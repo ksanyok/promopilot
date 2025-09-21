@@ -1,40 +1,56 @@
-// PromoPilot Custom Scripts
+// PromoPilot Scripts — animations + theme toggle
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Add bounce-in animation to cards
+    // THEME TOGGLE
+    const root = document.documentElement;
+    const storageKey = 'pp-theme';
+    const btn = document.getElementById('themeToggle');
+
+    function applyTheme(mode) {
+        if (mode === 'light') {
+            root.setAttribute('data-theme', 'light');
+        } else {
+            root.removeAttribute('data-theme'); // dark by default
+        }
+        if (btn) btn.innerHTML = mode === 'light' ? '<i class="bi bi-sun"></i>' : '<i class="bi bi-moon-stars"></i>';
+    }
+
+    const saved = localStorage.getItem(storageKey);
+    if (saved === 'light' || saved === 'dark') {
+        applyTheme(saved);
+    } else {
+        const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+        applyTheme(prefersLight ? 'light' : 'dark');
+    }
+
+    if (btn) {
+        btn.addEventListener('click', function() {
+            const current = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+            const next = current === 'light' ? 'dark' : 'light';
+            localStorage.setItem(storageKey, next);
+            applyTheme(next);
+        });
+    }
+
+    // Animations
     const cards = document.querySelectorAll('.card');
     cards.forEach((card, index) => {
-        setTimeout(() => {
-            card.classList.add('bounce-in');
-        }, index * 100);
+        setTimeout(() => { card.classList.add('bounce-in'); }, index * 80);
     });
 
-    // Add fade-in to alerts
     const alerts = document.querySelectorAll('.alert');
-    alerts.forEach(alert => {
-        alert.classList.add('fade-in');
-    });
+    alerts.forEach(alert => { alert.classList.add('fade-in'); });
 
-    // Smooth hover effects for buttons
     const buttons = document.querySelectorAll('.btn');
     buttons.forEach(btn => {
-        btn.addEventListener('mouseenter', function() {
-            this.style.transform = 'scale(1.05) rotate(1deg)';
-        });
-        btn.addEventListener('mouseleave', function() {
-            this.style.transform = 'scale(1) rotate(0deg)';
-        });
+        btn.addEventListener('mouseenter', function() { this.style.transform = 'translateY(-1px)'; });
+        btn.addEventListener('mouseleave', function() { this.style.transform = 'translateY(0)'; });
     });
 
-    // Form input animations
     const inputs = document.querySelectorAll('.form-control');
     inputs.forEach(input => {
-        input.addEventListener('focus', function() {
-            if (this.parentElement) this.parentElement.style.transform = 'scale(1.02)';
-        });
-        input.addEventListener('blur', function() {
-            if (this.parentElement) this.parentElement.style.transform = 'scale(1)';
-        });
+        input.addEventListener('focus', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1.01)'; });
+        input.addEventListener('blur', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1)'; });
     });
 
     // Language switcher auto-submit (if using a select)
@@ -45,30 +61,17 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Scroll animations
-    const observerOptions = {
-        threshold: 0.1,
-        rootMargin: '0px 0px -50px 0px'
-    };
+    // Scroll fade-in
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('fade-in'); });
+    }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
 
-    const observer = new IntersectionObserver(function(entries) {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('fade-in');
-            }
-        });
-    }, observerOptions);
+    document.querySelectorAll('.card, .alert, .table').forEach(el => observer.observe(el));
 
-    const animateElements = document.querySelectorAll('.card, .alert, .table');
-    animateElements.forEach(el => {
-        observer.observe(el);
-    });
-
-    // Admin sections toggle (optional)
+    // Admin sections toggle (if present)
     const usersSection = document.getElementById('users-section');
     const projectsSection = document.getElementById('projects-section');
     if (usersSection && projectsSection) {
-        // Default view
         usersSection.style.display = 'block';
         projectsSection.style.display = 'none';
         window.ppShowSection = function(section) {

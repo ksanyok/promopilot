@@ -2,33 +2,56 @@
 // Centralized bootstrap for PromoPilot
 // Starts session, loads functions, and defines URL helpers
 
-// Scheme and host for cookie security
-$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+// Scheme and host for cookie security (учёт обратного прокси)
+$forwardedProto = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($forwardedProto === 'https');
 
 if (session_status() === PHP_SESSION_NONE) {
-    // Безопасное определение домена cookie (убрать порт, не задавать для localhost/IP)
-    $hostHeader = strtolower((string)($_SERVER['HTTP_HOST'] ?? ''));
-    // убрать порт, если есть
-    $hostOnly = preg_replace('/:\\d+$/', '', $hostHeader);
+    // Всегда host-only cookie: не задаём domain, чтобы браузер сам применил текущий хост
     $cookieDomain = '';
-    if ($hostOnly && $hostOnly !== 'localhost' && filter_var($hostOnly, FILTER_VALIDATE_IP) === false) {
-        $cookieDomain = $hostOnly; // корректный домен без порта
-    } // иначе оставляем пустым, чтобы был host-only cookie
 
     // Secure session cookie params
     if (function_exists('session_set_cookie_params')) {
         session_set_cookie_params([
             'lifetime' => 0,
             'path' => '/',
-            'domain' => $cookieDomain, // пустая строка => host-only
+            'domain' => $cookieDomain,
             'secure' => $https,
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
     }
+
+    // Резервный каталог для хранения сессий, если системный недоступен
+    $rootAttempt = realpath(__DIR__ . '/..') ?: __DIR__ . '/..';
+    $fallbackSess = $rootAttempt . '/config/sessions';
+    $savePath = ini_get('session.save_path');
+    $needFallback = true;
+    if ($savePath) {
+        // session.save_path может иметь формат "N;MODE;PATH" или "N;PATH"; выделим фактический путь
+        $parts = explode(';', $savePath);
+        $pathCandidate = end($parts);
+        if (is_dir($pathCandidate) && is_writable($pathCandidate)) {
+            $needFallback = false;
+        }
+    }
+    if ($needFallback) {
+        if (!is_dir($fallbackSess)) @mkdir($fallbackSess, 0700, true);
+        if (is_dir($fallbackSess) && is_writable($fallbackSess)) {
+            ini_set('session.save_path', $fallbackSess);
+        }
+    }
+
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     session_start();
+}
+
+// Запрет кэширования динамических страниц, чтобы не кэшировались CSRF токены
+if (!headers_sent() && (PHP_SAPI !== 'cli')) {
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    header('Expires: 0');
 }
 
 // Absolute filesystem paths
