@@ -1,0 +1,99 @@
+<?php
+session_start();
+
+// Простой инсталлер для PromoPilot
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $host = $_POST['host'];
+    $user = $_POST['user'];
+    $pass = $_POST['pass'];
+    $db = $_POST['db'];
+
+    // Создать config.php
+    $config = "<?php\n\$db_host = '$host';\n\$db_user = '$user';\n\$db_pass = '$pass';\n\$db_name = '$db';\n?>";
+    file_put_contents('config.php', $config);
+
+    // Подключиться к БД
+    $conn = new mysqli($host, $user, $pass);
+    if ($conn->connect_error) {
+        die("Ошибка подключения: " . $conn->connect_error);
+    }
+
+    // Создать БД
+    $conn->query("CREATE DATABASE IF NOT EXISTS $db");
+
+    // Выбрать БД
+    $conn->select_db($db);
+
+    // Создать таблицы
+    $conn->query("CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) UNIQUE,
+        password VARCHAR(255),
+        role ENUM('admin', 'client') DEFAULT 'client',
+        balance DECIMAL(10,2) DEFAULT 0.00,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    $conn->query("CREATE TABLE IF NOT EXISTS projects (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT,
+        name VARCHAR(100),
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )");
+
+    // Добавить админа
+    $admin_pass = password_hash('admin123', PASSWORD_DEFAULT);
+    $conn->query("INSERT IGNORE INTO users (username, password, role) VALUES ('admin', '$admin_pass', 'admin')");
+
+    $conn->close();
+
+    echo "Установка завершена! Перейдите на <a href='login.php'>страницу входа</a>.";
+    exit;
+}
+?>
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Установка PromoPilot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-primary">
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-warning text-dark">
+                        <h3>Установка PromoPilot</h3>
+                    </div>
+                    <div class="card-body">
+                        <form method="post">
+                            <div class="mb-3">
+                                <label>Хост БД:</label>
+                                <input type="text" name="host" class="form-control" value="localhost" required>
+                            </div>
+                            <div class="mb-3">
+                                <label>Пользователь БД:</label>
+                                <input type="text" name="user" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label>Пароль БД:</label>
+                                <input type="password" name="pass" class="form-control">
+                            </div>
+                            <div class="mb-3">
+                                <label>Имя БД:</label>
+                                <input type="text" name="db" class="form-control" value="promopilot" required>
+                            </div>
+                            <button type="submit" class="btn btn-success">Установить</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
