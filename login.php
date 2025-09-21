@@ -50,8 +50,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             <div class="auth-card">
                 <h3>Вход через Google</h3>
-                <p>Используйте ваш Google-аккаунт для входа.</p>
-                <a href="<?= htmlspecialchars($loginUrl) ?>" class="login-button">Войти через Google</a>
+                <?php if (isset($googleAuthAvailable) && $googleAuthAvailable && !empty($loginUrl)): ?>
+                    <p>Используйте ваш Google-аккаунт для входа.</p>
+                    <a href="<?= htmlspecialchars($loginUrl) ?>" class="login-button">Войти через Google</a>
+                <?php else: ?>
+                    <p>Google вход пока не настроен. Его можно добавить позже, указав GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI в файле .env.</p>
+                <?php endif; ?>
             </div>
         </div>
     </div>

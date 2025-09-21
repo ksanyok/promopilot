@@ -342,7 +342,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
     if ($dbHost === '' || $dbName === '' || $dbUser === '') $errors[] = 'Заполните параметры базы данных.';
     if ($openaiKey === '') $errors[] = 'Укажите OpenAI API ключ.';
     if ($adminLogin === '' || $adminPass === '') $errors[] = 'Укажите логин и пароль администратора.';
-    if ($googleClientId === '' || $googleClientSecret === '' || $googleRedirectUri === '') $errors[] = 'Заполните параметры Google OAuth (Client ID, Secret, Redirect URI).';
+
+    // Доп. предупреждение если заполнено не всё для Google OAuth
+    $googleAllProvided = ($googleClientId !== '' && $googleClientSecret !== '' && $googleRedirectUri !== '');
+    $googleRedirectValid = $googleRedirectUri === '' ? false : (bool)filter_var($googleRedirectUri, FILTER_VALIDATE_URL);
 
     if (!$errors) {
         [$ok, $err] = try_pdo($dbHost, $dbName, $dbUser, $dbPass, $dbCharset);
@@ -360,11 +363,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
                 'OPENAI_API_KEY' => $openaiKey,
                 'ADMIN_LOGIN' => $adminLogin,
                 'ADMIN_PASSWORD_HASH' => $hash,
-                // Google OAuth
-                'GOOGLE_CLIENT_ID' => $googleClientId,
-                'GOOGLE_CLIENT_SECRET' => $googleClientSecret,
-                'GOOGLE_REDIRECT_URI' => $googleRedirectUri,
             ];
+            // Сохраняем Google OAuth только если все три поля указаны и redirect корректный URL
+            if ($googleAllProvided && $googleRedirectValid) {
+                $envData['GOOGLE_CLIENT_ID'] = $googleClientId;
+                $envData['GOOGLE_CLIENT_SECRET'] = $googleClientSecret;
+                $envData['GOOGLE_REDIRECT_URI'] = $googleRedirectUri;
+            } else {
+                $messages[] = 'Google OAuth можно настроить позже. Добавьте GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET и GOOGLE_REDIRECT_URI (абсолютный URL, например https://ваш-домен/login.php) в .env.';
+            }
             if (!env_write($envFile, $envData)) {
                 $errors[] = 'Не удалось записать .env.';
             } else {
@@ -517,30 +524,31 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
                 <div class="row">
                     <div>
                         <label>Client ID</label>
-                        <input type="text" name="google_client_id" placeholder="xxxxxxxxxxxx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.apps.googleusercontent.com" required>
+                        <input type="text" name="google_client_id" placeholder="xxxxxxxxxxxx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.apps.googleusercontent.com">
                     </div>
                     <div>
                         <label>Client Secret</label>
-                        <input type="text" name="google_client_secret" placeholder="GOCSPX-..." required>
+                        <input type="text" name="google_client_secret" placeholder="GOCSPX-...">
                     </div>
                     <div style="grid-column: 1 / -1;">
                         <label>Redirect URI</label>
-                        <input type="text" name="google_redirect_uri" placeholder="https://your-domain.com/login.php" required>
+                        <input type="text" name="google_redirect_uri" placeholder="https://your-domain.com/login.php">
                     </div>
                 </div>
                 <div class="help">
-                    <strong>Как настроить вход через Google:</strong>
+                    <strong>Google OAuth можно пропустить:</strong>
+                    <ul>
+                        <li>Вы можете настроить Google вход позже. Просто завершите установку сейчас.</li>
+                        <li>Когда будете готовы, откройте файл <span class="mono">.env</span> и добавьте:
+                            <div class="mono">GOOGLE_CLIENT_ID="..."<br>GOOGLE_CLIENT_SECRET="..."<br>GOOGLE_REDIRECT_URI="https://ВАШ_ДОМЕН/login.php"</div>
+                        </li>
+                        <li>Redirect URI должен быть абсолютным адресом и совпадать с указанным в Google Cloud Console.</li>
+                    </ul>
+                    <strong>Как получить ключи позже:</strong>
                     <ol>
                         <li>Откройте <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>.</li>
-                        <li>Создайте проект или выберите существующий.</li>
-                        <li>Перейдите в "Credentials" → "Create credentials" → "OAuth client ID".</li>
-                        <li>Выберите тип "Web application" и добавьте:
-                            <ul>
-                                <li>Authorized redirect URIs: <span class="mono">https://ВАШ_ДОМЕН/login.php</span></li>
-                            </ul>
-                        </li>
-                        <li>Сохраните <em>Client ID</em> и <em>Client Secret</em> и укажите их выше.</li>
-                        <li>Убедитесь, что файл <span class="mono">.env</span> содержит GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI.</li>
+                        <li>Создайте OAuth client ID (Web application) и укажите Redirect URI: <span class="mono">https://ВАШ_ДОМЕН/login.php</span>.</li>
+                        <li>Скопируйте Client ID и Client Secret в <span class="mono">.env</span>.</li>
                     </ol>
                 </div>
 
@@ -553,7 +561,7 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
             <p>Система уже установлена. При необходимости вы можете переустановить настройки .env, запустив мастер заново.</p>
         <?php endif; ?>
     </div>
-    <footer style="padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-start; align-items:center; background:#fafafa; font-size:13px; color:#334155; gap:12px;">
+    <footer style="padding:12px 16px; border-top:1px солид #e5e7eb; display:flex; justify-content:flex-start; align-items:center; background:#fafafa; font-size:13px; color:#334155; gap:12px;">
         <span>Текущая версия:</span>
         <strong><?php echo htmlspecialchars($localVersion); ?></strong>
         <?php if ($remoteVersion): ?>
