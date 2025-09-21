@@ -152,6 +152,11 @@ body {
     background: linear-gradient(45deg, #e74c3c, #c0392b);
 }
 
+.btn-group .btn.active {
+    background-color: #3498db !important;
+    border-color: #3498db !important;
+}
+
 .form-control {
     border-radius: 10px;
     border: 2px solid #ddd;

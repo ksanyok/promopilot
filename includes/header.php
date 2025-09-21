@@ -33,21 +33,10 @@
                         <li class="nav-item"><a class="nav-link" href="register.php"><?php echo __('Регистрация'); ?></a></li>
                     <?php endif; ?>
                     <li class="nav-item">
-                        <form method="post" action="set_lang.php" class="d-inline">
-                            <select name="lang" class="form-select form-select-sm d-inline w-auto" onchange="this.form.submit()">
-                                <?php
-                                $current_lang = $_SESSION['lang'] ?? 'ru';
-                                $langs = array_filter(scandir('../lang'), function($file) {
-                                    return pathinfo($file, PATHINFO_EXTENSION) == 'php';
-                                });
-                                foreach ($langs as $file) {
-                                    $code = pathinfo($file, PATHINFO_FILENAME);
-                                    $selected = ($code == $current_lang) ? 'selected' : '';
-                                    echo "<option value='$code' $selected>$code</option>";
-                                }
-                                ?>
-                            </select>
-                        </form>
+                        <div class="btn-group" role="group">
+                            <a href="set_lang.php?lang=ru" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'ru') ? 'active' : ''; ?>" title="Русский">RU</a>
+                            <a href="set_lang.php?lang=en" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'en') ? 'active' : ''; ?>" title="English">EN</a>
+                        </div>
                     </li>
                 </ul>
             </div>
