@@ -1,438 +1,130 @@
-body, h1, h2, h3, p, a, img, div {
-    margin: 0;
-    padding: 0;
-    border: 0;
-    font-size: 100%;
-    font: inherit;
-    vertical-align: baseline;
+/* Modern UI Redesign */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+:root {
+  --brand-1: #6a11cb;
+  --brand-2: #2575fc;
+  --brand-3: #00e5ff;
+  --brand-4: #ff7eb3;
+  --text: #111827;
+  --muted: #6b7280;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --border: #e5e7eb;
+  --ring: rgba(37, 117, 252, .35);
+}
+
+html, body { height: 100%; }
+body {
+  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--text);
+  background: radial-gradient(1200px 800px at 10% 10%, rgba(106, 17, 203, .10), transparent),
+              radial-gradient(1000px 700px at 90% 0%, rgba(37, 117, 252, .10), transparent),
+              linear-gradient(135deg, #f9fbff 0%, #f5f7ff 100%);
+  background-attachment: fixed;
 }
 
 header {
-    position: sticky;
-    top: 0;
-    z-index: 1000; /* Чтобы хедер был над другими элементами */
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-    padding: 1.5em 0;
+  position: sticky; top: 0; z-index: 1000;
+  background: linear-gradient(120deg, var(--brand-1), var(--brand-2), var(--brand-3));
+  background-size: 200% 200%;
+  animation: gradientShift 12s ease infinite;
+  box-shadow: 0 10px 30px rgba(0,0,0,.08);
+  padding: 18px 0;
 }
 
+.container { width: 100%; max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 0 16px; }
+.logo img { height: 64px; filter: drop-shadow(0 6px 12px rgba(0,0,0,.15)); }
 
-.container {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.auth-and-balance { display: flex; align-items: center; gap: 16px; }
+.greeting, .user-name { color: #fff; }
+.user-name { font-weight: 700; }
+.user-info { display: flex; align-items: center; gap: 16px; }
+.user-greeting { margin-right: 4px; }
+
+.balance { border: 1px solid rgba(255,255,255,.45); color: #fff; padding: 8px 12px; border-radius: 999px; backdrop-filter: blur(6px); background: rgba(255,255,255,.12); }
+
+.login-button, .logout-button, .btn {
+  appearance: none; border: 0; cursor: pointer; font-weight: 600;
+  color: #fff; text-decoration: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(120deg, var(--brand-2), var(--brand-1));
+  background-size: 200% 200%;
+  padding: 10px 16px; border-radius: 12px; box-shadow: 0 8px 20px rgba(37,117,252,.35);
+  transition: transform .15s ease, box-shadow .15s ease, background-position .6s ease;
 }
+.login-button:hover, .logout-button:hover, .btn:hover { transform: translateY(-1px); background-position: 100% 0; box-shadow: 0 10px 24px rgba(106,17,203,.35); }
+.login-button:active, .logout-button:active, .btn:active { transform: translateY(0); }
 
-.logo img {
-    height: 75px; /* Увеличиваем размер логотипа */
+.main-container { display: flex; min-height: calc(100vh - 100px); }
+
+.sidebar { width: 270px; flex-shrink: 0; height: calc(100vh - 90px); position: sticky; top: 90px; overflow-y: auto; padding: 16px; }
+.sidebar .sidebar-content {
+  background: rgba(255,255,255,.55);
+  border: 1px solid rgba(255,255,255,.6);
+  border-radius: 16px; padding: 16px; backdrop-filter: blur(10px);
+  box-shadow: 0 8px 30px rgba(0,0,0,.06);
 }
+.add-project-button { background: linear-gradient(120deg, var(--brand-2), var(--brand-1)); color: #fff; padding: 10px 14px; border-radius: 12px; font-weight: 700; text-align: center; display: flex; align-items:center; justify-content:center; gap:10px; box-shadow: 0 8px 20px rgba(37,117,252,.25); transition: transform .15s ease, box-shadow .15s ease; }
+.add-project-button:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(106,17,203,.25); }
 
-.auth-and-balance {
-    display: flex;
-    align-items: center;
-}
+.sidebar-divider { border: 0; border-top: 1px dashed var(--border); margin: 14px 0; }
+.projects-list { list-style: none; padding: 0; }
+.projects-list li { margin-bottom: 8px; }
+.projects-list li a { color: #111827; text-decoration: none; display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius: 10px; transition: background .2s ease; }
+.projects-list li a:hover { background: var(--surface-2); }
+.projects-list li.active a { background: linear-gradient(120deg, var(--brand-2), var(--brand-1)); color: #fff; }
+.projects-list li:not(.active) .project-icon { fill: var(--brand-2); }
 
-.greeting, .user-name {
-    color: #fff;
-    display: block; /* Новое: делаем блочным элементом для адаптивности */
-}
+.content { flex-grow: 1; padding: 24px; }
 
-.user-name {
-    font-weight: bold;
-}
+.project-info { background: linear-gradient(120deg, var(--brand-2), var(--brand-1)); color: #fff; padding: 20px; margin-bottom: 20px; border-radius: 16px; box-shadow: 0 12px 30px rgba(37,117,252,.25); text-align: center; }
+.project-info h1 { margin: 0; padding: 6px 0; font-size: 2rem; font-weight: 700; letter-spacing: .2px; }
+.project-info p { margin: 0; padding: 6px 0; font-size: 1rem; opacity: .95; }
 
-.user-info {
-    margin-right: 1em; /* Отступ между приветствием и кнопкой выхода */
-    display: flex; /* Добавлено: контейнер user-info становится flex-контейнером */
-}
+.content h1, .content h2 { font-size: 1.6rem; text-align: center; padding: 16px 0; margin: 16px 0; font-weight: 700; color: #0f172a; text-shadow: 0 1px 0 rgba(255,255,255,.7); }
+.content h3 { font-size: 1.2rem; text-align: left; padding: 10px 0; margin: 10px 0; font-weight: 700; color: #111827; }
 
-.user-greeting {
-    margin-right: 20px;
-}
+form { margin-bottom: 20px; background: var(--surface); padding: 16px; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 10px 24px rgba(0,0,0,.04); }
+input[type="text"], textarea, input[type="password"] { width: 100%; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 12px; outline: none; background: var(--surface-2); transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+input[type="text"]:focus, textarea:focus, input[type="password"]:focus { border-color: var(--brand-2); box-shadow: 0 0 0 4px var(--ring); background: #fff; }
 
-.logout {
-    margin-left: auto; /* Кнопка выхода будет прижата к правому краю блока user-info */
-}
+button { background: linear-gradient(120deg, var(--brand-2), var(--brand-1)); color: #fff; padding: 10px 16px; border: 0; border-radius: 12px; cursor: pointer; font-weight: 700; box-shadow: 0 8px 20px rgba(37,117,252,.25); transition: transform .15s ease, box-shadow .15s ease; }
+button:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(106,17,203,.25); }
+button.disabled { background: #a1a1aa; box-shadow: none; cursor: not-allowed; }
 
-.logout-button, .login-button {
-    background-color: #fff;
-    color: #667eea;
-    padding: 0.5em 1em;
-    text-decoration: none;
-    border-radius: 20px;
-    font-weight: bold;
-    transition: all 0.3s ease;
-    white-space: nowrap; /* Новое: предотвращаем перенос текста кнопки */
-	display: flex;
-}
+table { width: 100%; border-collapse: collapse; margin-top: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 12px 24px rgba(0,0,0,.04); }
+th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+th { background: linear-gradient(120deg, var(--brand-2), var(--brand-1)); color: #fff; border-bottom: none; }
+tr:hover { background: var(--surface-2); }
+tr:nth-child(even) { background: #fafbff; }
 
-.logout-button:hover, .login-button:hover {
-    background-color: #f8f9fa;
-}
+.delete-button { border: 1px solid var(--border); background: var(--surface); color: #ef4444; padding: 6px 10px; border-radius: 10px; transition: background .2s ease, color .2s ease; }
+.delete-button:hover { background: #fff1f2; color: #b91c1c; }
 
-.balance {
-    border: 2px solid #fff; /* Добавляем рамку вокруг баланса */
-    padding: 0.5em 1em;
-    border-radius: 20px; /* Скругляем углы рамки баланса */
-    white-space: nowrap; /* Предотвращаем перенос баланса */
-    margin-right: 20px; /* Отступ справа от блока баланса */
-}
+.progress-circle { width: 36px; height: 36px; border-radius: 50%; position: relative; background: conic-gradient(#e5e7eb 0, #e5e7eb 360deg); display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #111827; box-shadow: inset 0 0 0 6px #fff; }
+.progress-circle::before { content: attr(data-progress) '%'; position: absolute; display: grid; place-items: center; width: 100%; height: 100%; inset: 0; border-radius: 50%; }
+/* dynamic fill set via inline style --p (deg) */
+.progress-circle.fill { background: conic-gradient(var(--brand-2) var(--p, 0deg), #e5e7eb 0); transition: background .6s ease; }
 
-/* Адаптивность для мобильных устройств */
+.app-footer { margin-top: 24px; padding: 16px 24px; background: rgba(255,255,255,.75); border-top: 1px solid var(--border); color: #374151; font-size: 13px; display: flex; justify-content: space-between; align-items: center; backdrop-filter: blur(6px); }
+.app-footer .btn-update { background: linear-gradient(120deg, var(--brand-3), var(--brand-2)); }
+
 @media (max-width: 768px) {
-    .container {
-        flex-direction: column; /* Столбцовое расположение на маленьких экранах */
-        align-items: flex-start;
-    }
-
-    .logo {
-        margin-bottom: 1em; /* Добавляем отступ под логотипом */
-    }
-
-    .auth-and-balance {
-        align-items: flex-start;
-    }
-
-    .greeting, .user-name, .balance {
-        text-align: left; /* Выравнивание текста по левому краю */
-    }
-
-    .balance {
-        margin-top: 0.5em; /* Отступ между информацией пользователя и балансом */
-        margin-left: 0; /* Убираем левый отступ для баланса */
-    }
+  .container { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .logo { margin-bottom: 6px; }
+  .main-container { flex-direction: column; }
+  .sidebar { width: 100%; height: auto; position: relative; top: 0; }
+  .content { padding: 16px; }
 }
 
+@keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
 
+/* Hero visuals */
+.link-pyramid { display:flex; justify-content:center; margin: 20px 0; }
+.link-pyramid img { width: 100%; max-width: 860px; border-radius: 16px; box-shadow: 0 24px 60px rgba(37,117,252,.20); animation: floatY 8s ease-in-out infinite; }
 
+/* CTA button on index */
+.action-button { background: linear-gradient(120deg, var(--brand-4), var(--brand-2)); color:#fff; padding: 12px 18px; border:0; border-radius: 14px; font-weight: 700; cursor:pointer; box-shadow: 0 12px 28px rgba(255,126,179,.3); transition: transform .15s ease, box-shadow .15s ease, background-position .6s ease; background-size: 200% 200%; }
+.action-button:hover { transform: translateY(-1px); background-position: 100% 0; box-shadow: 0 16px 34px rgba(37,117,252,.28); }
 
-/*********** сайдбар ***********/
-.sidebar {
-	position: fixed;
-    background: linear-gradient(135deg, #f8f8f8 0%, #6ebeb3 100%);
-    padding: 1em;
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-}
-
-
-.sidebar-content {
-    display: flex;
-    flex-direction: column;
-}
-
-.add-project-button {
-    background-color: #667eea;
-    color: #fff;
-    padding: 0.5em 1em;
-    text-decoration: none;
-    border-radius: 20px;
-    font-weight: bold;
-    margin-bottom: 1em; /* Отступ до разделителя */
-    text-align: center;
-    display: flex; /* Используем flexbox для выравнивания иконки и текста */
-    align-items: center; /* Центрируем элементы по вертикали */
-    justify-content: center; /* Центрируем элементы по горизонтали */
-    gap: 10px; /* Добавляем небольшой промежуток между иконкой и текстом */	
-}
-
-
-/* Добавляем стили для иконки, если это необходимо */
-.icon {
-    /* Вы можете добавить здесь стили для вашей иконки, если это необходимо */
-}
-
-.sidebar-divider {
-    border: none; /* Убираем стандартную границу */
-    border-top: 2px dashed #ccc; /* Делаем пунктирный верхний бордюр */
-    margin: 1em 0; /* Добавляем немного отступа сверху и снизу */
-}
-
-
-.projects-list {
-    list-style-type: none; /* Убираем стандартные маркеры списка */
-    padding: 0;
-}
-
-.projects-list li {
-    margin-bottom: 0.5em; /* Добавляем немного пространства между элементами списка */
-    display: flex; /* Используем flexbox для выравнивания иконок и текста */
-    align-items: center; /* Центрируем элементы по вертикали */
-}
-
-.projects-list li a {
-    color: #333; /* Цвет текста ссылок */
-    text-decoration: none; /* Убираем подчеркивание */
-    display: flex; /* Используем flexbox для выравнивания иконок и текста */
-    align-items: center; /* Центрируем элементы по вертикали */
-    gap: 10px; /* Добавляем небольшой промежуток между иконкой и текстом */
-}
-
-.project-icon {
-    fill: #667eea; /* Цвет иконки, синий для соответствия основной цветовой схеме */
-    margin-right: 5px; /* Небольшой отступ справа от иконки */
-}
-
-
-
-
-
-.projects-list li.active a {
-    background-color: #4A90E2; /* Синий цвет фона для активного пункта */
-    color: #FFFFFF; /* Белый цвет текста */
-    border-radius: 5px; /* Скругление углов */
-    padding: 0.5em; /* Немного увеличиваем внутренние отступы */
-}
-
-.project-icon {
-    fill: #FFFFFF; /* Меняем цвет иконки на белый для активного пункта */
-}
-
-/* Стиль для неактивных элементов, чтобы иконки оставались синими */
-.projects-list li:not(.active) .project-icon {
-    fill: #667eea;
-}
-
-
-
-
-
-/* Стили для структуры страницы */
-.main-container {
-    display: flex;
-    min-height: 100vh;
-}
-
-.sidebar {
-    width: 250px; /* Задаем ширину сайдбара */
-    flex-shrink: 0; /* Сайдбар не будет сжиматься */
-    height: calc(100vh - 3em); /* Высота, отняв высоту шапки */
-    overflow-y: auto; /* Добавляем скролл при необходимости */
-}
-
-.content {
-    flex-grow: 1;
-    padding: 1em;
-    padding-left: 300px; /* Учитывая внутренние отступы сайдбара, добавляем немного больше */
-    overflow-y: auto;
-}
-
-
-/* Медиа запросы для адаптивности */
-@media (max-width: 768px) {
-    .main-container {
-        flex-direction: column;
-    }
-
-    .sidebar {
-        width: 100%; /* Сайдбар на всю ширину на мобильных */
-        height: auto;
-    }
-
-    .content {
-        order: 2; /* Контент идет после сайдбара на мобильных */
-    }
-}
-
-/*************** страница проекта **********/
-
-.project-info {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: #fff; /* Белый цвет текста для лучшего контраста */
-    padding: 20px; /* Отступы вокруг текста */
-    margin-bottom: 20px; /* Отступ снизу */
-    border-radius: 10px; /* Скругленные углы */
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Тень вокруг блока */
-    text-align: center; /* Выравнивание текста по центру */
-}
-
-.project-info h1 {
-    margin: 0; /* Убираем стандартные отступы */
-    padding: 10px 0; /* Увеличиваем отступы сверху и снизу для текста */
-    font-size: 2.5em; /* Увеличиваем размер шрифта */
-    text-transform: uppercase; /* Преобразуем текст в верхний регистр */
-    font-weight: bold; /* Делаем текст жирным */
-}
-
-.project-info p {
-    margin: 0; /* Убираем стандартные отступы */
-    padding: 10px 0; /* Увеличиваем отступы сверху и снизу для текста */
-    font-size: 1.2em; /* Немного увеличиваем размер шрифта */
-    font-weight: bold; /* Делаем текст жирным */
-}
-
-.content h1, h2 {
-    font-size: 2em; /* Увеличиваем размер шрифта для подзаголовка */
-    text-align: center; /* Выравнивание текста по центру */
-    padding: 20px 0; /* Добавляем отступы сверху и снизу */
-    text-decoration: underline; /* Применяем подчеркивание */
-    margin: 20px 0; /* Устанавливаем отступы для создания пространства вокруг подзаголовка */
-    font-weight: bold; /* Сделаем шрифт жирным для лучшей заметности */
-}
-
-.content h3 {
-    font-size: 1.5em; /* Увеличиваем размер шрифта для подзаголовка */
-    text-align: center; /* Выравнивание текста по центру */
-    padding: 20px 0; /* Добавляем отступы сверху и снизу */
-    margin: 20px 0; /* Устанавливаем отступы для создания пространства вокруг подзаголовка */
-    font-weight: bold; /* Сделаем шрифт жирным для лучшей заметности */
-}
-
-
-/* Стили для формы */
-form {
-    margin-bottom: 20px;
-}
-
-input[type="text"],
-textarea {
-    width: 100%;
-    padding: 8px;
-    margin-bottom: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-sizing: border-box; /* Чтобы padding не увеличивал ширину поля */
-}
-
-button {
-    background-color: #667eea; /* Синий фон */
-    color: white;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-button:hover {
-    background-color: #5a67d8;
-}
-
-/* Стили для таблицы */
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 20px;
-}
-
-table, th, td {
-    border: 1px solid #ddd;
-}
-
-th, td {
-    text-align: left;
-    padding: 8px;
-}
-
-th {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-}
-
-tr:nth-child(even) {
-    background-color: #f2f2f2;
-}
-
-/* Стили для кнопок в таблице */
-table button {
-    background-color: #667eea;
-    color: white;
-    padding: 5px 10px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    margin: 5px;
-}
-
-table button:hover {
-    background-color: #007B9E;
-}
-
-table button.disabled {
-    background-color: #a0a0a0;  /* Серый цвет для заблокированных кнопок */
-    color: #ccc;
-    cursor: not-allowed;  /* Курсор в виде знака запрета */
-}
-
-.project-info a {
-    color: #fffbfe; /* Светлый оттенок для контраста на темном фоне */
-    text-decoration: underline;
-}
-
-
-/********* История ***********/
-.project-history {
-    list-style: none;
-    padding-left: 20px; /* Отступ для создания вложенности */
-}
-
-.project-history li {
-    margin-bottom: 5px;
-}
-
-.project-history li a {
-    color: #333;
-    text-decoration: none;
-}
-
-.project-history li a:hover {
-    text-decoration: underline;
-}
-
-
-
-
-.delete-button {
-    border: 1px solid #c0c0c0;
-    background: none;
-    color: #313131;
-    font-size: 20px;
-    cursor: pointer;
-}
-
-
-
-
-
-
-
-.progress-circle {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    position: relative;
-    background-color: #ddd;
-    text-align: center;
-    line-height: 30px;
-    color: black;
-    font-weight: bold;
-}
-
-.progress-circle:before {
-    content: attr(data-progress) '%'; /* Добавление знака процента */
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: conic-gradient(green var(--p, 0), #ddd 0);
-    border-radius: 50%;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-
-.progress-circle:hover:before {
-    --p: calc(var(--progress) * 1%);
-}
-
-.link-pyramid img {
-    width: 100%;
-}
-
-.link-pyramid {
-    padding: 10px 0;
-}
+@keyframes floatY { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }

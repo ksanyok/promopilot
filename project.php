@@ -141,29 +141,33 @@ $sql = "SELECT p.id, p.page_url, p.anchor, p.language,
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$projectIdFromUrl]);
 while ($page = $stmt->fetch()) {
-    $totalProgress = round(($page['level1'] + $page['level2'] + $page['level3']) / 3 * 100);  // Вычисляем общий прогресс
-    $isInQueue = in_array($page['id'], $pagesInQueue);  // Проверяем, находится ли страница в очереди
+    // Targets per level
+    $target1 = 5; $target2 = 100; $target3 = 300;
+    $p1 = min(($page['level1'] ?? 0) / $target1, 1);
+    $p2 = min(($page['level2'] ?? 0) / $target2, 1);
+    $p3 = min(($page['level3'] ?? 0) / $target3, 1);
+    $totalProgress = (int)round((($p1 + $p2 + $p3) / 3) * 100);
+    $isInQueue = in_array($page['id'], $pagesInQueue);
 
     echo "<tr>";
     echo "<td>" . htmlspecialchars($page['page_url']) . "</td>";
     echo "<td>" . htmlspecialchars($page['anchor']) . "</td>";
     echo "<td>" . htmlspecialchars($page['language']) . "</td>";
 
+    // Progress circle shows percent and will be filled by JS below
     echo '<td><div class="progress-circle" data-progress="' . $totalProgress . '"></div></td>';
 
-    echo "<td>" . $page['level1'] . "</td>";
-    echo "<td>" . $page['level2'] . "</td>";
-    echo "<td>" . $page['level3'] . "</td>";
+    echo "<td>" . (int)$page['level1'] . "</td>";
+    echo "<td>" . (int)$page['level2'] . "</td>";
+    echo "<td>" . (int)$page['level3'] . "</td>";
     echo "<td>
             <form method='post'>
                 <input type='hidden' name='pageId' value='" . $page['id'] . "'/>";
-    // Блокируем кнопку если страница уже в очереди или прогресс 100%
-	// Блокируем кнопку если страница уже в очереди или прогресс 100%
-	if ($isInQueue || $totalProgress >= 100) {
-		echo "<button type='submit' name='promote' class='disabled' disabled>Продвинуть</button>";
-	} else {
-		echo "<button type='submit' name='promote'>Продвинуть</button>";
-	}
+    if ($isInQueue || $totalProgress >= 100) {
+        echo "<button type='submit' name='promote' class='disabled' disabled>Продвинуть</button>";
+    } else {
+        echo "<button type='submit' name='promote'>Продвинуть</button>";
+    }
 
     echo "  </form>
           </td>";
@@ -175,36 +179,24 @@ while ($page = $stmt->fetch()) {
           </td>";
     echo "</tr>";
 }
-
-
-/* 				while ($page = $stmt->fetch()) {
-					echo "<tr>";
-					echo "<td>" . htmlspecialchars($page['page_url']) . "</td>";
-					echo "<td>" . htmlspecialchars($page['anchor']) . "</td>";
-					echo "<td>" . htmlspecialchars($page['language']) . "</td>";
-					
-					echo '<td>
-							  <div class="progress-circle" data-progress="' . round($page['level1'] / 3 * 100) . '"></div>
-						  </td>';
-
-					echo "<td>" . $page['level1'] . "</td>";
-					echo "<td>" . $page['level2'] . "</td>";
-					echo "<td>" . $page['level3'] . "</td>";
-					echo "<td>
-							<form method='post'>
-								<input type='hidden' name='pageId' value='" . $page['id'] . "'/>
-								<button type='submit' name='promote'>Продвинуть</button>
-							</form>
-						  </td>";
-					echo "<td>
-							<form method='post'>
-								<input type='hidden' name='pageIdToDelete' value='" . $page['id'] . "'/>
-								<button type='submit' name='deletePage' class='delete-button'>&times;</button>
-							</form>
-						  </td>";
-					echo "</tr>";
-				} */
-				?>
+?>
+<script>
+// Fill progress circles using CSS custom property
+(function(){
+  function initProgress() {
+    document.querySelectorAll('.progress-circle').forEach(function(el){
+      var p = parseInt(el.getAttribute('data-progress') || '0', 10);
+      p = Math.max(0, Math.min(100, p));
+      var deg = Math.round(360 * (p / 100));
+      el.style.setProperty('--p', deg + 'deg');
+      el.classList.add('fill');
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initProgress);
+  } else { initProgress(); }
+})();
+</script>
 			</table>
 
 

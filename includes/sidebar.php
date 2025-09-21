@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/db.php';
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 
 // Функция для получения проектов пользователя по его ID
 function getProjectsByUserId($userId, $pdo) {

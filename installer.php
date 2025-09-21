@@ -9,7 +9,7 @@ header('Content-Type: text/html; charset=utf-8');
 $repoOwner = 'ksanyok';
 $repoName  = 'promopilot';
 $defaultBranch = 'main';
-$versionFile = __DIR__ . '/version.txt';
+$versionPhp  = __DIR__ . '/version.php';
 $envFile = __DIR__ . '/.env';
 
 // Полифилы для PHP < 8
@@ -98,21 +98,37 @@ function cmp_versions($a, $b) {
     return 0;
 }
 
-function current_version($versionFile) {
-    return file_exists($versionFile) ? trim((string)@file_get_contents($versionFile)) : '0.0.0';
+function current_version($versionPhpPath) {
+    if (file_exists($versionPhpPath)) {
+        $v = @include $versionPhpPath;
+        if (is_string($v) && $v !== '') return trim($v);
+    }
+    return '0.0.0';
 }
 
-function remote_version($owner, $repo, $branch) {
-    $url = "https://raw.githubusercontent.com/$owner/$repo/$branch/version.txt";
-    $data = fetch_remote($url);
-    if ($data === false) return null;
-    return trim($data);
+function parse_version_php_code($code) {
+    if (!is_string($code) || $code === '') return null;
+    if (preg_match('/return\s*[\'\"]([^\'\"]+)[\'\"];?/m', $code, $m)) {
+        return trim($m[1]);
+    }
+    return null;
+}
+
+function remote_version_from_branch($owner, $repo, $branch) {
+    // Ищем только version.php в репозитории
+    $urlPhp = "https://raw.githubusercontent.com/$owner/$repo/$branch/version.php";
+    $dataPhp = fetch_remote($urlPhp);
+    if ($dataPhp !== false) {
+        $pv = parse_version_php_code($dataPhp);
+        if ($pv) return $pv;
+    }
+    return null;
 }
 
 function detect_branch_with_version($owner, $repo) {
     $branches = ['main', 'master'];
     foreach ($branches as $br) {
-        $ver = remote_version($owner, $repo, $br);
+        $ver = remote_version_from_branch($owner, $repo, $br);
         if ($ver !== null && $ver !== '') {
             return [$br, $ver];
         }
@@ -260,7 +276,7 @@ $errors = [];
 // Обновление из репозитория
 if ($action === 'update') {
     [$branchToUse, $remoteVer] = detect_branch_with_version($repoOwner, $repoName);
-    $localVer = current_version($versionFile);
+    $localVer = current_version($versionPhp);
     if (!$branchToUse) {
         $errors[] = 'Не удалось определить ветку и версию репозитория.';
     } else {
@@ -292,9 +308,9 @@ if ($action === 'update') {
                     $messages[] = 'Не удалось автоматически установить NPM зависимости (auto-publisher). Установите вручную в ' . $apPath;
                 }
             }
-            // Обновляем версию, если удаленная >= локальной
+            // Обновляем только version.php
             if (cmp_versions($remoteVer, $localVer) >= 0) {
-                @file_put_contents($versionFile, $remoteVer . "\n");
+                @file_put_contents($versionPhp, "<?php\nreturn '" . addslashes($remoteVer) . "';\n");
             }
             $messages[] = 'Файлы успешно обновлены до версии ' . htmlspecialchars($remoteVer) . '.';
         } else {
@@ -339,9 +355,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
             if (!env_write($envFile, $envData)) {
                 $errors[] = 'Не удалось записать .env.';
             } else {
-                // Создаем version.txt, если отсутствует
-                if (!file_exists($versionFile)) {
-                    @file_put_contents($versionFile, "0.1.0\n");
+                // Создаем файлы версий, если отсутствуют
+                if (!file_exists($versionPhp)) {
+                    @file_put_contents($versionPhp, "<?php\nreturn '0.1.0';\n");
                 }
 
                 // Скачиваем исходники из репозитория (если нужно обновить текущую копию)
@@ -384,7 +400,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
     }
 }
 
-$localVersion = current_version($versionFile);
+$localVersion = current_version($versionPhp);
 [$branchDetected, $remoteVersion] = detect_branch_with_version($repoOwner, $repoName);
 $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion) > 0;
 
@@ -395,28 +411,30 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Установка PromoPilot</title>
+    <link rel="stylesheet" href="/styles/main.css">
     <style>
-        body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 0; background:#f6f7f9; }
-        .wrap { max-width: 880px; margin: 40px auto; background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.06); overflow: hidden; }
-        header { padding: 20px 24px; background: #0f62fe; color: #fff; }
-        header h1 { margin: 0; font-size: 22px; }
-        .inner { padding: 24px; }
+        /* Installer themed wrapper */
+        body:before {
+            content: "";
+            position: fixed; inset: -20%; z-index: -1;
+            background: radial-gradient(600px 400px at 10% 80%, rgba(255,126,179,.18), transparent),
+                        radial-gradient(700px 500px at 90% 10%, rgba(37,117,252,.15), transparent);
+            filter: blur(20px);
+        }
+        .wrap { max-width: 920px; margin: 40px auto; background: var(--surface); border-radius: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.08); overflow: hidden; border: 1px solid var(--border); }
+        header { padding: 22px 24px; }
+        header h1 { margin: 0; font-size: 22px; color: #fff; }
+        .inner { padding: 22px; }
         .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        label { font-size: 13px; color: #333; display:block; margin-bottom: 6px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #dfe3e8; border-radius: 8px; background:#fafbfc; outline: none; }
-        input[type="text"]:focus, input[type="password"]:focus { border-color:#0f62fe; background:#fff; }
+        label { font-size: 13px; color: #374151; display:block; margin-bottom: 6px; }
         .actions { margin-top: 16px; display:flex; gap:12px; align-items:center; }
-        .btn { appearance: none; border:0; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-weight: 600; }
-        .btn-primary { background:#0f62fe; color:#fff; }
-        .btn-secondary { background:#e0e7ff; color:#0f1c4d; }
-        .note { font-size:12px; color:#666; }
+        .note { font-size:12px; color: var(--muted); }
         .messages { margin: 12px 0; }
-        .msg { padding:10px 12px; border-radius:8px; margin-bottom:8px; }
-        .msg-ok { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
-        .msg-err { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
-        footer { padding: 16px 24px; background:#fafafa; color:#444; font-size:13px; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #eee; }
-        .version { font-weight: 600; }
-        .update-badge { background:#fff0c9; color:#7a2e0e; padding:4px 8px; border-radius:6px; border:1px solid #ffe69c; }
+        .msg { padding: 12px 14px; border-radius: 12px; margin-bottom: 10px; border: 1px solid var(--border); box-shadow: 0 8px 20px rgba(0,0,0,.04); }
+        .msg-ok { background: #ecfdf5; color:#065f46; border-color:#a7f3d0; }
+        .msg-err { background: #fef2f2; color:#991b1b; border-color:#fecaca; }
+        .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; background:#f3f4f6; border:1px solid #e5e7eb; border-radius: 6px; padding: 2px 6px; }
+        @media (max-width: 768px) { .row { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -479,15 +497,15 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
                 </div>
 
                 <div class="actions">
-                    <button class="btn btn-primary" type="submit">Установить</button>
-                    <span class="note">Будет создан файл .env и загружены файлы проекта из GitHub.</span>
+                    <button class="btn" type="submit">Установить</button>
+                    <span class="note">Будет создан файл <span class="kbd">.env</span> и загружены файлы проекта из GitHub.</span>
                 </div>
             </form>
         <?php else: ?>
             <p>Система уже установлена. Вы можете проверить наличие обновлений и выполнить обновление при необходимости.</p>
         <?php endif; ?>
     </div>
-    <footer>
+    <footer class="app-footer">
         <div>
             Текущая версия: <span class="version"><?php echo htmlspecialchars($localVersion); ?></span>
             <?php if ($remoteVersion): ?>
@@ -496,8 +514,7 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
         </div>
         <div>
             <?php if ($updateAvailable): ?>
-                <a class="btn btn-secondary" href="?action=update">Обновить до <?php echo htmlspecialchars($remoteVersion); ?></a>
-                <span class="update-badge">Доступно обновление</span>
+                <a class="btn btn-update" href="?action=update">Обновить до <?php echo htmlspecialchars($remoteVersion); ?></a>
             <?php else: ?>
                 <span style="color:#666;">Обновлений нет</span>
             <?php endif; ?>

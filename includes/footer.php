@@ -1,21 +1,18 @@
 <?php
 $version = '0.0.0';
-$verPath = dirname(__DIR__) . '/version.txt';
-if (file_exists($verPath)) {
-    $v = trim((string)@file_get_contents($verPath));
-    if ($v !== '') $version = $v;
+$verPhpPath = dirname(__DIR__) . '/version.php';
+if (file_exists($verPhpPath)) {
+    $v = @include $verPhpPath; // version.php должен return 'x.y.z'
+    if (is_string($v) && $v !== '') { $version = trim($v); }
 }
 
-// Проверка обновления (легкая логика, с таймаутами)
 $updateAvailable = false;
 $remoteVersion = null;
 $repoOwner = 'ksanyok';
 $repoName  = 'promopilot';
 $branch    = 'main';
-$remoteUrl = "https://raw.githubusercontent.com/$repoOwner/$repoName/$branch/version.txt";
 
 $fetch = function($url) {
-    // Пытаемся через cURL
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -30,7 +27,6 @@ $fetch = function($url) {
         curl_close($ch);
         if ($code >= 200 && $code < 300 && $data !== false) return $data;
     }
-    // Фолбэк на file_get_contents
     if (ini_get('allow_url_fopen')) {
         $ctx = stream_context_create(['http' => ['timeout' => 5, 'header' => "User-Agent: PromoPilot-Footer\r\n"]]);
         $data = @file_get_contents($url, false, $ctx);
@@ -52,15 +48,17 @@ $cmp = function($a, $b) {
     return 0;
 };
 
-$remoteData = $fetch($remoteUrl);
-if ($remoteData !== false) {
-    $remoteVersion = trim($remoteData);
-    if ($remoteVersion && $cmp($remoteVersion, $version) > 0) {
-        $updateAvailable = true;
-    }
+// Получаем удаленную версию только из version.php
+$remotePhp = $fetch("https://raw.githubusercontent.com/$repoOwner/$repoName/$branch/version.php");
+if ($remotePhp !== false && preg_match('/return\s*[\'\"]([^\'\"]+)[\'\"];?/m', $remotePhp, $m)) {
+    $remoteVersion = trim($m[1]);
+}
+
+if ($remoteVersion && $cmp($remoteVersion, $version) > 0) {
+    $updateAvailable = true;
 }
 ?>
-<footer style="margin-top:24px; padding:16px 24px; background:#fafafa; border-top:1px solid #eee; color:#444; font-size:13px; display:flex; justify-content:space-between; align-items:center;">
+<footer class="app-footer">
     <div>
         Разработчик: <a href="https://buyreadysite.com" target="_blank" rel="noopener" style="color:#0f62fe; text-decoration:none;">Buyreadysite.com</a>
     </div>
@@ -70,7 +68,7 @@ if ($remoteData !== false) {
             <span style="color:#666">Репозиторий: <?php echo htmlspecialchars($remoteVersion); ?></span>
         <?php endif; ?>
         <?php if ($updateAvailable): ?>
-            <a href="/installer.php?action=update" style="background:#0f62fe; color:#fff; padding:6px 10px; border-radius:6px; font-weight:600; text-decoration:none;">Обновить</a>
+            <a href="/installer.php?action=update" class="btn btn-update">Обновить</a>
         <?php endif; ?>
     </div>
 </footer>
