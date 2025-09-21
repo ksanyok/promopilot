@@ -6,6 +6,9 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0);
 header('Content-Type: text/html; charset=utf-8');
 
+// Start session for post-install auto-login
+if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
+
 $repoOwner = 'ksanyok';
 $repoName  = 'promopilot';
 $defaultBranch = 'main';
@@ -403,7 +406,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
                         }
                     }
                     $messages[] = 'Установка завершена. Конфигурация сохранена в .env.';
-                    $installed = true;
+                    // Автовход в админку и удаление инсталлера
+                    $_SESSION['is_admin'] = true;
+                    $_SESSION['admin_login'] = $adminLogin;
+                    $installerPath = __FILE__;
+                    @unlink($installerPath);
+                    if (file_exists($installerPath)) { @rename($installerPath, __DIR__ . '/installer.removed'); }
+                    header('Location: /admin.php');
+                    exit;
                 }
             }
         }
