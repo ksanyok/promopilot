@@ -53,6 +53,10 @@ function processQueue() {
         return;
     }
 
+    // Optional config for Node script
+    $networksArg = $env['NETWORKS'] ?? '';
+    $countArg = $env['COUNT'] ?? '';
+
     $nodePath = detectNodeBinary($env);
     $publishScriptPath = __DIR__ . '/auto-publisher/publish.js';
 
@@ -69,7 +73,9 @@ function processQueue() {
                    . escapeshellarg($item['page_url']) . ' '
                    . escapeshellarg($item['anchor']) . ' '
                    . escapeshellarg($item['language']) . ' '
-                   . escapeshellarg($openaiApiKey);
+                   . escapeshellarg($openaiApiKey) . ' '
+                   . escapeshellarg($networksArg) . ' '
+                   . escapeshellarg($countArg);
 
         appendLog("Выполняется команда: $command");
         $output = function_exists('shell_exec') ? shell_exec($command . ' 2>&1') : '';

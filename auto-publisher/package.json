@@ -1,19 +1,17 @@
 {
   "name": "auto-publisher",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Auto publisher scripts for PromoPilot",
+  "main": "publish.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node publish.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "body-parser": "^1.20.2",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "openai": "^4.33.0",
+    "node-fetch": "^2.6.11",
     "puppeteer": "^22.6.3"
   }
 }

@@ -273,7 +273,7 @@ $installed = file_exists($envFile);
 $messages = [];
 $errors = [];
 
-// Обновление из репозитория
+// Обновление из репозитория (поддерживаем, но кнопку на UI не показываем)
 if ($action === 'update') {
     [$branchToUse, $remoteVer] = detect_branch_with_version($repoOwner, $repoName);
     $localVer = current_version($versionPhp);
@@ -331,9 +331,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
     $adminLogin = trim($_POST['admin_login'] ?? '');
     $adminPass  = (string)($_POST['admin_pass'] ?? '');
 
+    // Новые поля Google OAuth
+    $googleClientId = trim($_POST['google_client_id'] ?? '');
+    $googleClientSecret = trim($_POST['google_client_secret'] ?? '');
+    $googleRedirectUri = trim($_POST['google_redirect_uri'] ?? '');
+
     if ($dbHost === '' || $dbName === '' || $dbUser === '') $errors[] = 'Заполните параметры базы данных.';
     if ($openaiKey === '') $errors[] = 'Укажите OpenAI API ключ.';
     if ($adminLogin === '' || $adminPass === '') $errors[] = 'Укажите логин и пароль администратора.';
+    if ($googleClientId === '' || $googleClientSecret === '' || $googleRedirectUri === '') $errors[] = 'Заполните параметры Google OAuth (Client ID, Secret, Redirect URI).';
 
     if (!$errors) {
         [$ok, $err] = try_pdo($dbHost, $dbName, $dbUser, $dbPass, $dbCharset);
@@ -351,6 +357,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'update') {
                 'OPENAI_API_KEY' => $openaiKey,
                 'ADMIN_LOGIN' => $adminLogin,
                 'ADMIN_PASSWORD_HASH' => $hash,
+                // Google OAuth
+                'GOOGLE_CLIENT_ID' => $googleClientId,
+                'GOOGLE_CLIENT_SECRET' => $googleClientSecret,
+                'GOOGLE_REDIRECT_URI' => $googleRedirectUri,
             ];
             if (!env_write($envFile, $envData)) {
                 $errors[] = 'Не удалось записать .env.';
@@ -411,36 +421,33 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Установка PromoPilot</title>
-    <link rel="stylesheet" href="/styles/main.css">
+    <!-- ВАЖНО: Не подключаем внешние стили. Все стили инлайн, так как при установке vendor/assets могут отсутствовать. -->
     <style>
-        /* Installer themed wrapper */
-        body:before {
-            content: "";
-            position: fixed; inset: -20%; z-index: -1;
-            background: radial-gradient(600px 400px at 10% 80%, rgba(255,126,179,.18), transparent),
-                        radial-gradient(700px 500px at 90% 10%, rgba(37,117,252,.15), transparent);
-            filter: blur(20px);
-        }
-        .wrap { max-width: 920px; margin: 40px auto; background: var(--surface); border-radius: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.08); overflow: hidden; border: 1px solid var(--border); }
-        header { padding: 22px 24px; }
-        header h1 { margin: 0; font-size: 22px; color: #fff; }
-        .inner { padding: 22px; }
-        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        label { font-size: 13px; color: #374151; display:block; margin-bottom: 6px; }
+        body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f7fafc; color:#0f172a; }
+        .wrap { max-width: 960px; margin: 32px auto; background:#fff; border:1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 12px 28px rgba(0,0,0,.06); overflow:hidden; }
+        header { padding: 18px 22px; background: linear-gradient(120deg, #6a11cb, #2575fc); color:#fff; }
+        header h1 { margin:0; font-size: 20px; }
+        .inner { padding: 20px 22px; }
+        .row { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        label { font-size: 13px; color:#334155; display:block; margin-bottom: 6px; }
+        input[type=text], input[type=password] { width:100%; padding:10px 12px; border:1px solid #e5e7eb; border-radius: 8px; background:#f9fafb; }
+        input[type=text]:focus, input[type=password]:focus { outline:none; border-color:#2575fc; box-shadow: 0 0 0 3px rgba(37,117,252,.2); background:#fff; }
         .actions { margin-top: 16px; display:flex; gap:12px; align-items:center; }
-        .note { font-size:12px; color: var(--muted); }
+        .btn { appearance:none; border:0; background: linear-gradient(120deg, #2575fc, #6a11cb); color:#fff; padding:10px 16px; border-radius: 10px; font-weight:600; cursor:pointer; }
         .messages { margin: 12px 0; }
-        .msg { padding: 12px 14px; border-radius: 12px; margin-bottom: 10px; border: 1px solid var(--border); box-shadow: 0 8px 20px rgba(0,0,0,.04); }
-        .msg-ok { background: #ecfdf5; color:#065f46; border-color:#a7f3d0; }
-        .msg-err { background: #fef2f2; color:#991b1b; border-color:#fecaca; }
-        .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; background:#f3f4f6; border:1px solid #e5e7eb; border-radius: 6px; padding: 2px 6px; }
-        @media (max-width: 768px) { .row { grid-template-columns: 1fr; } }
+        .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; border:1px solid #e5e7eb; }
+        .msg-ok { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+        .msg-err { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
+        h3 { margin: 16px 0 10px; font-size: 16px; }
+        .help { background:#f8fafc; border:1px dashed #e5e7eb; padding:12px; border-radius: 10px; font-size: 13px; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:6px; padding:2px 6px; }
+        @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
 <div class="wrap">
     <header>
-        <h1>Установка/обновление PromoPilot</h1>
+        <h1>Установка PromoPilot</h1>
     </header>
     <div class="inner">
         <div class="messages">
@@ -478,13 +485,13 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
                     </div>
                 </div>
 
-                <h3 style="margin-top:18px;">Ключ OpenAI</h3>
+                <h3>Ключ OpenAI</h3>
                 <div>
                     <label>OpenAI API Key</label>
                     <input type="text" name="openai_key" placeholder="sk-..." required>
                 </div>
 
-                <h3 style="margin-top:18px;">Администратор</h3>
+                <h3>Администратор</h3>
                 <div class="row">
                     <div>
                         <label>Логин администратора</label>
@@ -496,29 +503,52 @@ $updateAvailable = $remoteVersion && cmp_versions($remoteVersion, $localVersion)
                     </div>
                 </div>
 
+                <h3>Google OAuth (для входа через Google)</h3>
+                <div class="row">
+                    <div>
+                        <label>Client ID</label>
+                        <input type="text" name="google_client_id" placeholder="xxxxxxxxxxxx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.apps.googleusercontent.com" required>
+                    </div>
+                    <div>
+                        <label>Client Secret</label>
+                        <input type="text" name="google_client_secret" placeholder="GOCSPX-..." required>
+                    </div>
+                    <div style="grid-column: 1 / -1;">
+                        <label>Redirect URI</label>
+                        <input type="text" name="google_redirect_uri" placeholder="https://your-domain.com/login.php" required>
+                    </div>
+                </div>
+                <div class="help">
+                    <strong>Как настроить вход через Google:</strong>
+                    <ol>
+                        <li>Откройте <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>.</li>
+                        <li>Создайте проект или выберите существующий.</li>
+                        <li>Перейдите в "Credentials" → "Create credentials" → "OAuth client ID".</li>
+                        <li>Выберите тип "Web application" и добавьте:
+                            <ul>
+                                <li>Authorized redirect URIs: <span class="mono">https://ВАШ_ДОМЕН/login.php</span></li>
+                            </ul>
+                        </li>
+                        <li>Сохраните <em>Client ID</em> и <em>Client Secret</em> и укажите их выше.</li>
+                        <li>Убедитесь, что файл <span class="mono">.env</span> содержит GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI.</li>
+                    </ol>
+                </div>
+
                 <div class="actions">
                     <button class="btn" type="submit">Установить</button>
-                    <span class="note">Будет создан файл <span class="kbd">.env</span> и загружены файлы проекта из GitHub.</span>
+                    <span style="font-size:12px; color:#64748b;">Будет создан файл <span class="mono">.env</span> и загружены файлы проекта.</span>
                 </div>
             </form>
         <?php else: ?>
-            <p>Система уже установлена. Вы можете проверить наличие обновлений и выполнить обновление при необходимости.</p>
+            <p>Система уже установлена. При необходимости вы можете переустановить настройки .env, запустив мастер заново.</p>
         <?php endif; ?>
     </div>
-    <footer class="app-footer">
-        <div>
-            Текущая версия: <span class="version"><?php echo htmlspecialchars($localVersion); ?></span>
-            <?php if ($remoteVersion): ?>
-                <span style="margin-left:8px; color:#666;">Доступна в репозитории: <?php echo htmlspecialchars($remoteVersion); ?></span>
-            <?php endif; ?>
-        </div>
-        <div>
-            <?php if ($updateAvailable): ?>
-                <a class="btn btn-update" href="?action=update">Обновить до <?php echo htmlspecialchars($remoteVersion); ?></a>
-            <?php else: ?>
-                <span style="color:#666;">Обновлений нет</span>
-            <?php endif; ?>
-        </div>
+    <footer style="padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-start; align-items:center; background:#fafafa; font-size:13px; color:#334155; gap:12px;">
+        <span>Текущая версия:</span>
+        <strong><?php echo htmlspecialchars($localVersion); ?></strong>
+        <?php if ($remoteVersion): ?>
+            <span style="color:#64748b;">(в репозитории: <?php echo htmlspecialchars($remoteVersion); ?>)</span>
+        <?php endif; ?>
     </footer>
 </div>
 </body>
