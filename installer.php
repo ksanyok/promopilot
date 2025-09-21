@@ -11,6 +11,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $admin_user = $_POST['admin_user'];
     $admin_pass = $_POST['admin_pass'];
 
+    // Создать папку config если не существует
+    if (!is_dir('config')) {
+        mkdir('config', 0755, true);
+    }
+
     // Создать config.php
     $config = "<?php\n\$db_host = '$host';\n\$db_user = '$user';\n\$db_pass = '$pass';\n\$db_name = '$db';\n?>";
     file_put_contents('config/config.php', $config);
