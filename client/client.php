@@ -27,6 +27,17 @@ $conn->close();
 ?>
 
 <?php include '../includes/header.php'; ?>
+
+<div class="sidebar">
+    <h3>Клиент</h3>
+    <ul>
+        <li><a href="client.php">Дашборд</a></li>
+        <li><a href="add_project.php">Добавить проект</a></li>
+        <li><a href="../logout.php">Выход</a></li>
+    </ul>
+</div>
+
+<div class="main-content">
 <h2>Клиентский дашборд</h2>
 
 <div class="card mb-4">
@@ -54,5 +65,7 @@ $conn->close();
 <?php else: ?>
     <p>У вас пока нет проектов. <a href="add_project.php">Добавить проект</a></p>
 <?php endif; ?>
+
+</div>
 
 <?php include '../includes/footer.php'; ?>

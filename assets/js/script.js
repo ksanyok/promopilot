@@ -63,4 +63,20 @@ document.addEventListener('DOMContentLoaded', function() {
     animateElements.forEach(el => {
         observer.observe(el);
     });
+
+    // Show default admin section
+    showSection('users');
 });
+
+// Function to show/hide admin sections
+function showSection(sectionId) {
+    // Hide all sections
+    const sections = document.querySelectorAll('.admin-section');
+    sections.forEach(section => section.style.display = 'none');
+    
+    // Show the selected section
+    const selectedSection = document.getElementById(sectionId);
+    if (selectedSection) {
+        selectedSection.style.display = 'block';
+    }
+}

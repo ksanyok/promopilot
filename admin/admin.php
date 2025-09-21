@@ -18,8 +18,15 @@ $conn->close();
 ?>
 
 <?php include '../includes/header.php'; ?>
+<div class="sidebar">
+    <h3><?php echo __('Админка'); ?></h3>
+    <a href="#" onclick="showSection('users')"><?php echo __('Пользователи'); ?></a>
+    <a href="#" onclick="showSection('projects')"><?php echo __('Проекты'); ?></a>
+</div>
+<div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
 
+<div id="users-section">
 <h3><?php echo __('Пользователи'); ?></h3>
 <table class="table table-striped">
     <thead>
@@ -48,7 +55,9 @@ $conn->close();
         <?php endwhile; ?>
     </tbody>
 </table>
+</div>
 
+<div id="projects-section" style="display:none;">
 <h3><?php echo __('Проекты'); ?></h3>
 <table class="table table-striped">
     <thead>
@@ -72,5 +81,14 @@ $conn->close();
         <?php endwhile; ?>
     </tbody>
 </table>
+</div>
+
+<script>
+function showSection(section) {
+    document.getElementById('users-section').style.display = section === 'users' ? 'block' : 'none';
+    document.getElementById('projects-section').style.display = section === 'projects' ? 'block' : 'none';
+}
+</script>
 
 <?php include '../includes/footer.php'; ?>
+</div>

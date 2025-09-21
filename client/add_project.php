@@ -26,6 +26,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 ?>
 
 <?php include '../includes/header.php'; ?>
+
+<div class="sidebar">
+    <h3>Клиент</h3>
+    <ul>
+        <li><a href="client.php">Дашборд</a></li>
+        <li><a href="add_project.php">Добавить проект</a></li>
+        <li><a href="../logout.php">Выход</a></li>
+    </ul>
+</div>
+
+<div class="main-content">
 <div class="row justify-content-center">
     <div class="col-md-6">
         <div class="card">
@@ -51,4 +62,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         </div>
     </div>
 </div>
+</div>
+
 <?php include '../includes/footer.php'; ?>

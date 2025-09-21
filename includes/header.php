@@ -52,4 +52,6 @@
         <div class="particle"></div>
         <div class="particle"></div>
     </div>
+    <?php if (!is_admin()): ?>
     <div class="container mt-4">
+    <?php endif; ?>
