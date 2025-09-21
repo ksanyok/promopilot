@@ -1,2 +1,1 @@
-<?php
-return '0.1.1';
+<?php $version = "1.0.0"; ?>
