@@ -17,12 +17,31 @@ $conn->close();
 ?>
 
 <?php include '../includes/header.php'; ?>
-<div class="sidebar">
-    <h3><?php echo __('Админка'); ?></h3>
-    <a href="#" onclick="ppShowSection('users')"><?php echo __('Пользователи'); ?></a>
-    <a href="#" onclick="ppShowSection('projects')"><?php echo __('Проекты'); ?></a>
-    <a href="<?php echo pp_url('public/scan.php'); ?>"><?php echo __('Сканер локализации'); ?></a>
+
+<!-- Логотип на пересечении навбара и сайдбара -->
+<div class="corner-brand">
+    <img src="<?php echo asset_url('img/logo.png'); ?>" alt="Logo">
 </div>
+
+<div class="sidebar">
+    <div class="menu-block">
+        <div class="menu-title"><?php echo __('Обзор'); ?></div>
+        <ul class="menu-list">
+            <li><a href="#" class="menu-item" onclick="ppShowSection('users')"><i class="bi bi-people me-2"></i><?php echo __('Пользователи'); ?></a></li>
+            <li><a href="#" class="menu-item" onclick="ppShowSection('projects')"><i class="bi bi-kanban me-2"></i><?php echo __('Проекты'); ?></a></li>
+        </ul>
+    </div>
+
+    <hr class="menu-separator">
+
+    <div class="menu-block">
+        <div class="menu-title"><?php echo __('Инструменты'); ?></div>
+        <ul class="menu-list">
+            <li><a href="<?php echo pp_url('public/scan.php'); ?>" class="menu-item"><i class="bi bi-translate me-2"></i><?php echo __('Сканер локализации'); ?></a></li>
+        </ul>
+    </div>
+</div>
+
 <div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
 

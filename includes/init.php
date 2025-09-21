@@ -6,12 +6,21 @@
 $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
 
 if (session_status() === PHP_SESSION_NONE) {
+    // Безопасное определение домена cookie (убрать порт, не задавать для localhost/IP)
+    $hostHeader = strtolower((string)($_SERVER['HTTP_HOST'] ?? ''));
+    // убрать порт, если есть
+    $hostOnly = preg_replace('/:\\d+$/', '', $hostHeader);
+    $cookieDomain = '';
+    if ($hostOnly && $hostOnly !== 'localhost' && filter_var($hostOnly, FILTER_VALIDATE_IP) === false) {
+        $cookieDomain = $hostOnly; // корректный домен без порта
+    } // иначе оставляем пустым, чтобы был host-only cookie
+
     // Secure session cookie params
     if (function_exists('session_set_cookie_params')) {
         session_set_cookie_params([
             'lifetime' => 0,
             'path' => '/',
-            'domain' => $_SERVER['HTTP_HOST'] ?? '',
+            'domain' => $cookieDomain, // пустая строка => host-only
             'secure' => $https,
             'httponly' => true,
             'samesite' => 'Lax',
