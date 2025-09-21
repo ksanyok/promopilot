@@ -1,9 +1,8 @@
 <?php
-session_start();
-include '../includes/functions.php';
+require_once __DIR__ . '/../includes/init.php';
 
 if (!is_logged_in() || !is_admin()) {
-    redirect('login.php');
+    redirect('auth/login.php');
 }
 
 $conn = connect_db();
@@ -20,8 +19,9 @@ $conn->close();
 <?php include '../includes/header.php'; ?>
 <div class="sidebar">
     <h3><?php echo __('Админка'); ?></h3>
-    <a href="#" onclick="showSection('users')"><?php echo __('Пользователи'); ?></a>
-    <a href="#" onclick="showSection('projects')"><?php echo __('Проекты'); ?></a>
+    <a href="#" onclick="ppShowSection('users')"><?php echo __('Пользователи'); ?></a>
+    <a href="#" onclick="ppShowSection('projects')"><?php echo __('Проекты'); ?></a>
+    <a href="<?php echo pp_url('public/scan.php'); ?>"><?php echo __('Сканер локализации'); ?></a>
 </div>
 <div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
@@ -42,14 +42,15 @@ $conn->close();
     <tbody>
         <?php while ($user = $users->fetch_assoc()): ?>
             <tr>
-                <td><?php echo $user['id']; ?></td>
-                <td><?php echo $user['username']; ?></td>
-                <td><?php echo $user['role']; ?></td>
-                <td><?php echo $user['balance']; ?> руб.</td>
-                <td><?php echo $user['created_at']; ?></td>
+                <td><?php echo (int)$user['id']; ?></td>
+                <td><?php echo htmlspecialchars($user['username']); ?></td>
+                <td><?php echo htmlspecialchars($user['role']); ?></td>
+                <td><?php echo htmlspecialchars($user['balance']); ?> руб.</td>
+                <td><?php echo htmlspecialchars($user['created_at']); ?></td>
                 <td>
-                    <a href="admin_login_as.php?user_id=<?php echo $user['id']; ?>" class="btn btn-warning btn-sm"><?php echo __('Войти как'); ?></a>
-                    <a href="edit_balance.php?user_id=<?php echo $user['id']; ?>" class="btn btn-info btn-sm"><?php echo __('Изменить баланс'); ?></a>
+                    <?php $t = action_token('login_as', (string)$user['id']); ?>
+                    <a href="admin_login_as.php?user_id=<?php echo (int)$user['id']; ?>&t=<?php echo urlencode($t); ?>" class="btn btn-warning btn-sm"><?php echo __('Войти как'); ?></a>
+                    <a href="edit_balance.php?user_id=<?php echo (int)$user['id']; ?>" class="btn btn-info btn-sm"><?php echo __('Изменить баланс'); ?></a>
                 </td>
             </tr>
         <?php endwhile; ?>
@@ -72,23 +73,16 @@ $conn->close();
     <tbody>
         <?php while ($project = $projects->fetch_assoc()): ?>
             <tr>
-                <td><?php echo $project['id']; ?></td>
-                <td><?php echo $project['username']; ?></td>
-                <td><?php echo $project['name']; ?></td>
-                <td><?php echo $project['description']; ?></td>
-                <td><?php echo $project['created_at']; ?></td>
+                <td><?php echo (int)$project['id']; ?></td>
+                <td><?php echo htmlspecialchars($project['username']); ?></td>
+                <td><?php echo htmlspecialchars($project['name']); ?></td>
+                <td><?php echo htmlspecialchars($project['description']); ?></td>
+                <td><?php echo htmlspecialchars($project['created_at']); ?></td>
             </tr>
         <?php endwhile; ?>
     </tbody>
 </table>
 </div>
-
-<script>
-function showSection(section) {
-    document.getElementById('users-section').style.display = section === 'users' ? 'block' : 'none';
-    document.getElementById('projects-section').style.display = section === 'projects' ? 'block' : 'none';
-}
-</script>
 
 <?php include '../includes/footer.php'; ?>
 </div>

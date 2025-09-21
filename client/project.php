@@ -1,12 +1,11 @@
 <?php
-session_start();
-include '../includes/functions.php';
+require_once __DIR__ . '/../includes/init.php';
 
 if (!is_logged_in()) {
-    redirect('login.php');
+    redirect('auth/login.php');
 }
 
-$id = $_GET['id'] ?? 0;
+$id = (int)($_GET['id'] ?? 0);
 $user_id = $_SESSION['user_id'];
 
 $conn = connect_db();
@@ -16,7 +15,10 @@ $stmt->execute();
 $result = $stmt->get_result();
 
 if ($result->num_rows == 0) {
-    echo "Проект не найден.";
+    include '../includes/header.php';
+    echo '<div class="alert alert-warning">' . __('Проект не найден.') . '</div>';
+    echo '<a class="btn btn-secondary" href="' . pp_url('client/client.php') . '">' . __('Вернуться') . '</a>';
+    include '../includes/footer.php';
     exit;
 }
 
@@ -25,7 +27,10 @@ $conn->close();
 
 // Проверить доступ: админ или владелец
 if (!is_admin() && $project['user_id'] != $user_id) {
-    echo "Доступ запрещен.";
+    include '../includes/header.php';
+    echo '<div class="alert alert-danger">' . __('Доступ запрещен.') . '</div>';
+    echo '<a class="btn btn-secondary" href="' . pp_url('client/client.php') . '">' . __('Вернуться') . '</a>';
+    include '../includes/footer.php';
     exit;
 }
 ?>
@@ -35,16 +40,13 @@ if (!is_admin() && $project['user_id'] != $user_id) {
     <div class="col-md-8">
         <div class="card">
             <div class="card-header bg-secondary text-white">
-                <h4><?php echo $project['name']; ?></h4>
+                <h4><?php echo htmlspecialchars($project['name']); ?></h4>
             </div>
             <div class="card-body">
-                <p><strong>Пользователь:</strong> <?php echo $project['username']; ?></p>
-                <p><strong>Описание:</strong></p>
-                <p><?php echo nl2br($project['description']); ?></p>
-                <p><strong>Дата создания:</strong> <?php echo $project['created_at']; ?></p>
-                <?php if (is_admin() || $project['user_id'] == $user_id): ?>
-                    <!-- Здесь можно добавить кнопки редактирования, удаления и т.д. -->
-                <?php endif; ?>
+                <p><strong><?php echo __('Пользователь'); ?>:</strong> <?php echo htmlspecialchars($project['username']); ?></p>
+                <p><strong><?php echo __('Описание'); ?>:</strong></p>
+                <p><?php echo nl2br(htmlspecialchars($project['description'])); ?></p>
+                <p><strong><?php echo __('Дата создания'); ?>:</strong> <?php echo htmlspecialchars($project['created_at']); ?></p>
             </div>
         </div>
     </div>

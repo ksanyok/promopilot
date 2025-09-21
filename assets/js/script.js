@@ -30,14 +30,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const inputs = document.querySelectorAll('.form-control');
     inputs.forEach(input => {
         input.addEventListener('focus', function() {
-            this.parentElement.style.transform = 'scale(1.02)';
+            if (this.parentElement) this.parentElement.style.transform = 'scale(1.02)';
         });
         input.addEventListener('blur', function() {
-            this.parentElement.style.transform = 'scale(1)';
+            if (this.parentElement) this.parentElement.style.transform = 'scale(1)';
         });
     });
 
-    // Language switcher auto-submit
+    // Language switcher auto-submit (if using a select)
     const langSelect = document.querySelector('select[name="lang"]');
     if (langSelect) {
         langSelect.addEventListener('change', function() {
@@ -64,19 +64,16 @@ document.addEventListener('DOMContentLoaded', function() {
         observer.observe(el);
     });
 
-    // Show default admin section
-    showSection('users');
-});
-
-// Function to show/hide admin sections
-function showSection(sectionId) {
-    // Hide all sections
-    const sections = document.querySelectorAll('.admin-section');
-    sections.forEach(section => section.style.display = 'none');
-    
-    // Show the selected section
-    const selectedSection = document.getElementById(sectionId);
-    if (selectedSection) {
-        selectedSection.style.display = 'block';
+    // Admin sections toggle (optional)
+    const usersSection = document.getElementById('users-section');
+    const projectsSection = document.getElementById('projects-section');
+    if (usersSection && projectsSection) {
+        // Default view
+        usersSection.style.display = 'block';
+        projectsSection.style.display = 'none';
+        window.ppShowSection = function(section) {
+            usersSection.style.display = section === 'users' ? 'block' : 'none';
+            projectsSection.style.display = section === 'projects' ? 'block' : 'none';
+        }
     }
-}
+});

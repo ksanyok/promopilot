@@ -1,3 +1,6 @@
+<?php
+require_once __DIR__ . '/init.php';
+?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -5,40 +8,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PromoPilot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/css/style.css" rel="stylesheet">
-    <link rel="icon" href="assets/img/favicon.ico">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="<?php echo asset_url('css/style.css'); ?>" rel="stylesheet">
+    <link rel="icon" type="image/png" href="<?php echo asset_url('img/logo.png'); ?>">
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
-            <a class="navbar-brand" href="index.php">
-                <img src="assets/img/logo.png" alt="PromoPilot" width="30" height="30" class="d-inline-block align-top">
-                PromoPilot
+            <a class="navbar-brand d-flex align-items-center gap-2" href="<?php echo pp_url('public/'); ?>">
+                <img src="<?php echo asset_url('img/logo.png'); ?>" alt="PromoPilot" width="30" height="30" class="d-inline-block align-top rounded-2">
+                <span>PromoPilot</span>
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
+                <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
-                            <li class="nav-item"><a class="nav-link" href="admin.php"><?php echo __('Админка'); ?></a></li>
+                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
                         <?php else: ?>
-                            <li class="nav-item"><a class="nav-link" href="client.php"><?php echo __('Дашборд'); ?></a></li>
-                            <li class="nav-item"><a class="nav-link" href="add_project.php"><?php echo __('Добавить проект'); ?></a></li>
+                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-1"></i><?php echo __('Дашборд'); ?></a></li>
+                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/add_project.php'); ?>"><i class="bi bi-plus-circle me-1"></i><?php echo __('Добавить проект'); ?></a></li>
                         <?php endif; ?>
                         <?php if (isset($_SESSION['admin_user_id'])): ?>
-                            <li class="nav-item"><a class="nav-link" href="admin_return.php"><?php echo __('Вернуться в админку'); ?></a></li>
+                            <?php $retToken = action_token('admin_return', (string)$_SESSION['admin_user_id']); ?>
+                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin_return.php?t=' . urlencode($retToken)); ?>"><i class="bi bi-arrow-return-left me-1"></i><?php echo __('Вернуться в админку'); ?></a></li>
                         <?php endif; ?>
-                        <li class="nav-item"><a class="nav-link" href="logout.php"><?php echo __('Выход'); ?></a></li>
+                        <li class="nav-item">
+                            <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>" class="d-inline">
+                                <?php echo csrf_field(); ?>
+                                <button type="submit" class="nav-link btn btn-link p-0"><i class="bi bi-box-arrow-right me-1"></i><?php echo __('Выход'); ?></button>
+                            </form>
+                        </li>
                     <?php else: ?>
-                        <li class="nav-item"><a class="nav-link" href="login.php"><?php echo __('Вход'); ?></a></li>
-                        <li class="nav-item"><a class="nav-link" href="register.php"><?php echo __('Регистрация'); ?></a></li>
+                        <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('auth/login.php'); ?>"><i class="bi bi-box-arrow-in-right me-1"></i><?php echo __('Вход'); ?></a></li>
+                        <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('auth/register.php'); ?>"><i class="bi bi-person-plus me-1"></i><?php echo __('Регистрация'); ?></a></li>
                     <?php endif; ?>
-                    <li class="nav-item">
+                    <li class="nav-item ms-lg-2">
                         <div class="btn-group" role="group">
-                            <a href="set_lang.php?lang=ru" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'ru') ? 'active' : ''; ?>" title="Русский">RU</a>
-                            <a href="set_lang.php?lang=en" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'en') ? 'active' : ''; ?>" title="English">EN</a>
+                            <a href="<?php echo pp_url('public/set_lang.php?lang=ru'); ?>" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'ru') ? 'active' : ''; ?>" title="Русский">RU</a>
+                            <a href="<?php echo pp_url('public/set_lang.php?lang=en'); ?>" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'en') ? 'active' : ''; ?>" title="English">EN</a>
                         </div>
                     </li>
                 </ul>
@@ -52,6 +62,8 @@
         <div class="particle"></div>
         <div class="particle"></div>
     </div>
-    <?php if (!is_admin()): ?>
+    <?php 
+    $useContainer = isset($pp_container) ? (bool)$pp_container : !is_admin();
+    if ($useContainer): ?>
     <div class="container mt-4">
     <?php endif; ?>
