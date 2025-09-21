@@ -53,9 +53,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $conn->close();
 
     // Скачать/обновить файлы из репозитория
-    exec('git pull origin main 2>&1', $output);
+    $project_path = dirname(__FILE__);
+    exec("cd /tmp && rm -rf promopilot-main main.zip && wget https://github.com/ksanyok/promopilot/archive/main.zip && unzip main.zip && cp -r promopilot-main/* $project_path/ && rm -rf promopilot-main main.zip 2>&1", $output);
+    $output_str = implode("\n", $output);
 
-    echo "Установка завершена! Файлы обновлены.<br><pre>" . implode("\n", $output) . "</pre><br><a href='public/login.php'>Войти</a>";
+    // Инициализировать git для будущих обновлений
+    exec("cd $project_path && git init && git remote add origin https://github.com/ksanyok/promopilot.git 2>&1", $git_output);
+    $output_str .= "\n" . implode("\n", $git_output);
+
+    echo "Установка завершена! Файлы обновлены.<br><pre>" . $output_str . "</pre><br><a href='public/login.php'>Войти</a>";
     exit;
 }
 ?>
