@@ -8,10 +8,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $user = $_POST['user'];
     $pass = $_POST['pass'];
     $db = $_POST['db'];
+    $admin_user = $_POST['admin_user'];
+    $admin_pass = $_POST['admin_pass'];
 
     // Создать config.php
     $config = "<?php\n\$db_host = '$host';\n\$db_user = '$user';\n\$db_pass = '$pass';\n\$db_name = '$db';\n?>";
-    file_put_contents('config.php', $config);
+    file_put_contents('config/config.php', $config);
 
     // Подключиться к БД
     $conn = new mysqli($host, $user, $pass);
@@ -45,12 +47,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     )");
 
     // Добавить админа
-    $admin_pass = password_hash('admin123', PASSWORD_DEFAULT);
-    $conn->query("INSERT IGNORE INTO users (username, password, role) VALUES ('admin', '$admin_pass', 'admin')");
+    $admin_pass_hashed = password_hash($admin_pass, PASSWORD_DEFAULT);
+    $conn->query("INSERT IGNORE INTO users (username, password, role) VALUES ('$admin_user', '$admin_pass_hashed', 'admin')");
 
     $conn->close();
 
-    echo "Установка завершена! Перейдите на <a href='login.php'>страницу входа</a>.";
+    // Скачать/обновить файлы из репозитория
+    exec('git pull origin main 2>&1', $output);
+
+    echo "Установка завершена! Файлы обновлены.<br><pre>" . implode("\n", $output) . "</pre><br><a href='public/login.php'>Войти</a>";
     exit;
 }
 ?>
@@ -87,6 +92,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             <div class="mb-3">
                                 <label>Имя БД:</label>
                                 <input type="text" name="db" class="form-control" value="promopilot" required>
+                            </div>
+                            <div class="mb-3">
+                                <label>Логин админа:</label>
+                                <input type="text" name="admin_user" class="form-control" value="admin" required>
+                            </div>
+                            <div class="mb-3">
+                                <label>Пароль админа:</label>
+                                <input type="password" name="admin_pass" class="form-control" required>
                             </div>
                             <button type="submit" class="btn btn-success">Установить</button>
                         </form>
