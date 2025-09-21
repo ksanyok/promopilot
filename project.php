@@ -216,5 +216,7 @@ while ($page = $stmt->fetch()) {
 
 </div>
 
+<?php include 'includes/footer.php'; ?>
+
 </body>
 </html>

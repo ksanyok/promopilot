@@ -1,15 +1,61 @@
 <?php
-require_once __DIR__ . '/includes/db.php'; // Подключаем базу данных из папки includes
+require_once __DIR__ . '/includes/db.php';
 
 function appendLog($message) {
-    $logFile = __DIR__ . '/promotion_log.txt'; // Лог файл в корневой директории
+    $logFile = __DIR__ . '/promotion_log.txt';
     $currentTime = date('Y-m-d H:i:s');
     $logMessage = $currentTime . " - " . $message . PHP_EOL;
     file_put_contents($logFile, $logMessage, FILE_APPEND);
 }
 
+function loadEnv($path) {
+    $env = [];
+    if (file_exists($path)) {
+        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            if (strpos($line, '=') === false) continue;
+            list($k, $v) = explode('=', $line, 2);
+            $k = trim($k);
+            $v = trim($v);
+            if (strlen($v) > 1 && $v[0] === '"' && substr($v, -1) === '"') {
+                $v = stripcslashes(substr($v, 1, -1));
+            }
+            $env[$k] = $v;
+        }
+    }
+    return $env;
+}
+
+function detectNodeBinary($env) {
+    // Приоритет: NODE_PATH из .env -> command -v node -> распространенные пути
+    if (!empty($env['NODE_PATH']) && is_executable($env['NODE_PATH'])) {
+        return $env['NODE_PATH'];
+    }
+    if (function_exists('shell_exec')) {
+        $bin = trim((string)@shell_exec('command -v node 2>/dev/null'));
+        if ($bin && is_executable($bin)) return $bin;
+    }
+    $candidates = ['/usr/bin/node', '/usr/local/bin/node', '/bin/node'];
+    foreach ($candidates as $c) {
+        if (is_executable($c)) return $c;
+    }
+    return 'node'; // Надеемся, что в PATH
+}
+
 function processQueue() {
     global $pdo;
+    $env = loadEnv(__DIR__ . '/.env');
+    $openaiApiKey = $env['OPENAI_API_KEY'] ?? '';
+    if ($openaiApiKey === '') {
+        appendLog('OPENAI_API_KEY не указан в .env');
+        return;
+    }
+
+    $nodePath = detectNodeBinary($env);
+    $publishScriptPath = __DIR__ . '/auto-publisher/publish.js';
+
     $stmt = $pdo->prepare("SELECT * FROM publication_queue WHERE status = 'pending'");
     $stmt->execute();
     while ($item = $stmt->fetch()) {
@@ -18,23 +64,19 @@ function processQueue() {
         $updateStmt->execute([$item['id']]);
 
         appendLog("Начало обработки публикации страницы с ID: " . $item['id']);
-        $nodePath = '/home/topbit/.nvm/versions/node/v18.13.0/bin/node';
-        $publishScriptPath = __DIR__ . '/auto-publisher/publish.js';
 
-        $openaiApiKey = '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'; // Используйте безопасное хранение ключей
-
-        $command = "$nodePath " . escapeshellarg($publishScriptPath) . " "
-                   . escapeshellarg($item['page_url']) . " "
-                   . escapeshellarg($item['anchor']) . " "
-                   . escapeshellarg($item['language']) . " "
+        $command = escapeshellcmd($nodePath) . ' ' . escapeshellarg($publishScriptPath) . ' '
+                   . escapeshellarg($item['page_url']) . ' '
+                   . escapeshellarg($item['anchor']) . ' '
+                   . escapeshellarg($item['language']) . ' '
                    . escapeshellarg($openaiApiKey);
 
         appendLog("Выполняется команда: $command");
-        $output = shell_exec($command . ' 2>&1');
+        $output = function_exists('shell_exec') ? shell_exec($command . ' 2>&1') : '';
         appendLog("Результат выполнения команды: " . $output);
 
         $processed = false;
-        $lines = explode("\n", trim($output));
+        $lines = explode("\n", trim((string)$output));
         foreach ($lines as $line) {
             $result = json_decode($line, true);
             if (json_last_error() === JSON_ERROR_NONE && isset($result['publishedUrl'])) {
@@ -55,7 +97,9 @@ function processQueue() {
                     appendLog("Ошибка при сохранении публикации в базу данных: " . print_r($errorInfo, true));
                 }
             } else {
-                appendLog("Не удалось опубликовать статью или разобрать результат. Данные для разбора: " . $line);
+                if (trim($line) !== '') {
+                    appendLog("Не удалось опубликовать статью или разобрать результат. Данные: " . $line);
+                }
             }
         }
 

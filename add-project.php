@@ -59,5 +59,7 @@ if (isset($_POST['addProject'])) {
     </div>
 </div>
 
+<?php include 'includes/footer.php'; ?>
+
 </body>
 </html>

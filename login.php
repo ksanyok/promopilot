@@ -58,5 +58,8 @@ $loginUrl = $client->createAuthUrl();
         <a href="<?= htmlspecialchars($loginUrl) ?>" class="login-button">Вход через Google</a>
     </div>
 </div>
+
+<?php include 'includes/footer.php'; ?>
+
 </body>
 </html>
