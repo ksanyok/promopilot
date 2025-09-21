@@ -65,5 +65,12 @@ $lang = [
     'Дата' => 'Date',
     'Нажмите кнопку для обновления' => 'Click the button to update',
     'Обновление выполнено' => 'Update completed',
+    'Войти как' => 'Log in as',
+    'Изменить баланс' => 'Edit Balance',
+    'Действия' => 'Actions',
+    'Новый баланс' => 'New Balance',
+    'Обновить баланс' => 'Update Balance',
+    'Баланс обновлен!' => 'Balance updated!',
+    'Ошибка обновления.' => 'Update error.',
 ];
 ?>

@@ -11,7 +11,7 @@
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
-            <a class="navbar-brand" href="index.php">
+            <a class="navbar-brand" href="../index.php">
                 <img src="../assets/img/logo.png" alt="PromoPilot" width="30" height="30" class="d-inline-block align-top">
                 PromoPilot
             </a>
@@ -22,15 +22,15 @@
                 <ul class="navbar-nav ms-auto">
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
-                            <li class="nav-item"><a class="nav-link" href="admin.php">Админка</a></li>
+                            <li class="nav-item"><a class="nav-link" href="admin.php"><?php echo __('Админка'); ?></a></li>
                         <?php else: ?>
-                            <li class="nav-item"><a class="nav-link" href="client.php">Дашборд</a></li>
-                            <li class="nav-item"><a class="nav-link" href="add_project.php">Добавить проект</a></li>
+                            <li class="nav-item"><a class="nav-link" href="client.php"><?php echo __('Дашборд'); ?></a></li>
+                            <li class="nav-item"><a class="nav-link" href="add_project.php"><?php echo __('Добавить проект'); ?></a></li>
                         <?php endif; ?>
-                        <li class="nav-item"><a class="nav-link" href="logout.php">Выход</a></li>
+                        <li class="nav-item"><a class="nav-link" href="logout.php"><?php echo __('Выход'); ?></a></li>
                     <?php else: ?>
-                        <li class="nav-item"><a class="nav-link" href="login.php">Вход</a></li>
-                        <li class="nav-item"><a class="nav-link" href="register.php">Регистрация</a></li>
+                        <li class="nav-item"><a class="nav-link" href="login.php"><?php echo __('Вход'); ?></a></li>
+                        <li class="nav-item"><a class="nav-link" href="register.php"><?php echo __('Регистрация'); ?></a></li>
                     <?php endif; ?>
                     <li class="nav-item">
                         <form method="post" action="set_lang.php" class="d-inline">
@@ -53,4 +53,11 @@
             </div>
         </div>
     </nav>
+    <div class="particles">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
     <div class="container mt-4">
