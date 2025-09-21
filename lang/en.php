@@ -72,5 +72,6 @@ $lang = [
     'Обновить баланс' => 'Update Balance',
     'Баланс обновлен!' => 'Balance updated!',
     'Ошибка обновления.' => 'Update error.',
+    'Версия' => 'Version',
 ];
 ?>
