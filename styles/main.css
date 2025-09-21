@@ -1,0 +1,438 @@
+body, h1, h2, h3, p, a, img, div {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font-size: 100%;
+    font: inherit;
+    vertical-align: baseline;
+}
+
+header {
+    position: sticky;
+    top: 0;
+    z-index: 1000; /* Чтобы хедер был над другими элементами */
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    padding: 1.5em 0;
+}
+
+
+.container {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo img {
+    height: 75px; /* Увеличиваем размер логотипа */
+}
+
+.auth-and-balance {
+    display: flex;
+    align-items: center;
+}
+
+.greeting, .user-name {
+    color: #fff;
+    display: block; /* Новое: делаем блочным элементом для адаптивности */
+}
+
+.user-name {
+    font-weight: bold;
+}
+
+.user-info {
+    margin-right: 1em; /* Отступ между приветствием и кнопкой выхода */
+    display: flex; /* Добавлено: контейнер user-info становится flex-контейнером */
+}
+
+.user-greeting {
+    margin-right: 20px;
+}
+
+.logout {
+    margin-left: auto; /* Кнопка выхода будет прижата к правому краю блока user-info */
+}
+
+.logout-button, .login-button {
+    background-color: #fff;
+    color: #667eea;
+    padding: 0.5em 1em;
+    text-decoration: none;
+    border-radius: 20px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+    white-space: nowrap; /* Новое: предотвращаем перенос текста кнопки */
+	display: flex;
+}
+
+.logout-button:hover, .login-button:hover {
+    background-color: #f8f9fa;
+}
+
+.balance {
+    border: 2px solid #fff; /* Добавляем рамку вокруг баланса */
+    padding: 0.5em 1em;
+    border-radius: 20px; /* Скругляем углы рамки баланса */
+    white-space: nowrap; /* Предотвращаем перенос баланса */
+    margin-right: 20px; /* Отступ справа от блока баланса */
+}
+
+/* Адаптивность для мобильных устройств */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column; /* Столбцовое расположение на маленьких экранах */
+        align-items: flex-start;
+    }
+
+    .logo {
+        margin-bottom: 1em; /* Добавляем отступ под логотипом */
+    }
+
+    .auth-and-balance {
+        align-items: flex-start;
+    }
+
+    .greeting, .user-name, .balance {
+        text-align: left; /* Выравнивание текста по левому краю */
+    }
+
+    .balance {
+        margin-top: 0.5em; /* Отступ между информацией пользователя и балансом */
+        margin-left: 0; /* Убираем левый отступ для баланса */
+    }
+}
+
+
+
+
+/*********** сайдбар ***********/
+.sidebar {
+	position: fixed;
+    background: linear-gradient(135deg, #f8f8f8 0%, #6ebeb3 100%);
+    padding: 1em;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+}
+
+
+.sidebar-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.add-project-button {
+    background-color: #667eea;
+    color: #fff;
+    padding: 0.5em 1em;
+    text-decoration: none;
+    border-radius: 20px;
+    font-weight: bold;
+    margin-bottom: 1em; /* Отступ до разделителя */
+    text-align: center;
+    display: flex; /* Используем flexbox для выравнивания иконки и текста */
+    align-items: center; /* Центрируем элементы по вертикали */
+    justify-content: center; /* Центрируем элементы по горизонтали */
+    gap: 10px; /* Добавляем небольшой промежуток между иконкой и текстом */	
+}
+
+
+/* Добавляем стили для иконки, если это необходимо */
+.icon {
+    /* Вы можете добавить здесь стили для вашей иконки, если это необходимо */
+}
+
+.sidebar-divider {
+    border: none; /* Убираем стандартную границу */
+    border-top: 2px dashed #ccc; /* Делаем пунктирный верхний бордюр */
+    margin: 1em 0; /* Добавляем немного отступа сверху и снизу */
+}
+
+
+.projects-list {
+    list-style-type: none; /* Убираем стандартные маркеры списка */
+    padding: 0;
+}
+
+.projects-list li {
+    margin-bottom: 0.5em; /* Добавляем немного пространства между элементами списка */
+    display: flex; /* Используем flexbox для выравнивания иконок и текста */
+    align-items: center; /* Центрируем элементы по вертикали */
+}
+
+.projects-list li a {
+    color: #333; /* Цвет текста ссылок */
+    text-decoration: none; /* Убираем подчеркивание */
+    display: flex; /* Используем flexbox для выравнивания иконок и текста */
+    align-items: center; /* Центрируем элементы по вертикали */
+    gap: 10px; /* Добавляем небольшой промежуток между иконкой и текстом */
+}
+
+.project-icon {
+    fill: #667eea; /* Цвет иконки, синий для соответствия основной цветовой схеме */
+    margin-right: 5px; /* Небольшой отступ справа от иконки */
+}
+
+
+
+
+
+.projects-list li.active a {
+    background-color: #4A90E2; /* Синий цвет фона для активного пункта */
+    color: #FFFFFF; /* Белый цвет текста */
+    border-radius: 5px; /* Скругление углов */
+    padding: 0.5em; /* Немного увеличиваем внутренние отступы */
+}
+
+.project-icon {
+    fill: #FFFFFF; /* Меняем цвет иконки на белый для активного пункта */
+}
+
+/* Стиль для неактивных элементов, чтобы иконки оставались синими */
+.projects-list li:not(.active) .project-icon {
+    fill: #667eea;
+}
+
+
+
+
+
+/* Стили для структуры страницы */
+.main-container {
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 250px; /* Задаем ширину сайдбара */
+    flex-shrink: 0; /* Сайдбар не будет сжиматься */
+    height: calc(100vh - 3em); /* Высота, отняв высоту шапки */
+    overflow-y: auto; /* Добавляем скролл при необходимости */
+}
+
+.content {
+    flex-grow: 1;
+    padding: 1em;
+    padding-left: 300px; /* Учитывая внутренние отступы сайдбара, добавляем немного больше */
+    overflow-y: auto;
+}
+
+
+/* Медиа запросы для адаптивности */
+@media (max-width: 768px) {
+    .main-container {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        width: 100%; /* Сайдбар на всю ширину на мобильных */
+        height: auto;
+    }
+
+    .content {
+        order: 2; /* Контент идет после сайдбара на мобильных */
+    }
+}
+
+/*************** страница проекта **********/
+
+.project-info {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff; /* Белый цвет текста для лучшего контраста */
+    padding: 20px; /* Отступы вокруг текста */
+    margin-bottom: 20px; /* Отступ снизу */
+    border-radius: 10px; /* Скругленные углы */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Тень вокруг блока */
+    text-align: center; /* Выравнивание текста по центру */
+}
+
+.project-info h1 {
+    margin: 0; /* Убираем стандартные отступы */
+    padding: 10px 0; /* Увеличиваем отступы сверху и снизу для текста */
+    font-size: 2.5em; /* Увеличиваем размер шрифта */
+    text-transform: uppercase; /* Преобразуем текст в верхний регистр */
+    font-weight: bold; /* Делаем текст жирным */
+}
+
+.project-info p {
+    margin: 0; /* Убираем стандартные отступы */
+    padding: 10px 0; /* Увеличиваем отступы сверху и снизу для текста */
+    font-size: 1.2em; /* Немного увеличиваем размер шрифта */
+    font-weight: bold; /* Делаем текст жирным */
+}
+
+.content h1, h2 {
+    font-size: 2em; /* Увеличиваем размер шрифта для подзаголовка */
+    text-align: center; /* Выравнивание текста по центру */
+    padding: 20px 0; /* Добавляем отступы сверху и снизу */
+    text-decoration: underline; /* Применяем подчеркивание */
+    margin: 20px 0; /* Устанавливаем отступы для создания пространства вокруг подзаголовка */
+    font-weight: bold; /* Сделаем шрифт жирным для лучшей заметности */
+}
+
+.content h3 {
+    font-size: 1.5em; /* Увеличиваем размер шрифта для подзаголовка */
+    text-align: center; /* Выравнивание текста по центру */
+    padding: 20px 0; /* Добавляем отступы сверху и снизу */
+    margin: 20px 0; /* Устанавливаем отступы для создания пространства вокруг подзаголовка */
+    font-weight: bold; /* Сделаем шрифт жирным для лучшей заметности */
+}
+
+
+/* Стили для формы */
+form {
+    margin-bottom: 20px;
+}
+
+input[type="text"],
+textarea {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Чтобы padding не увеличивал ширину поля */
+}
+
+button {
+    background-color: #667eea; /* Синий фон */
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #5a67d8;
+}
+
+/* Стили для таблицы */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+table, th, td {
+    border: 1px solid #ddd;
+}
+
+th, td {
+    text-align: left;
+    padding: 8px;
+}
+
+th {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+/* Стили для кнопок в таблице */
+table button {
+    background-color: #667eea;
+    color: white;
+    padding: 5px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin: 5px;
+}
+
+table button:hover {
+    background-color: #007B9E;
+}
+
+table button.disabled {
+    background-color: #a0a0a0;  /* Серый цвет для заблокированных кнопок */
+    color: #ccc;
+    cursor: not-allowed;  /* Курсор в виде знака запрета */
+}
+
+.project-info a {
+    color: #fffbfe; /* Светлый оттенок для контраста на темном фоне */
+    text-decoration: underline;
+}
+
+
+/********* История ***********/
+.project-history {
+    list-style: none;
+    padding-left: 20px; /* Отступ для создания вложенности */
+}
+
+.project-history li {
+    margin-bottom: 5px;
+}
+
+.project-history li a {
+    color: #333;
+    text-decoration: none;
+}
+
+.project-history li a:hover {
+    text-decoration: underline;
+}
+
+
+
+
+.delete-button {
+    border: 1px solid #c0c0c0;
+    background: none;
+    color: #313131;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+
+
+
+
+
+
+.progress-circle {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    position: relative;
+    background-color: #ddd;
+    text-align: center;
+    line-height: 30px;
+    color: black;
+    font-weight: bold;
+}
+
+.progress-circle:before {
+    content: attr(data-progress) '%'; /* Добавление знака процента */
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: conic-gradient(green var(--p, 0), #ddd 0);
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+
+.progress-circle:hover:before {
+    --p: calc(var(--progress) * 1%);
+}
+
+.link-pyramid img {
+    width: 100%;
+}
+
+.link-pyramid {
+    padding: 10px 0;
+}
