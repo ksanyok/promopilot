@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PromoPilot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="../assets/css/style.css" rel="stylesheet">
-    <link rel="icon" href="../assets/img/favicon.ico">
+    <link href="assets/css/style.css" rel="stylesheet">
+    <link rel="icon" href="assets/img/favicon.ico">
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
-            <a class="navbar-brand" href="../index.php">
-                <img src="../assets/img/logo.png" alt="PromoPilot" width="30" height="30" class="d-inline-block align-top">
+            <a class="navbar-brand" href="index.php">
+                <img src="assets/img/logo.png" alt="PromoPilot" width="30" height="30" class="d-inline-block align-top">
                 PromoPilot
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -26,6 +26,9 @@
                         <?php else: ?>
                             <li class="nav-item"><a class="nav-link" href="client.php"><?php echo __('Дашборд'); ?></a></li>
                             <li class="nav-item"><a class="nav-link" href="add_project.php"><?php echo __('Добавить проект'); ?></a></li>
+                        <?php endif; ?>
+                        <?php if (isset($_SESSION['admin_user_id'])): ?>
+                            <li class="nav-item"><a class="nav-link" href="admin_return.php"><?php echo __('Вернуться в админку'); ?></a></li>
                         <?php endif; ?>
                         <li class="nav-item"><a class="nav-link" href="logout.php"><?php echo __('Выход'); ?></a></li>
                     <?php else: ?>

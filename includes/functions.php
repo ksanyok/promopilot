@@ -2,16 +2,16 @@
 $current_lang = $_SESSION['lang'] ?? 'ru';
 
 if ($current_lang != 'ru') {
-    include '../lang/' . $current_lang . '.php';
+    include 'lang/' . $current_lang . '.php';
 }
 
 // Общие функции для PromoPilot
 
 function connect_db() {
-    if (!file_exists('../config/config.php')) {
+    if (!file_exists('config/config.php')) {
         die('Config file not found. Please run the installer at /installer.php');
     }
-    include '../config/config.php';
+    include 'config/config.php';
     if (!isset($db_host, $db_user, $db_pass, $db_name)) {
         die('Database configuration variables are not set. Please check config/config.php');
     }
@@ -47,7 +47,7 @@ function check_version() {
     if ($response) {
         $data = json_decode($response, true);
         $latest = $data['tag_name'] ?? '1.0.0';
-        include '../config/version.php';
+        include 'config/version.php';
         return version_compare($latest, $version, '>');
     }
     return false;

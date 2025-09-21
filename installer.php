@@ -66,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     exec("cd $project_path && git init && git remote add origin https://github.com/ksanyok/promopilot.git 2>&1", $git_output);
     $output_str .= "\n" . implode("\n", $git_output);
 
-    echo "Установка завершена! Файлы обновлены.<br><pre>" . $output_str . "</pre><br><a href='public/login.php'>Войти</a>";
+    echo "Установка завершена! Файлы обновлены.<br><pre>" . $output_str . "</pre><br><a href='login.php'>Войти</a>";
     exit;
 }
 ?>

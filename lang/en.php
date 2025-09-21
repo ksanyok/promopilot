@@ -73,5 +73,6 @@ $lang = [
     'Баланс обновлен!' => 'Balance updated!',
     'Ошибка обновления.' => 'Update error.',
     'Версия' => 'Version',
+    'Вернуться в админку' => 'Return to Admin Panel',
 ];
 ?>

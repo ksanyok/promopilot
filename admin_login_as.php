@@ -16,6 +16,9 @@ if ($user_id) {
     $result = $stmt->get_result();
     if ($result->num_rows == 1) {
         $user = $result->fetch_assoc();
+        if (!isset($_SESSION['admin_user_id'])) {
+            $_SESSION['admin_user_id'] = $_SESSION['user_id'];
+        }
         $_SESSION['user_id'] = $user_id;
         $_SESSION['role'] = $user['role'];
         $conn->close();
