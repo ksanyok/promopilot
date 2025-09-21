@@ -8,7 +8,13 @@ if ($current_lang != 'ru') {
 // Общие функции для PromoPilot
 
 function connect_db() {
+    if (!file_exists('../config/config.php')) {
+        die('Config file not found. Please run the installer at /installer.php');
+    }
     include '../config/config.php';
+    if (!isset($db_host, $db_user, $db_pass, $db_name)) {
+        die('Database configuration variables are not set. Please check config/config.php');
+    }
     $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
     if ($conn->connect_error) {
         die("Ошибка подключения к БД: " . $conn->connect_error);
