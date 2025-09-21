@@ -47,6 +47,7 @@ function check_version() {
     if ($response) {
         $data = json_decode($response, true);
         $latest = $data['tag_name'] ?? '1.0.0';
+        $latest = str_replace('v', '', $latest); // Убираем 'v' если есть
         include 'config/version.php';
         return version_compare($latest, $version, '>');
     }
