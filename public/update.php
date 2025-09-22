@@ -17,6 +17,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } else {
         $current_version = get_version();
 
+        // Перейти в корневую директорию проекта
+        chdir(PP_ROOT_PATH);
+
         // Выполнить git pull
         exec('git pull origin main 2>&1', $output);
         $message = __('Обновление выполнено') . ':<br><pre>' . implode("\n", $output) . '</pre>';
