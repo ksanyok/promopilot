@@ -107,7 +107,7 @@ body::after {
 
 /* Corner brand (logo on intersection) */
 .corner-brand { position: fixed; z-index: 3; top: calc(var(--navbar-h) - 30px); left: calc(var(--sidebar-width) - 30px); width: 60px; height: 60px; display: grid; place-items: center; border-radius: 16px; background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); box-shadow: var(--shadow); }
-.corner-brand img { width: 36px; height: 36px; border-radius: 10px; }
+.corner-brand img { width: 70%; height: auto; border-radius: 12px; }
 
 /* =================== Components =================== */
 .card { border: 1px solid var(--border); border-radius: var(--radius); background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); backdrop-filter: blur(10px); box-shadow: var(--shadow); }
@@ -134,7 +134,7 @@ body::after {
 .alert { border-radius: var(--radius-xs); border: 1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,.04)); color: var(--text); }
 
 .footer { background: linear-gradient(180deg, rgba(17,24,39,.85), rgba(17,24,39,.65)); border-top: 1px solid var(--border); box-shadow: var(--shadow); }
-.footer-logo { filter: drop-shadow(0 4px 10px rgba(59,130,246,.35)); }
+.footer-logo { filter: drop-shadow(0 4px 10px rgba(59,130,246,.35)); height: clamp(28px, 5vh, 48px); width: auto; object-fit: contain; }
 
 /* Utility */
 .badge { border-radius: 999px; padding: .35em .6em; font-weight: 600; }
@@ -152,4 +152,28 @@ body::after {
   .sidebar { position: static; width: 100%; height: auto; backdrop-filter: none; background: linear-gradient(180deg, rgba(17,24,39,.7), rgba(17,24,39,.5)); }
   .main-content { margin-left: 0; padding: 18px; }
   .corner-brand { display: none; }
+}
+
+/* Adaptive brand logos */
+.navbar .navbar-brand .brand-logo {
+  height: calc(var(--navbar-h) - 20px);
+  max-height: calc(var(--navbar-h) - 16px);
+  width: auto;
+  aspect-ratio: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(59,130,246,.35);
+}
+
+.footer .footer-logo {
+  height: clamp(28px, 5vh, 48px);
+  width: auto;
+  object-fit: contain;
+}
+
+/* Corner brand image keep ratio */
+.corner-brand img {
+  width: 70%;
+  height: auto;
+  border-radius: 12px;
 }

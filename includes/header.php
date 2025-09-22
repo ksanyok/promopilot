@@ -16,7 +16,7 @@ require_once __DIR__ . '/init.php';
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="<?php echo pp_url('public/'); ?>" title="PromoPilot">
-                <img src="<?php echo asset_url('img/logo.png'); ?>" alt="Logo" width="36" height="36" class="d-inline-block align-top rounded-2">
+                <img src="<?php echo asset_url('img/logo.png'); ?>" alt="Logo" class="brand-logo">
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>

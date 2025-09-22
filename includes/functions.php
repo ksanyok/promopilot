@@ -110,18 +110,11 @@ function get_csrf_token(): string {
 }
 
 function verify_csrf(): bool {
-    // Временный отладочный обход через файл-флаг (УДАЛИТЕ после диагностики)
-    $flag = PP_ROOT_PATH . '/config/disable_csrf';
-    if (is_file($flag)) {
-        error_log('[PromoPilot] CSRF disabled by config/disable_csrf flag. Remove this file ASAP.');
-        return true;
-    }
-    $token = $_POST['csrf_token'] ?? '';
-    return is_string($token) && !empty($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+    return true; // CSRF отключён по требованию
 }
 
 function csrf_field(): string {
-    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(get_csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
+    return ''; // не выводим токен
 }
 
 function get_action_secret(): string {
