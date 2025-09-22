@@ -74,23 +74,8 @@ function get_version() {
     return $version;
 }
 
-function check_version(bool $force = false) {
-    $cacheFile = PP_ROOT_PATH . '/config/version_cache.json';
-    $ttl = 60 * 60; // 1 hour
-    $now = time();
-
-    if (!$force && file_exists($cacheFile)) {
-        $data = json_decode(@file_get_contents($cacheFile), true);
-        if (!empty($data['ts']) && ($now - (int)$data['ts'] < $ttl) && isset($data['is_new'])) {
-            // Re-evaluate with current version to be safe
-            $cachedLatest = $data['latest'] ?? null;
-            if ($cachedLatest) {
-                return version_compare($cachedLatest, get_version(), '>');
-            }
-            return (bool)$data['is_new'];
-        }
-    }
-
+// Fetch latest release info from GitHub (no local JSON cache)
+function fetch_latest_release_info(): ?array {
     $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
     $context = stream_context_create([
         'http' => [
@@ -102,27 +87,44 @@ function check_version(bool $force = false) {
             'verify_peer_name' => true,
         ],
     ]);
-    $isNew = false;
-    $latest = null;
     $response = @file_get_contents($url, false, $context);
-    if ($response) {
-        $data = json_decode($response, true);
-        $tag = (string)($data['tag_name'] ?? '');
-        $latest = preg_replace('~^v~i', '', $tag ?: '0.0.0');
-        $current = get_version();
-        $isNew = version_compare($latest, $current, '>');
-        @file_put_contents($cacheFile, json_encode(['ts' => $now, 'is_new' => $isNew, 'latest' => $latest]));
-        return $isNew;
+    if (!$response) return null;
+    $data = json_decode($response, true);
+    if (!$data || !isset($data['tag_name'])) return null;
+    $tag = (string)$data['tag_name'];
+    $latest = preg_replace('~^v~i', '', $tag ?: '0.0.0');
+    $publishedRaw = (string)($data['published_at'] ?? '');
+    // Normalize to Y-m-d
+    $published = '';
+    if ($publishedRaw) {
+        $ts = strtotime($publishedRaw);
+        if ($ts) { $published = date('Y-m-d', $ts); }
     }
+    return [
+        'version' => $latest,
+        'published_at' => $published,
+    ];
+}
 
-    // On fetch failure: do not overwrite cache; fall back to previous cache if valid
-    if (file_exists($cacheFile)) {
-        $data = json_decode(@file_get_contents($cacheFile), true);
-        if ($data && isset($data['latest'])) {
-            return version_compare($data['latest'], get_version(), '>');
-        }
+// Return update status with latest version and date
+function get_update_status(): array {
+    // Clean up obsolete cache file if it exists
+    $oldCache = PP_ROOT_PATH . '/config/version_cache.json';
+    if (is_file($oldCache)) { @unlink($oldCache); }
+
+    $current = get_version();
+    $info = fetch_latest_release_info();
+    if (!$info) {
+        return ['is_new' => false, 'latest' => null, 'published_at' => null];
     }
-    return false;
+    $isNew = version_compare($info['version'], $current, '>');
+    return ['is_new' => $isNew, 'latest' => $info['version'], 'published_at' => $info['published_at']];
+}
+
+// Back-compat: simple boolean check
+function check_version(bool $force = false) {
+    $st = get_update_status();
+    return (bool)$st['is_new'];
 }
 
 // Функция перевода

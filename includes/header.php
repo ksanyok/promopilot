@@ -14,8 +14,11 @@ require_once __DIR__ . '/init.php';
     <link rel="icon" type="image/svg+xml" href="<?php echo asset_url('img/logo.svg'); ?>">
 </head>
 <body>
+    <!-- Futuristic neutral background canvas -->
+    <div id="bgfx" aria-hidden="true"><canvas id="bgfx-canvas"></canvas></div>
+
     <nav class="navbar navbar-expand-lg navbar-dark">
-        <div class="container">
+        <div class="container-fluid">
             <?php if (empty($pp_hide_brand_logo)): ?>
             <a class="navbar-brand d-flex align-items-center" href="<?php echo pp_url(''); ?>" title="PromoPilot">
                 <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="Logo" class="brand-logo">
@@ -65,13 +68,6 @@ require_once __DIR__ . '/init.php';
             </div>
         </div>
     </nav>
-    <div class="particles">
-        <div class="particle"></div>
-        <div class="particle"></div>
-        <div class="particle"></div>
-        <div class="particle"></div>
-        <div class="particle"></div>
-    </div>
     <main class="page-wrap">
     <?php 
     $useContainer = isset($pp_container) ? (bool)$pp_container : !is_admin();

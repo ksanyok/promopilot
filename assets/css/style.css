@@ -53,9 +53,14 @@ body {
   flex-direction: column;
 }
 
+/* Futuristic background canvas layer */
+#bgfx { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+#bgfx-canvas { width: 100%; height: 100%; display: block; opacity: .55; }
+:root[data-theme="light"] #bgfx-canvas { opacity: .35; }
+
 /* Background aura */
 body::before, body::after {
-  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
 }
 body::before {
   background:
@@ -81,6 +86,7 @@ main.page-wrap { flex: 1 1 auto; display: block; }
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow);
+  z-index: 5;
 }
 .navbar .navbar-brand img { width: 38px; height: 38px; border-radius: 10px; box-shadow: 0 4px 14px rgba(59,130,246,.35); }
 .nav-link { color: var(--text) !important; opacity: .9; }
@@ -91,11 +97,11 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .theme-toggle.btn:hover { background: var(--surface-2); color: var(--primary); }
 
 /* =================== Layout =================== */
-.main-content { position: relative; z-index: 1; margin-left: var(--sidebar-width); padding: 28px; /* removed min-height to avoid layout conflicts */ }
+.main-content { position: relative; z-index: 3; margin-left: var(--sidebar-width); padding: 28px; /* removed min-height to avoid layout conflicts */ }
 
 /* Sidebar */
 .sidebar {
-  position: fixed; z-index: 2; top: var(--navbar-h); left: 0;
+  position: fixed; z-index: 4; top: var(--navbar-h); left: 0;
   width: var(--sidebar-width); height: calc(100% - var(--navbar-h));
   background: linear-gradient(180deg, rgba(17,24,39,.85), rgba(17,24,39,.65));
   backdrop-filter: blur(10px);
@@ -113,7 +119,7 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .menu-separator { border: none; height: 1px; margin: 12px 6px 16px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
 
 /* Corner brand (logo on intersection) */
-.corner-brand { position: fixed; z-index: 3; top: calc(var(--navbar-h) - 30px); left: calc(var(--sidebar-width) - 30px); width: 60px; height: 60px; display: grid; place-items: center; border-radius: 16px; background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.corner-brand { position: fixed; z-index: 6; top: calc(var(--navbar-h) - 30px); left: calc(var(--sidebar-width) - 30px); width: 60px; height: 60px; display: grid; place-items: center; border-radius: 16px; background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); box-shadow: var(--shadow); }
 .corner-brand img { width: 70%; height: auto; border-radius: 12px; }
 
 /* =================== Components =================== */
@@ -134,7 +140,16 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 20%, transparent); }
 
 .table { color: var(--text); border-radius: var(--radius-sm); overflow: hidden; }
-.table thead th { background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); border-bottom: 1px solid var(--border); }
+.table thead th { 
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); 
+  border-bottom: 1px solid var(--border); 
+  color: var(--text); 
+  font-weight: 600;
+}
+/* Slightly stronger contrast for dark theme */
+:root:not([data-theme="light"]) .table thead th {
+  background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.06));
+}
 .table-striped tbody tr:nth-of-type(odd) { background: rgba(255,255,255,.02); }
 .table-hover tbody tr:hover { background: rgba(255,255,255,.05); }
 
