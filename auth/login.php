@@ -15,24 +15,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $password = $_POST['password'];
 
         $conn = connect_db();
-        $stmt = $conn->prepare("SELECT id, password, role FROM users WHERE username = ?");
-        $stmt->bind_param("s", $username);
-        $stmt->execute();
-        $result = $stmt->get_result();
-
-        if ($result->num_rows == 1) {
-            $user = $result->fetch_assoc();
-            if (password_verify($password, $user['password'])) {
-                pp_session_regenerate();
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['role'] = $user['role'];
-                session_write_close(); // гарантируем сохранение сессии
-                redirect($user['role'] === 'admin' ? 'admin/admin.php' : 'client/client.php');
+        $stmt = $conn->prepare("SELECT id, password, role FROM users WHERE username = ? LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param("s", $username);
+            $stmt->execute();
+            $stmt->bind_result($uid, $hash, $role);
+            if ($stmt->fetch()) {
+                if (password_verify($password, $hash)) {
+                    $stmt->close();
+                    $conn->close();
+                    pp_session_regenerate();
+                    $_SESSION['user_id'] = $uid;
+                    $_SESSION['role'] = $role;
+                    session_write_close();
+                    redirect($role === 'admin' ? 'admin/admin.php' : 'client/client.php');
+                } else {
+                    $message = 'Неверный пароль.';
+                }
             } else {
-                $message = 'Неверный пароль.';
+                $message = 'Пользователь не найден.';
             }
+            $stmt->close();
         } else {
-            $message = 'Пользователь не найден.';
+            $message = 'Ошибка запроса.';
         }
         $conn->close();
     }
