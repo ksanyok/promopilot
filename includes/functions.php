@@ -146,4 +146,28 @@ function verify_action_token(string $token, string $action, string $data = ''): 
     $calc = action_token($action, $data);
     return hash_equals($calc, $token);
 }
+
+function get_user_balance(int $userId): ?float {
+    $conn = @connect_db();
+    if (!$conn) return null;
+    $stmt = $conn->prepare("SELECT balance FROM users WHERE id = ?");
+    if (!$stmt) { $conn->close(); return null; }
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $stmt->bind_result($balance);
+    if ($stmt->fetch()) {
+        $stmt->close();
+        $conn->close();
+        return (float)$balance;
+    }
+    $stmt->close();
+    $conn->close();
+    return null;
+}
+
+function get_current_user_balance(): ?float {
+    if (!is_logged_in()) return null;
+    return get_user_balance((int)$_SESSION['user_id']);
+}
+
 ?>

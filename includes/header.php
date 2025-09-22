@@ -10,14 +10,17 @@ require_once __DIR__ . '/init.php';
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="<?php echo asset_url('css/style.css'); ?>" rel="stylesheet">
-    <link rel="icon" type="image/png" href="<?php echo asset_url('img/logo.png'); ?>">
+    <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
+    <link rel="icon" type="image/svg+xml" href="<?php echo asset_url('img/logo.svg'); ?>">
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
+            <?php if (empty($pp_hide_brand_logo)): ?>
             <a class="navbar-brand d-flex align-items-center" href="<?php echo pp_url(''); ?>" title="PromoPilot">
-                <img src="<?php echo asset_url('img/logo.png'); ?>" alt="Logo" class="brand-logo">
+                <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="Logo" class="brand-logo">
             </a>
+            <?php endif; ?>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
@@ -29,6 +32,9 @@ require_once __DIR__ . '/init.php';
                         <?php else: ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-1"></i><?php echo __('Дашборд'); ?></a></li>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/add_project.php'); ?>"><i class="bi bi-plus-circle me-1"></i><?php echo __('Добавить проект'); ?></a></li>
+                            <?php $bal = get_current_user_balance(); if ($bal !== null): ?>
+                                <li class="nav-item"><span class="nav-link"><i class="bi bi-coin me-1"></i><?php echo __('Баланс'); ?>: <?php echo htmlspecialchars(number_format($bal, 2, '.', ' ')); ?> <?php echo __('руб.'); ?></span></li>
+                            <?php endif; ?>
                         <?php endif; ?>
                         <?php if (isset($_SESSION['admin_user_id'])): ?>
                             <?php $retToken = action_token('admin_return', (string)$_SESSION['admin_user_id']); ?>

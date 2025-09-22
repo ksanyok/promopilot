@@ -13,20 +13,24 @@ if (!$user_id || !verify_action_token($token, 'login_as', (string)$user_id)) {
 }
 
 $conn = connect_db();
-$stmt = $conn->prepare("SELECT role FROM users WHERE id = ?");
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$result = $stmt->get_result();
-if ($result->num_rows == 1) {
-    $user = $result->fetch_assoc();
-    if (!isset($_SESSION['admin_user_id'])) {
-        $_SESSION['admin_user_id'] = $_SESSION['user_id'];
+$stmt = $conn->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
+if ($stmt) {
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $stmt->bind_result($role);
+    if ($stmt->fetch()) {
+        if (!isset($_SESSION['admin_user_id'])) {
+            $_SESSION['admin_user_id'] = $_SESSION['user_id'];
+        }
+        $stmt->close();
+        $conn->close();
+        pp_session_regenerate();
+        $_SESSION['user_id'] = $user_id;
+        $_SESSION['role'] = $role;
+        session_write_close();
+        redirect($role === 'admin' ? 'admin/admin.php' : 'client/client.php');
     }
-    pp_session_regenerate();
-    $_SESSION['user_id'] = $user_id;
-    $_SESSION['role'] = $user['role'];
-    $conn->close();
-    redirect('client/client.php');
+    $stmt->close();
 }
 $conn->close();
 

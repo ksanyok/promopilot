@@ -5,6 +5,9 @@ if (!is_logged_in() || !is_admin()) {
     redirect('auth/login.php');
 }
 
+// Hide brand logo in top navbar to leave only the corner-brand in admin
+$pp_hide_brand_logo = true;
+
 $conn = connect_db();
 
 // Получить пользователей
@@ -20,15 +23,34 @@ $conn->close();
 
 <!-- Логотип на пересечении навбара и сайдбара -->
 <div class="corner-brand">
-    <img src="<?php echo asset_url('img/logo.png'); ?>" alt="Logo">
+    <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="Logo">
 </div>
 
 <div class="sidebar">
     <div class="menu-block">
         <div class="menu-title"><?php echo __('Обзор'); ?></div>
         <ul class="menu-list">
-            <li><a href="#" class="menu-item" onclick="ppShowSection('users')"><i class="bi bi-people me-2"></i><?php echo __('Пользователи'); ?></a></li>
-            <li><a href="#" class="menu-item" onclick="ppShowSection('projects')"><i class="bi bi-kanban me-2"></i><?php echo __('Проекты'); ?></a></li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('users')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <circle cx="7" cy="8" r="3"/>
+                        <circle cx="17" cy="8" r="3"/>
+                        <path d="M2 20c0-3 3-5 5-5s5 2 5 5"/>
+                        <path d="M12 20c0-3 3-5 5-5s5 2 5 5"/>
+                    </svg>
+                    <?php echo __('Пользователи'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('projects')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="me-2" aria-hidden="true">
+                        <rect x="3" y="4" width="6" height="16" rx="2"/>
+                        <rect x="10" y="4" width="6" height="12" rx="2"/>
+                        <rect x="17" y="4" width="4" height="8" rx="2"/>
+                    </svg>
+                    <?php echo __('Проекты'); ?>
+                </a>
+            </li>
         </ul>
     </div>
 
@@ -37,7 +59,17 @@ $conn->close();
     <div class="menu-block">
         <div class="menu-title"><?php echo __('Инструменты'); ?></div>
         <ul class="menu-list">
-            <li><a href="<?php echo pp_url('public/scan.php'); ?>" class="menu-item"><i class="bi bi-translate me-2"></i><?php echo __('Сканер локализации'); ?></a></li>
+            <li>
+                <a href="<?php echo pp_url('public/scan.php'); ?>" class="menu-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <path d="M4 5h16"/>
+                        <path d="M9 3v4"/>
+                        <path d="M7 9c2 6 7 9 7 9"/>
+                        <path d="M12 12h8"/>
+                    </svg>
+                    <?php echo __('Сканер локализации'); ?>
+                </a>
+            </li>
         </ul>
     </div>
 </div>
