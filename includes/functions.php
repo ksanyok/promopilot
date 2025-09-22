@@ -74,29 +74,55 @@ function get_version() {
     return $version;
 }
 
-function check_version() {
+function check_version(bool $force = false) {
     $cacheFile = PP_ROOT_PATH . '/config/version_cache.json';
-    $ttl = 6 * 60 * 60; // 6 hours
+    $ttl = 60 * 60; // 1 hour
     $now = time();
-    if (file_exists($cacheFile)) {
+
+    if (!$force && file_exists($cacheFile)) {
         $data = json_decode(@file_get_contents($cacheFile), true);
         if (!empty($data['ts']) && ($now - (int)$data['ts'] < $ttl) && isset($data['is_new'])) {
+            // Re-evaluate with current version to be safe
+            $cachedLatest = $data['latest'] ?? null;
+            if ($cachedLatest) {
+                return version_compare($cachedLatest, get_version(), '>');
+            }
             return (bool)$data['is_new'];
         }
     }
 
     $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
-    $context = stream_context_create(['http' => ['header' => 'User-Agent: PHP']]);
+    $context = stream_context_create([
+        'http' => [
+            'header' => "User-Agent: PromoPilot\r\nAccept: application/vnd.github+json",
+            'timeout' => 5,
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
     $isNew = false;
+    $latest = null;
     $response = @file_get_contents($url, false, $context);
     if ($response) {
         $data = json_decode($response, true);
-        $latest = str_replace('v', '', ($data['tag_name'] ?? '1.0.0'));
+        $tag = (string)($data['tag_name'] ?? '');
+        $latest = preg_replace('~^v~i', '', $tag ?: '0.0.0');
         $current = get_version();
         $isNew = version_compare($latest, $current, '>');
+        @file_put_contents($cacheFile, json_encode(['ts' => $now, 'is_new' => $isNew, 'latest' => $latest]));
+        return $isNew;
     }
-    @file_put_contents($cacheFile, json_encode(['ts' => $now, 'is_new' => $isNew]));
-    return $isNew;
+
+    // On fetch failure: do not overwrite cache; fall back to previous cache if valid
+    if (file_exists($cacheFile)) {
+        $data = json_decode(@file_get_contents($cacheFile), true);
+        if ($data && isset($data['latest'])) {
+            return version_compare($data['latest'], get_version(), '>');
+        }
+    }
+    return false;
 }
 
 // Функция перевода
