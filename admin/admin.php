@@ -64,6 +64,8 @@ $users = $conn->query("SELECT id, username, role, balance, created_at FROM users
 $projects = $conn->query("SELECT p.id, p.name, p.description, p.created_at, u.username FROM projects p JOIN users u ON p.user_id = u.id ORDER BY p.id");
 
 $conn->close();
+
+$updateStatus = get_update_status();
 ?>
 
 <?php include '../includes/header.php'; ?>
@@ -126,12 +128,31 @@ $conn->close();
                     <?php echo __('Сканер локализации'); ?>
                 </a>
             </li>
+            <?php if ($updateStatus['is_new']): ?>
+            <li>
+                <a href="<?php echo pp_url('public/update.php'); ?>" class="menu-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <path d="M4 5h16"/>
+                        <path d="M9 3v4"/>
+                        <path d="M7 9c2 6 7 9 7 9"/>
+                        <path d="M12 12h8"/>
+                    </svg>
+                    <?php echo __('Обновление'); ?> (<?php echo htmlspecialchars($updateStatus['latest']); ?>)
+                </a>
+            </li>
+            <?php endif; ?>
         </ul>
     </div>
 </div>
 
 <div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
+<?php if ($updateStatus['is_new']): ?>
+<div class="alert alert-warning fade-in">
+    <strong><?php echo __('Доступно обновление'); ?>:</strong> <?php echo htmlspecialchars($updateStatus['latest']); ?> (опубликовано <?php echo htmlspecialchars($updateStatus['published_at']); ?>).
+    <a href="<?php echo pp_url('public/update.php'); ?>" class="alert-link"><?php echo __('Перейти к обновлению'); ?></a>.
+</div>
+<?php endif; ?>
 
 <div id="users-section">
 <h3><?php echo __('Пользователи'); ?></h3>

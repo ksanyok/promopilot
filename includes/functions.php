@@ -74,31 +74,36 @@ function get_version() {
     return $version;
 }
 
-// Fetch latest release info from GitHub (no local JSON cache)
-function fetch_latest_release_info(): ?array {
-    $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
-    $context = stream_context_create([
+// Fetch latest version info from GitHub main branch
+function fetch_latest_version_info(): ?array {
+    // Get version from config/version.php in main branch
+    $url = 'https://raw.githubusercontent.com/ksanyok/promopilot/main/config/version.php';
+    $response = @file_get_contents($url, false, stream_context_create([
+        'http' => ['timeout' => 5],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+    ]));
+    if (!$response) return null;
+    if (preg_match("/\\\$version\s*=\s*['\"]([^'\"]*)['\"]/", $response, $matches)) {
+        $latest = $matches[1];
+    } else {
+        return null;
+    }
+    // Get date of last commit
+    $commitUrl = 'https://api.github.com/repos/ksanyok/promopilot/commits/main';
+    $commitResponse = @file_get_contents($commitUrl, false, stream_context_create([
         'http' => [
             'header' => "User-Agent: PromoPilot\r\nAccept: application/vnd.github+json",
             'timeout' => 5,
         ],
-        'ssl' => [
-            'verify_peer' => true,
-            'verify_peer_name' => true,
-        ],
-    ]);
-    $response = @file_get_contents($url, false, $context);
-    if (!$response) return null;
-    $data = json_decode($response, true);
-    if (!$data || !isset($data['tag_name'])) return null;
-    $tag = (string)$data['tag_name'];
-    $latest = preg_replace('~^v~i', '', $tag ?: '0.0.0');
-    $publishedRaw = (string)($data['published_at'] ?? '');
-    // Normalize to Y-m-d
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+    ]));
     $published = '';
-    if ($publishedRaw) {
-        $ts = strtotime($publishedRaw);
-        if ($ts) { $published = date('Y-m-d', $ts); }
+    if ($commitResponse) {
+        $commitData = json_decode($commitResponse, true);
+        if ($commitData && isset($commitData['commit']['committer']['date'])) {
+            $ts = strtotime($commitData['commit']['committer']['date']);
+            if ($ts) { $published = date('Y-m-d', $ts); }
+        }
     }
     return [
         'version' => $latest,
@@ -113,7 +118,7 @@ function get_update_status(): array {
     if (is_file($oldCache)) { @unlink($oldCache); }
 
     $current = get_version();
-    $info = fetch_latest_release_info();
+    $info = fetch_latest_version_info();
     if (!$info) {
         return ['is_new' => false, 'latest' => null, 'published_at' => null];
     }
