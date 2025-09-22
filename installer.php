@@ -185,7 +185,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         $errors[] = 'Ошибка создания таблицы users: ' . $mysqli->error;
     }
 
-    $mysqli->query("CREATE TABLE IF NOT EXISTS projects (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        user_id INT,\n        name VARCHAR(100),\n        description TEXT,\n        links JSON DEFAULT ('[]'),\n        language VARCHAR(10) DEFAULT 'ru',\n        wishes TEXT,\n        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    $mysqli->query("CREATE TABLE IF NOT EXISTS projects (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        user_id INT,\n        name VARCHAR(100),\n        description TEXT,\n        links TEXT DEFAULT '[]',\n        language VARCHAR(10) DEFAULT 'ru',\n        wishes TEXT,\n        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     if ($mysqli->error) {
         $errors[] = 'Ошибка создания таблицы projects: ' . $mysqli->error;

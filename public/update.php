@@ -8,7 +8,7 @@ if (!is_logged_in() || !is_admin()) {
 $message = '';
 
 $migrations = [
-    '1.0.11' => "ALTER TABLE projects ADD COLUMN IF NOT EXISTS links JSON DEFAULT ('[]'), ADD COLUMN IF NOT EXISTS language VARCHAR(10) DEFAULT 'ru', ADD COLUMN IF NOT EXISTS wishes TEXT;",
+    '1.0.11' => "ALTER TABLE projects ADD COLUMN links TEXT DEFAULT '[]', ADD COLUMN language VARCHAR(10) DEFAULT 'ru', ADD COLUMN wishes TEXT;",
     // Add future migrations here as 'version' => 'SQL'
 ];
 
@@ -99,7 +99,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 if ($conn->query($sql)) {
                     $message .= "<br>Applied migration for version $ver";
                 } else {
-                    $message .= "<br>Error in migration $ver: " . $conn->error;
+                    if ($conn->errno == 1060) { // Duplicate column name
+                        $message .= "<br>Migration for version $ver already applied";
+                    } else {
+                        $message .= "<br>Error in migration $ver: " . $conn->error;
+                    }
                 }
             }
         }
