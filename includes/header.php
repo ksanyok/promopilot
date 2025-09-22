@@ -36,7 +36,7 @@ require_once __DIR__ . '/init.php';
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-1"></i><?php echo __('Дашборд'); ?></a></li>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/add_project.php'); ?>"><i class="bi bi-plus-circle me-1"></i><?php echo __('Добавить проект'); ?></a></li>
                             <?php $bal = get_current_user_balance(); if ($bal !== null): ?>
-                                <li class="nav-item"><span class="nav-link"><i class="bi bi-coin me-1"></i><?php echo __('Баланс'); ?>: <?php echo htmlspecialchars(number_format($bal, 2, '.', ' ')); ?> <?php echo __('руб.'); ?></span></li>
+                                <li class="nav-item"><span class="nav-link"><i class="bi bi-coin me-1"></i><?php echo __('Баланс'); ?>: <?php echo htmlspecialchars(format_currency($bal)); ?></span></li>
                             <?php endif; ?>
                         <?php endif; ?>
                         <?php if (isset($_SESSION['admin_user_id'])): ?>

@@ -139,6 +139,20 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 :root[data-theme="light"] .form-control { background: rgba(255,255,255,.9); }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 20%, transparent); }
 
+/* Forms — improve readability, especially in dark theme */
+.form-label { color: var(--text); font-weight: 600; opacity: .95; }
+.form-check-label { color: var(--text); opacity: .9; }
+.form-control::placeholder { color: color-mix(in oklab, var(--text) 55%, transparent); }
+
+/* Style selects same as inputs */
+.form-select { background: rgba(0,0,0,.15); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-xs); }
+:root[data-theme="light"] .form-select { background: rgba(255,255,255,.9); color: var(--text); }
+.form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 20%, transparent); }
+
+/* Settings section specific tweaks */
+#settings-section .card { background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03)); }
+#settings-section .form-label { opacity: 1; }
+
 .table { color: var(--text); border-radius: var(--radius-sm); overflow: hidden; }
 .table thead th { 
   background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); 

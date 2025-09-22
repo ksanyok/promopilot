@@ -48,7 +48,7 @@ $pp_container = false;
 
 <div class="card mb-4">
     <div class="card-body">
-        <h5><?php echo __('Ваш баланс'); ?>: <?php echo htmlspecialchars($balance); ?> <?php echo __('руб.'); ?></h5>
+        <h5><?php echo __('Ваш баланс'); ?>: <?php echo htmlspecialchars(format_currency($balance)); ?></h5>
     </div>
 </div>
 

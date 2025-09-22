@@ -152,7 +152,7 @@ $conn->close();
                 <td><?php echo (int)$user['id']; ?></td>
                 <td><?php echo htmlspecialchars($user['username']); ?></td>
                 <td><?php echo htmlspecialchars($user['role']); ?></td>
-                <td><?php echo htmlspecialchars($user['balance']); ?> руб.</td>
+                <td><?php echo htmlspecialchars(format_currency($user['balance'])); ?></td>
                 <td><?php echo htmlspecialchars($user['created_at']); ?></td>
                 <td>
                     <?php $t = action_token('login_as', (string)$user['id']); ?>

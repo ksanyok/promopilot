@@ -198,4 +198,45 @@ function get_current_user_balance(): ?float {
     return get_user_balance((int)$_SESSION['user_id']);
 }
 
+// Settings helpers
+function get_setting(string $key, $default = null) {
+    static $cache = null;
+    if ($cache === null) {
+        // Load all settings once; fail gracefully if table not found
+        $cache = [];
+        try {
+            $conn = @connect_db();
+            if ($conn) {
+                $res = @$conn->query("SELECT k, v FROM settings");
+                if ($res) {
+                    while ($row = $res->fetch_assoc()) { $cache[$row['k']] = $row['v']; }
+                }
+                $conn->close();
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+    return $cache[$key] ?? $default;
+}
+
+function get_currency_code(): string {
+    $cur = strtoupper((string)get_setting('currency', 'RUB'));
+    $allowed = ['RUB','USD','EUR','GBP','UAH'];
+    if (!in_array($cur, $allowed, true)) { $cur = 'RUB'; }
+    return $cur;
+}
+
+function format_currency($amount): string {
+    $code = get_currency_code();
+    $num = is_numeric($amount) ? number_format((float)$amount, 2, '.', ' ') : (string)$amount;
+    // Keep it neutral (CODE). If you prefer symbols, switch mapping below.
+    return $num . ' ' . $code;
+    /* Symbol example:
+    $map = ['RUB' => '₽','USD' => '$','EUR' => '€','GBP' => '£','UAH' => '₴'];
+    $sym = $map[$code] ?? $code;
+    return $sym . $num;
+    */
+}
+
 ?>
