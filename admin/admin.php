@@ -58,7 +58,7 @@ if ($res) {
 $users = $conn->query("SELECT id, username, role, balance, created_at FROM users ORDER BY id");
 
 // Получить проекты
-$projects = $conn->query("SELECT p.id, p.name, p.description, p.links, p.created_at, u.username FROM projects p JOIN users u ON p.user_id = u.id ORDER BY p.id");
+$projects = $conn->query("SELECT p.id, p.name, p.description, p.created_at, u.username FROM projects p JOIN users u ON p.user_id = u.id ORDER BY p.id");
 
 $conn->close();
 
