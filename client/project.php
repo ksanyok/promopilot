@@ -88,6 +88,38 @@ $links = json_decode($project['links'] ?? '[]', true) ?: [];
         </div>
 
         <div class="card mt-4">
+            <div class="card-header bg-info text-white">
+                <h5><?php echo __('Информация о проекте'); ?></h5>
+            </div>
+            <div class="card-body">
+                <h6><?php echo __('Ссылки'); ?>:</h6>
+                <?php if (!empty($links)): ?>
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th><?php echo __('№'); ?></th>
+                                <th><?php echo __('Ссылка'); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($links as $index => $link): ?>
+                                <tr>
+                                    <td><?php echo $index + 1; ?></td>
+                                    <td><a href="<?php echo htmlspecialchars($link); ?>" target="_blank"><?php echo htmlspecialchars($link); ?></a></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p><?php echo __('Ссылок нет.'); ?></p>
+                <?php endif; ?>
+                <p><strong><?php echo __('Язык страницы'); ?>:</strong> <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></p>
+                <p><strong><?php echo __('Пожелания'); ?>:</strong></p>
+                <p><?php echo nl2br(htmlspecialchars($project['wishes'] ?? '')); ?></p>
+            </div>
+        </div>
+
+        <div class="card mt-4">
             <div class="card-header bg-primary text-white">
                 <h5><?php echo __('Настройки проекта'); ?></h5>
             </div>

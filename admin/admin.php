@@ -58,7 +58,7 @@ if ($res) {
 $users = $conn->query("SELECT id, username, role, balance, created_at FROM users ORDER BY id");
 
 // Получить проекты
-$projects = $conn->query("SELECT p.id, p.name, p.description, p.created_at, u.username FROM projects p JOIN users u ON p.user_id = u.id ORDER BY p.id");
+$projects = $conn->query("SELECT p.id, p.name, p.description, p.links, p.created_at, u.username FROM projects p JOIN users u ON p.user_id = u.id ORDER BY p.id");
 
 $conn->close();
 
@@ -187,6 +187,7 @@ $updateStatus = get_update_status();
             <th><?php echo __('Пользователь'); ?></th>
             <th><?php echo __('Название'); ?></th>
             <th><?php echo __('Описание'); ?></th>
+            <th><?php echo __('Ссылки'); ?></th>
             <th><?php echo __('Дата создания'); ?></th>
         </tr>
     </thead>
@@ -197,6 +198,7 @@ $updateStatus = get_update_status();
                 <td><?php echo htmlspecialchars($project['username']); ?></td>
                 <td><?php echo htmlspecialchars($project['name']); ?></td>
                 <td><?php echo htmlspecialchars($project['description']); ?></td>
+                <td><?php $links = json_decode($project['links'] ?? '[]', true); echo count($links); ?></td>
                 <td><?php echo htmlspecialchars($project['created_at']); ?></td>
             </tr>
         <?php endwhile; ?>

@@ -95,7 +95,7 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .navbar .container-fluid {
   max-width: none;
 }
-.navbar .navbar-brand img { width: 50px; height: 50px; border-radius: 0; box-shadow: none; }
+.navbar .navbar-brand img { width: 60px; height: auto; border-radius: 0; box-shadow: none; }
 .nav-link { color: var(--text) !important; opacity: .9; }
 .nav-link:hover { color: var(--primary) !important; opacity: 1; }
 

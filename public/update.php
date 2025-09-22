@@ -8,7 +8,7 @@ if (!is_logged_in() || !is_admin()) {
 $message = '';
 
 $migrations = [
-    '1.0.10' => "ALTER TABLE projects ADD COLUMN IF NOT EXISTS links JSON DEFAULT ('[]'), ADD COLUMN IF NOT EXISTS language VARCHAR(10) DEFAULT 'ru', ADD COLUMN IF NOT EXISTS wishes TEXT;",
+    '1.0.11' => "ALTER TABLE projects ADD COLUMN IF NOT EXISTS links JSON DEFAULT ('[]'), ADD COLUMN IF NOT EXISTS language VARCHAR(10) DEFAULT 'ru', ADD COLUMN IF NOT EXISTS wishes TEXT;",
     // Add future migrations here as 'version' => 'SQL'
 ];
 
@@ -93,22 +93,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         $new_version = get_version();
 
-        if (version_compare($new_version, $current_version, '>')) {
-            $conn = connect_db();
-            foreach ($migrations as $ver => $sql) {
-                if (version_compare($ver, $current_version, '>=') && version_compare($ver, $new_version, '<=')) {
-                    if ($conn->query($sql)) {
-                        $message .= "<br>Applied migration for version $ver";
-                    } else {
-                        $message .= "<br>Error in migration $ver: " . $conn->error;
-                    }
+        $conn = connect_db();
+        foreach ($migrations as $ver => $sql) {
+            if (version_compare($ver, $new_version, '<=')) {
+                if ($conn->query($sql)) {
+                    $message .= "<br>Applied migration for version $ver";
+                } else {
+                    $message .= "<br>Error in migration $ver: " . $conn->error;
                 }
             }
-            $conn->close();
-            $message .= '<br>Все миграции применены до версии ' . htmlspecialchars($new_version);
-        } elseif ($message == __('Файлы обновлены успешно.')) {
-            $message .= '<br>Версия уже актуальная или обновлена.';
         }
+        $conn->close();
+        $message .= '<br>Все миграции применены до версии ' . htmlspecialchars($new_version);
     }
 }
 ?>
