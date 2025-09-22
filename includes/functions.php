@@ -244,4 +244,18 @@ function format_currency($amount): string {
     */
 }
 
+function rmdir_recursive($dir) {
+    if (!is_dir($dir)) return;
+    $files = array_diff(scandir($dir), ['.', '..']);
+    foreach ($files as $file) {
+        $path = $dir . '/' . $file;
+        if (is_dir($path)) {
+            rmdir_recursive($path);
+        } else {
+            unlink($path);
+        }
+    }
+    rmdir($dir);
+}
+
 ?>
