@@ -7,28 +7,12 @@ $forwardedProto = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))
 $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($forwardedProto === 'https');
 
 if (session_status() === PHP_SESSION_NONE) {
-    // Всегда host-only cookie: не задаём domain, чтобы браузер сам применил текущий хост
-    $cookieDomain = '';
-
-    // Secure session cookie params
-    if (function_exists('session_set_cookie_params')) {
-        session_set_cookie_params([
-            'lifetime' => 0,
-            'path' => '/',
-            'domain' => $cookieDomain,
-            'secure' => $https,
-            'httponly' => true,
-            'samesite' => 'Lax',
-        ]);
-    }
-
     // Резервный каталог для хранения сессий, если системный недоступен
     $rootAttempt = realpath(__DIR__ . '/..') ?: __DIR__ . '/..';
     $fallbackSess = $rootAttempt . '/config/sessions';
     $savePath = ini_get('session.save_path');
     $needFallback = true;
     if ($savePath) {
-        // session.save_path может иметь формат "N;MODE;PATH" или "N;PATH"; выделим фактический путь
         $parts = explode(';', $savePath);
         $pathCandidate = end($parts);
         if (is_dir($pathCandidate) && is_writable($pathCandidate)) {
@@ -42,8 +26,14 @@ if (session_status() === PHP_SESSION_NONE) {
         }
     }
 
+    // Базовые безопасные флаги
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
+    ini_set('session.cookie_httponly', '1');
+    ini_set('session.cookie_samesite', 'Lax');
+    ini_set('session.cookie_secure', '0'); // не требуем HTTPS, совместимо с прокси
+
+    // Запускаем сессию с настройками по умолчанию PHP
     session_start();
 }
 

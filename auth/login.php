@@ -26,6 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 pp_session_regenerate();
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['role'] = $user['role'];
+                session_write_close(); // гарантируем сохранение сессии
                 redirect($user['role'] === 'admin' ? 'admin/admin.php' : 'client/client.php');
             } else {
                 $message = 'Неверный пароль.';

@@ -3,6 +3,7 @@
     if ($useContainer): ?>
     </div>
 <?php endif; ?>
+    </main>
     <footer class="footer text-center">
         <div class="container">
             <img src="<?php echo asset_url('img/logo.png'); ?>" alt="PromoPilot Logo" class="footer-logo">

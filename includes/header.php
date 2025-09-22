@@ -66,6 +66,7 @@ require_once __DIR__ . '/init.php';
         <div class="particle"></div>
         <div class="particle"></div>
     </div>
+    <main class="page-wrap">
     <?php 
     $useContainer = isset($pp_container) ? (bool)$pp_container : !is_admin();
     if ($useContainer): ?>
