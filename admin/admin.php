@@ -5,9 +5,6 @@ if (!is_logged_in() || !is_admin()) {
     redirect('auth/login.php');
 }
 
-// Hide brand logo in top navbar to leave only the corner-brand in admin
-$pp_hide_brand_logo = true;
-
 $conn = connect_db();
 
 // Ensure settings table exists
