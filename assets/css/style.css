@@ -72,7 +72,7 @@ body::after {
 .particles { display:none; }
 
 /* Main wrapper to take remaining height */
-main.page-wrap { flex: 1 0 auto; display: block; }
+main.page-wrap { flex: 1 1 auto; display: block; }
 
 /* =================== Navbar =================== */
 .navbar {

@@ -7,6 +7,9 @@ $forwardedProto = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))
 $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($forwardedProto === 'https');
 
 if (session_status() === PHP_SESSION_NONE) {
+    // Unique session name to avoid collisions
+    @ini_set('session.name', 'PPSESSID');
+
     // Всегда используем локальную директорию для сессий, чтобы избежать проблем с правами
     $rootAttempt = realpath(__DIR__ . '/..') ?: __DIR__ . '/..';
     $primarySess = $rootAttempt . '/config/sessions';
