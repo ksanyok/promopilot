@@ -6,7 +6,7 @@
     </main>
     <footer class="footer text-center">
         <div class="container">
-            <img src="<?php echo asset_url('img/logo.png'); ?>" alt="PromoPilot Logo" class="footer-logo">
+            <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="PromoPilot Logo" class="footer-logo">
             <?php $upd = get_update_status(); ?>
             <p>&copy; 2025 PromoPilot. <?php echo __('Все права защищены.'); ?> | <?php echo __('Версия'); ?>: <?php echo htmlspecialchars(get_version()); ?><?php if (!empty($upd['latest'])): ?> | <?php echo __('Последний релиз'); ?>: v<?php echo htmlspecialchars($upd['latest']); ?><?php if (!empty($upd['published_at'])): ?> (<?php echo __('от'); ?> <?php echo htmlspecialchars($upd['published_at']); ?>)<?php endif; ?><?php endif; ?></p>
             <?php if (is_admin() && !empty($upd['is_new'])): ?>

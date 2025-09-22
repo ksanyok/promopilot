@@ -30,17 +30,38 @@ $pp_container = false;
 <?php include '../includes/header.php'; ?>
 
 <div class="sidebar">
-    <h3><?php echo __('Клиентский дашборд'); ?></h3>
-    <ul>
-        <li><a href="<?php echo pp_url('client/client.php'); ?>"><?php echo __('Дашборд'); ?></a></li>
-        <li><a href="<?php echo pp_url('client/add_project.php'); ?>"><?php echo __('Добавить проект'); ?></a></li>
-        <li>
-            <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>">
-                <?php echo csrf_field(); ?>
-                <button type="submit" class="btn btn-link p-0"><?php echo __('Выход'); ?></button>
-            </form>
-        </li>
-    </ul>
+    <div class="menu-block">
+        <div class="menu-title"><?php echo __('Меню'); ?></div>
+        <ul class="menu-list">
+            <li>
+                <a href="<?php echo pp_url('client/client.php'); ?>" class="menu-item">
+                    <i class="bi bi-grid me-2"></i>
+                    <?php echo __('Дашборд'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="<?php echo pp_url('client/add_project.php'); ?>" class="menu-item">
+                    <i class="bi bi-plus-circle me-2"></i>
+                    <?php echo __('Добавить проект'); ?>
+                </a>
+            </li>
+            <li>
+                <span class="menu-item">
+                    <i class="bi bi-coin me-2"></i>
+                    <?php echo __('Баланс'); ?>: <?php echo htmlspecialchars(format_currency($balance)); ?>
+                </span>
+            </li>
+            <li>
+                <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>" class="d-inline">
+                    <?php echo csrf_field(); ?>
+                    <button type="submit" class="menu-item btn btn-link p-0 w-100 text-start">
+                        <i class="bi bi-box-arrow-right me-2"></i>
+                        <?php echo __('Выход'); ?>
+                    </button>
+                </form>
+            </li>
+        </ul>
+    </div>
 </div>
 
 <div class="main-content">

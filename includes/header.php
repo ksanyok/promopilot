@@ -33,11 +33,7 @@ require_once __DIR__ . '/init.php';
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
                         <?php else: ?>
-                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-1"></i><?php echo __('Дашборд'); ?></a></li>
-                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('client/add_project.php'); ?>"><i class="bi bi-plus-circle me-1"></i><?php echo __('Добавить проект'); ?></a></li>
-                            <?php $bal = get_current_user_balance(); if ($bal !== null): ?>
-                                <li class="nav-item"><span class="nav-link"><i class="bi bi-coin me-1"></i><?php echo __('Баланс'); ?>: <?php echo htmlspecialchars(format_currency($bal)); ?></span></li>
-                            <?php endif; ?>
+                            <!-- Пункты меню для клиентов теперь в sidebar -->
                         <?php endif; ?>
                         <?php if (isset($_SESSION['admin_user_id'])): ?>
                             <?php $retToken = action_token('admin_return', (string)$_SESSION['admin_user_id']); ?>
