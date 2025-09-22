@@ -18,17 +18,30 @@ if ($current_lang != 'ru') {
 function connect_db() {
     $configPath = PP_ROOT_PATH . '/config/config.php';
     if (!file_exists($configPath)) {
-        // Try to provide a helpful link if helpers available
+        // Graceful redirect to installer if no config
         $installer = (defined('PP_BASE_URL') ? pp_url('installer.php') : '/installer.php');
-        die('Config file not found. Please run the installer: <a href="' . $installer . '">installer</a>');
+        if (!headers_sent()) {
+            header('Location: ' . $installer, true, 302);
+        }
+        exit('Config file not found. Please run the installer: <a href="' . htmlspecialchars($installer) . '">installer</a>');
     }
+
+    // Ensure mysqli extension is available
+    if (!class_exists('mysqli')) {
+        exit('PHP mysqli extension is not available. Please enable it to continue.');
+    }
+
     include $configPath;
     if (!isset($db_host, $db_user, $db_pass, $db_name)) {
-        die('Database configuration variables are not set. Please check config/config.php');
+        exit('Database configuration variables are not set. Please check config/config.php');
     }
     $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
     if ($conn->connect_error) {
-        die("Ошибка подключения к БД: " . $conn->connect_error);
+        exit("Ошибка подключения к БД: " . $conn->connect_error);
+    }
+    // Ensure proper charset
+    if (method_exists($conn, 'set_charset')) {
+        @$conn->set_charset('utf8mb4');
     }
     return $conn;
 }

@@ -31,7 +31,10 @@ if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.use_only_cookies', '1');
     ini_set('session.cookie_httponly', '1');
     ini_set('session.cookie_samesite', 'Lax');
-    ini_set('session.cookie_secure', '0'); // не требуем HTTPS, совместимо с прокси
+    // ВАЖНО: сделать cookie видимой на всём сайте (а не только на /auth)
+    ini_set('session.cookie_path', '/');
+    // secure в зависимости от схемы
+    ini_set('session.cookie_secure', $https ? '1' : '0');
 
     // Запускаем сессию с настройками по умолчанию PHP
     session_start();

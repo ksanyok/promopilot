@@ -103,5 +103,6 @@ $conn->close();
 </table>
 </div>
 
+</div><!-- /.main-content -->
+
 <?php include '../includes/footer.php'; ?>
-</div>
