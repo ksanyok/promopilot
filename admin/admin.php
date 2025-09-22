@@ -70,11 +70,6 @@ $updateStatus = get_update_status();
 
 <?php include '../includes/header.php'; ?>
 
-<!-- Логотип на пересечении навбара и сайдбара -->
-<div class="corner-brand">
-    <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="Logo">
-</div>
-
 <div class="sidebar">
     <div class="menu-block">
         <div class="menu-title"><?php echo __('Обзор'); ?></div>
