@@ -270,3 +270,39 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 
 /* subtle helper text */
 .help { color: var(--muted); font-size: .9rem; }
+
+/* === Link table layout fixes === */
+.table-links { table-layout: fixed; }
+.table-links th:nth-child(1),
+.table-links td:nth-child(1) { width: 44px; }
+.table-links th:nth-child(4),
+.table-links td:nth-child(4) { width: 140px; }
+.table-links th:nth-child(5),
+.table-links td:nth-child(5) { width: 220px; }
+
+/* Prevent overflow and keep rows neat */
+.table-links .url-cell a,
+.table-links .url-cell input,
+.table-links .anchor-cell .view-anchor,
+.table-links .anchor-cell .edit-anchor {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Ensure header controls wrap nicely and don't overlap */
+.section-header { flex-wrap: wrap; }
+.section-header .toolbar { flex-wrap: wrap; gap: 8px; }
+
+/* Slightly reduce padding for compact view */
+.table-links.table-sm thead th,
+.table-links.table-sm tbody td { padding-top: .55rem; padding-bottom: .55rem; }
+
+/* On very narrow screens, allow action column to wrap */
+@media (max-width: 576px) {
+  .table-links th:nth-child(5),
+  .table-links td:nth-child(5) { width: 160px; }
+  .main-content { padding: 14px; }
+}
