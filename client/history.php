@@ -32,10 +32,47 @@ if (!is_admin() && (int)$project['user_id'] !== $user_id) {
 // Sidebar context
 $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['name']];
 
-// Fetch publications
+// Filters
+$network = trim((string)($_GET['network'] ?? ''));
+$q = trim((string)($_GET['q'] ?? ''));
+
+// Fetch available networks for filter
+$networks = [];
+if ($stmt = $conn->prepare("SELECT DISTINCT network FROM publications WHERE project_id = ? ORDER BY network ASC")) {
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $r = $stmt->get_result();
+    while ($row = $r->fetch_assoc()) { if (!empty($row['network'])) { $networks[] = $row['network']; } }
+    $stmt->close();
+}
+
+// Fetch publications with optional filters
 $publications = [];
-$stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url FROM publications WHERE project_id = ? ORDER BY created_at DESC, id DESC");
-$stmt->bind_param('i', $id);
+if ($network !== '' && $q !== '') {
+    $like = '%' . $q . '%';
+    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
+                             FROM publications
+                             WHERE project_id = ? AND network = ? AND (anchor LIKE ? OR page_url LIKE ? OR post_url LIKE ? OR published_by LIKE ?)
+                             ORDER BY created_at DESC, id DESC");
+    $stmt->bind_param('isssss', $id, $network, $like, $like, $like, $like);
+} elseif ($network !== '') {
+    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
+                             FROM publications
+                             WHERE project_id = ? AND network = ?
+                             ORDER BY created_at DESC, id DESC");
+    $stmt->bind_param('is', $id, $network);
+} elseif ($q !== '') {
+    $like = '%' . $q . '%';
+    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
+                             FROM publications
+                             WHERE project_id = ? AND (anchor LIKE ? OR page_url LIKE ? OR post_url LIKE ? OR published_by LIKE ?)
+                             ORDER BY created_at DESC, id DESC");
+    $stmt->bind_param('issss', $id, $like, $like, $like, $like);
+} else {
+    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url FROM publications WHERE project_id = ? ORDER BY created_at DESC, id DESC");
+    $stmt->bind_param('i', $id);
+}
+
 $stmt->execute();
 $r = $stmt->get_result();
 while ($row = $r->fetch_assoc()) { $publications[] = $row; }
@@ -55,9 +92,34 @@ include __DIR__ . '/../includes/client_sidebar.php';
             <div class="title mb-1"><?php echo __('История публикаций'); ?></div>
             <div class="help">#<?php echo (int)$project['id']; ?> · <?php echo htmlspecialchars($project['name']); ?></div>
           </div>
-          <div>
+          <div class="d-flex gap-2 align-items-center">
             <a class="btn btn-outline-primary" href="<?php echo pp_url('client/project.php?id=' . (int)$project['id']); ?>"><i class="bi bi-arrow-left me-1"></i><?php echo __('Вернуться'); ?></a>
           </div>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="card mb-3">
+        <div class="card-body">
+          <form class="row g-2 align-items-end" method="get" action="">
+            <input type="hidden" name="id" value="<?php echo (int)$project['id']; ?>">
+            <div class="col-12 col-md-4">
+              <label class="form-label"><?php echo __('Сеть'); ?></label>
+              <select class="form-select" name="network">
+                <option value=""><?php echo __('Все сети'); ?></option>
+                <?php foreach ($networks as $net): ?>
+                  <option value="<?php echo htmlspecialchars($net); ?>" <?php echo ($network === $net ? 'selected' : ''); ?>><?php echo htmlspecialchars($net); ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label"><?php echo __('Поиск'); ?></label>
+              <input type="text" class="form-control" name="q" value="<?php echo htmlspecialchars($q); ?>" placeholder="<?php echo __('Анкор, страница, ссылка на пост или автор'); ?>">
+            </div>
+            <div class="col-12 col-md-2 text-end">
+              <button type="submit" class="btn btn-primary w-100"><i class="bi bi-filter me-1"></i><?php echo __('Фильтр'); ?></button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -85,10 +147,20 @@ include __DIR__ . '/../includes/client_sidebar.php';
                   <td><?php echo htmlspecialchars($row['network']); ?></td>
                   <td><?php echo htmlspecialchars($row['published_by']); ?></td>
                   <td><?php echo htmlspecialchars($row['anchor']); ?></td>
-                  <td><a href="<?php echo htmlspecialchars($row['page_url']); ?>" target="_blank"><?php echo htmlspecialchars($row['page_url']); ?></a></td>
+                  <td>
+                    <?php $purl = (string)$row['page_url']; ?>
+                    <div class="d-flex align-items-center gap-2">
+                      <a href="<?php echo htmlspecialchars($purl); ?>" target="_blank"><?php echo htmlspecialchars($purl); ?></a>
+                      <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($purl); ?>"><i class="bi bi-clipboard"></i></button>
+                    </div>
+                  </td>
                   <td>
                     <?php if (!empty($row['post_url'])): ?>
-                      <a href="<?php echo htmlspecialchars($row['post_url']); ?>" target="_blank"><?php echo htmlspecialchars($row['post_url']); ?></a>
+                      <?php $post = (string)$row['post_url']; ?>
+                      <div class="d-flex align-items-center gap-2">
+                        <a href="<?php echo htmlspecialchars($post); ?>" target="_blank"><?php echo htmlspecialchars($post); ?></a>
+                        <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($post); ?>"><i class="bi bi-clipboard"></i></button>
+                      </div>
                     <?php else: ?>
                       <span class="text-muted">—</span>
                     <?php endif; ?>
@@ -106,5 +178,29 @@ include __DIR__ . '/../includes/client_sidebar.php';
     </div>
   </div>
 </div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.copy-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const text = btn.getAttribute('data-copy') || '';
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function(){
+            btn.classList.add('text-success');
+            setTimeout(function(){ btn.classList.remove('text-success'); }, 800);
+          }).catch(function(){ alert('<?php echo __('Не удалось скопировать'); ?>'); });
+        } else {
+          // Fallback
+          const ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); btn.classList.add('text-success'); setTimeout(function(){ btn.classList.remove('text-success'); }, 800); }
+          catch(e){ alert('<?php echo __('Не удалось скопировать'); ?>'); }
+          finally { document.body.removeChild(ta); }
+        }
+      });
+    });
+  });
+</script>
 
 <?php include '../includes/footer.php'; ?>

@@ -250,16 +250,13 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="alert alert-info"><?php echo htmlspecialchars($message); ?></div>
                         <?php endif; ?>
 
-                        <div class="row g-2 align-items-center mb-3">
-                            <div class="col-12 col-md-6">
-                                <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
-                            </div>
-                            <div class="col-8 col-md-4">
-                                <input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
-                            </div>
-                            <div class="col-4 col-md-2 text-end">
-                                <button type="button" class="btn btn-outline-success" id="add-link"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
-                            </div>
+                        <div class="link-adder mb-3">
+                            <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
+                            <input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                            <button type="button" class="btn btn-outline-success btn-add" id="add-link">
+                                <i class="bi bi-plus-lg"></i>
+                                <span class="btn-text ms-1"><?php echo __('Добавить'); ?></span>
+                            </button>
                         </div>
                         <div id="added-hidden"></div>
 

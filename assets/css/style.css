@@ -339,3 +339,68 @@ main.page-wrap { flex: 1 1 auto; display: block; }
   .table-links td:nth-child(5) { width: 180px; }
   .main-content { padding: 14px; }
 }
+
+/* =================== Tables: readability improvements =================== */
+.table {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.table thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.table th, .table td {
+  padding: 10px 12px;
+  vertical-align: middle;
+  line-height: 1.35;
+  font-size: .95rem;
+}
+.table-sm th, .table-sm td { padding: 8px 10px; }
+.table-striped tbody tr:nth-of-type(odd) { background-color: rgba(255,255,255,.03); }
+
+/* Long URLs and anchors should wrap nicely for readability */
+.table-links .url-cell a,
+.table-links .url-cell,
+.table-links .anchor-cell {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.table-links .url-cell a { color: var(--primary); }
+
+/* Prevent layout jumping when toggling edit inputs */
+.table-links .edit-url,
+.table-links .edit-anchor {
+  min-height: 36px;
+}
+
+/* =================== Link Adder block =================== */
+.link-adder {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@media (min-width: 768px) {
+  .link-adder { grid-template-columns: 1fr 0.7fr auto; align-items: stretch; }
+}
+.link-adder .form-control { height: 42px; }
+.link-adder .btn-add {
+  height: 42px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+/* On very small screens, keep the button compact */
+@media (max-width: 420px) {
+  .btn .btn-text { display: none; }
+}
+
+/* Badges tweak for better legibility */
+.badge { border-radius: 999px; font-weight: 600; }
+
+/* Optional fixed layout for links table for steadier columns */
+.table-links { table-layout: auto; }
