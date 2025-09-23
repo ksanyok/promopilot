@@ -8,7 +8,10 @@ if (!is_logged_in() || !is_admin()) {
 $message = '';
 
 $migrations = [
-    '1.0.11' => "ALTER TABLE projects ADD COLUMN links TEXT NULL, ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'ru', ADD COLUMN wishes TEXT NULL;",
+    // Split initial columns into separate migrations to avoid all-or-nothing errors
+    '1.0.11.1' => "ALTER TABLE `projects` ADD COLUMN `links` TEXT NULL;",
+    '1.0.11.2' => "ALTER TABLE `projects` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru';",
+    '1.0.11.3' => "ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL;",
     // New: publications history table and safe column adds
     '1.0.18' => "CREATE TABLE IF NOT EXISTS `publications` (
         `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -112,18 +115,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $new_version = get_version();
 
         $conn = connect_db();
+        // Safe migration executor that tolerates duplicate/exists errors even when mysqli throws exceptions
+        $apply = function(string $ver, string $sql) use ($conn, &$message) {
+            try {
+                $ok = $conn->query($sql);
+                if ($ok) {
+                    $message .= "<br>Applied migration for version $ver";
+                    return;
+                }
+                // If mysqli isn't throwing exceptions, handle errno here
+                $errno = (int)$conn->errno;
+                if (in_array($errno, [1050, 1060, 1061, 1091], true)) {
+                    $message .= "<br>Migration for version $ver already applied";
+                } else {
+                    $message .= "<br>Error in migration $ver: (#$errno) " . $conn->error;
+                }
+            } catch (Throwable $e) {
+                $code = (int)$e->getCode();
+                $msg  = (string)$e->getMessage();
+                // Known benign cases: table exists, duplicate column/key, can't drop because doesn't exist
+                $known = [1050, 1060, 1061, 1091];
+                $isKnown = in_array($code, $known, true)
+                    || stripos($msg, 'Duplicate') !== false
+                    || stripos($msg, 'already exists') !== false
+                    || stripos($msg, 'exists') !== false
+                    || stripos($msg, 'Can\'t DROP') !== false;
+                if ($isKnown) {
+                    $message .= "<br>Migration for version $ver already applied";
+                } else {
+                    $message .= "<br>Error in migration $ver: (#$code) " . htmlspecialchars($msg);
+                }
+            }
+        };
         foreach ($migrations as $ver => $sql) {
             if (version_compare($ver, $new_version, '<=')) {
-                if ($conn->query($sql)) {
-                    $message .= "<br>Applied migration for version $ver";
-                } else {
-                    // 1060 Duplicate column, 1050 Table exists — treat as already applied
-                    if (in_array($conn->errno, [1060, 1050], true)) {
-                        $message .= "<br>Migration for version $ver already applied";
-                    } else {
-                        $message .= "<br>Error in migration $ver: " . $conn->error;
-                    }
-                }
+                $apply($ver, $sql);
             }
         }
         $conn->close();
