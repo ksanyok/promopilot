@@ -1,6 +1,9 @@
 // PromoPilot Scripts — animations + theme toggle
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Respect reduced motion
+    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     // THEME TOGGLE
     const root = document.documentElement;
     const storageKey = 'pp-theme';
@@ -37,25 +40,38 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Animations (UI)
-    const cards = document.querySelectorAll('.card');
-    cards.forEach((card, index) => {
-        setTimeout(() => { card.classList.add('bounce-in'); }, index * 80);
-    });
+    if (!prefersReducedMotion) {
+        const cards = document.querySelectorAll('.card');
+        cards.forEach((card, index) => {
+            setTimeout(() => { card.classList.add('bounce-in'); }, index * 80);
+        });
 
-    const alerts = document.querySelectorAll('.alert');
-    alerts.forEach(alert => { alert.classList.add('fade-in'); });
+        const alerts = document.querySelectorAll('.alert');
+        alerts.forEach(alert => { alert.classList.add('fade-in'); });
+
+        // Scroll fade-in
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('fade-in'); });
+        }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
+
+        document.querySelectorAll('.card, .alert, .table').forEach(el => observer.observe(el));
+    }
 
     const buttons = document.querySelectorAll('.btn');
-    buttons.forEach(btn => {
-        btn.addEventListener('mouseenter', function() { this.style.transform = 'translateY(-1px)'; });
-        btn.addEventListener('mouseleave', function() { this.style.transform = 'translateY(0)'; });
-    });
+    if (!prefersReducedMotion) {
+        buttons.forEach(btn => {
+            btn.addEventListener('mouseenter', function() { this.style.transform = 'translateY(-1px)'; });
+            btn.addEventListener('mouseleave', function() { this.style.transform = 'translateY(0)'; });
+        });
+    }
 
     const inputs = document.querySelectorAll('.form-control');
-    inputs.forEach(input => {
-        input.addEventListener('focus', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1.01)'; });
-        input.addEventListener('blur', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1)'; });
-    });
+    if (!prefersReducedMotion) {
+        inputs.forEach(input => {
+            input.addEventListener('focus', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1.01)'; });
+            input.addEventListener('blur', function() { if (this.parentElement) this.parentElement.style.transform = 'scale(1)'; });
+        });
+    }
 
     // Language switcher auto-submit (if using a select)
     const langSelect = document.querySelector('select[name="lang"]');
@@ -64,13 +80,6 @@ document.addEventListener('DOMContentLoaded', function() {
             this.form.submit();
         });
     }
-
-    // Scroll fade-in
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('fade-in'); });
-    }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
-
-    document.querySelectorAll('.card, .alert, .table').forEach(el => observer.observe(el));
 
     // Admin sections toggle (now supports users, projects, settings)
     const sections = {
@@ -91,6 +100,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Futuristic neutral background (particle network)
     (function initBgfx(){
+        if (prefersReducedMotion) return; // skip background animation
         const wrapper = document.getElementById('bgfx');
         const canvas = document.getElementById('bgfx-canvas');
         if (!wrapper || !canvas) return;
