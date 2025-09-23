@@ -174,111 +174,126 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 
             <form method="post" id="project-form" class="form-grid">
                 <?php echo csrf_field(); ?>
-                <!-- Links section with statuses and inline edit -->
-                <div class="card section">
-                    <div class="section-header">
-                        <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Ссылки'); ?></span></div>
-                        <div class="toolbar">
-                            <a href="#links-section" class="btn btn-ghost btn-sm"><i class="bi bi-plus-circle me-1"></i><?php echo __('Добавить'); ?></a>
-                            <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-primary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
+
+                <div class="left-col">
+                    <!-- Top Add Link card -->
+                    <div class="card section link-adder-card mb-3">
+                        <div class="section-header">
+                            <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Добавить ссылку'); ?></span></div>
+                            <div class="toolbar">
+                                <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-primary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="link-adder">
+                                <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
+                                <input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                                <button type="button" class="btn btn-gradient btn-add" id="add-link">
+                                    <i class="bi bi-plus-lg"></i>
+                                    <span class="btn-text ms-1"><?php echo __('Добавить'); ?></span>
+                                </button>
+                            </div>
+                            <div id="added-hidden"></div>
                         </div>
                     </div>
-                    <div class="card-body">
-                        <?php if (!empty($links)): ?>
-                        <div class="table-responsive">
-                            <table class="table table-striped table-hover table-sm align-middle table-links">
-                                <thead>
-                                    <tr>
-                                        <th style="width:44px;">#</th>
-                                        <th><?php echo __('Ссылка'); ?></th>
-                                        <th><?php echo __('Анкор'); ?></th>
-                                        <th><?php echo __('Статус'); ?></th>
-                                        <th class="text-end" style="width:220px;">&nbsp;</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($links as $index => $item):
-                                        $url = $item['url']; $anchor = $item['anchor'];
-                                        $status = $pubStatusByUrl[$url] ?? 'not_published';
-                                        $canEdit = ($status === 'not_published');
-                                    ?>
-                                    <tr data-index="<?php echo (int)$index; ?>">
-                                        <td><?php echo $index + 1; ?></td>
-                                        <td class="url-cell">
-                                            <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($url); ?></a>
-                                            <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$index; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
-                                        </td>
-                                        <td class="anchor-cell">
-                                            <span class="view-anchor"><?php echo htmlspecialchars($anchor); ?></span>
-                                            <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$index; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
-                                        </td>
-                                        <td>
-                                            <?php if ($status === 'published'): ?>
-                                                <span class="badge badge-success"><?php echo __('Опубликована'); ?></span>
-                                            <?php elseif ($status === 'pending'): ?>
-                                                <span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>
-                                            <?php else: ?>
-                                                <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td class="text-end">
-                                            <?php if ($canEdit): ?>
-                                                <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?></button>
-                                                <button type="button" class="btn btn-outline-danger btn-sm action-remove" data-index="<?php echo (int)$index; ?>"><?php echo __('Удалить'); ?></button>
-                                            <?php else: ?>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled><i class="bi bi-lock me-1"></i><?php echo __('Редактировать'); ?></button>
-                                            <?php endif; ?>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
+
+                    <!-- Links table card -->
+                    <div class="card section table-card" id="links-card">
+                        <div class="section-header">
+                            <div class="label"><i class="bi bi-list-task"></i><span><?php echo __('Ссылки'); ?></span></div>
+                            <div class="toolbar">
+                                <!-- reserved for future controls -->
+                            </div>
                         </div>
-                        <?php else: ?>
-                            <div class="empty-state"><?php echo __('Ссылок нет.'); ?></div>
-                        <?php endif; ?>
+                        <div class="card-body">
+                            <?php if (!empty($links)): ?>
+                            <div class="table-responsive">
+                                <table class="table table-striped table-hover table-sm align-middle table-links">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:44px;">#</th>
+                                            <th><?php echo __('Ссылка'); ?></th>
+                                            <th><?php echo __('Анкор'); ?></th>
+                                            <th><?php echo __('Статус'); ?></th>
+                                            <th class="text-end" style="width:220px;">&nbsp;</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($links as $index => $item):
+                                            $url = $item['url']; $anchor = $item['anchor'];
+                                            $status = $pubStatusByUrl[$url] ?? 'not_published';
+                                            $canEdit = ($status === 'not_published');
+                                        ?>
+                                        <tr data-index="<?php echo (int)$index; ?>">
+                                            <td data-label="#"><?php echo $index + 1; ?></td>
+                                            <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
+                                                <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($url); ?></a>
+                                                <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$index; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
+                                            </td>
+                                            <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
+                                                <span class="view-anchor"><?php echo htmlspecialchars($anchor); ?></span>
+                                                <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$index; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
+                                            </td>
+                                            <td data-label="<?php echo __('Статус'); ?>">
+                                                <?php if ($status === 'published'): ?>
+                                                    <span class="badge badge-success"><?php echo __('Опубликована'); ?></span>
+                                                <?php elseif ($status === 'pending'): ?>
+                                                    <span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>
+                                                <?php else: ?>
+                                                    <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="text-end" data-label="<?php echo __('Действия'); ?>">
+                                                <?php if ($canEdit): ?>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
+                                                    <button type="button" class="btn btn-outline-danger btn-sm action-remove" data-index="<?php echo (int)$index; ?>"><i class="bi bi-trash me-1"></i><span class="btn-text"><?php echo __('Удалить'); ?></span></button>
+                                                <?php else: ?>
+                                                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled><i class="bi bi-lock me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <?php else: ?>
+                                <div class="empty-state"><?php echo __('Ссылок нет.'); ?></div>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Settings / add and preferences -->
-                <div class="card section" id="links-section">
-                    <div class="section-header">
-                        <div class="label"><i class="bi bi-sliders2"></i><span><?php echo __('Настройки проекта'); ?></span></div>
-                    </div>
-                    <div class="card-body">
-                        <?php if ($message): ?>
-                            <div class="alert alert-info"><?php echo htmlspecialchars($message); ?></div>
-                        <?php endif; ?>
-
-                        <div class="link-adder mb-3">
-                            <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
-                            <input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
-                            <button type="button" class="btn btn-outline-success btn-add" id="add-link">
-                                <i class="bi bi-plus-lg"></i>
-                                <span class="btn-text ms-1"><?php echo __('Добавить'); ?></span>
-                            </button>
+                <div class="right-col">
+                    <!-- Settings / preferences -->
+                    <div class="card section" id="links-section">
+                        <div class="section-header">
+                            <div class="label"><i class="bi bi-sliders2"></i><span><?php echo __('Настройки проекта'); ?></span></div>
                         </div>
-                        <div id="added-hidden"></div>
+                        <div class="card-body">
+                            <?php if ($message): ?>
+                                <div class="alert alert-info"><?php echo htmlspecialchars($message); ?></div>
+                            <?php endif; ?>
 
-                        <div class="row g-3">
-                            <div class="col-12 col-lg-6">
-                                <label class="form-label"><?php echo __('Язык страницы'); ?></label>
-                                <select name="language" class="form-select">
-                                    <option value="ru" <?php echo ($project['language'] == 'ru' ? 'selected' : ''); ?>>Русский</option>
-                                    <option value="en" <?php echo ($project['language'] == 'en' ? 'selected' : ''); ?>>English</option>
-                                    <option value="es" <?php echo ($project['language'] == 'es' ? 'selected' : ''); ?>>Español</option>
-                                    <option value="fr" <?php echo ($project['language'] == 'fr' ? 'selected' : ''); ?>>Français</option>
-                                    <option value="de" <?php echo ($project['language'] == 'de' ? 'selected' : ''); ?>>Deutsch</option>
-                                </select>
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="form-label"><?php echo __('Язык страницы'); ?></label>
+                                    <select name="language" class="form-select">
+                                        <option value="ru" <?php echo ($project['language'] == 'ru' ? 'selected' : ''); ?>>Русский</option>
+                                        <option value="en" <?php echo ($project['language'] == 'en' ? 'selected' : ''); ?>>English</option>
+                                        <option value="es" <?php echo ($project['language'] == 'es' ? 'selected' : ''); ?>>Español</option>
+                                        <option value="fr" <?php echo ($project['language'] == 'fr' ? 'selected' : ''); ?>>Français</option>
+                                        <option value="de" <?php echo ($project['language'] == 'de' ? 'selected' : ''); ?>>Deutsch</option>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label"><?php echo __('Пожелания'); ?></label>
+                                    <textarea name="wishes" class="form-control" rows="6" placeholder="<?php echo __('Укажите ваши пожелания'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
+                                </div>
                             </div>
-                            <div class="col-12 col-lg-6">
-                                <label class="form-label"><?php echo __('Пожелания'); ?></label>
-                                <textarea name="wishes" class="form-control" rows="6" placeholder="<?php echo __('Укажите ваши пожелания'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
-                            </div>
-                        </div>
 
-                        <div class="sticky-actions text-end mt-3">
-                            <button type="submit" name="update_project" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i><?php echo __('Сохранить изменения'); ?></button>
+                            <div class="sticky-actions text-end mt-3">
+                                <button type="submit" name="update_project" class="btn btn-gradient"><i class="bi bi-check2-circle me-1"></i><span class="btn-text"><?php echo __('Сохранить изменения'); ?></span></button>
+                            </div>
                         </div>
                     </div>
                 </div>

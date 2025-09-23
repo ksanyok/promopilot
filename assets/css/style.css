@@ -496,3 +496,52 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 
 /* Optional fixed layout for links table for steadier columns */
 .table-links { table-layout: auto; }
+
+/* ===== Enhanced controls for Link Adder (top bar) ===== */
+.link-adder-card {
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.link-adder-card .section-header { background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.link-adder { grid-template-columns: 1.4fr 1fr auto; }
+@media (max-width: 992px) { .link-adder { grid-template-columns: 1fr; } }
+.link-adder .form-control { height: 46px; }
+.link-adder .btn-add { height: 46px; }
+
+/* Gradient / glow buttons */
+.btn-gradient {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--primary-2) 40%, black);
+  color: #0b1220;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+  box-shadow: 0 6px 14px rgba(59,130,246,.25), inset 0 -1px 0 rgba(255,255,255,.2);
+}
+.btn-gradient:hover { filter: brightness(1.06); box-shadow: 0 8px 18px rgba(59,130,246,.32), inset 0 -1px 0 rgba(255,255,255,.25); }
+.btn-gradient:active { filter: brightness(0.98); }
+.btn-gradient i { color: #0b1220; }
+
+/* Outline glossy buttons */
+.btn-outline-primary { border-color: color-mix(in srgb, var(--primary-2) 60%, white 0%); color: var(--primary); }
+.btn-outline-primary:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); border-color: var(--primary-2); color: var(--primary-2); }
+
+/* Section spacing tweaks */
+.section + .section { margin-top: 16px; }
+
+/* Table card polish */
+.table-card { border-radius: var(--radius); overflow: hidden; }
+.table-card .section-header { background: var(--surface-2); }
+
+/* ===== Responsive stacked table (mobile) ===== */
+@media (max-width: 640px) {
+  .table-links thead { display: none; }
+  .table-links tbody tr { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  .table-links tbody tr td { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 4px 0; }
+  .table-links tbody tr td:last-child { grid-template-columns: 1fr; }
+  .table-links tbody tr td::before { content: attr(data-label); color: var(--muted); font-weight: 600; }
+  .table-links tbody tr td.text-end { text-align: left !important; }
+}
+
+/* Icon-only buttons on very narrow screens */
+@media (max-width: 420px) { .btn .btn-text { display:none; } }
