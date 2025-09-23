@@ -32,19 +32,7 @@ $pp_container = false;
 
 <?php include '../includes/header.php'; ?>
 
-<div class="sidebar">
-    <h3><?php echo __('Клиентский дашборд'); ?></h3>
-    <ul>
-        <li><a href="<?php echo pp_url('client/client.php'); ?>"><?php echo __('Дашборд'); ?></a></li>
-        <li><a href="<?php echo pp_url('client/add_project.php'); ?>"><?php echo __('Добавить проект'); ?></a></li>
-        <li>
-            <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>">
-                <?php echo csrf_field(); ?>
-                <button type="submit" class="btn btn-link p-0"><?php echo __('Выход'); ?></button>
-            </form>
-        </li>
-    </ul>
-</div>
+<?php include __DIR__ . '/../includes/client_sidebar.php'; ?>
 
 <div class="main-content">
 <div class="row justify-content-center">

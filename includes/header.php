@@ -11,7 +11,6 @@ require_once __DIR__ . '/init.php';
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="<?php echo asset_url('css/style.css'); ?>" rel="stylesheet">
     <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
-    <link rel="icon" type="image/svg+xml" href="<?php echo asset_url('img/logo.svg'); ?>">
 </head>
 <body>
     <!-- Futuristic neutral background canvas -->

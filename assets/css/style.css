@@ -92,10 +92,9 @@ main.page-wrap { flex: 1 1 auto; display: block; }
   padding-left: 20px;
   padding-right: 20px;
 }
-.navbar .container-fluid {
-  max-width: none;
-}
-.navbar .navbar-brand img { width: 60px; height: auto; border-radius: 0; box-shadow: none; }
+.navbar .container-fluid { max-width: none; }
+/* Keep logo simple: no rounded corners, no shadows */
+.navbar .navbar-brand img { width: 60px; height: auto; border-radius: 0; box-shadow: none !important; filter: none !important; }
 .nav-link { color: var(--text) !important; opacity: .9; }
 .nav-link:hover { color: var(--primary) !important; opacity: 1; }
 
@@ -104,12 +103,13 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .theme-toggle.btn:hover { background: var(--surface-2); color: var(--primary); }
 
 /* =================== Layout =================== */
-.main-content { position: relative; z-index: 3; margin-left: var(--sidebar-width); padding: 28px; /* removed min-height to avoid layout conflicts */ }
+.main-content { position: relative; z-index: 3; margin-left: var(--sidebar-width); padding: 28px; }
 
 /* Sidebar */
 .sidebar {
-  position: fixed; z-index: 4; top: var(--navbar-h); left: 0; bottom: var(--footer-h);
+  position: fixed; z-index: 4; top: var(--navbar-h); left: 0; /* no explicit bottom */
   width: var(--sidebar-width);
+  height: calc(100vh - var(--navbar-h) - var(--footer-h)); /* prevent overlap with footer */
   background: linear-gradient(180deg, rgba(17,24,39,.85), rgba(17,24,39,.65));
   backdrop-filter: blur(10px);
   border-right: 1px solid var(--border);
@@ -177,7 +177,7 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 
 .alert { border-radius: var(--radius-xs); border: 1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,.04)); color: var(--text); }
 
-.footer { background: linear-gradient(180deg, rgba(17,24,39,.85), rgba(17,24,39,.65)); border-top: 1px solid var(--border); box-shadow: var(--shadow); margin-top: auto; }
+.footer { background: linear-gradient(180deg, rgba(17,24,39,.85), rgba(17,24,39,.65)); border-top: 1px solid var(--border); box-shadow: var(--shadow); margin-top: auto; position: relative; z-index: 2; }
 
 .footer-logo { filter: drop-shadow(0 4px 10px rgba(59,130,246,.35)); height: clamp(28px, 5vh, 48px); width: auto; object-fit: contain; }
 
@@ -206,8 +206,9 @@ main.page-wrap { flex: 1 1 auto; display: block; }
   width: auto;
   aspect-ratio: auto;
   object-fit: contain;
-  border-radius: 10px;
-  box-shadow: 0 4px 14px rgba(59,130,246,.35);
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
 }
 
 .footer .footer-logo {

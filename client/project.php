@@ -70,96 +70,103 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
 }
 
 $links = json_decode($project['links'] ?? '[]', true) ?: [];
+
+$pp_container = false;
+$pp_current_project = ['id' => (int)$project['id'], 'name' => $project['name'] ?? ('ID ' . (int)$project['id'])];
 ?>
 
 <?php include '../includes/header.php'; ?>
-<div class="row justify-content-center">
-    <div class="col-md-8">
-        <div class="card">
-            <div class="card-header bg-secondary text-white">
-                <h4><?php echo htmlspecialchars($project['name']); ?></h4>
-            </div>
-            <div class="card-body">
-                <p><strong><?php echo __('Пользователь'); ?>:</strong> <?php echo htmlspecialchars($project['username']); ?></p>
-                <p><strong><?php echo __('Описание'); ?>:</strong></p>
-                <p><?php echo nl2br(htmlspecialchars($project['description'])); ?></p>
-                <p><strong><?php echo __('Дата создания'); ?>:</strong> <?php echo htmlspecialchars($project['created_at']); ?></p>
-            </div>
-        </div>
+<?php include __DIR__ . '/../includes/client_sidebar.php'; ?>
 
-        <div class="card mt-4">
-            <div class="card-header bg-info text-white">
-                <h5><?php echo __('Информация о проекте'); ?></h5>
+<div class="main-content">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h4><?php echo htmlspecialchars($project['name']); ?></h4>
+                </div>
+                <div class="card-body">
+                    <p><strong><?php echo __('Пользователь'); ?>:</strong> <?php echo htmlspecialchars($project['username']); ?></p>
+                    <p><strong><?php echo __('Описание'); ?>:</strong></p>
+                    <p><?php echo nl2br(htmlspecialchars($project['description'])); ?></p>
+                    <p><strong><?php echo __('Дата создания'); ?>:</strong> <?php echo htmlspecialchars($project['created_at']); ?></p>
+                </div>
             </div>
-            <div class="card-body">
-                <h6><?php echo __('Ссылки'); ?>:</h6>
-                <?php if (!empty($links)): ?>
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th><?php echo __('№'); ?></th>
-                                <th><?php echo __('Ссылка'); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($links as $index => $link): ?>
+
+            <div class="card mt-4">
+                <div class="card-header bg-info text-white">
+                    <h5><?php echo __('Информация о проекте'); ?></h5>
+                </div>
+                <div class="card-body">
+                    <h6><?php echo __('Ссылки'); ?>:</h6>
+                    <?php if (!empty($links)): ?>
+                        <table class="table table-striped">
+                            <thead>
                                 <tr>
-                                    <td><?php echo $index + 1; ?></td>
-                                    <td><a href="<?php echo htmlspecialchars($link); ?>" target="_blank"><?php echo htmlspecialchars($link); ?></a></td>
+                                    <th><?php echo __('№'); ?></th>
+                                    <th><?php echo __('Ссылка'); ?></th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php else: ?>
-                    <p><?php echo __('Ссылок нет.'); ?></p>
-                <?php endif; ?>
-                <p><strong><?php echo __('Язык страницы'); ?>:</strong> <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></p>
-                <p><strong><?php echo __('Пожелания'); ?>:</strong></p>
-                <p><?php echo nl2br(htmlspecialchars($project['wishes'] ?? '')); ?></p>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($links as $index => $link): ?>
+                                    <tr>
+                                        <td><?php echo $index + 1; ?></td>
+                                        <td><a href="<?php echo htmlspecialchars($link); ?>" target="_blank"><?php echo htmlspecialchars($link); ?></a></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php else: ?>
+                        <p><?php echo __('Ссылок нет.'); ?></p>
+                    <?php endif; ?>
+                    <p><strong><?php echo __('Язык страницы'); ?>:</strong> <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></p>
+                    <p><strong><?php echo __('Пожелания'); ?>:</strong></p>
+                    <p><?php echo nl2br(htmlspecialchars($project['wishes'] ?? '')); ?></p>
+                </div>
             </div>
-        </div>
 
-        <div class="card mt-4">
-            <div class="card-header bg-primary text-white">
-                <h5><?php echo __('Настройки проекта'); ?></h5>
-            </div>
-            <div class="card-body">
-                <?php if ($message): ?>
-                    <div class="alert alert-info"><?php echo htmlspecialchars($message); ?></div>
-                <?php endif; ?>
-                <form method="post">
-                    <?php echo csrf_field(); ?>
-                    <div class="mb-3">
-                        <label class="form-label"><?php echo __('Ссылки'); ?>:</label>
-                        <div id="links-list">
-                            <?php foreach ($links as $link): ?>
-                                <div class="input-group mb-2">
-                                    <input type="text" class="form-control" value="<?php echo htmlspecialchars($link); ?>" readonly>
-                                    <button type="button" class="btn btn-outline-danger remove-link" data-link="<?php echo htmlspecialchars($link); ?>"><?php echo __('Удалить'); ?></button>
-                                </div>
-                            <?php endforeach; ?>
+            <div class="card mt-4" id="links-section">
+                <div class="card-header bg-primary text-white">
+                    <h5><?php echo __('Настройки проекта'); ?></h5>
+                </div>
+                <div class="card-body">
+                    <?php if ($message): ?>
+                        <div class="alert alert-info"><?php echo htmlspecialchars($message); ?></div>
+                    <?php endif; ?>
+                    <form method="post">
+                        <?php echo csrf_field(); ?>
+                        <div class="mb-3">
+                            <label class="form-label"><?php echo __('Ссылки'); ?>:</label>
+                            <div id="links-list">
+                                <?php foreach ($links as $link): ?>
+                                    <div class="input-group mb-2">
+                                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($link); ?>" readonly>
+                                        <button type="button" class="btn btn-outline-danger remove-link" data-link="<?php echo htmlspecialchars($link); ?>"><?php echo __('Удалить'); ?></button>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div class="input-group">
+                                <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
+                                <button type="button" class="btn btn-outline-success" id="add-link"><?php echo __('Добавить'); ?></button>
+                            </div>
                         </div>
-                        <div class="input-group">
-                            <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
-                            <button type="button" class="btn btn-outline-success" id="add-link"><?php echo __('Добавить'); ?></button>
+                        <div class="mb-3">
+                            <label class="form-label"><?php echo __('Язык страницы'); ?>:</label>
+                            <select name="language" class="form-select">
+                                <option value="ru" <?php echo ($project['language'] == 'ru' ? 'selected' : ''); ?>>Русский</option>
+                                <option value="en" <?php echo ($project['language'] == 'en' ? 'selected' : ''); ?>>English</option>
+                                <option value="es" <?php echo ($project['language'] == 'es' ? 'selected' : ''); ?>>Español</option>
+                                <option value="fr" <?php echo ($project['language'] == 'fr' ? 'selected' : ''); ?>>Français</option>
+                                <option value="de" <?php echo ($project['language'] == 'de' ? 'selected' : ''); ?>>Deutsch</option>
+                            </select>
                         </div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label"><?php echo __('Язык страницы'); ?>:</label>
-                        <select name="language" class="form-select">
-                            <option value="ru" <?php echo ($project['language'] == 'ru' ? 'selected' : ''); ?>>Русский</option>
-                            <option value="en" <?php echo ($project['language'] == 'en' ? 'selected' : ''); ?>>English</option>
-                            <option value="es" <?php echo ($project['language'] == 'es' ? 'selected' : ''); ?>>Español</option>
-                            <option value="fr" <?php echo ($project['language'] == 'fr' ? 'selected' : ''); ?>>Français</option>
-                            <option value="de" <?php echo ($project['language'] == 'de' ? 'selected' : ''); ?>>Deutsch</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label"><?php echo __('Пожелания'); ?>:</label>
-                        <textarea name="wishes" class="form-control" rows="4" placeholder="<?php echo __('Укажите ваши пожелания'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
-                    </div>
-                    <button type="submit" name="update_project" class="btn btn-primary"><?php echo __('Сохранить изменения'); ?></button>
-                </form>
+                        <div class="mb-3">
+                            <label class="form-label"><?php echo __('Пожелания'); ?>:</label>
+                            <textarea name="wishes" class="form-control" rows="4" placeholder="<?php echo __('Укажите ваши пожелания'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
+                        </div>
+                        <button type="submit" name="update_project" class="btn btn-primary"><?php echo __('Сохранить изменения'); ?></button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
