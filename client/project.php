@@ -296,6 +296,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const newAnchorInput = form.querySelector('input[name="new_anchor"]');
     let addIndex = 0;
 
+    // New: references for links table (may not exist initially)
+    let linksTable = document.querySelector('.table-links');
+    let linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
+
     function makeHidden(name, value) {
         const input = document.createElement('input');
         input.type = 'hidden';
@@ -304,24 +308,141 @@ document.addEventListener('DOMContentLoaded', function() {
         return input;
     }
 
+    // Create the links table if it doesn't exist (when first link is added)
+    function ensureLinksTable() {
+        if (linksTbody) return linksTbody;
+        const empty = document.querySelector('.card.section .card-body .empty-state');
+        const cardBody = empty ? empty.closest('.card-body') : document.querySelector('.card.section .card-body');
+        if (!cardBody) return null;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-responsive';
+        wrapper.innerHTML = `
+            <table class="table table-striped table-hover table-sm align-middle table-links">
+                <thead>
+                    <tr>
+                        <th style="width:44px;">#</th>
+                        <th><?php echo __('Ссылка'); ?></th>
+                        <th><?php echo __('Анкор'); ?></th>
+                        <th><?php echo __('Статус'); ?></th>
+                        <th class="text-end" style="width:220px;">&nbsp;</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>`;
+        if (empty) empty.replaceWith(wrapper);
+        else cardBody.prepend(wrapper);
+        linksTable = wrapper.querySelector('table');
+        linksTbody = linksTable.querySelector('tbody');
+        return linksTbody;
+    }
+
+    function refreshRowNumbers() {
+        if (!linksTbody) return;
+        let i = 1;
+        linksTbody.querySelectorAll('tr').forEach(tr => {
+            const cell = tr.querySelector('td');
+            if (cell) cell.textContent = i++;
+        });
+    }
+
     // Fix pairing: use explicit index for url+anchor
     addLinkBtn.addEventListener('click', function() {
         const url = newLinkInput.value.trim();
         const anchor = newAnchorInput.value.trim();
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
         const idx = addIndex++;
+
+        // Hidden inputs stored separately for submission
         const wrap = document.createElement('div');
         wrap.className = 'added-pair';
         wrap.id = 'added-' + idx;
         wrap.appendChild(makeHidden('added_links['+idx+'][url]', url));
         wrap.appendChild(makeHidden('added_links['+idx+'][anchor]', anchor));
         addedHidden.appendChild(wrap);
+
+        // New: also render a visual row into the links table
+        const tbody = ensureLinksTable();
+        if (tbody) {
+            const tr = document.createElement('tr');
+            tr.setAttribute('data-index', 'new');
+            tr.setAttribute('data-added-index', String(idx));
+            tr.innerHTML = `
+                <td></td>
+                <td class="url-cell">
+                    <a href="${escapeHtml(url)}" target="_blank" class="view-url">${escapeHtml(url)}</a>
+                    <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
+                </td>
+                <td class="anchor-cell">
+                    <span class="view-anchor">${escapeHtml(anchor)}</span>
+                    <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
+                </td>
+                <td>
+                    <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
+                </td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?></button>
+                    <button type="button" class="btn btn-outline-danger btn-sm action-remove-new"><?php echo __('Удалить'); ?></button>
+                </td>`;
+            tbody.appendChild(tr);
+
+            // Attach listeners for this new row
+            const editBtn = tr.querySelector('.action-edit');
+            const removeBtn = tr.querySelector('.action-remove-new');
+            const urlCell = tr.querySelector('.url-cell');
+            const anchorCell = tr.querySelector('.anchor-cell');
+            const viewUrl = urlCell.querySelector('.view-url');
+            const viewAnchor = anchorCell.querySelector('.view-anchor');
+            const editUrl = urlCell.querySelector('.edit-url');
+            const editAnchor = anchorCell.querySelector('.edit-anchor');
+
+            function syncHidden() {
+                const holder = document.getElementById('added-' + idx);
+                if (!holder) return;
+                const urlInput = holder.querySelector(`input[name="added_links[${idx}][url]"]`);
+                const anchorInput = holder.querySelector(`input[name="added_links[${idx}][anchor]"]`);
+                if (urlInput) urlInput.value = editUrl.value.trim();
+                if (anchorInput) anchorInput.value = editAnchor.value.trim();
+                viewUrl.textContent = editUrl.value.trim();
+                viewUrl.href = editUrl.value.trim();
+                viewAnchor.textContent = editAnchor.value.trim();
+            }
+
+            editUrl.addEventListener('input', syncHidden);
+            editAnchor.addEventListener('input', syncHidden);
+
+            editBtn.addEventListener('click', function() {
+                const editing = !editUrl.classList.contains('d-none');
+                if (editing) {
+                    editUrl.classList.add('d-none');
+                    editAnchor.classList.add('d-none');
+                    viewUrl.classList.remove('d-none');
+                    viewAnchor.classList.remove('d-none');
+                    this.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
+                } else {
+                    editUrl.classList.remove('d-none');
+                    editAnchor.classList.remove('d-none');
+                    viewUrl.classList.add('d-none');
+                    viewAnchor.classList.add('d-none');
+                    this.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
+                }
+            });
+
+            removeBtn.addEventListener('click', function() {
+                // Remove hidden inputs and the row
+                const holder = document.getElementById('added-' + idx);
+                if (holder) holder.remove();
+                tr.remove();
+                refreshRowNumbers();
+            });
+
+            refreshRowNumbers();
+        }
+
         newLinkInput.value = '';
         newAnchorInput.value = '';
-        // Optional: show toast or visual row
     });
 
-    // Inline edit toggle
+    // Inline edit toggle (existing rows)
     document.querySelectorAll('.action-edit').forEach(btn => {
         btn.addEventListener('click', function() {
             const tr = btn.closest('tr');
@@ -340,12 +461,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     editAnchor.classList.add('d-none');
                     viewUrl.classList.remove('d-none');
                     viewAnchor.classList.remove('d-none');
+                    btn.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
                 } else {
                     // Show editors
                     editUrl.classList.remove('d-none');
                     editAnchor.classList.remove('d-none');
                     viewUrl.classList.add('d-none');
                     viewAnchor.classList.add('d-none');
+                    btn.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
                 }
             }
         });
@@ -360,10 +483,19 @@ document.addEventListener('DOMContentLoaded', function() {
             // Optionally hide row immediately
             const tr = btn.closest('tr');
             if (tr) tr.remove();
+            refreshRowNumbers();
         });
     });
 
     function isValidUrl(string) { try { new URL(string); return true; } catch (_) { return false; } }
+
+    // escaping helpers for safe HTML/attribute insertion
+    function escapeHtml(s){
+        return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+    function escapeAttribute(s){
+        return s.replace(/["']/g, c => ({'"':'&quot;','\'':'&#39;'}[c]));
+    }
 });
 </script>
 
