@@ -7,32 +7,6 @@ if (!is_logged_in() || !is_admin()) {
 
 $message = '';
 
-$migrations = [
-    // Split initial columns into separate migrations to avoid all-or-nothing errors
-    '1.0.11.1' => "ALTER TABLE `projects` ADD COLUMN `links` TEXT NULL;",
-    '1.0.11.2' => "ALTER TABLE `projects` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru';",
-    '1.0.11.3' => "ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL;",
-    // New: publications history table and safe column adds
-    '1.0.18' => "CREATE TABLE IF NOT EXISTS `publications` (
-        `id` INT AUTO_INCREMENT PRIMARY KEY,
-        `project_id` INT NOT NULL,
-        `page_url` TEXT NOT NULL,
-        `anchor` VARCHAR(255) NULL,
-        `network` VARCHAR(100) NULL,
-        `published_by` VARCHAR(100) NULL,
-        `post_url` TEXT NULL,
-        `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        INDEX (`project_id`),
-        CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-    '1.0.18.1' => "ALTER TABLE `publications` ADD COLUMN `anchor` VARCHAR(255) NULL;",
-    '1.0.18.2' => "ALTER TABLE `publications` ADD COLUMN `network` VARCHAR(100) NULL;",
-    '1.0.18.3' => "ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL;",
-    '1.0.18.4' => "ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL;",
-    '1.0.18.5' => "ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;",
-    '1.0.18.6' => "ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0;",
-];
-
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
@@ -115,43 +89,98 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $new_version = get_version();
 
         $conn = connect_db();
-        // Safe migration executor that tolerates duplicate/exists errors even when mysqli throws exceptions
-        $apply = function(string $ver, string $sql) use ($conn, &$message) {
+        // Helpers: existence checks
+        $tableExists = function(string $table) use ($conn): bool {
             try {
-                $ok = $conn->query($sql);
-                if ($ok) {
-                    $message .= "<br>Applied migration for version $ver";
-                    return;
-                }
-                // If mysqli isn't throwing exceptions, handle errno here
+                $stmt = $conn->prepare("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1");
+                if (!$stmt) return false;
+                $stmt->bind_param('s', $table);
+                $stmt->execute();
+                $stmt->store_result();
+                $ok = $stmt->num_rows > 0;
+                $stmt->close();
+                return $ok;
+            } catch (Throwable $e) { return false; }
+        };
+        $columnExists = function(string $table, string $column) use ($conn): bool {
+            try {
+                $stmt = $conn->prepare("SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1");
+                if (!$stmt) return false;
+                $stmt->bind_param('ss', $table, $column);
+                $stmt->execute();
+                $stmt->store_result();
+                $ok = $stmt->num_rows > 0;
+                $stmt->close();
+                return $ok;
+            } catch (Throwable $e) { return false; }
+        };
+        $apply = function(string $sql) use ($conn, &$message): void {
+            try {
+                if ($conn->query($sql) === true) return;
                 $errno = (int)$conn->errno;
-                if (in_array($errno, [1050, 1060, 1061, 1091], true)) {
-                    $message .= "<br>Migration for version $ver already applied";
-                } else {
-                    $message .= "<br>Error in migration $ver: (#$errno) " . $conn->error;
+                if (!in_array($errno, [1050,1060,1061,1091], true)) {
+                    $message .= '<br>SQL error (#' . $errno . '): ' . htmlspecialchars($conn->error);
                 }
             } catch (Throwable $e) {
                 $code = (int)$e->getCode();
-                $msg  = (string)$e->getMessage();
-                // Known benign cases: table exists, duplicate column/key, can't drop because doesn't exist
-                $known = [1050, 1060, 1061, 1091];
-                $isKnown = in_array($code, $known, true)
-                    || stripos($msg, 'Duplicate') !== false
-                    || stripos($msg, 'already exists') !== false
-                    || stripos($msg, 'exists') !== false
-                    || stripos($msg, 'Can\'t DROP') !== false;
-                if ($isKnown) {
-                    $message .= "<br>Migration for version $ver already applied";
-                } else {
-                    $message .= "<br>Error in migration $ver: (#$code) " . htmlspecialchars($msg);
+                $msg = $e->getMessage();
+                if (!in_array($code, [1050,1060,1061,1091], true) && stripos($msg, 'exists') === false && stripos($msg, 'Duplicate') === false) {
+                    $message .= '<br>SQL exception (#' . $code . '): ' . htmlspecialchars($msg);
                 }
             }
         };
-        foreach ($migrations as $ver => $sql) {
-            if (version_compare($ver, $new_version, '<=')) {
-                $apply($ver, $sql);
-            }
+
+        // Ensure projects table and columns
+        if (!$tableExists('projects')) {
+            $apply("CREATE TABLE IF NOT EXISTS `projects` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `user_id` INT NOT NULL,
+                `name` VARCHAR(255) NOT NULL,
+                `description` TEXT NULL,
+                `links` TEXT NULL,
+                `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
+                `wishes` TEXT NULL,
+                `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX (`user_id`),
+                CONSTRAINT `fk_projects_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>projects: ' . __('Создана/обновлена таблица.');
+        } else {
+            if (!$columnExists('projects','links'))    { $apply("ALTER TABLE `projects` ADD COLUMN `links` TEXT NULL"); }
+            if (!$columnExists('projects','language')) { $apply("ALTER TABLE `projects` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); }
+            if (!$columnExists('projects','wishes'))   { $apply("ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL"); }
+            // tighten language column null/default if needed
+            try { $apply("ALTER TABLE `projects` MODIFY COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); } catch (Throwable $e) { /* ignore */ }
         }
+
+        // Ensure users.balance
+        if (!$columnExists('users','balance')) {
+            $apply("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
+        }
+
+        // Ensure publications table and columns
+        if (!$tableExists('publications')) {
+            $apply("CREATE TABLE IF NOT EXISTS `publications` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `project_id` INT NOT NULL,
+                `page_url` TEXT NOT NULL,
+                `anchor` VARCHAR(255) NULL,
+                `network` VARCHAR(100) NULL,
+                `published_by` VARCHAR(100) NULL,
+                `post_url` TEXT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX (`project_id`),
+                CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>publications: ' . __('Создана/обновлена таблица.');
+        } else {
+            if (!$columnExists('publications','anchor'))       { $apply("ALTER TABLE `publications` ADD COLUMN `anchor` VARCHAR(255) NULL"); }
+            if (!$columnExists('publications','network'))      { $apply("ALTER TABLE `publications` ADD COLUMN `network` VARCHAR(100) NULL"); }
+            if (!$columnExists('publications','published_by')) { $apply("ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL"); }
+            if (!$columnExists('publications','post_url'))     { $apply("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL"); }
+            if (!$columnExists('publications','created_at'))   { $apply("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); }
+        }
+
         $conn->close();
         $message .= '<br>Все миграции применены до версии ' . htmlspecialchars($new_version);
     }
