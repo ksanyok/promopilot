@@ -543,5 +543,21 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   .table-links tbody tr td.text-end { text-align: left !important; }
 }
 
+/* ===== Responsive stacked table for History (mobile) ===== */
+@media (max-width: 640px) {
+  .table-history thead { display: none; }
+  .table-history tbody tr { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  .table-history tbody tr td { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 4px 0; }
+  .table-history tbody tr td:last-child { grid-template-columns: 1fr; }
+  .table-history tbody tr td::before { content: attr(data-label); color: var(--muted); font-weight: 600; }
+}
+
+/* URL cells in history table */
+.table-history .url-cell, .table-history .url-cell a {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* Icon-only buttons on very narrow screens */
 @media (max-width: 420px) { .btn .btn-text { display:none; } }

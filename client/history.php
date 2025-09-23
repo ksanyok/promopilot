@@ -29,8 +29,9 @@ if (!is_admin() && (int)$project['user_id'] !== $user_id) {
     exit;
 }
 
-// Sidebar context
+// Sidebar context and full-width page
 $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['name']];
+$pp_container = false; $pp_container_class = '';
 
 // Filters
 $network = trim((string)($_GET['network'] ?? ''));
@@ -84,97 +85,106 @@ include __DIR__ . '/../includes/client_sidebar.php';
 ?>
 
 <div class="main-content fade-in">
-  <div class="row justify-content-center">
-    <div class="col-md-11 col-lg-10">
-      <div class="card mb-3">
-        <div class="card-body d-flex align-items-center justify-content-between">
-          <div>
-            <div class="title mb-1"><?php echo __('История публикаций'); ?></div>
-            <div class="help">#<?php echo (int)$project['id']; ?> · <?php echo htmlspecialchars($project['name']); ?></div>
-          </div>
-          <div class="d-flex gap-2 align-items-center">
-            <a class="btn btn-outline-primary" href="<?php echo pp_url('client/project.php?id=' . (int)$project['id']); ?>"><i class="bi bi-arrow-left me-1"></i><?php echo __('Вернуться'); ?></a>
-          </div>
-        </div>
+  <!-- Header card -->
+  <div class="card section project-hero mb-3">
+    <div class="card-body d-flex align-items-center justify-content-between gap-3">
+      <div>
+        <div class="title mb-1"><?php echo __('История публикаций'); ?></div>
+        <div class="help">#<?php echo (int)$project['id']; ?> · <?php echo htmlspecialchars($project['name']); ?></div>
       </div>
+      <div class="d-flex gap-2 align-items-center">
+        <a class="btn btn-outline-primary" href="<?php echo pp_url('client/project.php?id=' . (int)$project['id']); ?>"><i class="bi bi-arrow-left me-1"></i><span class="btn-text"><?php echo __('Вернуться'); ?></span></a>
+      </div>
+    </div>
+  </div>
 
-      <!-- Filters -->
-      <div class="card mb-3">
-        <div class="card-body">
-          <form class="row g-2 align-items-end" method="get" action="">
-            <input type="hidden" name="id" value="<?php echo (int)$project['id']; ?>">
-            <div class="col-12 col-md-4">
-              <label class="form-label"><?php echo __('Сеть'); ?></label>
-              <select class="form-select" name="network">
-                <option value=""><?php echo __('Все сети'); ?></option>
-                <?php foreach ($networks as $net): ?>
-                  <option value="<?php echo htmlspecialchars($net); ?>" <?php echo ($network === $net ? 'selected' : ''); ?>><?php echo htmlspecialchars($net); ?></option>
-                <?php endforeach; ?>
-              </select>
-            </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label"><?php echo __('Поиск'); ?></label>
-              <input type="text" class="form-control" name="q" value="<?php echo htmlspecialchars($q); ?>" placeholder="<?php echo __('Анкор, страница, ссылка на пост или автор'); ?>">
-            </div>
-            <div class="col-12 col-md-2 text-end">
-              <button type="submit" class="btn btn-primary w-100"><i class="bi bi-filter me-1"></i><?php echo __('Фильтр'); ?></button>
-            </div>
-          </form>
-        </div>
+  <!-- Filters -->
+  <div class="card section mb-3">
+    <div class="section-header">
+      <div class="label"><i class="bi bi-funnel"></i><span><?php echo __('Фильтры'); ?></span></div>
+      <div class="toolbar">
+        <?php $base = pp_url('client/history.php?id=' . (int)$project['id']); ?>
+        <a href="<?php echo $base; ?>" class="btn btn-outline-light btn-sm"><i class="bi bi-x-circle me-1"></i><span class="btn-text"><?php echo __('Сбросить'); ?></span></a>
       </div>
+    </div>
+    <div class="card-body">
+      <form class="row g-3 align-items-end" method="get" action="">
+        <input type="hidden" name="id" value="<?php echo (int)$project['id']; ?>">
+        <div class="col-12 col-md-4">
+          <label class="form-label"><?php echo __('Сеть'); ?></label>
+          <select class="form-select" name="network">
+            <option value=""><?php echo __('Все сети'); ?></option>
+            <?php foreach ($networks as $net): ?>
+              <option value="<?php echo htmlspecialchars($net); ?>" <?php echo ($network === $net ? 'selected' : ''); ?>><?php echo htmlspecialchars($net); ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label"><?php echo __('Поиск'); ?></label>
+          <input type="text" class="form-control" name="q" value="<?php echo htmlspecialchars($q); ?>" placeholder="<?php echo __('Анкор, страница, ссылка на пост или автор'); ?>">
+        </div>
+        <div class="col-12 col-md-2 text-end">
+          <button type="submit" class="btn btn-gradient w-100"><i class="bi bi-filter me-1"></i><span class="btn-text"><?php echo __('Фильтр'); ?></span></button>
+        </div>
+      </form>
+    </div>
+  </div>
 
-      <div class="card">
-        <div class="card-body">
-          <?php if (!empty($publications)): ?>
-          <div class="table-responsive">
-            <table class="table table-bordered table-sm align-middle">
-              <thead class="table-secondary">
-                <tr>
-                  <th>#</th>
-                  <th><?php echo __('Дата'); ?></th>
-                  <th><?php echo __('Сеть'); ?></th>
-                  <th><?php echo __('Опубликовано'); ?></th>
-                  <th><?php echo __('Анкор'); ?></th>
-                  <th><?php echo __('Страница'); ?></th>
-                  <th><?php echo __('Ссылка на публикацию'); ?></th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php foreach ($publications as $i => $row): ?>
-                <tr>
-                  <td><?php echo $i + 1; ?></td>
-                  <td><?php echo htmlspecialchars($row['created_at']); ?></td>
-                  <td><?php echo htmlspecialchars($row['network']); ?></td>
-                  <td><?php echo htmlspecialchars($row['published_by']); ?></td>
-                  <td><?php echo htmlspecialchars($row['anchor']); ?></td>
-                  <td>
-                    <?php $purl = (string)$row['page_url']; ?>
-                    <div class="d-flex align-items-center gap-2">
-                      <a href="<?php echo htmlspecialchars($purl); ?>" target="_blank"><?php echo htmlspecialchars($purl); ?></a>
-                      <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($purl); ?>"><i class="bi bi-clipboard"></i></button>
-                    </div>
-                  </td>
-                  <td>
-                    <?php if (!empty($row['post_url'])): ?>
-                      <?php $post = (string)$row['post_url']; ?>
-                      <div class="d-flex align-items-center gap-2">
-                        <a href="<?php echo htmlspecialchars($post); ?>" target="_blank"><?php echo htmlspecialchars($post); ?></a>
-                        <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($post); ?>"><i class="bi bi-clipboard"></i></button>
-                      </div>
-                    <?php else: ?>
-                      <span class="text-muted">—</span>
-                    <?php endif; ?>
-                  </td>
-                </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
-          </div>
-          <?php else: ?>
-            <div class="empty-state"><?php echo __('Нет записей истории.'); ?></div>
-          <?php endif; ?>
-        </div>
+  <!-- History table -->
+  <div class="card section table-card">
+    <div class="section-header">
+      <div class="label"><i class="bi bi-clock-history"></i><span><?php echo __('Записи'); ?></span></div>
+      <div class="toolbar"></div>
+    </div>
+    <div class="card-body">
+      <?php if (!empty($publications)): ?>
+      <div class="table-responsive">
+        <table class="table table-striped table-hover table-sm align-middle table-history">
+          <thead>
+            <tr>
+              <th style="width:60px;">#</th>
+              <th><?php echo __('Дата'); ?></th>
+              <th><?php echo __('Сеть'); ?></th>
+              <th><?php echo __('Опубликовано'); ?></th>
+              <th><?php echo __('Анкор'); ?></th>
+              <th><?php echo __('Страница'); ?></th>
+              <th><?php echo __('Ссылка на публикацию'); ?></th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($publications as $i => $row): ?>
+            <tr>
+              <td data-label="#"><?php echo $i + 1; ?></td>
+              <td data-label="<?php echo __('Дата'); ?>"><?php echo htmlspecialchars($row['created_at']); ?></td>
+              <td data-label="<?php echo __('Сеть'); ?>"><?php echo htmlspecialchars($row['network']); ?></td>
+              <td data-label="<?php echo __('Опубликовано'); ?>"><?php echo htmlspecialchars($row['published_by']); ?></td>
+              <td data-label="<?php echo __('Анкор'); ?>"><?php echo htmlspecialchars($row['anchor']); ?></td>
+              <td data-label="<?php echo __('Страница'); ?>" class="url-cell">
+                <?php $purl = (string)$row['page_url']; ?>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                  <a href="<?php echo htmlspecialchars($purl); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($purl); ?></a>
+                  <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($purl); ?>"><i class="bi bi-clipboard"></i></button>
+                </div>
+              </td>
+              <td data-label="<?php echo __('Ссылка на публикацию'); ?>" class="url-cell">
+                <?php if (!empty($row['post_url'])): ?>
+                  <?php $post = (string)$row['post_url']; ?>
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <a href="<?php echo htmlspecialchars($post); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($post); ?></a>
+                    <button type="button" class="btn btn-outline-secondary btn-sm copy-btn" title="<?php echo __('Копировать'); ?>" data-copy="<?php echo htmlspecialchars($post); ?>"><i class="bi bi-clipboard"></i></button>
+                  </div>
+                <?php else: ?>
+                  <span class="text-muted">—</span>
+                <?php endif; ?>
+              </td>
+            </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
       </div>
+      <?php else: ?>
+        <div class="empty-state"><?php echo __('Нет записей истории.'); ?></div>
+      <?php endif; ?>
     </div>
   </div>
 </div>
