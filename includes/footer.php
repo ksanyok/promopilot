@@ -14,7 +14,7 @@
             <?php endif; ?>
         </div>
     </footer>
-    <script src="<?php echo asset_url('js/script.js'); ?>"></script>
+    <script src="<?php echo asset_url('js/script.js?v=' . rawurlencode(get_version())); ?>"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

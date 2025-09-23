@@ -26,6 +26,18 @@
   --sidebar-width: 280px;
   --navbar-h: 64px;
   --footer-h: 80px;
+
+  /* Bootstrap variable overrides for global theming */
+  color-scheme: dark;
+  --bs-body-bg: var(--bg);
+  --bs-body-color: var(--text);
+  --bs-border-color: var(--border);
+  --bs-link-color: var(--primary);
+  --bs-link-hover-color: var(--primary-2);
+  --bs-heading-color: var(--text);
+  --bs-card-bg: var(--surface);
+  --bs-card-color: var(--text);
+  --bs-tertiary-bg: var(--surface-2);
 }
 
 :root[data-theme="light"] {
@@ -43,6 +55,17 @@
   --danger: #dc2626;
   --border: rgba(0,0,0,0.1);
   --shadow: 0 12px 30px rgba(2,6,23,.12);
+
+  color-scheme: light;
+  --bs-body-bg: var(--bg);
+  --bs-body-color: var(--text);
+  --bs-border-color: var(--border);
+  --bs-link-color: var(--primary);
+  --bs-link-hover-color: var(--primary-2);
+  --bs-heading-color: var(--text);
+  --bs-card-bg: var(--surface);
+  --bs-card-color: var(--text);
+  --bs-tertiary-bg: var(--surface-2);
 }
 
 /* =================== Base =================== */
@@ -95,6 +118,10 @@ a:hover { color: var(--primary-2); text-decoration-color: currentColor; }
 
 /* improve default muted text accessibility */
 .text-muted, small, .help { color: var(--muted) !important; }
+
+/* Ensure headings and card text inherit correct contrast */
+h1, h2, h3, h4, h5, h6 { color: var(--text); }
+.card-title, .card-subtitle, .card-text { color: var(--text); }
 
 /* =================== Navbar =================== */
 .navbar {
@@ -246,7 +273,7 @@ a:hover { color: var(--primary-2); text-decoration-color: currentColor; }
 .badge-primary { background: color-mix(in srgb, var(--primary) 35%, black); }
 .badge-success { background: linear-gradient( to bottom, #10b981, #059669 ); color: #03150f; }
 .badge-warning { background: linear-gradient( to bottom, #f59e0b, #d97706 ); color: #1a1203; }
-.badge-secondary { background: rgba(255,255,255,.18); color: var (--text); border: 1px solid var(--border); }
+.badge-secondary { background: rgba(255,255,255,.18); color: var(--text); border: 1px solid var(--border); }
 
 /* Controls */
 .theme-toggle { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 999px; padding: 6px 10px; line-height: 1; box-shadow: var(--shadow); }
@@ -312,8 +339,8 @@ a:hover { color: var(--primary-2); text-decoration-color: currentColor; }
               linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
   border: 1px solid var(--border);
 }
-.project-hero .title { font-size: clamp(20px, 2.4vw, 28px); font-weight: 800; letter-spacing: .2px; }
-.project-hero .subtitle { color: var(--muted); font-weight: 600; }
+.project-hero .title { font-size: clamp(20px, 2.4vw, 28px); font-weight: 800; letter-spacing: .2px; color: inherit; }
+.project-hero .subtitle { color: inherit; font-weight: 600; }
 .meta-list { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 12px 0 0; }
 .meta-item { display:flex; align-items:center; gap:8px; color: var(--muted); font-weight:600; }
 .meta-item .bi { color: var(--primary); }
@@ -404,6 +431,11 @@ a:hover { color: var(--primary-2); text-decoration-color: currentColor; }
 .table {
   background: var(--surface);
   border-color: var(--border);
+  --bs-table-color: var(--text);
+  --bs-table-bg: transparent;
+  --bs-table-striped-bg: rgba(255,255,255,.04);
+  --bs-table-hover-bg: rgba(255,255,255,.06);
+  --bs-table-border-color: var(--border);
 }
 .table thead th {
   background: var(--surface-2);
