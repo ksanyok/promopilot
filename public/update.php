@@ -8,7 +8,7 @@ if (!is_logged_in() || !is_admin()) {
 $message = '';
 
 $migrations = [
-    '1.0.11' => "ALTER TABLE projects ADD COLUMN links TEXT DEFAULT '[]', ADD COLUMN language VARCHAR(10) DEFAULT 'ru', ADD COLUMN wishes TEXT;",
+    '1.0.11' => "ALTER TABLE projects ADD COLUMN links TEXT NULL, ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'ru', ADD COLUMN wishes TEXT NULL;",
     // Add future migrations here as 'version' => 'SQL'
 ];
 
