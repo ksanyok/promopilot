@@ -66,6 +66,7 @@ require_once __DIR__ . '/init.php';
     <main class="page-wrap">
     <?php 
     $useContainer = isset($pp_container) ? (bool)$pp_container : !is_admin();
+    $pp_container_class = isset($pp_container_class) && is_string($pp_container_class) ? trim($pp_container_class) : 'container';
     if ($useContainer): ?>
-    <div class="container mt-4">
+    <div class="<?php echo htmlspecialchars($pp_container_class); ?> mt-4">
     <?php endif; ?>

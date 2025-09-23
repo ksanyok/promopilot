@@ -136,14 +136,20 @@ try {
     }
 } catch (Throwable $e) { /* ignore */ }
 
+// Make this page full-width (no Bootstrap container wrapper from header)
+$pp_container = false;
+$pp_container_class = '';
+// Provide current project context for sidebar highlighting (optional)
+$pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['name']];
+
 ?>
 
 <?php include '../includes/header.php'; ?>
 <?php include __DIR__ . '/../includes/client_sidebar.php'; ?>
 
 <div class="main-content fade-in">
-    <div class="row justify-content-center">
-        <div class="col-md-11 col-lg-10">
+    <div class="row">
+        <div class="col-12">
             <!-- Project hero -->
             <div class="card project-hero mb-3">
                 <div class="card-body">
