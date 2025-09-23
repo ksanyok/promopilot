@@ -15,29 +15,53 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             root.removeAttribute('data-theme'); // dark by default
         }
-        if (btn) btn.innerHTML = mode === 'light' ? '<i class="bi bi-sun"></i>' : '<i class="bi bi-moon-stars"></i>';
+        if (btn) {
+            btn.innerHTML = mode === 'light' ? '<i class="bi bi-sun"></i>' : '<i class="bi bi-moon-stars"></i>';
+            // reflect pressed state: true when dark theme is active
+            btn.setAttribute('aria-pressed', mode === 'dark' ? 'true' : 'false');
+        }
         // update bgfx colors on theme change
         if (typeof window.ppBgfxUpdateColors === 'function') {
             window.ppBgfxUpdateColors();
         }
     }
 
+    // Determine initial theme
     const saved = localStorage.getItem(storageKey);
-    if (saved === 'light' || saved === 'dark') {
+    const hasSaved = (saved === 'light' || saved === 'dark');
+    if (hasSaved) {
         applyTheme(saved);
     } else {
         const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
         applyTheme(prefersLight ? 'light' : 'dark');
     }
 
-    if (btn) {
-        btn.addEventListener('click', function() {
-            const current = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-            const next = current === 'light' ? 'dark' : 'light';
-            localStorage.setItem(storageKey, next);
-            applyTheme(next);
-        });
+    // Follow system theme changes if user has no explicit preference
+    const mqlLight = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+    if (mqlLight && !hasSaved) {
+        const onScheme = (e) => applyTheme(e.matches ? 'light' : 'dark');
+        try { mqlLight.addEventListener('change', onScheme); } catch(_) { mqlLight.addListener(onScheme); }
     }
+
+    function toggleTheme() {
+        const current = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        const next = current === 'light' ? 'dark' : 'light';
+        localStorage.setItem(storageKey, next);
+        applyTheme(next);
+    }
+
+    if (btn) {
+        btn.addEventListener('click', toggleTheme);
+    }
+
+    // Keyboard shortcut: press "T" to toggle theme
+    document.addEventListener('keydown', function(e) {
+        if (e.defaultPrevented) return;
+        if ((e.ctrlKey || e.metaKey || e.altKey) || e.repeat) return;
+        if (e.key && e.key.toLowerCase && e.key.toLowerCase() === 't') {
+            toggleTheme();
+        }
+    });
 
     // Animations (UI)
     if (!prefersReducedMotion) {

@@ -108,6 +108,24 @@ function ensure_schema(): void {
     if (!empty($usersCols) && !isset($usersCols['balance'])) {
         @$conn->query("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
     }
+    // Users table: add profile fields if missing
+    if (!empty($usersCols)) {
+        if (!isset($usersCols['full_name'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `full_name` VARCHAR(255) NULL AFTER `username`");
+        }
+        if (!isset($usersCols['email'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `email` VARCHAR(190) NULL AFTER `full_name`");
+        }
+        if (!isset($usersCols['phone'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `phone` VARCHAR(32) NULL AFTER `email`");
+        }
+        if (!isset($usersCols['avatar'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `avatar` VARCHAR(255) NULL AFTER `phone`");
+        }
+        if (!isset($usersCols['newsletter_opt_in'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `newsletter_opt_in` TINYINT(1) NOT NULL DEFAULT 1 AFTER `avatar`");
+        }
+    }
 
     // Publications table for history
     $pubCols = $getCols('publications');
