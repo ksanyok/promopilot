@@ -9,7 +9,25 @@ $message = '';
 
 $migrations = [
     '1.0.11' => "ALTER TABLE projects ADD COLUMN links TEXT NULL, ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'ru', ADD COLUMN wishes TEXT NULL;",
-    // Add future migrations here as 'version' => 'SQL'
+    // New: publications history table and safe column adds
+    '1.0.18' => "CREATE TABLE IF NOT EXISTS `publications` (
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
+        `project_id` INT NOT NULL,
+        `page_url` TEXT NOT NULL,
+        `anchor` VARCHAR(255) NULL,
+        `network` VARCHAR(100) NULL,
+        `published_by` VARCHAR(100) NULL,
+        `post_url` TEXT NULL,
+        `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX (`project_id`),
+        CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+    '1.0.18.1' => "ALTER TABLE `publications` ADD COLUMN `anchor` VARCHAR(255) NULL;",
+    '1.0.18.2' => "ALTER TABLE `publications` ADD COLUMN `network` VARCHAR(100) NULL;",
+    '1.0.18.3' => "ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL;",
+    '1.0.18.4' => "ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL;",
+    '1.0.18.5' => "ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;",
+    '1.0.18.6' => "ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0;",
 ];
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -99,7 +117,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 if ($conn->query($sql)) {
                     $message .= "<br>Applied migration for version $ver";
                 } else {
-                    if ($conn->errno == 1060) { // Duplicate column name
+                    // 1060 Duplicate column, 1050 Table exists — treat as already applied
+                    if (in_array($conn->errno, [1060, 1050], true)) {
                         $message .= "<br>Migration for version $ver already applied";
                     } else {
                         $message .= "<br>Error in migration $ver: " . $conn->error;

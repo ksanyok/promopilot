@@ -109,6 +109,39 @@ function ensure_schema(): void {
         @$conn->query("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
     }
 
+    // Publications table for history
+    $pubCols = $getCols('publications');
+    if (empty($pubCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `publications` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `project_id` INT NOT NULL,
+            `page_url` TEXT NOT NULL,
+            `anchor` VARCHAR(255) NULL,
+            `network` VARCHAR(100) NULL,
+            `published_by` VARCHAR(100) NULL,
+            `post_url` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX (`project_id`),
+            CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        if (!isset($pubCols['anchor'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `anchor` VARCHAR(255) NULL");
+        }
+        if (!isset($pubCols['network'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `network` VARCHAR(100) NULL");
+        }
+        if (!isset($pubCols['published_by'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL");
+        }
+        if (!isset($pubCols['post_url'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL");
+        }
+        if (!isset($pubCols['created_at'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+        }
+    }
+
     // Settings table optional—skip if missing
 
     @$conn->close();

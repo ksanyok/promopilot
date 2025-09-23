@@ -40,15 +40,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
     } else {
+        // Decode links as array of ['url'=>..., 'anchor'=>...]
         $links = json_decode($project['links'] ?? '[]', true) ?: [];
-        $new_link = trim($_POST['new_link'] ?? '');
-        if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
-            $links[] = $new_link;
+        if (!is_array($links)) { $links = []; }
+        // Normalize legacy entries
+        $norm = [];
+        foreach ($links as $idx => $item) {
+            if (is_string($item)) { $norm[] = ['url' => $item, 'anchor' => '']; }
+            elseif (is_array($item)) { $norm[] = ['url' => trim((string)($item['url'] ?? '')), 'anchor' => trim((string)($item['anchor'] ?? ''))]; }
         }
-        $remove_links = $_POST['remove_links'] ?? [];
-        $links = array_filter($links, function($link) use ($remove_links) {
-            return !in_array($link, $remove_links);
-        });
+        $links = $norm;
+
+        // Remove links by index
+        $remove = $_POST['remove_links'] ?? [];
+        if (!is_array($remove)) { $remove = []; }
+        $removeIdx = array_map('intval', $remove);
+        rsort($removeIdx); // remove from highest index to lowest
+        foreach ($removeIdx as $ri) {
+            if (isset($links[$ri])) { array_splice($links, $ri, 1); }
+        }
+
+        // Add new links from batched hidden inputs
+        if (!empty($_POST['added_links']) && is_array($_POST['added_links'])) {
+            foreach ($_POST['added_links'] as $row) {
+                $url = trim($row['url'] ?? '');
+                $anchor = trim($row['anchor'] ?? '');
+                if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
+                    $links[] = ['url' => $url, 'anchor' => $anchor];
+                }
+            }
+        } else {
+            // Fallback: single fields if user typed and clicked Save directly
+            $new_link = trim($_POST['new_link'] ?? '');
+            $new_anchor = trim($_POST['new_anchor'] ?? '');
+            if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
+                $links[] = ['url' => $new_link, 'anchor' => $new_anchor];
+            }
+        }
+
         $language = trim($_POST['language'] ?? 'ru');
         $wishes = trim($_POST['wishes'] ?? '');
 
@@ -70,6 +99,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
 }
 
 $links = json_decode($project['links'] ?? '[]', true) ?: [];
+if (!is_array($links)) { $links = []; }
+$links = array_map(function($it){
+    if (is_string($it)) return ['url'=>$it,'anchor'=>''];
+    return ['url'=>trim((string)($it['url'] ?? '')),'anchor'=>trim((string)($it['anchor'] ?? ''))];
+}, $links);
+
+// Fetch publication history
+$publications = [];
+try {
+    $conn = connect_db();
+    if ($conn) {
+        $stmt = $conn->prepare("SELECT id, page_url, anchor, network, published_by, post_url, created_at FROM publications WHERE project_id = ? ORDER BY created_at DESC");
+        if ($stmt) {
+            $stmt->bind_param('i', $id);
+            $stmt->execute();
+            $res = $stmt->get_result();
+            while ($row = $res->fetch_assoc()) { $publications[] = $row; }
+            $stmt->close();
+        }
+        $conn->close();
+    }
+} catch (Throwable $e) { /* ignore if table missing */ }
 
 $pp_container = false;
 $pp_current_project = ['id' => (int)$project['id'], 'name' => $project['name'] ?? ('ID ' . (int)$project['id'])];
@@ -80,7 +131,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => $project['name'] ?
 
 <div class="main-content">
     <div class="row justify-content-center">
-        <div class="col-md-8">
+        <div class="col-md-10 col-lg-9">
             <div class="card">
                 <div class="card-header bg-secondary text-white">
                     <h4><?php echo htmlspecialchars($project['name']); ?></h4>
@@ -98,30 +149,84 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => $project['name'] ?
                     <h5><?php echo __('Информация о проекте'); ?></h5>
                 </div>
                 <div class="card-body">
-                    <h6><?php echo __('Ссылки'); ?>:</h6>
+                    <h6 class="mb-3"><?php echo __('Ссылки'); ?>:</h6>
                     <?php if (!empty($links)): ?>
-                        <table class="table table-striped">
-                            <thead>
-                                <tr>
-                                    <th><?php echo __('№'); ?></th>
-                                    <th><?php echo __('Ссылка'); ?></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($links as $index => $link): ?>
+                        <div class="table-responsive">
+                            <table class="table table-striped align-middle">
+                                <thead>
                                     <tr>
-                                        <td><?php echo $index + 1; ?></td>
-                                        <td><a href="<?php echo htmlspecialchars($link); ?>" target="_blank"><?php echo htmlspecialchars($link); ?></a></td>
+                                        <th style="width:60px;">#</th>
+                                        <th><?php echo __('Ссылка'); ?></th>
+                                        <th><?php echo __('Анкор'); ?></th>
+                                        <th style="width:180px;"><?php echo __('Действия'); ?></th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($links as $index => $item): ?>
+                                        <tr>
+                                            <td><?php echo $index + 1; ?></td>
+                                            <td><a href="<?php echo htmlspecialchars($item['url']); ?>" target="_blank"><?php echo htmlspecialchars($item['url']); ?></a></td>
+                                            <td><?php echo htmlspecialchars($item['anchor']); ?></td>
+                                            <td>
+                                                <button type="button" class="btn btn-success btn-sm" title="<?php echo __('Опубликовать'); ?>"><?php echo __('Опубликовать'); ?></button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     <?php else: ?>
                         <p><?php echo __('Ссылок нет.'); ?></p>
                     <?php endif; ?>
-                    <p><strong><?php echo __('Язык страницы'); ?>:</strong> <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></p>
+                    <p class="mt-3"><strong><?php echo __('Язык страницы'); ?>:</strong> <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></p>
                     <p><strong><?php echo __('Пожелания'); ?>:</strong></p>
                     <p><?php echo nl2br(htmlspecialchars($project['wishes'] ?? '')); ?></p>
+                </div>
+            </div>
+
+            <div class="card mt-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><?php echo __('История публикаций'); ?></h5>
+                </div>
+                <div class="card-body">
+                    <?php if (!empty($publications)): ?>
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-sm align-middle">
+                                <thead class="table-secondary">
+                                    <tr>
+                                        <th>#</th>
+                                        <th><?php echo __('Дата'); ?></th>
+                                        <th><?php echo __('Сеть'); ?></th>
+                                        <th><?php echo __('Опубликовано'); ?></th>
+                                        <th><?php echo __('Анкор'); ?></th>
+                                        <th><?php echo __('Страница'); ?></th>
+                                        <th><?php echo __('Ссылка на публикацию'); ?></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($publications as $i => $row): ?>
+                                        <tr>
+                                            <td><?php echo $i + 1; ?></td>
+                                            <td><?php echo htmlspecialchars($row['created_at']); ?></td>
+                                            <td><?php echo htmlspecialchars($row['network']); ?></td>
+                                            <td><?php echo htmlspecialchars($row['published_by']); ?></td>
+                                            <td><?php echo htmlspecialchars($row['anchor']); ?></td>
+                                            <td><a href="<?php echo htmlspecialchars($row['page_url']); ?>" target="_blank"><?php echo htmlspecialchars($row['page_url']); ?></a></td>
+                                            <td>
+                                                <?php if (!empty($row['post_url'])): ?>
+                                                    <a href="<?php echo htmlspecialchars($row['post_url']); ?>" target="_blank"><?php echo htmlspecialchars($row['post_url']); ?></a>
+                                                <?php else: ?>
+                                                    <span class="text-muted">—</span>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php else: ?>
+                        <p class="text-muted mb-0"><?php echo __('Нет записей истории.'); ?></p>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -138,17 +243,28 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => $project['name'] ?
                         <div class="mb-3">
                             <label class="form-label"><?php echo __('Ссылки'); ?>:</label>
                             <div id="links-list">
-                                <?php foreach ($links as $link): ?>
-                                    <div class="input-group mb-2">
-                                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($link); ?>" readonly>
-                                        <button type="button" class="btn btn-outline-danger remove-link" data-link="<?php echo htmlspecialchars($link); ?>"><?php echo __('Удалить'); ?></button>
+                                <?php foreach ($links as $idx => $item): ?>
+                                    <div class="row g-2 align-items-center mb-2" data-index="<?php echo (int)$idx; ?>">
+                                        <div class="col-12 col-md-6"><input type="text" class="form-control" value="<?php echo htmlspecialchars($item['url']); ?>" readonly></div>
+                                        <div class="col-8 col-md-4"><input type="text" class="form-control" value="<?php echo htmlspecialchars($item['anchor']); ?>" readonly></div>
+                                        <div class="col-4 col-md-2 text-end">
+                                            <button type="button" class="btn btn-outline-danger btn-sm remove-link" data-index="<?php echo (int)$idx; ?>"><?php echo __('Удалить'); ?></button>
+                                        </div>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
-                            <div class="input-group">
-                                <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
-                                <button type="button" class="btn btn-outline-success" id="add-link"><?php echo __('Добавить'); ?></button>
+                            <div class="row g-2 align-items-center">
+                                <div class="col-12 col-md-6">
+                                    <input type="url" name="new_link" class="form-control" placeholder="<?php echo __('Добавить новую ссылку'); ?>">
+                                </div>
+                                <div class="col-8 col-md-4">
+                                    <input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                                </div>
+                                <div class="col-4 col-md-2 text-end">
+                                    <button type="button" class="btn btn-outline-success" id="add-link"><?php echo __('Добавить'); ?></button>
+                                </div>
                             </div>
+                            <div id="added-hidden"></div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label"><?php echo __('Язык страницы'); ?>:</label>
@@ -177,45 +293,77 @@ document.addEventListener('DOMContentLoaded', function() {
     const linksList = document.getElementById('links-list');
     const addLinkBtn = document.getElementById('add-link');
     const newLinkInput = document.querySelector('input[name="new_link"]');
+    const newAnchorInput = document.querySelector('input[name="new_anchor"]');
+    const addedHidden = document.getElementById('added-hidden');
 
-    // Add link
+    function makeHidden(name, value) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        return input;
+    }
+
+    // Add link (with anchor)
     addLinkBtn.addEventListener('click', function() {
         const url = newLinkInput.value.trim();
+        const anchor = newAnchorInput.value.trim();
         if (url && isValidUrl(url)) {
-            const div = document.createElement('div');
-            div.className = 'input-group mb-2';
-            div.innerHTML = `
-                <input type="text" class="form-control" value="${url}" readonly>
-                <button type="button" class="btn btn-outline-danger remove-link" data-link="${url}"><?php echo __('Удалить'); ?></button>
+            // Visual preview row
+            const row = document.createElement('div');
+            row.className = 'row g-2 align-items-center mb-2';
+            row.innerHTML = `
+                <div class="col-12 col-md-6"><input type="text" class="form-control" value="${escapeHtml(url)}" readonly></div>
+                <div class="col-8 col-md-4"><input type="text" class="form-control" value="${escapeHtml(anchor)}" readonly></div>
+                <div class="col-4 col-md-2 text-end">
+                    <button type="button" class="btn btn-outline-danger btn-sm remove-added"><?php echo __('Удалить'); ?></button>
+                </div>
             `;
-            linksList.appendChild(div);
+            // Hidden inputs for server
+            const wrap = document.createElement('div');
+            wrap.className = 'added-pair';
+            wrap.appendChild(makeHidden('added_links[][url]', url));
+            wrap.appendChild(makeHidden('added_links[][anchor]', anchor));
+
+            row.dataset.hiddenRefId = 'ref-' + Math.random().toString(36).slice(2);
+            wrap.id = row.dataset.hiddenRefId;
+
+            linksList.appendChild(row);
+            addedHidden.appendChild(wrap);
+
             newLinkInput.value = '';
+            newAnchorInput.value = '';
         } else {
             alert('<?php echo __('Введите корректный URL'); ?>');
         }
     });
 
-    // Remove link
+    // Remove existing link by index OR remove just-added row
     linksList.addEventListener('click', function(e) {
         if (e.target.classList.contains('remove-link')) {
-            const link = e.target.getAttribute('data-link');
-            e.target.closest('.input-group').remove();
-            // Add hidden input for removal
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = 'remove_links[]';
-            hidden.value = link;
-            e.target.form.appendChild(hidden);
+            const idx = e.target.getAttribute('data-index');
+            const row = e.target.closest('.row');
+            if (row) row.remove();
+            const hidden = makeHidden('remove_links[]', idx);
+            // Append hidden to the form
+            const form = e.target.closest('form') || document.querySelector('#links-section form');
+            if (form) form.appendChild(hidden);
+        }
+        if (e.target.classList.contains('remove-added')) {
+            const row = e.target.closest('.row');
+            if (row && row.dataset.hiddenRefId) {
+                const wrap = document.getElementById(row.dataset.hiddenRefId);
+                if (wrap) wrap.remove();
+            }
+            if (row) row.remove();
         }
     });
 
     function isValidUrl(string) {
-        try {
-            new URL(string);
-            return true;
-        } catch (_) {
-            return false;
-        }
+        try { new URL(string); return true; } catch (_) { return false; }
+    }
+    function escapeHtml(s){
+        return s.replace(/[&<>"]+/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]); });
     }
 });
 </script>

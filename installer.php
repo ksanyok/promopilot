@@ -179,16 +179,51 @@ function setup_database(string $host, string $user, string $pass, string $db, st
     }
     $mysqli->select_db($db);
 
-    $mysqli->query("CREATE TABLE IF NOT EXISTS users (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        username VARCHAR(50) UNIQUE,\n        password VARCHAR(255),\n        role ENUM('admin','client') DEFAULT 'client',\n        balance DECIMAL(10,2) DEFAULT 0.00,\n        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    $mysqli->query("CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) UNIQUE,
+        password VARCHAR(255),
+        role ENUM('admin','client') DEFAULT 'client',
+        balance DECIMAL(10,2) DEFAULT 0.00,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     if ($mysqli->error) {
         $errors[] = 'Ошибка создания таблицы users: ' . $mysqli->error;
     }
 
-    $mysqli->query("CREATE TABLE IF NOT EXISTS projects (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        user_id INT,\n        name VARCHAR(100),\n        description TEXT,\n        links TEXT DEFAULT '[]',\n        language VARCHAR(10) DEFAULT 'ru',\n        wishes TEXT,\n        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    $mysqli->query("CREATE TABLE IF NOT EXISTS projects (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT,
+        name VARCHAR(100),
+        description TEXT,
+        links TEXT DEFAULT '[]',
+        language VARCHAR(10) DEFAULT 'ru',
+        wishes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     if ($mysqli->error) {
         $errors[] = 'Ошибка создания таблицы projects: ' . $mysqli->error;
+    }
+
+    // Publications table
+    $mysqli->query("CREATE TABLE IF NOT EXISTS publications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        project_id INT NOT NULL,
+        page_url TEXT NOT NULL,
+        anchor VARCHAR(255) NULL,
+        network VARCHAR(100) NULL,
+        published_by VARCHAR(100) NULL,
+        post_url TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX (project_id),
+        CONSTRAINT fk_publications_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы publications: ' . $mysqli->error;
     }
 
     $admin_pass_hashed = password_hash($admin_pass, PASSWORD_DEFAULT);
