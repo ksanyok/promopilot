@@ -126,5 +126,15 @@ $lang = [
     'Ссылка на публикацию' => 'Post URL',
     'Проект обновлен.' => 'Project updated.',
     'Ошибка обновления проекта.' => 'Project update error.',
+    // New keys for UI terms
+    'Статус' => 'Status',
+    'Опубликована' => 'Published',
+    'Не опубликована' => 'Not published',
+    'В ожидании' => 'Pending',
+    'Редактировать' => 'Edit',
+    'Отмена' => 'Cancel',
+    'История' => 'History',
+    'Сохранить' => 'Save',
+    'Якорный текст будет использован при публикации' => 'Anchor text will be used in publication',
 ];
 ?>

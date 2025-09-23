@@ -124,6 +124,7 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 .menu-item { display: block; padding: 11px 12px; border-radius: 12px; color: var(--text); text-decoration: none; background: transparent; border: 1px solid transparent; transition: .2s ease; }
 .menu-item .bi { color: var(--muted); }
 .menu-item:hover { background: var(--surface); border-color: var(--border); transform: translateX(2px); }
+.menu-item.active { background: var(--surface); border-color: var(--border); }
 .menu-separator { border: none; height: 1px; margin: 12px 6px 16px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
 
 /* Corner brand (logo on intersection) */
@@ -184,6 +185,9 @@ main.page-wrap { flex: 1 1 auto; display: block; }
 /* Utility */
 .badge { border-radius: 999px; padding: .35em .6em; font-weight: 600; }
 .badge-primary { background: color-mix(in oklab, var(--primary) 35%, black); }
+.badge-success { background: color-mix(in oklab, var(--success) 40%, black); }
+.badge-warning { background: color-mix(in oklab, var(--warning) 45%, black); color:#111; }
+.badge-secondary { background: rgba(255,255,255,.15); }
 
 /* =================== Animations =================== */
 .fade-in { animation: fadeIn .5s ease both; }

@@ -24,6 +24,25 @@ if (is_logged_in() && !is_admin()) {
     }
 }
 $currentProject = $pp_current_project ?? null;
+
+$projectsList = [];
+if (is_logged_in() && !is_admin()) {
+    $uid = (int)($_SESSION['user_id'] ?? 0);
+    if ($uid > 0) {
+        $conn = connect_db();
+        if ($conn) {
+            $stmt = $conn->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY id DESC LIMIT 100");
+            if ($stmt) {
+                $stmt->bind_param('i', $uid);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) { $projectsList[] = $row; }
+                $stmt->close();
+            }
+            $conn->close();
+        }
+    }
+}
 ?>
 
 <div class="sidebar">
@@ -62,6 +81,22 @@ $currentProject = $pp_current_project ?? null;
         </ul>
     </div>
 
+    <?php if (!empty($projectsList)): ?>
+    <div class="menu-block">
+        <div class="menu-title"><?php echo __('Проекты'); ?></div>
+        <ul class="menu-list">
+            <?php foreach ($projectsList as $p): $active = ($currentProject && (int)$currentProject['id'] === (int)$p['id']); ?>
+                <li>
+                    <a class="menu-item<?php echo $active ? ' active' : ''; ?>" href="<?php echo pp_url('client/project.php?id=' . (int)$p['id']); ?>">
+                        <i class="bi bi-folder2-open me-2"></i>
+                        <?php echo htmlspecialchars($p['name'] ?: ('ID ' . (int)$p['id'])); ?>
+                    </a>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+    <?php endif; ?>
+
     <?php if ($currentProject && !empty($currentProject['id'])): ?>
     <hr class="menu-separator" />
     <div class="menu-block">
@@ -85,7 +120,12 @@ $currentProject = $pp_current_project ?? null;
                     <?php echo __('Добавить ссылку'); ?>
                 </a>
             </li>
-            <!-- Future project actions can be added here -->
+            <li>
+                <a href="<?php echo pp_url('client/history.php?id=' . (int)$currentProject['id']); ?>" class="menu-item">
+                    <i class="bi bi-clock-history me-2"></i>
+                    <?php echo __('История'); ?>
+                </a>
+            </li>
         </ul>
     </div>
     <?php endif; ?>
