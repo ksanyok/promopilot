@@ -121,3 +121,8 @@ if (!function_exists('asset_url')) {
 
 // Load core functions (with robust relative includes)
 require_once __DIR__ . '/functions.php';
+
+// Auto-heal database schema (idempotent)
+if (function_exists('ensure_schema')) {
+    ensure_schema();
+}

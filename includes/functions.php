@@ -46,6 +46,74 @@ function connect_db() {
     return $conn;
 }
 
+// Ensure DB schema has required columns/tables
+function ensure_schema(): void {
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return; // cannot connect; installer will handle
+    }
+    if (!$conn) return;
+
+    // Helper to get columns map
+    $getCols = function(string $table) use ($conn): array {
+        $cols = [];
+        try {
+            if ($res = @$conn->query("DESCRIBE `{$table}`")) {
+                while ($row = $res->fetch_assoc()) {
+                    $cols[$row['Field']] = $row;
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) { /* ignore */ }
+        return $cols;
+    };
+
+    // Projects table
+    $projectsCols = $getCols('projects');
+    if (empty($projectsCols)) {
+        // Create minimal projects table if missing
+        @$conn->query("CREATE TABLE IF NOT EXISTS `projects` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `name` VARCHAR(255) NOT NULL,
+            `description` TEXT NULL,
+            `links` TEXT NULL,
+            `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
+            `wishes` TEXT NULL,
+            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        // Add missing columns
+        if (!isset($projectsCols['links'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `links` TEXT NULL");
+        }
+        if (!isset($projectsCols['language'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'");
+        } else {
+            // Ensure language has NOT NULL and default 'ru'
+            $lang = $projectsCols['language'];
+            $needsFix = (strtoupper($lang['Null'] ?? '') === 'YES') || (($lang['Default'] ?? '') === null);
+            if ($needsFix) {
+                @$conn->query("ALTER TABLE `projects` MODIFY COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'");
+            }
+        }
+        if (!isset($projectsCols['wishes'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL");
+        }
+    }
+
+    // Users table: ensure balance column exists
+    $usersCols = $getCols('users');
+    if (!empty($usersCols) && !isset($usersCols['balance'])) {
+        @$conn->query("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
+    }
+
+    // Settings table optional—skip if missing
+
+    @$conn->close();
+}
+
 function is_logged_in() {
     return isset($_SESSION['user_id']);
 }
