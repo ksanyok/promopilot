@@ -328,24 +328,21 @@ function get_current_user_balance(): ?float {
     return get_user_balance((int)$_SESSION['user_id']);
 }
 
-// Settings helpers
+// Settings helpers (single implementation with cache + invalidation flag)
 function get_setting(string $key, $default = null) {
     static $cache = null;
-    if ($cache === null) {
-        // Load all settings once; fail gracefully if table not found
+    if ($cache === null || isset($GLOBALS['__pp_settings_cache_invalidate'])) {
+        unset($GLOBALS['__pp_settings_cache_invalidate']);
         $cache = [];
         try {
             $conn = @connect_db();
             if ($conn) {
-                $res = @$conn->query("SELECT k, v FROM settings");
-                if ($res) {
+                if ($res = @$conn->query("SELECT k, v FROM settings")) {
                     while ($row = $res->fetch_assoc()) { $cache[$row['k']] = $row['v']; }
                 }
                 $conn->close();
             }
-        } catch (Throwable $e) {
-            // ignore
-        }
+        } catch (Throwable $e) { /* ignore */ }
     }
     return $cache[$key] ?? $default;
 }
@@ -359,45 +356,12 @@ function set_setting(string $key, $value): bool {
     $ok = $stmt->execute();
     $stmt->close();
     $conn->close();
-    // invalidate cache
-    if (function_exists('__settings_cache_reset')) { __settings_cache_reset(); }
+    $GLOBALS['__pp_settings_cache_invalidate'] = true; // mark cache dirty
     return $ok;
 }
 
-// Reset internal settings cache
 if (!function_exists('__settings_cache_reset')) {
-    function __settings_cache_reset(): void {
-        $ref = new ReflectionFunction('get_setting');
-        $static = $ref->getStaticVariables();
-        if (array_key_exists('cache', $static)) {
-            $GLOBALS['__pp_settings_cache_invalidate'] = true; // flag
-        }
-    }
-}
-
-// Override get_setting to allow cache invalidation flag
-if (!function_exists('__original_get_setting_wrapper')) {
-    // Wrap existing implementation only once
-    $orig = function_exists('get_setting') ? 'get_setting' : null;
-    if ($orig) {
-        function get_setting(string $key, $default = null) {
-            static $cache = null; static $loaded = false;
-            if ($cache === null || isset($GLOBALS['__pp_settings_cache_invalidate'])) {
-                unset($GLOBALS['__pp_settings_cache_invalidate']);
-                $cache = [];
-                try {
-                    $conn = @connect_db();
-                    if ($conn) {
-                        $res = @$conn->query("SELECT k, v FROM settings");
-                        if ($res) { while ($row = $res->fetch_assoc()) { $cache[$row['k']] = $row['v']; } }
-                        $conn->close();
-                    }
-                } catch (Throwable $e) { /* ignore */ }
-                $loaded = true;
-            }
-            return $cache[$key] ?? $default;
-        }
-    }
+    function __settings_cache_reset(): void { $GLOBALS['__pp_settings_cache_invalidate'] = true; }
 }
 
 // Active networks per user (stored in settings as JSON per user)
@@ -447,7 +411,7 @@ function format_currency($amount): string {
     /* Symbol example:
     $map = ['RUB' => '₽','USD' => '$','EUR' => '€','GBP' => '£','UAH' => '₴'];
     $sym = $map[$code] ?? $code;
-    return $sym . $num;
+    return $sym + $num;
     */
 }
 
