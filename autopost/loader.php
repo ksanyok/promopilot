@@ -15,6 +15,46 @@ if (!function_exists('autopost_log')) {
 }
 require_once PP_ROOT_PATH . '/includes/functions.php';
 
+// Cached metadata helpers (store only slug,name,description)
+function autopost_scan_plugins_metadata(): array {
+    $meta = [];
+    $dir = PP_ROOT_PATH . '/autopost';
+    if (!is_dir($dir)) return $meta;
+    clearstatcache(true, $dir);
+    foreach (glob($dir . '/network_*.php') ?: [] as $file) {
+        try {
+            $data = include $file;
+            if (is_array($data) && isset($data['slug'],$data['name'])) {
+                $slug = strtolower(preg_replace('~[^a-z0-9_\-]+~','',$data['slug']));
+                if ($slug==='') continue;
+                $meta[$slug] = [
+                    'slug' => $slug,
+                    'name' => (string)$data['name'],
+                    'description' => (string)($data['description'] ?? ''),
+                ];
+            }
+        } catch (Throwable $e) { /* ignore */ }
+    }
+    return array_values($meta);
+}
+function autopost_refresh_network_cache(): array {
+    $items = autopost_scan_plugins_metadata();
+    set_setting('autopost_networks_cache', json_encode(['refreshed_at'=>time(),'items'=>$items], JSON_UNESCAPED_UNICODE));
+    return $items;
+}
+function autopost_get_cached_network_metadata(bool $autoInit=true): array {
+    $raw = get_setting('autopost_networks_cache','');
+    if ($raw) {
+        $obj = json_decode($raw,true);
+        if (is_array($obj) && isset($obj['items']) && is_array($obj['items'])) return $obj;
+    }
+    if ($autoInit) {
+        $items = autopost_refresh_network_cache();
+        return ['refreshed_at'=>time(),'items'=>$items];
+    }
+    return ['refreshed_at'=>null,'items'=>[]];
+}
+
 function autopost_load_all(): array {
     static $cache = null;
     if ($cache !== null) return $cache;
