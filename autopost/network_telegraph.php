@@ -104,31 +104,64 @@ return [
 
         // Launch headless browser and publish
         try {
+            $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
+            if (!class_exists($browserFactoryClass)) { return null; }
             $browserFactory = new $browserFactoryClass();
-            $browser = $browserFactory->createBrowser([
+            $chromeBinary = getenv('CHROME_PATH');
+            $browser = $browserFactory->createBrowser(array_filter([
                 'headless' => true,
                 'noSandbox' => true,
                 'enableImages' => false,
-                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu']
-            ]);
+                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'],
+                'chromeBinary' => $chromeBinary ?: null,
+            ]));
             $page = $browser->createPage();
             $page->navigate('https://telegra.ph/')->waitForNavigation();
 
-            // Title
-            $page->evaluate('document.querySelector(\'h1[data-placeholder="Title"]\').innerText = "";');
-            $page->evaluate('document.querySelector(\'h1[data-placeholder="Title"]\').focus();');
+            // Wait for title field to appear (retry loop)
+            $maxWaitMs = 5000; $step = 200; $elapsed = 0; $titleSelectorReady = false;
+            while ($elapsed < $maxWaitMs) {
+                $exists = $page->evaluate('return !!document.querySelector("h1[data-placeholder=\\"Title\\"]")')->getReturnValue();
+                if ($exists) { $titleSelectorReady = true; break; }
+                usleep($step * 1000); $elapsed += $step;
+            }
+            if (!$titleSelectorReady) { $browser->close(); return null; }
+
+            // Title typing (clear then type to trigger events)
+            $page->evaluate('const el=document.querySelector("h1[data-placeholder=\\"Title\\"]"); el.innerText=""; el.focus();');
             $page->keyboard()->typeText($title);
+            usleep(150000); // 150ms
 
             // Author
-            $page->evaluate('document.querySelector(\'address[data-placeholder="Your name"]\').focus();');
+            $page->evaluate('const a=document.querySelector("address[data-placeholder=\\"Your name\\"]"); if(a){a.focus(); a.textContent="";}');
             $page->keyboard()->typeText($author);
+            usleep(120000);
 
-            // Content
+            // Content insertion using execCommand to fire input events + single link already prepared
             $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
-            $page->evaluate('document.querySelector(\'p[data-placeholder="Your story..."]\').innerHTML = ' . $escaped . ';');
+            $page->evaluate('(function(html){
+                var target = document.querySelector("p[data-placeholder=\\"Your story...\\"]");
+                if(!target){ target = document.querySelector("[data-placeholder]"); }
+                if(!target){ return; }
+                target.focus();
+                try { document.execCommand("selectAll", false, null); } catch(e) {}
+                try { document.execCommand("insertHTML", false, html); } catch(e) { target.innerHTML = html; }
+                var evt = new Event("input", {bubbles:true});
+                target.dispatchEvent(evt);
+            })(' . $escaped . ');');
+            usleep(300000);
 
-            // Publish
-            $page->evaluate('document.querySelector(\'button.publish_button\').click();');
+            // Ensure CSRF hidden input exists (just a sanity check)
+            $hasCsrf = $page->evaluate('return !!document.querySelector("input[name=csrf]");')->getReturnValue();
+            if (!$hasCsrf) {
+                // Sometimes Telegraph loads it lazily; wait a bit more
+                usleep(500000);
+                $hasCsrf = $page->evaluate('return !!document.querySelector("input[name=csrf]");')->getReturnValue();
+            }
+            if (!$hasCsrf) { $browser->close(); return null; }
+
+            // Click publish via JS to avoid overlay issues
+            $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b){ b.click(); } })();');
             $page->waitForNavigation();
             $finalUrl = $page->getCurrentUrl();
             $browser->close();
