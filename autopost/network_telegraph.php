@@ -27,6 +27,28 @@ return [
         $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
         if (!class_exists($browserFactoryClass)) { if (function_exists('autopost_log')) autopost_log('telegraph: BrowserFactory class missing'); return null; }
 
+        // Extended environment logging (once per request)
+        if (function_exists('autopost_log')) {
+            static $envLogged = false;
+            if (!$envLogged) {
+                $envLogged = true;
+                $php = PHP_VERSION; $sapi = php_sapi_name();
+                $os = function_exists('php_uname') ? @php_uname() : PHP_OS;
+                $disabled = (string)ini_get('disable_functions');
+                $pathEnv = (string)getenv('PATH');
+                $chromeEnv = (string)getenv('CHROME_PATH');
+                $libVer = 'unknown';
+                if (class_exists('Composer\\InstalledVersions')) {
+                    try { $libVer = (string)Composer\InstalledVersions::getPrettyVersion('chrome-php/chrome'); } catch (\Throwable $e) { $libVer = 'unknown'; }
+                }
+                autopost_log('env: php=' . $php . ' sapi=' . $sapi . ' os=' . $os);
+                autopost_log('env: chrome-php/chrome=' . $libVer);
+                autopost_log('env: PATH=' . $pathEnv);
+                autopost_log('env: CHROME_PATH=' . $chromeEnv);
+                autopost_log('env: disable_functions=' . $disabled);
+            }
+        }
+
         // Fetch source page meta to build content heuristically
         $fetch_html = function(string $url): string {
             $ch = curl_init($url);
@@ -105,7 +127,9 @@ return [
         // Launch headless browser and publish
         try {
             $browserFactory = new $browserFactoryClass();
-            $chromeBinary = getenv('CHROME_PATH');
+            // 1) Admin setting has top priority
+            $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
+            if ($chromeBinary === '') { $chromeBinary = getenv('CHROME_PATH'); }
             // Try common paths if env not set
             if (!$chromeBinary) {
                 $candidates = [
@@ -119,12 +143,37 @@ return [
                 foreach ($candidates as $p) { if (is_file($p) && is_executable($p)) { $chromeBinary = $p; break; } }
                 if (!$chromeBinary && function_exists('autopost_log')) autopost_log('telegraph: Chrome binary not found, relying on default lookup');
             }
+
+            // Detailed binary diagnostics
+            if (function_exists('autopost_log')) {
+                if ($chromeBinary) {
+                    $exists = is_file($chromeBinary) ? '1' : '0';
+                    $exec = is_executable($chromeBinary) ? '1' : '0';
+                    $perm = function_exists('fileperms') ? decoct(@fileperms($chromeBinary) & 0777) : 'n/a';
+                    autopost_log('telegraph: chromeBinary=' . $chromeBinary . ' exists=' . $exists . ' exec=' . $exec . ' perms=' . $perm);
+                    // Try to get browser version if functions allowed
+                    $disabled = strtolower((string)ini_get('disable_functions'));
+                    $canExec = (strpos($disabled,'shell_exec')===false && strpos($disabled,'proc_open')===false && strpos($disabled,'exec')===false);
+                    if ($canExec) {
+                        $cmd = escapeshellarg($chromeBinary) . ' --version 2>&1';
+                        $out = @shell_exec($cmd);
+                        if (is_string($out) && $out!=='') { autopost_log('telegraph: chrome --version => ' . trim($out)); }
+                        else { autopost_log('telegraph: unable to read chrome --version (empty output)'); }
+                    } else {
+                        autopost_log('telegraph: exec functions disabled, skip chrome --version');
+                    }
+                } else {
+                    autopost_log('telegraph: chromeBinary unresolved (will rely on library auto-detect)');
+                }
+            }
+
             $options = array_filter([
                 'headless' => true,
                 'noSandbox' => true,
                 'enableImages' => false,
                 'userAgent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'],
+                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-software-rasterizer','--no-zygote','--single-process','--disable-setuid-sandbox'],
+                'startupTimeout' => 30000, // ms
                 'chromeBinary' => $chromeBinary ?: null,
             ]);
             if (function_exists('autopost_log')) autopost_log('telegraph: launching Chrome ' . ($options['chromeBinary'] ?? 'auto'));
@@ -189,7 +238,12 @@ return [
             $browser->close();
         } catch (\Throwable $e) {
             if (isset($browser)) { try { $browser->close(); } catch (\Throwable $e2) {} }
-            if (function_exists('autopost_log')) autopost_log('telegraph exception: ' . $e->getMessage());
+            if (function_exists('autopost_log')) {
+                autopost_log('telegraph exception: ' . $e->getMessage());
+                if (method_exists($e,'getFile')) { autopost_log('telegraph exception at ' . $e->getFile() . ':' . $e->getLine()); }
+                $prev = $e->getPrevious();
+                if ($prev) { autopost_log('telegraph previous: ' . get_class($prev) . ' ' . $prev->getMessage()); }
+            }
             return null;
         }
 
