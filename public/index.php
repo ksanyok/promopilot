@@ -30,8 +30,8 @@ include '../includes/header.php'; ?>
     <div class="col-lg-6">
       <div class="hero-media position-relative text-center">
         <picture>
-          <!-- NOTE: hero_main.jpg (рекомендуемо 1600x900, webp дубликат: hero_main.webp); hero_main_mobile.jpg (900x1100) -->
-          <source srcset="<?php echo asset_url('img/hero_main.jpg'); ?>" type="image/webp">
+          <!-- hero_main.jpg (1600x900) -->
+          <source srcset="<?php echo asset_url('img/hero_main.jpg'); ?>" type="image/jpeg">
           <img src="<?php echo asset_url('img/hero_main.jpg'); ?>" alt="<?php echo __('Схема многоуровневого продвижения'); ?>" class="img-fluid rounded-4 shadow hero-image mb-3" loading="lazy" width="1600" height="900">
         </picture>
         <figcaption class="small text-muted"><?php echo __('Визуализация структуры 5 → 100 → 300'); ?></figcaption>
@@ -214,9 +214,8 @@ include '../includes/header.php'; ?>
       </div>
     </div>
     <div class="col-lg-6 order-1 order-lg-2 text-center">
-      <!-- NOTE: benefits.png (рекомендуемо 1100x740 / webp) -->
       <picture>
-        <source srcset="<?php echo asset_url('img/benefits.png'); ?>" type="image/webp">
+        <source srcset="<?php echo asset_url('img/benefits.png'); ?>" type="image/png">
         <img src="<?php echo asset_url('img/benefits.png'); ?>" alt="<?php echo __('Преимущества структуры'); ?>" class="img-fluid rounded-4 shadow benefits-image" loading="lazy" width="1100" height="740">
       </picture>
       <div class="small text-muted mt-2"><?php echo __('Схематичное отражение распределения веса и индексации'); ?></div>

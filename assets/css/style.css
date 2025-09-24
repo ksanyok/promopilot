@@ -654,3 +654,23 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .hero-points li a:focus-visible, .benefit-list li a:focus-visible, .level-card:focus-visible, .step-item:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
 
 /* Motion reduce respect already handled globally */
+
+/* =================== Tooltip overrides (readability) =================== */
+.tooltip { --pp-tooltip-bg: color-mix(in srgb, var(--bg-2) 82%, #000 18%); }
+.tooltip .tooltip-inner {
+  background: var(--pp-tooltip-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 18px -4px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04) inset;
+  padding: 8px 12px;
+  font-size: .75rem;
+  line-height: 1.25;
+  letter-spacing: .2px;
+  text-align: left;
+  max-width: 320px;
+  border-radius: 8px;
+}
+.tooltip .tooltip-arrow::before { background: var(--pp-tooltip-bg); }
+:root[data-theme="light"] .tooltip { --pp-tooltip-bg: color-mix(in srgb, #ffffff 94%, var(--primary) 6%); }
+:root[data-theme="light"] .tooltip .tooltip-inner { color: #111827; box-shadow: 0 6px 16px -4px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.06) inset; }
+/* =================== End tooltip overrides =================== */
