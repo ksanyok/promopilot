@@ -438,4 +438,185 @@ function rmdir_recursive($dir) {
     rmdir($dir);
 }
 
+// ===== Global runtime helpers for headless browser automation =====
+/**
+ * Resolve Chrome/Chromium binary path from settings/env/common locations.
+ */
+function pp_resolve_chrome_binary(): string {
+    $chromeBinary = trim((string)get_setting('chrome_binary', ''));
+    if ($chromeBinary === '') {
+        $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: '';
+    }
+    if ($chromeBinary && @is_file($chromeBinary)) return $chromeBinary;
+
+    // Common candidates
+    $candidates = [
+        '/usr/bin/google-chrome', '/usr/local/bin/google-chrome',
+        '/usr/bin/chromium', '/usr/local/bin/chromium', '/usr/bin/chromium-browser', '/usr/local/bin/chromium-browser',
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/opt/homebrew/bin/google-chrome', '/opt/homebrew/bin/chromium',
+    ];
+    foreach ($candidates as $p) {
+        if (@is_file($p) && @is_executable($p)) return $p;
+    }
+    return '';
+}
+
+/**
+ * Resolve Node.js binary path from settings/env/common locations (shared hosting friendly).
+ */
+function pp_resolve_node_binary(): string {
+    $node = trim((string)get_setting('node_binary', ''));
+    if ($node === '') { $node = getenv('NODE_BINARY') ?: getenv('NODE_PATH') ?: ''; }
+    $tryNames = [];
+    if ($node !== '') { $tryNames[] = $node; }
+    // Common executable names on various hostings
+    $tryNames = array_merge($tryNames, ['node', 'nodejs', 'node20', 'node18', 'node16']);
+
+    // Common absolute paths
+    $candidates = [
+        '/usr/local/bin/node','/usr/bin/node','/bin/node',
+        '/usr/local/bin/nodejs','/usr/bin/nodejs',
+        // CloudLinux alt-nodejs
+        '/opt/alt/alt-nodejs16/root/usr/bin/node',
+        '/opt/alt/alt-nodejs18/root/usr/bin/node',
+        '/opt/alt/alt-nodejs20/root/usr/bin/node',
+        // cPanel EA
+        '/opt/cpanel/ea-nodejs16/bin/node',
+        '/opt/cpanel/ea-nodejs18/bin/node',
+        '/opt/cpanel/ea-nodejs20/bin/node',
+    ];
+
+    foreach (array_merge($tryNames, $candidates) as $cand) {
+        // If not absolute, rely on PATH; quick test by executing --version
+        if ($cand === '') continue;
+        $cmd = escapeshellcmd($cand) . ' --version 2>&1';
+        $out = @shell_exec($cmd);
+        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) {
+            return $cand; // works
+        }
+    }
+
+    // Try glob patterns (CloudLinux may use different minor versions)
+    foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node'] as $pattern) {
+        foreach ((array)glob($pattern) as $path) {
+            if (@is_file($path) && @is_executable($path)) {
+                $out = @shell_exec(escapeshellarg($path) . ' --version 2>&1');
+                if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $path;
+            }
+        }
+    }
+    return '';
+}
+
+/**
+ * Execute a Puppeteer JS snippet with environment and optional local NODE_PATH injection.
+ * Returns [code, stdout, stderr].
+ */
+function pp_run_puppeteer(string $jsCode, array $env = [], int $timeoutSec = 90): array {
+    $nodeBin = pp_resolve_node_binary();
+    if ($nodeBin === '') { return [127, '', 'Node.js not found']; }
+    $tmp = sys_get_temp_dir();
+    $script = $tmp . DIRECTORY_SEPARATOR . 'pp_puppet_' . uniqid('', true) . '.js';
+    if (@file_put_contents($script, $jsCode) === false) { return [126, '', 'Cannot write temporary script']; }
+
+    // Ensure local NODE_PATH to use project-level node_runtime if available
+    $nodePath = getenv('NODE_PATH') ?: '';
+    $localNodeModules = PP_ROOT_PATH . '/node_runtime/node_modules';
+    if (is_dir($localNodeModules)) {
+        $nodePath = $localNodeModules . ($nodePath ? PATH_SEPARATOR . $nodePath : '');
+    }
+
+    $allEnv = array_merge([
+        'NODE_PATH' => $nodePath,
+        'PUPPETEER_EXECUTABLE_PATH' => pp_resolve_chrome_binary(),
+        'CHROME_BIN' => pp_resolve_chrome_binary(),
+    ], $env);
+
+    $desc = [ 0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w'] ];
+    $proc = @proc_open([$nodeBin, $script], $desc, $pipes, PP_ROOT_PATH, $allEnv);
+    if (!is_resource($proc)) { @unlink($script); return [125, '', 'Failed to start node process']; }
+    fclose($pipes[0]);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $stdout = '';$stderr='';
+    $start = microtime(true);
+    while (true) {
+        $status = proc_get_status($proc);
+        $stdout .= stream_get_contents($pipes[1]);
+        $stderr .= stream_get_contents($pipes[2]);
+        if (!$status['running']) break;
+        if ((microtime(true) - $start) > $timeoutSec) { proc_terminate($proc, 9); break; }
+        usleep(100000);
+    }
+    fclose($pipes[1]); fclose($pipes[2]);
+    $code = proc_close($proc);
+    @unlink($script);
+    return [$code, $stdout, $stderr];
+}
+
+/**
+ * Resolve npm binary path from settings/env/common locations.
+ */
+function pp_resolve_npm_binary(): string {
+    $npm = getenv('NPM_BINARY') ?: '';
+    $try = [];
+    if ($npm) $try[] = $npm;
+    $try = array_merge($try, ['npm','pnpm','yarn']);
+    $candidates = [
+        '/usr/local/bin/npm','/usr/bin/npm','/bin/npm',
+        '/opt/cpanel/ea-nodejs16/bin/npm','/opt/cpanel/ea-nodejs18/bin/npm','/opt/cpanel/ea-nodejs20/bin/npm',
+        '/opt/alt/alt-nodejs16/root/usr/bin/npm','/opt/alt/alt-nodejs18/root/usr/bin/npm','/opt/alt/alt-nodejs20/root/usr/bin/npm',
+    ];
+    foreach (array_merge($try,$candidates) as $bin) {
+        if ($bin==='') continue;
+        $out = @shell_exec(escapeshellcmd($bin).' --version 2>&1');
+        if (is_string($out) && trim($out)!=='') return $bin;
+    }
+    return '';
+}
+
+/**
+ * Ensure node_runtime dependencies installed. Attempts to run npm install if missing.
+ */
+function pp_ensure_node_runtime_installed(): bool {
+    $root = PP_ROOT_PATH . '/node_runtime';
+    if (!is_dir($root)) { @mkdir($root, 0777, true); }
+    $pkg = $root . '/package.json';
+    $mods = $root . '/node_modules';
+    $hasPuppeteer = is_dir($mods . '/puppeteer') || is_dir($mods . '/puppeteer-core');
+    if ($hasPuppeteer) return true;
+    if (!is_file($pkg)) return false;
+
+    $npm = pp_resolve_npm_binary();
+    if ($npm === '') return false;
+
+    $desc = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+    $cmd = [$npm, '--prefix', $root, 'install', '--no-audit', '--no-fund', '--omit=dev'];
+    $proc = @proc_open($cmd, $desc, $pipes, PP_ROOT_PATH);
+    if (!is_resource($proc)) return false;
+    fclose($pipes[0]);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $out=''; $err=''; $start=microtime(true); $timeout=300; // 5 min
+    while (true) {
+        $status = proc_get_status($proc);
+        $out .= stream_get_contents($pipes[1]);
+        $err .= stream_get_contents($pipes[2]);
+        if (!$status['running']) break;
+        if ((microtime(true)-$start) > $timeout) { proc_terminate($proc, 9); break; }
+        usleep(200000);
+    }
+    fclose($pipes[1]); fclose($pipes[2]);
+    $code = proc_close($proc);
+    if (function_exists('autopost_log')) {
+        if (trim($err)!=='') autopost_log('npm install stderr: ' . trim($err));
+        if ($code !== 0) autopost_log('npm install exit code: ' . $code);
+    }
+    clearstatcache();
+    return is_dir($mods . '/puppeteer') || is_dir($mods . '/puppeteer-core');
+}
+
 ?>

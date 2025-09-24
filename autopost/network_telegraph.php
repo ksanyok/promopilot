@@ -32,31 +32,26 @@ return [
         $publishViaPuppeteer = function(string $title, string $author, string $htmlContent) use ($pageUrl, $anchor, $language) {
             $log = function($msg){ if (function_exists('autopost_log')) autopost_log($msg); };
 
-            // Resolve Node binary
-            $nodeBin = trim((string)(function_exists('get_setting') ? get_setting('node_binary','') : ''));
-            if ($nodeBin === '') { $nodeBin = getenv('NODE_BINARY') ?: getenv('NODE_PATH') ?: 'node'; }
+            // Ensure shared node runtime is installed
+            if (function_exists('pp_ensure_node_runtime_installed')) {
+                $ok = pp_ensure_node_runtime_installed();
+                $log('telegraph: ensure node runtime installed => ' . ($ok ? 'ok' : 'failed'));
+            }
 
-            // Resolve Chrome for puppeteer-core if needed
-            $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
-            if ($chromeBinary === '') { $chromeBinary = getenv('PUPPETEER_EXECUTABLE_PATH') ?: getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: ''; }
+            $nodeBin = function_exists('pp_resolve_node_binary') ? pp_resolve_node_binary() : '';
+            $chromeBinary = function_exists('pp_resolve_chrome_binary') ? pp_resolve_chrome_binary() : '';
+            $nodePath = getenv('NODE_PATH') ?: '';
+            $localNodeModules = defined('PP_ROOT_PATH') ? (PP_ROOT_PATH . '/node_runtime/node_modules') : __DIR__ . '/../node_runtime/node_modules';
+            if (is_dir($localNodeModules)) {
+                $nodePath = $localNodeModules . ($nodePath ? PATH_SEPARATOR . $nodePath : '');
+            }
 
-            // Basic diagnostics
-            $log('telegraph: puppeteer fallback start, nodeBin=' . $nodeBin . ' chromeBinary=' . ($chromeBinary ?: 'auto'));
+            $log('telegraph: puppeteer fallback start, nodeBin=' . ($nodeBin ?: 'not-found') . ' chromeBinary=' . ($chromeBinary ?: 'auto'));
 
-            // Check if node is callable
-            $disabled = strtolower((string)ini_get('disable_functions'));
-            $canExec = (strpos($disabled,'shell_exec')===false && strpos($disabled,'proc_open')===false && strpos($disabled,'exec')===false);
-            if (!$canExec) { $log('telegraph: exec functions disabled, puppeteer fallback unavailable'); return null; }
+            // Abort early if no node binary found
+            if ($nodeBin === '') { $log('telegraph: node binary not found'); return null; }
 
-            $versionOut = @shell_exec(escapeshellcmd($nodeBin) . ' --version 2>&1');
-            if (!is_string($versionOut) || $versionOut === '') { $log('telegraph: node not found or not executable: ' . $nodeBin); return null; }
-            $log('telegraph: node --version => ' . trim($versionOut));
-
-            // Prepare a temporary JS script
-            $tmpDir = sys_get_temp_dir();
-            $scriptPath = $tmpDir . DIRECTORY_SEPARATOR . 'pp_telegraph_puppet_' . uniqid('', true) . '.js';
             $contentB64 = base64_encode($htmlContent);
-
             $js = <<<'JS'
 (async () => {
   const decode = (b64) => Buffer.from(b64, 'base64').toString('utf8');
@@ -82,11 +77,11 @@ return [
     const page = await browser.newPage();
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 60000 });
 
-    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 15000 });
+    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 20000 });
     await page.click('h1[data-placeholder="Title"]');
     await page.keyboard.type(TITLE, { delay: 10 });
 
-    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 15000 });
+    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 20000 });
     await page.click('address[data-placeholder="Your name"]');
     await page.keyboard.type(AUTHOR, { delay: 10 });
 
@@ -111,50 +106,26 @@ return [
 });
 JS;
 
-            // Write script
-            if (@file_put_contents($scriptPath, $js) === false) { $log('telegraph: cannot write temp puppeteer script'); return null; }
-
-            // Build environment for the node process
-            $env = [
-                'TITLE' => $title,
-                'AUTHOR' => $author,
-                'CONTENT_B64' => $contentB64,
-            ];
-            if ($chromeBinary) { $env['CHROME_BIN'] = $chromeBinary; $env['PUPPETEER_EXECUTABLE_PATH'] = $chromeBinary; }
-
-            // Launch node script with a timeout
-            $descriptorspec = [ 0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w'] ];
-            $process = @proc_open([$nodeBin, $scriptPath], $descriptorspec, $pipes, null, $env);
-            if (!is_resource($process)) { @unlink($scriptPath); $log('telegraph: failed to spawn node process'); return null; }
-
-            // Close stdin
-            fclose($pipes[0]);
-
-            $stdout = '';$stderr='';
-            $start = microtime(true); $timeout = 90; // seconds
-            stream_set_blocking($pipes[1], false);
-            stream_set_blocking($pipes[2], false);
-            while (true) {
-                $status = proc_get_status($process);
-                $stdout .= stream_get_contents($pipes[1]);
-                $stderr .= stream_get_contents($pipes[2]);
-                if (!$status['running']) break;
-                if ((microtime(true) - $start) > $timeout) { proc_terminate($process, 9); $log('telegraph: puppeteer timed out'); break; }
-                usleep(100000);
+            if (function_exists('pp_run_puppeteer')) {
+                [$code, $stdout, $stderr] = pp_run_puppeteer($js, [
+                    'TITLE' => $title,
+                    'AUTHOR' => $author,
+                    'CONTENT_B64' => $contentB64,
+                    'PUPPETEER_EXECUTABLE_PATH' => $chromeBinary,
+                    'CHROME_BIN' => $chromeBinary,
+                    'NODE_PATH' => $nodePath,
+                ], 120);
+                if ($stderr) { $log('telegraph puppeteer stderr: ' . trim($stderr)); }
+                if (preg_match('~https?://telegra\.ph/[^\s\"]+~', $stdout, $m)) {
+                    $url = trim($m[0]);
+                    $log('telegraph: puppeteer published => ' . $url);
+                    return $url;
+                }
+                $log('telegraph: puppeteer stdout (no url): ' . trim($stdout));
+                return null;
             }
-            fclose($pipes[1]); fclose($pipes[2]);
-            $code = proc_close($process);
-            @unlink($scriptPath);
 
-            if ($stderr !== '') { $log('telegraph puppeteer stderr: ' . trim($stderr)); }
-
-            // Try to find Telegraph URL in stdout
-            if (preg_match('~https?://telegra\.ph/[^\s\"]+~', $stdout, $m)) {
-                $url = trim($m[0]);
-                $log('telegraph: puppeteer published => ' . $url);
-                return $url;
-            }
-            $log('telegraph: puppeteer stdout (no url): ' . trim($stdout));
+            // Fallback if pp_run_puppeteer helper is unavailable (should not happen)
             return null;
         };
 
