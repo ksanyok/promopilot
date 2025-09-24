@@ -43,66 +43,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_update'])) {
             $errors[] = __('Не удалось получить информацию о коммите (сетевое соединение).');
         } else {
             $commitData = json_decode($commitJson, true);
-            $sha = $commitData['sha'] ?? null;
-            if (!$sha) {
-                $errors[] = __('Ответ GitHub без SHA.');
+            // If GitHub returned an error payload, surface it
+            if (isset($commitData['message']) && !isset($commitData['sha'])) {
+                $errors[] = __('Ошибка GitHub API') . ': ' . htmlspecialchars((string)$commitData['message']);
+            }
+            $sha = $commitData['sha'] ?? '';
+
+            // Prefer SHA zip if available; otherwise fallback to refs/heads/main.zip
+            $zipUrl = $sha ? ("https://github.com/ksanyok/promopilot/archive/{$sha}.zip")
+                           : 'https://github.com/ksanyok/promopilot/archive/refs/heads/main.zip';
+            $zipData = pp_http_get($zipUrl, 60);
+            if ($zipData === false) {
+                $errors[] = __('Не удалось скачать архив.');
             } else {
-                $zipUrl = "https://github.com/ksanyok/promopilot/archive/{$sha}.zip";
-                $zipData = pp_http_get($zipUrl, 60);
-                if ($zipData === false) {
-                    $errors[] = __('Не удалось скачать архив.');
+                $tmpZip = tempnam(sys_get_temp_dir(), 'ppupd_');
+                if (!@file_put_contents($tmpZip, $zipData)) {
+                    $errors[] = __('Не удалось сохранить архив во временный файл.');
                 } else {
-                    $tmpZip = tempnam(sys_get_temp_dir(), 'ppupd_');
-                    if (!@file_put_contents($tmpZip, $zipData)) {
-                        $errors[] = __('Не удалось сохранить архив во временный файл.');
+                    $zip = new ZipArchive();
+                    if ($zip->open($tmpZip) !== true) {
+                        $errors[] = __('Не удалось открыть архив.');
                     } else {
-                        $zip = new ZipArchive();
-                        if ($zip->open($tmpZip) !== true) {
-                            $errors[] = __('Не удалось открыть архив.');
+                        $extractDir = PP_ROOT_PATH . '/_update_' . ($sha ?: 'main');
+                        if (!is_dir($extractDir) && !@mkdir($extractDir, 0755, true)) {
+                            $errors[] = __('Не удалось создать директорию распаковки.');
                         } else {
-                            $extractDir = PP_ROOT_PATH . '/_update_' . $sha;
-                            if (!is_dir($extractDir) && !@mkdir($extractDir, 0755, true)) {
-                                $errors[] = __('Не удалось создать директорию распаковки.');
-                            } else {
-                                if (!$zip->extractTo($extractDir)) {
-                                    $errors[] = __('Ошибка распаковки архива.');
-                                }
-                                $zip->close();
-                                if (empty($errors)) {
-                                    $srcRoot = $extractDir . '/promopilot-' . $sha;
-                                    if (!is_dir($srcRoot)) { $errors[] = __('Структура архива неожиданна.'); }
-                                    else {
-                                        $exclude = [
-                                            '/config/config.php',
-                                            '/logs',
-                                            '/uploads',
-                                        ];
-                                        $copyDir = function($src, $dst) use (&$copyDir, $exclude) {
-                                            $dir = opendir($src);
-                                            if (!is_dir($dst)) { @mkdir($dst, 0755, true); }
-                                            while (($f = readdir($dir)) !== false) {
-                                                if ($f === '.' || $f === '..') continue;
-                                                $srcPath = $src . '/' . $f;
-                                                $rel = substr($srcPath, strlen($GLOBALS['__update_src_root']));
-                                                foreach ($exclude as $ex) { if (strpos($rel, $ex) === 0) continue 2; }
-                                                $dstPath = $dst . '/' . $f;
-                                                if (is_dir($srcPath)) {
-                                                    $copyDir($srcPath, $dstPath);
-                                                } else {
-                                                    @copy($srcPath, $dstPath);
-                                                }
+                            if (!$zip->extractTo($extractDir)) {
+                                $errors[] = __('Ошибка распаковки архива.');
+                            }
+                            $zip->close();
+                            if (empty($errors)) {
+                                // Detect extracted root folder name
+                                $candidates = [];
+                                if ($sha) { $candidates[] = $extractDir . '/promopilot-' . $sha; }
+                                $candidates[] = $extractDir . '/promopilot-main';
+                                // Also handle GitHub alt naming (owner-repo-xxxx)
+                                $candidates = array_merge($candidates, glob($extractDir . '/*', GLOB_ONLYDIR) ?: []);
+                                $srcRoot = '';
+                                foreach ($candidates as $cand) { if (is_dir($cand)) { $srcRoot = $cand; break; } }
+                                if ($srcRoot === '') { $errors[] = __('Структура архива неожиданна.'); }
+                                else {
+                                    $exclude = [
+                                        '/config/config.php',
+                                        '/logs',
+                                        '/uploads',
+                                    ];
+                                    $copyDir = function($src, $dst) use (&$copyDir, $exclude) {
+                                        $dir = opendir($src);
+                                        if (!is_dir($dst)) { @mkdir($dst, 0755, true); }
+                                        while (($f = readdir($dir)) !== false) {
+                                            if ($f === '.' || $f === '..') continue;
+                                            $srcPath = $src . '/' . $f;
+                                            $rel = substr($srcPath, strlen($GLOBALS['__update_src_root']));
+                                            foreach ($exclude as $ex) { if (strpos($rel, $ex) === 0) continue 2; }
+                                            $dstPath = $dst . '/' . $f;
+                                            if (is_dir($srcPath)) {
+                                                $copyDir($srcPath, $dstPath);
+                                            } else {
+                                                @copy($srcPath, $dstPath);
                                             }
-                                            closedir($dir);
-                                        };
-                                        $GLOBALS['__update_src_root'] = $srcRoot;
-                                        $copyDir($srcRoot, PP_ROOT_PATH);
-                                    }
+                                        }
+                                        closedir($dir);
+                                    };
+                                    $GLOBALS['__update_src_root'] = $srcRoot;
+                                    $copyDir($srcRoot, PP_ROOT_PATH);
                                 }
                             }
                         }
-                        @unlink($tmpZip);
-                        if (is_dir($extractDir)) { rmdir_recursive($extractDir); }
                     }
+                    @unlink($tmpZip);
+                    if (isset($extractDir) && is_dir($extractDir)) { rmdir_recursive($extractDir); }
                 }
             }
         }
