@@ -25,7 +25,138 @@ return [
 
         // Dynamic dependency class name
         $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
-        if (!class_exists($browserFactoryClass)) { if (function_exists('autopost_log')) autopost_log('telegraph: BrowserFactory class missing'); return null; }
+        $usePhpChrome = class_exists($browserFactoryClass);
+        if (!$usePhpChrome && function_exists('autopost_log')) autopost_log('telegraph: BrowserFactory class missing');
+
+        // Helper: Node.js Puppeteer fallback publisher
+        $publishViaPuppeteer = function(string $title, string $author, string $htmlContent) use ($pageUrl, $anchor, $language) {
+            $log = function($msg){ if (function_exists('autopost_log')) autopost_log($msg); };
+
+            // Resolve Node binary
+            $nodeBin = trim((string)(function_exists('get_setting') ? get_setting('node_binary','') : ''));
+            if ($nodeBin === '') { $nodeBin = getenv('NODE_BINARY') ?: getenv('NODE_PATH') ?: 'node'; }
+
+            // Resolve Chrome for puppeteer-core if needed
+            $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
+            if ($chromeBinary === '') { $chromeBinary = getenv('PUPPETEER_EXECUTABLE_PATH') ?: getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: ''; }
+
+            // Basic diagnostics
+            $log('telegraph: puppeteer fallback start, nodeBin=' . $nodeBin . ' chromeBinary=' . ($chromeBinary ?: 'auto'));
+
+            // Check if node is callable
+            $disabled = strtolower((string)ini_get('disable_functions'));
+            $canExec = (strpos($disabled,'shell_exec')===false && strpos($disabled,'proc_open')===false && strpos($disabled,'exec')===false);
+            if (!$canExec) { $log('telegraph: exec functions disabled, puppeteer fallback unavailable'); return null; }
+
+            $versionOut = @shell_exec(escapeshellcmd($nodeBin) . ' --version 2>&1');
+            if (!is_string($versionOut) || $versionOut === '') { $log('telegraph: node not found or not executable: ' . $nodeBin); return null; }
+            $log('telegraph: node --version => ' . trim($versionOut));
+
+            // Prepare a temporary JS script
+            $tmpDir = sys_get_temp_dir();
+            $scriptPath = $tmpDir . DIRECTORY_SEPARATOR . 'pp_telegraph_puppet_' . uniqid('', true) . '.js';
+            $contentB64 = base64_encode($htmlContent);
+
+            $js = <<<'JS'
+(async () => {
+  const decode = (b64) => Buffer.from(b64, 'base64').toString('utf8');
+  const TITLE = process.env.TITLE || '';
+  const AUTHOR = process.env.AUTHOR || '';
+  const CONTENT_HTML = decode(process.env.CONTENT_B64 || '');
+  const CHROME_BIN = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
+
+  let puppeteer;
+  try { puppeteer = require('puppeteer'); }
+  catch (e1) {
+    try { puppeteer = require('puppeteer-core'); } catch (e2) {
+      console.error('ERR: puppeteer not installed');
+      process.exit(2);
+    }
+  }
+
+  const launchOpts = { headless: 'new' };
+  if (CHROME_BIN) { launchOpts.executablePath = CHROME_BIN; }
+
+  const browser = await puppeteer.launch(launchOpts);
+  try {
+    const page = await browser.newPage();
+    await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 60000 });
+
+    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 15000 });
+    await page.click('h1[data-placeholder="Title"]');
+    await page.keyboard.type(TITLE, { delay: 10 });
+
+    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 15000 });
+    await page.click('address[data-placeholder="Your name"]');
+    await page.keyboard.type(AUTHOR, { delay: 10 });
+
+    await page.evaluate((html) => {
+      const el = document.querySelector('p[data-placeholder="Your story..."]');
+      if (el) el.innerHTML = html;
+    }, CONTENT_HTML);
+
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+      page.click('button.publish_button')
+    ]);
+
+    const url = page.url();
+    process.stdout.write(url + '\n');
+  } finally {
+    await browser.close();
+  }
+})().catch(err => {
+  console.error('ERR:', err && err.message ? err.message : String(err));
+  process.exit(1);
+});
+JS;
+
+            // Write script
+            if (@file_put_contents($scriptPath, $js) === false) { $log('telegraph: cannot write temp puppeteer script'); return null; }
+
+            // Build environment for the node process
+            $env = [
+                'TITLE' => $title,
+                'AUTHOR' => $author,
+                'CONTENT_B64' => $contentB64,
+            ];
+            if ($chromeBinary) { $env['CHROME_BIN'] = $chromeBinary; $env['PUPPETEER_EXECUTABLE_PATH'] = $chromeBinary; }
+
+            // Launch node script with a timeout
+            $descriptorspec = [ 0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w'] ];
+            $process = @proc_open([$nodeBin, $scriptPath], $descriptorspec, $pipes, null, $env);
+            if (!is_resource($process)) { @unlink($scriptPath); $log('telegraph: failed to spawn node process'); return null; }
+
+            // Close stdin
+            fclose($pipes[0]);
+
+            $stdout = '';$stderr='';
+            $start = microtime(true); $timeout = 90; // seconds
+            stream_set_blocking($pipes[1], false);
+            stream_set_blocking($pipes[2], false);
+            while (true) {
+                $status = proc_get_status($process);
+                $stdout .= stream_get_contents($pipes[1]);
+                $stderr .= stream_get_contents($pipes[2]);
+                if (!$status['running']) break;
+                if ((microtime(true) - $start) > $timeout) { proc_terminate($process, 9); $log('telegraph: puppeteer timed out'); break; }
+                usleep(100000);
+            }
+            fclose($pipes[1]); fclose($pipes[2]);
+            $code = proc_close($process);
+            @unlink($scriptPath);
+
+            if ($stderr !== '') { $log('telegraph puppeteer stderr: ' . trim($stderr)); }
+
+            // Try to find Telegraph URL in stdout
+            if (preg_match('~https?://telegra\.ph/[^\s\"]+~', $stdout, $m)) {
+                $url = trim($m[0]);
+                $log('telegraph: puppeteer published => ' . $url);
+                return $url;
+            }
+            $log('telegraph: puppeteer stdout (no url): ' . trim($stdout));
+            return null;
+        };
 
         // Extended environment logging (once per request)
         if (function_exists('autopost_log')) {
@@ -124,127 +255,137 @@ return [
             $content = substr($content,0,$firstPos+3).$after; // crude but acceptable for heuristic
         }
 
-        // Launch headless browser and publish
-        try {
-            $browserFactory = new $browserFactoryClass();
-            // 1) Admin setting has top priority
-            $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
-            if ($chromeBinary === '') { $chromeBinary = getenv('CHROME_PATH'); }
-            // Try common paths if env not set
-            if (!$chromeBinary) {
-                $candidates = [
-                    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS Chrome
-                    '/Applications/Chromium.app/Contents/MacOS/Chromium',          // macOS Chromium
-                    '/opt/homebrew/bin/chromium',                                   // macOS Homebrew ARM
-                    '/opt/homebrew/bin/google-chrome',                              // macOS Homebrew
-                    '/usr/local/bin/chromium', '/usr/local/bin/chromium-browser',
-                    '/usr/local/bin/google-chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'
-                ];
-                foreach ($candidates as $p) { if (is_file($p) && is_executable($p)) { $chromeBinary = $p; break; } }
-                if (!$chromeBinary && function_exists('autopost_log')) autopost_log('telegraph: Chrome binary not found, relying on default lookup');
-            }
+        $finalUrl = null;
 
-            // Detailed binary diagnostics
-            if (function_exists('autopost_log')) {
-                if ($chromeBinary) {
-                    $exists = is_file($chromeBinary) ? '1' : '0';
-                    $exec = is_executable($chromeBinary) ? '1' : '0';
-                    $perm = function_exists('fileperms') ? decoct(@fileperms($chromeBinary) & 0777) : 'n/a';
-                    autopost_log('telegraph: chromeBinary=' . $chromeBinary . ' exists=' . $exists . ' exec=' . $exec . ' perms=' . $perm);
-                    // Try to get browser version if functions allowed
-                    $disabled = strtolower((string)ini_get('disable_functions'));
-                    $canExec = (strpos($disabled,'shell_exec')===false && strpos($disabled,'proc_open')===false && strpos($disabled,'exec')===false);
-                    if ($canExec) {
-                        $cmd = escapeshellarg($chromeBinary) . ' --version 2>&1';
-                        $out = @shell_exec($cmd);
-                        if (is_string($out) && $out!=='') { autopost_log('telegraph: chrome --version => ' . trim($out)); }
-                        else { autopost_log('telegraph: unable to read chrome --version (empty output)'); }
+        // Launch headless browser and publish (PHP chrome-php)
+        if ($usePhpChrome) {
+            try {
+                $browserFactory = new $browserFactoryClass();
+                // 1) Admin setting has top priority
+                $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
+                if ($chromeBinary === '') { $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: ''; }
+                // Try common paths if env not set
+                if (!$chromeBinary) {
+                    $candidates = [
+                        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS Chrome
+                        '/Applications/Chromium.app/Contents/MacOS/Chromium',          // macOS Chromium
+                        '/opt/homebrew/bin/chromium',                                   // macOS Homebrew ARM
+                        '/opt/homebrew/bin/google-chrome',                              // macOS Homebrew
+                        '/usr/local/bin/chromium', '/usr/local/bin/chromium-browser',
+                        '/usr/local/bin/google-chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'
+                    ];
+                    foreach ($candidates as $p) { if (is_file($p) && is_executable($p)) { $chromeBinary = $p; break; } }
+                    if (!$chromeBinary && function_exists('autopost_log')) autopost_log('telegraph: Chrome binary not found, relying on default lookup');
+                }
+
+                // Detailed binary diagnostics
+                if (function_exists('autopost_log')) {
+                    if ($chromeBinary) {
+                        $exists = is_file($chromeBinary) ? '1' : '0';
+                        $exec = is_executable($chromeBinary) ? '1' : '0';
+                        $perm = function_exists('fileperms') ? decoct(@fileperms($chromeBinary) & 0777) : 'n/a';
+                        autopost_log('telegraph: chromeBinary=' . $chromeBinary . ' exists=' . $exists . ' exec=' . $exec . ' perms=' . $perm);
+                        // Try to get browser version if functions allowed
+                        $disabled = strtolower((string)ini_get('disable_functions'));
+                        $canExec = (strpos($disabled,'shell_exec')===false && strpos($disabled,'proc_open')===false && strpos($disabled,'exec')===false);
+                        if ($canExec) {
+                            $cmd = escapeshellarg($chromeBinary) . ' --version 2>&1';
+                            $out = @shell_exec($cmd);
+                            if (is_string($out) && $out!=='') { autopost_log('telegraph: chrome --version => ' . trim($out)); }
+                            else { autopost_log('telegraph: unable to read chrome --version (empty output)'); }
+                        } else {
+                            autopost_log('telegraph: exec functions disabled, skip chrome --version');
+                        }
                     } else {
-                        autopost_log('telegraph: exec functions disabled, skip chrome --version');
+                        autopost_log('telegraph: chromeBinary unresolved (will rely on library auto-detect)');
                     }
+                }
+
+                $options = array_filter([
+                    'headless' => true,
+                    'noSandbox' => true,
+                    'enableImages' => false,
+                    'userAgent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-software-rasterizer','--no-zygote','--single-process','--disable-setuid-sandbox'],
+                    'startupTimeout' => 30000, // ms
+                    'chromeBinary' => $chromeBinary ?: null,
+                ]);
+                if (function_exists('autopost_log')) autopost_log('telegraph: launching Chrome ' . ($options['chromeBinary'] ?? 'auto'));
+                $browser = $browserFactory->createBrowser($options);
+                $page = $browser->createPage();
+                $page->navigate('https://telegra.ph/')->waitForNavigation();
+
+                // Wait for form + csrf (token might appear after short delay)
+                $csrf = null; $attempts=0;
+                while ($attempts < 20) { // up to ~5s
+                    $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
+                    if ($csrf) break; usleep(250000); $attempts++;
+                }
+
+                // Title
+                $page->evaluate('const el=document.querySelector("h1[data-placeholder=\\"Title\\"]"); if(el){el.innerText=""; el.focus();}');
+                $page->keyboard()->typeText($title);
+                usleep(200000);
+
+                // Author
+                $page->evaluate('const a=document.querySelector("address[data-placeholder=\\"Your name\\"]"); if(a){a.textContent=""; a.focus();}');
+                $page->keyboard()->typeText($author);
+                usleep(200000);
+
+                // Content insertion strategy
+                $fast = getenv('TELEGRAPH_FAST') === '1';
+                if ($fast) {
+                    $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+                    $page->evaluate('(function(html){ var t=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(!t) return; t.focus(); try{document.execCommand("selectAll",false,null);}catch(e){}; try{document.execCommand("insertHTML",false,html);}catch(e){t.innerHTML=html;} ["input","keyup","change"].forEach(e=>t.dispatchEvent(new Event(e,{bubbles:true}))); })( ' . $escaped . ' );');
                 } else {
-                    autopost_log('telegraph: chromeBinary unresolved (will rely on library auto-detect)');
+                    // Slow typing to trigger all events and avoid CSRF issues
+                    $plain = $content;
+                    // Replace headings with uppercase lines + blank line
+                    $plain = preg_replace_callback('~<h2>(.*?)</h2>~i', function($m){ return "\n".strtoupper(trim(strip_tags($m[1])))."\n\n"; }, $plain);
+                    // Strip remaining tags except <a>
+                    $plain = strip_tags($plain, '<a>');
+                    // Convert links to text anchor (Telegraph will preserve clickable link when typed fully) -> keep HTML anchor? We'll just keep plain anchor text + URL
+                    $plain = preg_replace_callback('~<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>~i', function($m){ return $m[2].' ('.$m[1].')'; }, $plain);
+                    $paras = preg_split('~\n{2,}~', $plain);
+                    $page->evaluate('var c=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(c){c.focus();}');
+                    foreach ($paras as $idx=>$p) {
+                        $line = trim($p);
+                        if ($line==='') continue;
+                        $page->keyboard()->typeText($line);
+                        usleep(80000);
+                        if ($idx < count($paras)-1) { $page->keyboard()->typeRawKey('\n'); usleep(80000); $page->keyboard()->typeRawKey('\n'); }
+                    }
                 }
-            }
 
-            $options = array_filter([
-                'headless' => true,
-                'noSandbox' => true,
-                'enableImages' => false,
-                'userAgent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-software-rasterizer','--no-zygote','--single-process','--disable-setuid-sandbox'],
-                'startupTimeout' => 30000, // ms
-                'chromeBinary' => $chromeBinary ?: null,
-            ]);
-            if (function_exists('autopost_log')) autopost_log('telegraph: launching Chrome ' . ($options['chromeBinary'] ?? 'auto'));
-            $browser = $browserFactory->createBrowser($options);
-            $page = $browser->createPage();
-            $page->navigate('https://telegra.ph/')->waitForNavigation();
-
-            // Wait for form + csrf (token might appear after short delay)
-            $csrf = null; $attempts=0;
-            while ($attempts < 20) { // up to ~5s
-                $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
-                if ($csrf) break; usleep(250000); $attempts++;
-            }
-
-            // Title
-            $page->evaluate('const el=document.querySelector("h1[data-placeholder=\\"Title\\"]"); if(el){el.innerText=""; el.focus();}');
-            $page->keyboard()->typeText($title);
-            usleep(200000);
-
-            // Author
-            $page->evaluate('const a=document.querySelector("address[data-placeholder=\\"Your name\\"]"); if(a){a.textContent=""; a.focus();}');
-            $page->keyboard()->typeText($author);
-            usleep(200000);
-
-            // Content insertion strategy
-            $fast = getenv('TELEGRAPH_FAST') === '1';
-            if ($fast) {
-                $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
-                $page->evaluate('(function(html){ var t=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(!t) return; t.focus(); try{document.execCommand("selectAll",false,null);}catch(e){}; try{document.execCommand("insertHTML",false,html);}catch(e){t.innerHTML=html;} ["input","keyup","change"].forEach(e=>t.dispatchEvent(new Event(e,{bubbles:true}))); })( ' . $escaped . ' );');
-            } else {
-                // Slow typing to trigger all events and avoid CSRF issues
-                $plain = $content;
-                // Replace headings with uppercase lines + blank line
-                $plain = preg_replace_callback('~<h2>(.*?)</h2>~i', function($m){ return "\n".strtoupper(trim(strip_tags($m[1])))."\n\n"; }, $plain);
-                // Strip remaining tags except <a>
-                $plain = strip_tags($plain, '<a>');
-                // Convert links to text anchor (Telegraph will preserve clickable link when typed fully) -> keep HTML anchor? We'll just keep plain anchor text + URL
-                $plain = preg_replace_callback('~<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>~i', function($m){ return $m[2].' ('.$m[1].')'; }, $plain);
-                $paras = preg_split('~\n{2,}~', $plain);
-                $page->evaluate('var c=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(c){c.focus();}');
-                foreach ($paras as $idx=>$p) {
-                    $line = trim($p);
-                    if ($line==='') continue;
-                    $page->keyboard()->typeText($line);
-                    usleep(80000);
-                    if ($idx < count($paras)-1) { $page->keyboard()->typeRawKey('\n'); usleep(80000); $page->keyboard()->typeRawKey('\n'); }
+                // Poll again for csrf (typing often triggers its creation)
+                $csrf = null; $attempts=0;
+                while ($attempts < 40) { // up to ~10s total
+                    $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
+                    if ($csrf) break; usleep(250000); $attempts++;
                 }
-            }
+                if (!$csrf) { if (function_exists('autopost_log')) autopost_log('telegraph: csrf not found'); $browser->close(); throw new \RuntimeException('csrf not found'); }
 
-            // Poll again for csrf (typing often triggers its creation)
-            $csrf = null; $attempts=0;
-            while ($attempts < 40) { // up to ~10s total
-                $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
-                if ($csrf) break; usleep(250000); $attempts++;
+                usleep(400000);
+                $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b) b.click(); })();');
+                $page->waitForNavigation();
+                $finalUrl = $page->getCurrentUrl();
+                $browser->close();
+            } catch (\Throwable $e) {
+                if (isset($browser)) { try { $browser->close(); } catch (\Throwable $e2) {} }
+                if (function_exists('autopost_log')) {
+                    autopost_log('telegraph exception: ' . $e->getMessage());
+                    if (method_exists($e,'getFile')) { autopost_log('telegraph exception at ' . $e->getFile() . ':' . $e->getLine()); }
+                    $prev = $e->getPrevious();
+                    if ($prev) { autopost_log('telegraph previous: ' . get_class($prev) . ' ' . $prev->getMessage()); }
+                }
+                $finalUrl = null; // will try puppeteer fallback below
             }
-            if (!$csrf) { if (function_exists('autopost_log')) autopost_log('telegraph: csrf not found'); $browser->close(); return null; }
+        }
 
-            usleep(400000);
-            $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b) b.click(); })();');
-            $page->waitForNavigation();
-            $finalUrl = $page->getCurrentUrl();
-            $browser->close();
-        } catch (\Throwable $e) {
-            if (isset($browser)) { try { $browser->close(); } catch (\Throwable $e2) {} }
-            if (function_exists('autopost_log')) {
-                autopost_log('telegraph exception: ' . $e->getMessage());
-                if (method_exists($e,'getFile')) { autopost_log('telegraph exception at ' . $e->getFile() . ':' . $e->getLine()); }
-                $prev = $e->getPrevious();
-                if ($prev) { autopost_log('telegraph previous: ' . get_class($prev) . ' ' . $prev->getMessage()); }
-            }
-            return null;
+        // Fallback to Node.js Puppeteer if needed
+        if (!filter_var($finalUrl ?? '', FILTER_VALIDATE_URL)) {
+            if (function_exists('autopost_log')) autopost_log('telegraph: trying puppeteer fallback');
+            $finalUrl = $publishViaPuppeteer($title, $author, $content);
         }
 
         if (!filter_var($finalUrl ?? '', FILTER_VALIDATE_URL)) { if (function_exists('autopost_log')) autopost_log('telegraph: finalUrl invalid'); return null; }
