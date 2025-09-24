@@ -10,6 +10,7 @@ require_once PP_ROOT_PATH . '/includes/functions.php';
 return [
     'slug' => 'telegraph',
     'name' => 'Telegraph',
+    'description' => 'Telegraph article publication with OpenAI generated content',
     'publish' => function(array $ctx) {
         $openaiKey = get_openai_api_key();
         if ($openaiKey === '') { return null; }

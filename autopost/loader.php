@@ -3,22 +3,47 @@
 // Each network plugin file: network_<slug>.php returns array: ['slug'=>'telegraph','name'=>'Telegraph','publish'=>callable]
 
 if (!defined('PP_ROOT_PATH')) { define('PP_ROOT_PATH', realpath(__DIR__ . '/..')); }
+// Simple logger
+if (!function_exists('autopost_log')) {
+    function autopost_log(string $msg): void {
+        $dir = PP_ROOT_PATH . '/logs'; // moved from config/logs to logs
+        if (!is_dir($dir)) { @mkdir($dir, 0777, true); }
+        $file = $dir . '/autopost.log';
+        $line = '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
+        @file_put_contents($file, $line, FILE_APPEND);
+    }
+}
 require_once PP_ROOT_PATH . '/includes/functions.php';
 
 function autopost_load_all(): array {
     static $cache = null;
     if ($cache !== null) return $cache;
     $cache = [];
-    $pattern = PP_ROOT_PATH . '/autopost/network_*.php';
-    foreach (glob($pattern) as $file) {
+    $dir = PP_ROOT_PATH . '/autopost';
+    if (!is_dir($dir)) {
+        autopost_log('Directory missing: ' . $dir);
+        return $cache;
+    }
+    $pattern = $dir . '/network_*.php';
+    $files = glob($pattern) ?: [];
+    if (empty($files)) { autopost_log('No plugin files found by pattern ' . $pattern); }
+    foreach ($files as $file) {
         try {
             $net = include $file;
-            if (is_array($net) && isset($net['slug'],$net['name'],$net['publish']) && is_callable($net['publish'])) {
-                $slug = strtolower(preg_replace('~[^a-z0-9_\-]+~','',$net['slug']));
-                if ($slug !== '') { $net['slug']=$slug; $cache[$slug] = $net; }
+            if (!is_array($net)) { autopost_log('Plugin did not return array: ' . $file); continue; }
+            if (!isset($net['slug'],$net['name'],$net['publish']) || !is_callable($net['publish'])) {
+                autopost_log('Plugin missing required keys: ' . $file);
+                continue;
             }
-        } catch (Throwable $e) { /* ignore bad plugin */ }
+            $slug = strtolower(preg_replace('~[^a-z0-9_\-]+~','',$net['slug']));
+            if ($slug === '') { autopost_log('Empty slug after sanitize: ' . $file); continue; }
+            $net['slug'] = $slug;
+            $cache[$slug] = $net;
+        } catch (Throwable $e) {
+            autopost_log('Exception loading ' . $file . ': ' . $e->getMessage());
+        }
     }
+    if (empty($cache)) { autopost_log('No valid plugins loaded.'); }
     return $cache;
 }
 
@@ -27,8 +52,9 @@ function autopost_list_networks(): array {
 }
 
 function autopost_attempt_publication(int $publicationId, int $userId): ?array {
+    autopost_log('Attempt publication id=' . $publicationId . ' by user=' . $userId);
     $conn = connect_db();
-    if (!$conn) return null;
+    if (!$conn) { autopost_log('DB connect failed'); return null; }
     // Fetch publication & project ensuring ownership
     $stmt = $conn->prepare("SELECT p.id, p.project_id, p.page_url, p.anchor, p.post_url, p.network, pr.user_id, pr.language FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1");
     if (!$stmt) { $conn->close(); return null; }
@@ -42,7 +68,12 @@ function autopost_attempt_publication(int $publicationId, int $userId): ?array {
     if (!empty($pub['post_url'])) { $conn->close(); return null; }
 
     $active = get_active_network_slugs_for_user($userId);
-    if (empty($active)) { $conn->close(); return null; }
+    if (empty($active)) { // fallback to global
+        if (function_exists('get_global_active_network_slugs')) {
+            $active = get_global_active_network_slugs();
+        }
+    }
+    if (empty($active)) { autopost_log('No active networks for user/global'); $conn->close(); return null; }
     $networks = autopost_load_all();
     $candidates = [];
     foreach ($active as $slug) { if (isset($networks[$slug])) { $candidates[$slug] = $networks[$slug]; } }
@@ -53,6 +84,7 @@ function autopost_attempt_publication(int $publicationId, int $userId): ?array {
     $result = null;
     foreach ($slugs as $slug) {
         $net = $candidates[$slug];
+        autopost_log('Trying network=' . $slug . ' publication=' . $publicationId);
         try {
             $publishFn = $net['publish'];
             $ctx = [
@@ -74,6 +106,7 @@ function autopost_attempt_publication(int $publicationId, int $userId): ?array {
                     $stmt2->execute();
                     $stmt2->close();
                 }
+                autopost_log('SUCCESS network=' . $slug . ' publication=' . $publicationId . ' url=' . $postUrl);
                 $result = [
                     'post_url' => $postUrl,
                     'network' => $slug,
@@ -81,15 +114,29 @@ function autopost_attempt_publication(int $publicationId, int $userId): ?array {
                     'title' => $title,
                 ];
                 break;
+            } else {
+                autopost_log('FAIL (no post_url) network=' . $slug . ' publication=' . $publicationId);
             }
         } catch (Throwable $e) {
-            // try next
+            autopost_log('EXCEPTION network=' . $slug . ' publication=' . $publicationId . ' msg=' . $e->getMessage());
             continue;
         }
     }
+    if (!$result) { autopost_log('All networks failed publication=' . $publicationId); }
 
     $conn->close();
     return $result; // null if not published
+}
+
+function autopost_debug_info(): array {
+    $dir = PP_ROOT_PATH . '/autopost';
+    $pattern = $dir . '/network_*.php';
+    return [
+        'dir_exists' => is_dir($dir),
+        'pattern' => $pattern,
+        'files' => glob($pattern) ?: [],
+        'loaded_slugs' => array_keys(autopost_load_all()),
+    ];
 }
 
 ?>

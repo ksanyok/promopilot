@@ -17,6 +17,7 @@ $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'
 $allNetworks = autopost_list_networks();
 $activeGlobal = get_global_active_network_slugs();
 $networksMsg='';
+$netDebug = function_exists('autopost_debug_info') ? autopost_debug_info() : [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     if (!verify_csrf()) {
@@ -305,6 +306,14 @@ $updateStatus = get_update_status();
     </form>
     <div class="mt-3 small text-muted">
         <?php echo __('Список формируется автоматически из файлов network_*.php в папке autopost.'); ?>
+    </div>
+    <div class="mt-4">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="var d=document.getElementById('net-debug'); d.style.display = d.style.display==='none'?'block':'none';">Debug</button>
+        <div id="net-debug" style="display:none;" class="mt-2 small">
+            <pre class="p-2 bg-light border rounded" style="white-space:pre-wrap;">
+<?php echo htmlspecialchars(json_encode($netDebug, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE)); ?>
+            </pre>
+        </div>
     </div>
 </div>
 
