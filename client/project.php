@@ -376,7 +376,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                 <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
                                             <?php elseif ($status === 'not_published'): ?>
                                                 <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>">
-                                                    <i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
+                                                    <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
                                                 </button>
                                             <?php else: ?>
                                                 <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="d-none d-lg-inline"><?php echo __('Опубликована'); ?></span></button>
@@ -521,7 +521,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                 </td>
                 <td class="text-end">
-                    <button type="button" class="btn btn-sm btn-publish me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
+                    <button type="button" class="btn btn-sm btn-publish me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
                     <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
                     <button type="button" class="icon-btn action-remove-new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                 </td>`;
@@ -744,7 +744,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else if (status === 'not_published') {
                         const cancelBtn = actionsCell.querySelector('.action-cancel');
                         if (cancelBtn) {
-                            cancelBtn.outerHTML = '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
+                            cancelBtn.outerHTML = '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
                         }
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = false; b.classList.remove('disabled'); });
                     }
