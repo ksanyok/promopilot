@@ -251,8 +251,13 @@ include '../includes/header.php'; ?>
       </div>
     </div>
   </div>
-  <!-- NOTE: process_flow.svg (рекомендуемо до 1400x500) -->
-  <div class="mt-4 text-center small text-muted">process_flow.svg — <?php echo __('дополнительная визуализация этапов (опционально)'); ?></div>
+  <div class="process-flow mt-4 text-center">
+    <picture>
+      <source srcset="<?php echo asset_url('img/process_flow.svg'); ?>" type="image/svg+xml">
+      <img src="<?php echo asset_url('img/process_flow.png'); ?>" alt="<?php echo __('Поток этапов: сбор → публикация → индекс'); ?>" class="img-fluid process-flow-image rounded-3 shadow" loading="lazy" width="1400" height="500">
+    </picture>
+    <div class="small text-muted mt-2"><?php echo __('Схема процесса: подготовка семантики, каскад публикаций, мониторинг индексации.'); ?></div>
+  </div>
 </section>
 
 <section class="landing-section cta-final" id="cta">
