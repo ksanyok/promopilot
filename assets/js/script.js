@@ -232,4 +232,11 @@ document.addEventListener('DOMContentLoaded', function() {
         resize();
         start();
     })();
+
+    // Initialize Bootstrap tooltips (добавлено)
+    if (window.bootstrap && document.querySelector('[data-bs-toggle="tooltip"]')) {
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+            try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
+        });
+    }
 });

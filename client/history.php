@@ -89,7 +89,10 @@ include __DIR__ . '/../includes/client_sidebar.php';
   <div class="card section project-hero mb-3">
     <div class="card-body d-flex align-items-center justify-content-between gap-3">
       <div>
-        <div class="title mb-1"><?php echo __('История публикаций'); ?></div>
+        <div class="title mb-1 d-flex align-items-center gap-2">
+          <?php echo __('История публикаций'); ?>
+          <i class="bi bi-info-circle text-primary" data-bs-toggle="tooltip" title="<?php echo __('Хронология размещённых и ожидающих публикаций по выбранному проекту.'); ?>"></i>
+        </div>
         <div class="help">#<?php echo (int)$project['id']; ?> · <?php echo htmlspecialchars($project['name']); ?></div>
       </div>
       <div class="d-flex gap-2 align-items-center">
@@ -101,10 +104,10 @@ include __DIR__ . '/../includes/client_sidebar.php';
   <!-- Filters -->
   <div class="card section mb-3">
     <div class="section-header">
-      <div class="label"><i class="bi bi-funnel"></i><span><?php echo __('Фильтры'); ?></span></div>
+      <div class="label"><i class="bi bi-funnel"></i><span><?php echo __('Фильтры'); ?></span> <i class="bi bi-question-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Сужайте список по сети или ключевому фрагменту: анкору, URL или автору.'); ?>"></i></div>
       <div class="toolbar">
         <?php $base = pp_url('client/history.php?id=' . (int)$project['id']); ?>
-        <a href="<?php echo $base; ?>" class="btn btn-outline-light btn-sm"><i class="bi bi-x-circle me-1"></i><span class="btn-text"><?php echo __('Сбросить'); ?></span></a>
+        <a href="<?php echo $base; ?>" class="btn btn-outline-light btn-sm" data-bs-toggle="tooltip" title="<?php echo __('Сбросить фильтры'); ?>"><i class="bi bi-x-circle me-1"></i><span class="btn-text"><?php echo __('Сбросить'); ?></span></a>
       </div>
     </div>
     <div class="card-body">
@@ -143,12 +146,12 @@ include __DIR__ . '/../includes/client_sidebar.php';
           <thead>
             <tr>
               <th style="width:60px;">#</th>
-              <th><?php echo __('Дата'); ?></th>
-              <th><?php echo __('Сеть'); ?></th>
-              <th><?php echo __('Опубликовано'); ?></th>
-              <th><?php echo __('Анкор'); ?></th>
-              <th><?php echo __('Страница'); ?></th>
-              <th><?php echo __('Ссылка на публикацию'); ?></th>
+              <th><?php echo __('Дата'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Время регистрации публикации в системе.'); ?>"></i></th>
+              <th><?php echo __('Сеть'); ?> <i class="bi bi-question-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Тип площадки / группа ресурсов.'); ?>"></i></th>
+              <th><?php echo __('Опубликовано'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Сервис или оператор разместивший запись.'); ?>"></i></th>
+              <th><?php echo __('Анкор'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Текст ссылки использованный в публикации (если применимо).'); ?>"></i></th>
+              <th><?php echo __('Страница'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Целевая страница проекта, на которую ведёт публикация.'); ?>"></i></th>
+              <th><?php echo __('Ссылка на публикацию'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Прямая URL размещённого материала (если уже доступен).'); ?>"></i></th>
             </tr>
           </thead>
           <tbody>

@@ -155,7 +155,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                 <div class="card-body">
                     <div class="d-flex align-items-start justify-content-between gap-3">
                         <div>
-                            <div class="title"><?php echo htmlspecialchars($project['name']); ?></div>
+                            <div class="title"><?php echo htmlspecialchars($project['name']); ?> <i class="bi bi-info-circle ms-1 text-primary" data-bs-toggle="tooltip" title="<?php echo __('Страница проекта: управляйте ссылками, языком и пожеланиями. После публикации ссылки блокируются от редактирования.'); ?>"></i></div>
                             <div class="subtitle">@<?php echo htmlspecialchars($project['username']); ?></div>
                             <div class="meta-list">
                                 <div class="meta-item"><i class="bi bi-calendar3"></i><span><?php echo __('Дата создания'); ?>: <?php echo htmlspecialchars($project['created_at']); ?></span></div>
@@ -163,11 +163,13 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             </div>
                         </div>
                         <div class="text-end">
-                            <span class="chip"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
+                            <span class="chip" data-bs-toggle="tooltip" title="<?php echo __('Внутренний идентификатор проекта'); ?>"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
                         </div>
                     </div>
                     <?php if (!empty($project['description'])): ?>
                         <div class="mt-3 help"><?php echo nl2br(htmlspecialchars($project['description'])); ?></div>
+                    <?php else: ?>
+                        <div class="mt-3 small text-muted"><i class="bi bi-lightbulb me-1"></i><?php echo __('Добавьте описание проекту для контекстуализации семантики.'); ?></div>
                     <?php endif; ?>
                 </div>
             </div>
@@ -179,7 +181,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                     <!-- Top Add Link card -->
                     <div class="card section link-adder-card mb-3">
                         <div class="section-header">
-                            <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Добавить ссылку'); ?></span></div>
+                            <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Добавить ссылку'); ?></span> <i class="bi bi-question-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Добавьте целевые страницы (URL) которые будут продвигаться. Анкор — текст ссылки.'); ?>"></i></div>
                             <div class="toolbar">
                                 <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-primary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
                             </div>
@@ -200,9 +202,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                     <!-- Links table card -->
                     <div class="card section table-card" id="links-card">
                         <div class="section-header">
-                            <div class="label"><i class="bi bi-list-task"></i><span><?php echo __('Ссылки'); ?></span></div>
+                            <div class="label"><i class="bi bi-list-task"></i><span><?php echo __('Ссылки'); ?></span> <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Ссылки можно редактировать и удалять пока не началась публикация. После появления статуса \'В ожидании\' ссылка закрепляется.'); ?>"></i></div>
                             <div class="toolbar">
-                                <!-- reserved for future controls -->
+                                <span class="d-none d-md-inline small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Легенда статусов'); ?>">🟢 <?php echo __('Опубликована'); ?> · 🟡 <?php echo __('В ожидании'); ?> · ⚪ <?php echo __('Не опубликована'); ?></span>
                             </div>
                         </div>
                         <div class="card-body">
@@ -257,7 +259,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 </table>
                             </div>
                             <?php else: ?>
-                                <div class="empty-state"><?php echo __('Ссылок нет.'); ?></div>
+                                <div class="empty-state"><?php echo __('Ссылок нет.'); ?> <span class="d-inline-block ms-1" data-bs-toggle="tooltip" title="<?php echo __('Добавьте первую целевую ссылку выше.'); ?>"><i class="bi bi-info-circle"></i></span></div>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -267,7 +269,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                     <!-- Settings / preferences -->
                     <div class="card section" id="links-section">
                         <div class="section-header">
-                            <div class="label"><i class="bi bi-sliders2"></i><span><?php echo __('Настройки проекта'); ?></span></div>
+                            <div class="label"><i class="bi bi-sliders2"></i><span><?php echo __('Настройки проекта'); ?></span> <i class="bi bi-question-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Укажите язык и составьте пожелания: тон статей, ограничения по бренду, типы анкоров.'); ?>"></i></div>
                         </div>
                         <div class="card-body">
                             <?php if ($message): ?>
@@ -276,7 +278,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 
                             <div class="row g-3">
                                 <div class="col-12">
-                                    <label class="form-label"><?php echo __('Язык страницы'); ?></label>
+                                    <label class="form-label"><?php echo __('Язык страницы'); ?> <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Основной язык целевых страниц — влияет на генерацию окружения.'); ?>"></i></label>
                                     <select name="language" class="form-select">
                                         <option value="ru" <?php echo ($project['language'] == 'ru' ? 'selected' : ''); ?>>Русский</option>
                                         <option value="en" <?php echo ($project['language'] == 'en' ? 'selected' : ''); ?>>English</option>
@@ -286,7 +288,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                     </select>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label"><?php echo __('Пожелания'); ?></label>
+                                    <label class="form-label"><?php echo __('Пожелания'); ?> <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Добавьте стиль, тематику, примерные типы анкоров (бренд / URL / разбавленные).'); ?>"></i></label>
                                     <textarea name="wishes" class="form-control" rows="6" placeholder="<?php echo __('Укажите ваши пожелания'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
                                 </div>
                             </div>

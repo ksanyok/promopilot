@@ -32,15 +32,23 @@ $pp_container = false;
 <?php include __DIR__ . '/../includes/client_sidebar.php'; ?>
 
 <div class="main-content">
-<h2><?php echo __('Клиентский дашборд'); ?></h2>
+<h2><?php echo __('Клиентский дашборд'); ?> <i class="bi bi-info-circle info-help" data-bs-toggle="tooltip" data-bs-placement="right" title="<?php echo __('Обзор ключевых показателей и быстрый доступ к проектам.'); ?>"></i></h2>
 
 <div class="card mb-4">
-    <div class="card-body">
-        <h5><?php echo __('Ваш баланс'); ?>: <?php echo htmlspecialchars(format_currency($balance)); ?></h5>
+    <div class="card-body d-flex align-items-start justify-content-between gap-3">
+        <div>
+            <h5 class="mb-1"><?php echo __('Ваш баланс'); ?>: <?php echo htmlspecialchars(format_currency($balance)); ?></h5>
+            <div class="text-muted small">
+                <i class="bi bi-info-circle me-1"></i><?php echo __('Баланс используется для запуска и масштабирования публикационных каскадов.'); ?>
+            </div>
+        </div>
+        <div>
+            <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient btn-sm"><i class="bi bi-plus-lg me-1"></i><?php echo __('Новый проект'); ?></a>
+        </div>
     </div>
 </div>
 
-<h3><?php echo __('Ваши проекты'); ?></h3>
+<h3 class="d-flex align-items-center gap-2 mb-3"><?php echo __('Ваши проекты'); ?> <i class="bi bi-question-circle info-help" data-bs-toggle="tooltip" title="<?php echo __('Каждый проект имеет собственный набор ссылок и историю публикаций.'); ?>"></i></h3>
 <?php if ($projects->num_rows > 0): ?>
     <div class="row">
         <?php while ($project = $projects->fetch_assoc()): ?>
