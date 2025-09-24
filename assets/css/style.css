@@ -677,7 +677,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 /* ===== Modal Interaction Fix ===== */
 .modal { z-index: 2000; }
 .modal-backdrop { z-index: 1990; }
-.modal, .modal * { pointer-events: auto; }
+/* Force vertical centering (fallback) */
+.modal.show.modal-fixed-center { display: flex !important; align-items: center; }
 
 /* ===== Link Actions Redesign ===== */
 .icon-btn {
@@ -696,17 +697,43 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .icon-btn:active { transform: scale(.94); }
 .icon-btn.disabled, .icon-btn:disabled { opacity: .5; cursor: not-allowed; }
 
-.btn-publish {
-  background: linear-gradient(135deg, var(--accent), var(--primary));
-  color: #08121c;
-  border: 1px solid color-mix(in srgb, var(--primary) 70%, black);
-  font-weight: 600;
-  display: inline-flex; align-items: center; gap: .4em;
-  box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--primary) 40%, transparent);
+/* ===== Actions cell: single row buttons ===== */
+.table-links td.text-end { 
+  display: flex; 
+  justify-content: flex-end; 
+  align-items: center; 
+  gap: 6px; 
+  white-space: nowrap; 
 }
-.btn-publish:hover { filter: brightness(1.08); }
-.btn-publish:active { filter: brightness(.95); }
-.btn-publish .bi { font-size: 1rem; }
+
+/* Compact icon buttons */
+.icon-btn { 
+  background: var(--surface-2); 
+  border: 1px solid var(--border); 
+  color: var(--text); 
+  padding: 6px 9px; 
+  border-radius: var(--radius-xs); 
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center; 
+  line-height: 1; 
+  font-size: .85rem; 
+  transition: background .15s ease, border-color .15s ease, color .15s ease; 
+}
+.icon-btn:hover { background: var(--surface); color: var(--primary); }
+.icon-btn.disabled, .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Space between mixed buttons */
+.text-end > * + * { margin-left: 6px; }
+
+/* Ensure publish/cancel btn height matches icon buttons */
+.table-links .btn.btn-sm { padding: 6px 10px; line-height: 1; }
+
+/* Responsive tightness */
+@media (max-width: 640px) {
+  .table-links td.text-end { flex-wrap: wrap; justify-content: flex-end; }
+  .text-end > * { margin-left: 4px !important; }
+}
 
 /* Compact action cell spacing */
 .table-links td.text-end .icon-btn { margin-left: .25rem; }

@@ -228,8 +228,8 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
             </div>
 
             <!-- Modal: Project Info -->
-            <div class="modal fade" id="projectInfoModal" tabindex="-1" aria-hidden="true">
-              <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal fade modal-fixed-center" id="projectInfoModal" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
                 <div class="modal-content">
                   <form method="post" id="project-info-form">
                     <?php echo csrf_field(); ?>
