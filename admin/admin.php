@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../includes/init.php';
+require_once PP_ROOT_PATH . '/autopost/loader.php';
 
 if (!is_logged_in() || !is_admin()) {
     redirect('auth/login.php');
@@ -13,6 +14,9 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KE
 $settingsMsg = '';
 $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
+$allNetworks = autopost_list_networks();
+$activeGlobal = get_global_active_network_slugs();
+$networksMsg='';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     if (!verify_csrf()) {
@@ -40,6 +44,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
             $settingsMsg = __('Настройки сохранены.');
         } else {
             $settingsMsg = __('Ошибка сохранения настроек.');
+        }
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['networks_submit'])) {
+    if (!verify_csrf()) {
+        $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
+    } else {
+        $sel = isset($_POST['networks']) && is_array($_POST['networks']) ? $_POST['networks'] : [];
+        if (set_global_active_network_slugs($sel)) {
+            $activeGlobal = get_global_active_network_slugs();
+            $networksMsg = __('Сети сохранены.');
+        } else {
+            $networksMsg = __('Ошибка сохранения.');
         }
     }
 }
@@ -99,6 +117,15 @@ $updateStatus = get_update_status();
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.4l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10.5 2.28V2a2 2 0 1 1 4 0v.09c0 .67.39 1.27 1 1.51h.01c.63.25 1.35.11 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.44.47-.58 1.19-.33 1.82v.01c.24.61.84 1 1.51 1H22a2 2 0 1 1 0 4h-.09c-.67 0-1.27.39-1.51 1z"/>
                     </svg>
                     <?php echo __('Основные настройки'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('networks')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <?php echo __('Сети автопостинга'); ?>
                 </a>
             </li>
         </ul>
@@ -241,6 +268,44 @@ $updateStatus = get_update_status();
             <button type="submit" name="settings_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
         </div>
     </form>
+</div>
+
+<div id="networks-section" style="display:none;">
+    <h3><?php echo __('Сети автопостинга'); ?></h3>
+    <?php if ($networksMsg): ?><div class="alert alert-info fade-in"><?php echo htmlspecialchars($networksMsg); ?></div><?php endif; ?>
+    <form method="post" class="card p-3">
+        <?php echo csrf_field(); ?>
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th><?php echo __('Активна'); ?></th>
+                        <th>Slug</th>
+                        <th><?php echo __('Название'); ?></th>
+                        <th><?php echo __('Описание'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php if (empty($allNetworks)): ?>
+                    <tr><td colspan="4" class="text-muted"><?php echo __('Плагины сетей не найдены.'); ?></td></tr>
+                <?php else: foreach ($allNetworks as $net): $slug = htmlspecialchars($net['slug']); ?>
+                    <tr>
+                        <td><input type="checkbox" name="networks[]" value="<?php echo $slug; ?>" <?php echo in_array($net['slug'],$activeGlobal,true)?'checked':''; ?>></td>
+                        <td><code><?php echo $slug; ?></code></td>
+                        <td><?php echo htmlspecialchars($net['name'] ?? $net['slug']); ?></td>
+                        <td class="text-muted small"><?php echo htmlspecialchars($net['description'] ?? ''); ?></td>
+                    </tr>
+                <?php endforeach; endif; ?>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-3">
+            <button type="submit" name="networks_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+        </div>
+    </form>
+    <div class="mt-3 small text-muted">
+        <?php echo __('Список формируется автоматически из файлов network_*.php в папке autopost.'); ?>
+    </div>
 </div>
 
 </div><!-- /.main-content -->

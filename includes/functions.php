@@ -160,6 +160,12 @@ function ensure_schema(): void {
         }
     }
 
+    // Settings table (k,v)
+    $settingsCols = $getCols('settings');
+    if (empty($settingsCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `settings` ( `k` VARCHAR(191) NOT NULL PRIMARY KEY, `v` LONGTEXT NULL ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    }
+
     // Settings table optional—skip if missing
 
     @$conn->close();
@@ -342,6 +348,88 @@ function get_setting(string $key, $default = null) {
         }
     }
     return $cache[$key] ?? $default;
+}
+
+function set_setting(string $key, $value): bool {
+    try { $conn = connect_db(); } catch (Throwable $e) { return false; }
+    $stmt = $conn->prepare("REPLACE INTO settings (k, v) VALUES (?, ?)");
+    if (!$stmt) { $conn->close(); return false; }
+    $val = is_scalar($value) ? (string)$value : json_encode($value, JSON_UNESCAPED_UNICODE);
+    $stmt->bind_param('ss', $key, $val);
+    $ok = $stmt->execute();
+    $stmt->close();
+    $conn->close();
+    // invalidate cache
+    if (function_exists('__settings_cache_reset')) { __settings_cache_reset(); }
+    return $ok;
+}
+
+// Reset internal settings cache
+if (!function_exists('__settings_cache_reset')) {
+    function __settings_cache_reset(): void {
+        $ref = new ReflectionFunction('get_setting');
+        $static = $ref->getStaticVariables();
+        if (array_key_exists('cache', $static)) {
+            $GLOBALS['__pp_settings_cache_invalidate'] = true; // flag
+        }
+    }
+}
+
+// Override get_setting to allow cache invalidation flag
+if (!function_exists('__original_get_setting_wrapper')) {
+    // Wrap existing implementation only once
+    $orig = function_exists('get_setting') ? 'get_setting' : null;
+    if ($orig) {
+        function get_setting(string $key, $default = null) {
+            static $cache = null; static $loaded = false;
+            if ($cache === null || isset($GLOBALS['__pp_settings_cache_invalidate'])) {
+                unset($GLOBALS['__pp_settings_cache_invalidate']);
+                $cache = [];
+                try {
+                    $conn = @connect_db();
+                    if ($conn) {
+                        $res = @$conn->query("SELECT k, v FROM settings");
+                        if ($res) { while ($row = $res->fetch_assoc()) { $cache[$row['k']] = $row['v']; } }
+                        $conn->close();
+                    }
+                } catch (Throwable $e) { /* ignore */ }
+                $loaded = true;
+            }
+            return $cache[$key] ?? $default;
+        }
+    }
+}
+
+// Active networks per user (stored in settings as JSON per user)
+function get_active_network_slugs_for_user(int $uid): array {
+    $raw = get_setting('networks_active_u' . $uid, '');
+    if (!$raw) return [];
+    $arr = json_decode($raw, true);
+    return is_array($arr) ? array_values(array_unique(array_filter($arr, 'is_string'))) : [];
+}
+function set_active_network_slugs_for_user(int $uid, array $slugs): bool {
+    $clean = [];
+    foreach ($slugs as $s) { $s = strtolower(preg_replace('~[^a-z0-9_\-]+~','',$s)); if ($s!=='') $clean[]=$s; }
+    $clean = array_values(array_unique($clean));
+    return set_setting('networks_active_u' . $uid, json_encode($clean, JSON_UNESCAPED_UNICODE));
+}
+
+// Active networks globally (stored in settings as JSON)
+function get_global_active_network_slugs(): array {
+    $raw = get_setting('networks_active_global', '');
+    if (!$raw) return [];
+    $arr = json_decode($raw, true);
+    return is_array($arr) ? array_values(array_unique(array_filter($arr, 'is_string'))) : [];
+}
+function set_global_active_network_slugs(array $slugs): bool {
+    $clean = [];
+    foreach ($slugs as $s) { $s = strtolower(preg_replace('~[^a-z0-9_\-]+~','',$s)); if ($s!=='') $clean[]=$s; }
+    $clean = array_values(array_unique($clean));
+    return set_setting('networks_active_global', json_encode($clean, JSON_UNESCAPED_UNICODE));
+}
+
+function get_openai_api_key(): string {
+    return trim((string)get_setting('openai_api_key', ''));
 }
 
 function get_currency_code(): string {

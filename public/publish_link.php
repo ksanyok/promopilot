@@ -71,18 +71,31 @@ if ($action === 'publish') {
             echo json_encode(['ok'=>false,'error'=>'ALREADY_PUBLISHED']);
             $conn->close(); exit;
         }
-        // уже pending
         echo json_encode(['ok'=>true,'status'=>'pending']);
         $conn->close(); exit;
     }
     $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor) VALUES (?,?,?)");
     $stmt->bind_param('iss', $project_id, $url, $anchor);
     if ($stmt->execute()) {
-        echo json_encode(['ok'=>true,'status'=>'pending']);
+        $newPubId = $stmt->insert_id;
+        $stmt->close();
+        // Попытка автоматической публикации сразу
+        $autoResult = null;
+        try {
+            require_once PP_ROOT_PATH . '/autopost/loader.php';
+            $autoResult = autopost_attempt_publication($newPubId, (int)$_SESSION['user_id']);
+        } catch (Throwable $e) {
+            $autoResult = null; // ignore
+        }
+        if (is_array($autoResult) && !empty($autoResult['post_url'])) {
+            echo json_encode(['ok'=>true,'status'=>'published','data'=>$autoResult]);
+        } else {
+            echo json_encode(['ok'=>true,'status'=>'pending']);
+        }
     } else {
+        $stmt->close();
         echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
     }
-    $stmt->close();
     $conn->close();
     exit;
 } elseif ($action === 'cancel') {
