@@ -36,7 +36,30 @@ if (!is_admin() && $project['user_id'] != $user_id) {
 
 // Обработка формы
 $message = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info'])) {
+    if (!verify_csrf()) {
+        $message = __('Ошибка обновления.') . ' (CSRF)';
+    } else {
+        $newName = trim($_POST['project_name'] ?? '');
+        $newDesc = trim($_POST['project_description'] ?? '');
+        $newWishes = trim($_POST['project_wishes'] ?? '');
+        if ($newName) {
+            $conn = connect_db();
+            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ? WHERE id = ?");
+            $stmt->bind_param('sssi', $newName, $newDesc, $newWishes, $id);
+            if ($stmt->execute()) {
+                $message = __('Основная информация обновлена.');
+                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes;
+            } else {
+                $message = __('Ошибка сохранения основной информации.');
+            }
+            $stmt->close(); $conn->close();
+        } else {
+            $message = __('Название не может быть пустым.');
+        }
+    }
+// Завершаем ветку основной информации
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
     } else {
@@ -99,7 +122,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
         }
 
         // Глобальное пожелание проекта
-        $wishes = trim($_POST['wishes'] ?? ($project['wishes'] ?? ''));
+        if (isset($_POST['wishes'])) {
+            $wishes = trim($_POST['wishes']);
+        } else {
+            $wishes = $project['wishes'] ?? '';
+        }
         $language = $project['language'] ?? 'ru'; // язык проекта не редактируется здесь
 
         $conn = connect_db();
@@ -170,9 +197,15 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
             <!-- Project hero -->
             <div class="card project-hero mb-3">
                 <div class="card-body">
-                    <div class="d-flex align-items-start justify-content-between gap-3">
+                    <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
                         <div>
-                            <div class="title"><?php echo htmlspecialchars($project['name']); ?> <i class="bi bi-info-circle ms-1 text-primary" data-bs-toggle="tooltip" title="<?php echo __('Страница проекта: управляйте ссылками, языком и пожеланиями. После публикации ссылки блокируются от редактирования.'); ?>"></i></div>
+                            <div class="title d-flex align-items-center gap-2">
+                                <span><?php echo htmlspecialchars($project['name']); ?></span>
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#projectInfoModal" title="<?php echo __('Редактировать основную информацию'); ?>">
+                                    <i class="bi bi-pencil-square"></i>
+                                </button>
+                                <i class="bi bi-info-circle ms-1 text-primary" data-bs-toggle="tooltip" title="<?php echo __('Страница проекта: управляйте ссылками и пожеланиями.'); ?>"></i>
+                            </div>
                             <div class="subtitle">@<?php echo htmlspecialchars($project['username']); ?></div>
                             <div class="meta-list">
                                 <div class="meta-item"><i class="bi bi-calendar3"></i><span><?php echo __('Дата создания'); ?>: <?php echo htmlspecialchars($project['created_at']); ?></span></div>
@@ -184,17 +217,60 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                         </div>
                     </div>
                     <?php if (!empty($project['description'])): ?>
-                        <div class="mt-3 help"><?php echo nl2br(htmlspecialchars($project['description'])); ?></div>
+                        <div class="mt-3 help">&zwj;<?php echo nl2br(htmlspecialchars($project['description'])); ?></div>
                     <?php else: ?>
                         <div class="mt-3 small text-muted"><i class="bi bi-lightbulb me-1"></i><?php echo __('Добавьте описание проекту для контекстуализации семантики.'); ?></div>
                     <?php endif; ?>
+                    <?php if (!empty($project['wishes'])): ?>
+                        <div class="mt-2 small text-muted"><i class="bi bi-stars me-1"></i><span class="text-truncate d-inline-block" style="max-width:100%" title="<?php echo htmlspecialchars($project['wishes']); ?>"><?php echo htmlspecialchars(mb_substr($project['wishes'],0,160)); ?><?php echo mb_strlen($project['wishes'])>160?'…':''; ?></span></div>
+                    <?php endif; ?>
                 </div>
+            </div>
+
+            <!-- Modal: Project Info -->
+            <div class="modal fade" id="projectInfoModal" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                <div class="modal-content">
+                  <form method="post" id="project-info-form">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="update_project_info" value="1" />
+                    <div class="modal-header">
+                      <h5 class="modal-title"><i class="bi bi-sliders2 me-2"></i><?php echo __('Основная информация проекта'); ?></h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                      <div class="mb-3">
+                        <label class="form-label"><?php echo __('Название'); ?> *</label>
+                        <input type="text" name="project_name" class="form-control" value="<?php echo htmlspecialchars($project['name']); ?>" required>
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label"><?php echo __('Описание'); ?></label>
+                        <textarea name="project_description" class="form-control" rows="3" placeholder="<?php echo __('Кратко о проекте'); ?>"><?php echo htmlspecialchars($project['description'] ?? ''); ?></textarea>
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label"><?php echo __('Глобальное пожелание (тон, стиль, ограничения)'); ?></label>
+                        <textarea name="project_wishes" class="form-control" rows="5" placeholder="<?php echo __('Стиль, тематика, распределение анкоров, брендовые упоминания...'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
+                        <div class="form-text"><?php echo __('Используется по умолчанию при добавлении новых ссылок (можно вставить в индивидуальное поле).'); ?></div>
+                      </div>
+                    </div>
+                    <div class="modal-footer justify-content-between">
+                      <div class="text-muted small"><i class="bi bi-info-circle me-1"></i><?php echo __('Изменения применяются после сохранения.'); ?></div>
+                      <div>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i><?php echo __('Сохранить'); ?></button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              </div>
             </div>
 
             <form method="post" id="project-form" class="mb-4">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="update_project" value="1" />
-                <!-- Добавление ссылки + глобальные настройки -->
+                <!-- Скрытое глобальное пожелание для синхронизации -->
+                <input type="hidden" id="global_wishes" name="wishes" value="<?php echo htmlspecialchars($project['wishes'] ?? ''); ?>" />
+                <!-- Добавление ссылки -->
                 <div class="card section link-adder-card mb-3">
                     <div class="section-header">
                         <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Добавить ссылку'); ?></span></div>
@@ -226,11 +302,6 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <input class="form-check-input" type="checkbox" id="use_global_wish">
                                 <label class="form-check-label" for="use_global_wish"><?php echo __('Использовать глобальное пожелание проекта'); ?></label>
                             </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label mb-1"><?php echo __('Глобальное пожелание проекта'); ?></label>
-                            <textarea name="wishes" id="global_wishes" rows="4" class="form-control" placeholder="<?php echo __('Стиль, тон, тематика, брендовое / разбавленное анкорное распределение...'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
-                            <div class="form-text"><?php echo __('При отмеченном чекбоксе выше текст копируется в пожелание ссылки и поле блокируется.'); ?></div>
                         </div>
                         <div id="added-hidden"></div>
                         <div class="text-end">
@@ -301,10 +372,17 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php endif; ?>
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
+                                            <?php if ($status === 'pending'): ?>
+                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="btn-text"><?php echo __('Отменить'); ?></span></button>
+                                            <?php elseif ($status === 'not_published'): ?>
+                                                <button type="button" class="btn btn-outline-success btn-sm me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>"><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликовать'); ?></span></button>
+                                            <?php else: ?>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликована'); ?></span></button>
+                                            <?php endif; ?>
                                             <?php if ($canEdit): ?>
                                                 <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
                                                 <button type="button" class="btn btn-outline-danger btn-sm action-remove" data-index="<?php echo (int)$index; ?>"><i class="bi bi-trash me-1"></i><span class="btn-text"><?php echo __('Удалить'); ?></span></button>
-                                            <?php else: ?>
+                                            <?php elseif ($status === 'pending'): ?>
                                                 <button type="button" class="btn btn-outline-secondary btn-sm" disabled><i class="bi bi-lock me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
                                             <?php endif; ?>
                                         </td>
@@ -332,8 +410,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const newAnchorInput = form.querySelector('input[name="new_anchor"]');
     const newLangSelect = form.querySelector('select[name="new_language"]');
     const newWish = form.querySelector('#new_wish');
-    const globalWish = form.querySelector('#global_wishes');
+    const globalWish = document.querySelector('#global_wishes'); // теперь hidden
     const useGlobal = form.querySelector('#use_global_wish');
+    const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
 
     // New: references for links table (may not exist initially)
@@ -432,6 +511,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                 </td>
                 <td class="text-end">
+                    <button type="button" class="btn btn-outline-success btn-sm me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff me-1"></i><?php echo __('Опубликовать'); ?></button>
                     <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?></button>
                     <button type="button" class="btn btn-outline-danger btn-sm action-remove-new"><?php echo __('Удалить'); ?></button>
                 </td>`;
@@ -440,6 +520,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Attach listeners for this new row
             const editBtn = tr.querySelector('.action-edit');
             const removeBtn = tr.querySelector('.action-remove-new');
+            const publishBtn = tr.querySelector('.action-publish-new');
             const urlCell = tr.querySelector('.url-cell');
             const anchorCell = tr.querySelector('.anchor-cell');
             const viewUrl = urlCell.querySelector('.view-url');
@@ -487,6 +568,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 refreshRowNumbers();
             });
 
+            publishBtn.addEventListener('click', function() {
+                alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>');
+            });
+
             refreshRowNumbers();
         }
 
@@ -507,7 +592,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const viewUrl = urlCell.querySelector('.view-url');
             const viewAnchor = anchorCell.querySelector('.view-anchor');
             const editUrl = urlCell.querySelector('.edit-url');
-            const editAnchor = anchorCell.querySelector('.edit-anchor');
+            const editAnchor = anchorCell.querySelector('.edit-anchor'); // FIX: раньше искали в urlCell
             const viewLang = langCell ? langCell.querySelector('.view-language') : null;
             const editLang = langCell ? langCell.querySelector('.edit-language') : null;
             const viewWish = wishCell ? wishCell.querySelector('.view-wish') : null;
@@ -548,6 +633,18 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // Заглушка для кнопок публикации
+    document.querySelectorAll('.action-publish-new').forEach(btn => {
+        btn.addEventListener('click', () => {
+            alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>');
+        });
+    });
+
+    if (projectInfoForm) {
+        projectInfoForm.addEventListener('submit', () => {
+            // При submit модалки значение hidden синхронизируется после перезагрузки страницы сервером
+        });
+    }
     useGlobal.addEventListener('change', () => {
         if (useGlobal.checked) {
             newWish.value = globalWish.value;
@@ -569,6 +666,112 @@ document.addEventListener('DOMContentLoaded', function() {
     function escapeAttribute(s){
         return s.replace(/["']/g, c => ({'"':'&quot;','\'':'&#39;'}[c]));
     }
+
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const PROJECT_ID = <?php echo (int)$project['id']; ?>;
+
+    function setButtonLoading(btn, loading) {
+        if (!btn) return;
+        if (loading) {
+            btn.dataset.originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + (btn.dataset.loadingText || btn.textContent.trim());
+        } else {
+            if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    async function sendPublishAction(btn, url, action) {
+        if (!csrfTokenInput) { alert('CSRF missing'); return; }
+        if (!url) { alert('<?php echo __('Сначала сохраните проект чтобы опубликовать новую ссылку.'); ?>'); return; }
+        setButtonLoading(btn, true);
+        try {
+            const formData = new FormData();
+            formData.append('csrf_token', csrfTokenInput.value);
+            formData.append('project_id', PROJECT_ID);
+            formData.append('url', url);
+            formData.append('action', action);
+            const res = await fetch('<?php echo pp_url('public/publish_link.php'); ?>', { method: 'POST', body: formData, credentials: 'same-origin' });
+            const data = await res.json().catch(()=>({ok:false,error:'BAD_JSON'}));
+            if (!data.ok) {
+                let msg = data.error || 'ERROR';
+                const map = { 'ALREADY_PUBLISHED':'<?php echo __('Уже опубликована'); ?>', 'DB_ERROR':'<?php echo __('Ошибка базы данных'); ?>', 'PROJECT_NOT_FOUND':'<?php echo __('Проект не найден'); ?>', 'FORBIDDEN':'<?php echo __('Нет прав'); ?>', 'NOT_PENDING':'<?php echo __('Не в ожидании'); ?>', 'BAD_ACTION':'<?php echo __('Неверное действие'); ?>'};
+                if (map[msg]) msg = map[msg];
+                alert('<?php echo __('Ошибка'); ?>: ' + msg);
+                return;
+            }
+            updateRowUI(url, data.status);
+        } catch (e) {
+            alert('<?php echo __('Сетевая ошибка'); ?>');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    }
+
+    function updateRowUI(url, status) {
+        const rows = document.querySelectorAll('table.table-links tbody tr');
+        rows.forEach(tr => {
+            const linkEl = tr.querySelector('.url-cell .view-url');
+            if (!linkEl) return;
+            if (linkEl.getAttribute('href') === url) {
+                const statusCell = tr.querySelector('td:nth-child(6)'); // status column
+                const actionsCell = tr.querySelector('td.text-end');
+                if (statusCell) {
+                    if (status === 'pending') {
+                        statusCell.innerHTML = '<span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>';
+                    } else if (status === 'not_published') {
+                        statusCell.innerHTML = '<span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>';
+                    }
+                }
+                if (actionsCell) {
+                    if (status === 'pending') {
+                        actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = true; b.classList.add('disabled'); });
+                        const pubBtn = actionsCell.querySelector('.action-publish');
+                        if (pubBtn) {
+                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="btn-text"><?php echo __('Отменить'); ?></span></button>';
+                        }
+                    } else if (status === 'not_published') {
+                        // restore publish button, enable edit/remove
+                        const cancelBtn = actionsCell.querySelector('.action-cancel');
+                        if (cancelBtn) {
+                            cancelBtn.outerHTML = '<button type="button" class="btn btn-outline-success btn-sm me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликовать'); ?></span></button>';
+                        }
+                        actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = false; b.classList.remove('disabled'); });
+                    }
+                    // Re-bind handlers after DOM changes
+                    bindDynamicPublishButtons();
+                }
+            }
+        });
+    }
+
+    function bindDynamicPublishButtons() {
+        document.querySelectorAll('.action-publish').forEach(btn => {
+            if (btn.dataset.bound==='1') return;
+            btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
+                sendPublishAction(btn, url, 'publish');
+            });
+        });
+        document.querySelectorAll('.action-cancel').forEach(btn => {
+            if (btn.dataset.bound==='1') return;
+            btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
+                if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
+                sendPublishAction(btn, url, 'cancel');
+            });
+        });
+        document.querySelectorAll('.action-publish-new').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => { alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>'); });
+        });
+    }
+
+    // Initial bind
+    bindDynamicPublishButtons();
 });
 </script>
 

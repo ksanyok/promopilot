@@ -201,7 +201,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <p><?php echo __('Нажмите кнопку для обновления'); ?>.</p>
                 <form method="post">
                     <?php echo csrf_field(); ?>
-                    <button type="submit" class="btn btn-danger"><i class="bi bi-arrow-repeat me-1"></i><?php echo __('Обновить'); ?></button>
+                    <?php if ($message): ?>
+                        <button type="submit" class="btn btn-danger" disabled><i class="bi bi-check2-circle me-1"></i><?php echo __('Обновлено'); ?></button>
+                        <div class="mt-3 d-flex flex-wrap gap-2">
+                            <a href="<?php echo pp_url('index.php'); ?>" class="btn btn-outline-secondary"><i class="bi bi-house me-1"></i><?php echo __('На главную'); ?></a>
+                            <a href="<?php echo pp_url('admin/admin.php'); ?>" class="btn btn-outline-primary"><i class="bi bi-speedometer2 me-1"></i><?php echo __('В админку'); ?></a>
+                        </div>
+                    <?php else: ?>
+                        <button type="submit" class="btn btn-danger"><i class="bi bi-arrow-repeat me-1"></i><?php echo __('Обновить'); ?></button>
+                    <?php endif; ?>
                 </form>
             </div>
         </div>
