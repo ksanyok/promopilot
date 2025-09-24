@@ -232,8 +232,8 @@ JS;
         if ($usePhpChrome) {
             try {
                 $browserFactory = new $browserFactoryClass();
-                // 1) Admin setting has top priority
-                $chromeBinary = trim((string)(function_exists('get_setting') ? get_setting('chrome_binary','') : ''));
+                // Resolve Chrome binary automatically (no admin setting)
+                $chromeBinary = function_exists('pp_resolve_chrome_binary') ? pp_resolve_chrome_binary() : '';
                 if ($chromeBinary === '') { $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: ''; }
                 // Try common paths if env not set
                 if (!$chromeBinary) {

@@ -163,7 +163,16 @@ function ensure_schema(): void {
     // Settings table (k,v)
     $settingsCols = $getCols('settings');
     if (empty($settingsCols)) {
-        @$conn->query("CREATE TABLE IF NOT EXISTS `settings` ( `k` VARCHAR(191) NOT NULL PRIMARY KEY, `v` LONGTEXT NULL ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+        @$conn->query("CREATE TABLE IF NOT EXISTS `settings` (
+            `k` VARCHAR(191) NOT NULL PRIMARY KEY,
+            `v` LONGTEXT NULL,
+            `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        // Add updated_at if missing
+        if (!isset($settingsCols['updated_at'])) {
+            @$conn->query("ALTER TABLE `settings` ADD COLUMN `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `v`");
+        }
     }
 
     // Settings table optional—skip if missing
@@ -440,13 +449,10 @@ function rmdir_recursive($dir) {
 
 // ===== Global runtime helpers for headless browser automation =====
 /**
- * Resolve Chrome/Chromium binary path from settings/env/common locations.
+ * Resolve Chrome/Chromium binary path from env/common locations.
  */
 function pp_resolve_chrome_binary(): string {
-    $chromeBinary = trim((string)get_setting('chrome_binary', ''));
-    if ($chromeBinary === '') {
-        $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: '';
-    }
+    $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: getenv('PUPPETEER_EXECUTABLE_PATH') ?: '';
     if ($chromeBinary && @is_file($chromeBinary)) return $chromeBinary;
 
     // Common candidates
@@ -464,11 +470,10 @@ function pp_resolve_chrome_binary(): string {
 }
 
 /**
- * Resolve Node.js binary path from settings/env/common locations (shared hosting friendly).
+ * Resolve Node.js binary path from env/common locations (shared hosting friendly).
  */
 function pp_resolve_node_binary(): string {
-    $node = trim((string)get_setting('node_binary', ''));
-    if ($node === '') { $node = getenv('NODE_BINARY') ?: getenv('NODE_PATH') ?: ''; }
+    $node = getenv('NODE_BINARY') ?: '';
     $tryNames = [];
     if ($node !== '') { $tryNames[] = $node; }
     // Common executable names on various hostings
@@ -489,7 +494,6 @@ function pp_resolve_node_binary(): string {
     ];
 
     foreach (array_merge($tryNames, $candidates) as $cand) {
-        // If not absolute, rely on PATH; quick test by executing --version
         if ($cand === '') continue;
         $cmd = escapeshellcmd($cand) . ' --version 2>&1';
         $out = @shell_exec($cmd);
@@ -498,7 +502,7 @@ function pp_resolve_node_binary(): string {
         }
     }
 
-    // Try glob patterns (CloudLinux may use different minor versions)
+    // Try glob patterns
     foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node'] as $pattern) {
         foreach ((array)glob($pattern) as $path) {
             if (@is_file($path) && @is_executable($path)) {
