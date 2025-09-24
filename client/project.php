@@ -405,6 +405,14 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // ==== FIX: вынести модалку из-под возможного stacking context (.main-content / анимации) ====
+    // Если любой предок имел transform/animation, modal не может перекрыть backdrop (который добавляется к body)
+    // Поэтому переносим саму .modal прямо в <body> сразу после загрузки DOM.
+    const projectInfoModalEl = document.getElementById('projectInfoModal');
+    if (projectInfoModalEl && projectInfoModalEl.parentElement !== document.body) {
+        document.body.appendChild(projectInfoModalEl);
+    }
+
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
     const addedHidden = document.getElementById('added-hidden');
