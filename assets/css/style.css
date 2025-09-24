@@ -181,8 +181,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .main-content {
   margin-left: var(--sidebar-width);
   padding: 24px;
-  position: relative;
-  z-index: 2;
+  position: relative; /* keep relative for internal positioning; no z-index so modal inside can sit above backdrop */
+  /* z-index: 2;  -- removed: was creating a stacking context that trapped .modal below .modal-backdrop */
 }
 
 @media (max-width: 991.98px) {
