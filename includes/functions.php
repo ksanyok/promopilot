@@ -281,11 +281,20 @@ function get_csrf_token(): string {
 }
 
 function verify_csrf(): bool {
-    return true; // CSRF отключён по требованию
+    // Разрешаем GET без проверки
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        return true;
+    }
+    $sessionToken = $_SESSION['csrf_token'] ?? '';
+    // Принимаем токен из POST (основное) или из GET как fallback
+    $sent = $_POST['csrf_token'] ?? ($_GET['csrf_token'] ?? '');
+    if (!$sessionToken || !$sent) return false;
+    return hash_equals($sessionToken, $sent);
 }
 
 function csrf_field(): string {
-    return ''; // не выводим токен
+    $t = htmlspecialchars(get_csrf_token(), ENT_QUOTES, 'UTF-8');
+    return '<input type="hidden" name="csrf_token" value="' . $t . '">';
 }
 
 function get_action_secret(): string {
