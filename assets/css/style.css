@@ -114,7 +114,7 @@ body::after {
 .particles { display:none; }
 
 /* Main wrapper to take remaining height */
-main.page-wrap { flex: 1 1 auto; display: block; position: relative; z-index: 2; }
+main.page-wrap { flex: 1 1 auto; display: block; position: relative; }
 
 /* Make links readable in both themes */
 a { color: var(--primary); text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent); text-underline-offset: 2px; }
