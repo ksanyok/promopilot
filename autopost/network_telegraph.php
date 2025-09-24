@@ -2,132 +2,145 @@
 // Network plugin: Telegraph
 // slug: telegraph
 // name: Telegraph
-// This uses OpenAI API (requires setting openai_api_key) and Telegraph public API.
+// Updated: now uses headless browser automation (chrome-php/chrome) instead of Telegraph & OpenAI APIs.
 
 if (!defined('PP_ROOT_PATH')) { define('PP_ROOT_PATH', realpath(__DIR__ . '/..')); }
 require_once PP_ROOT_PATH . '/includes/functions.php';
 
+// Try to include Composer autoload if present
+$autoloadPath = PP_ROOT_PATH . '/vendor/autoload.php';
+if (file_exists($autoloadPath)) { require_once $autoloadPath; }
+
 return [
     'slug' => 'telegraph',
     'name' => 'Telegraph',
-    'description' => 'Telegraph article publication with OpenAI generated content',
+    'description' => 'Telegraph article publication via headless browser (no external APIs)',
     'publish' => function(array $ctx) {
-        $openaiKey = get_openai_api_key();
-        if ($openaiKey === '') { return null; }
+        // Validate required context
         $pageUrl = (string)($ctx['page_url'] ?? '');
         if (!filter_var($pageUrl, FILTER_VALIDATE_URL)) { return null; }
         $anchor = trim((string)($ctx['anchor'] ?? ''));
         $language = preg_replace('~[^a-zA-Z\-]~','', (string)($ctx['language'] ?? 'en'));
         if ($language === '') { $language = 'en'; }
 
-        // Simple HTTP helper
-        $http_json = function(string $url, array $payload, int $timeout=40) {
+        // Dynamic dependency class name
+        $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
+        if (!class_exists($browserFactoryClass)) { return null; }
+
+        // Fetch source page meta to build content heuristically
+        $fetch_html = function(string $url): string {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
-                CURLOPT_POST => true,
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CONNECTTIMEOUT => 10,
-                CURLOPT_TIMEOUT => $timeout,
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-                CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 15,
+                CURLOPT_CONNECTTIMEOUT => 8,
+                CURLOPT_USERAGENT => 'PromopilotBot/1.0'
             ]);
-            $res = curl_exec($ch);
-            $err = curl_error($ch);
+            $html = curl_exec($ch);
             curl_close($ch);
-            if ($res === false) return null;
-            $data = json_decode($res, true);
-            return $data ?: null;
+            return is_string($html) ? $html : '';
         };
 
-        $chat = function(string $prompt) use ($openaiKey) {
-            $ch = curl_init('https://api.openai.com/v1/chat/completions');
-            $body = [
-                'model' => 'gpt-4o-mini',
-                'messages' => [ ['role'=>'user','content'=>$prompt] ],
-                'temperature' => 0.7,
-                'max_tokens' => 800,
-            ];
-            curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . $openaiKey,
-                ],
-                CURLOPT_POSTFIELDS => json_encode($body, JSON_UNESCAPED_UNICODE),
-                CURLOPT_CONNECTTIMEOUT => 15,
-                CURLOPT_TIMEOUT => 60,
-            ]);
-            $res = curl_exec($ch);
-            if ($res === false) { curl_close($ch); return null; }
-            $data = json_decode($res, true);
-            curl_close($ch);
-            $txt = $data['choices'][0]['message']['content'] ?? null;
-            if (!is_string($txt)) return null;
-            return trim($txt);
-        };
-
-        $titlePrompt = "Give a concise engaging article title (no quotes) for: {$pageUrl}";
-        $authorPrompt = "Provide a neutral author name (2 words) suitable for {$language} audience.";
-        $contentPrompt = "Write an informative article in {$language} (min 2500 characters) about the topic of {$pageUrl}. Include exactly one hyperlink using anchor text '{$anchor}' if anchor not empty else derive a natural anchor. The link HTML must appear once as <a href=\"{$pageUrl}\">{$anchor}\n</a>. Structure with H2 subheadings.";
-
-        $title = $chat($titlePrompt) ?: 'Article';
-        $author = $chat($authorPrompt) ?: 'Author';
-        $content = $chat($contentPrompt) ?: ('Link: <a href="'.$pageUrl.'">'.$anchor.'</a>');
-
-        // Ensure single link formatting
-        $content = preg_replace('~https?://[^\s<>]+~', '', $content); // remove raw urls
-        if ($anchor !== '') {
-            if (strpos($content, '<a ') === false) {
-                $insertion = '<a href="'.htmlspecialchars($pageUrl, ENT_QUOTES).'">'.htmlspecialchars($anchor, ENT_QUOTES).'</a>';
-                $content = $insertion."\n\n".$content;
-            }
+        $html = $fetch_html($pageUrl);
+        $metaTitle = '';
+        $metaDesc = '';
+        if ($html) {
+            if (preg_match('~<title>(.*?)</title>~is', $html, $m)) { $metaTitle = trim(html_entity_decode($m[1], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); }
+            if (preg_match('~<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)["\']~i', $html, $m)) { $metaDesc = trim(html_entity_decode($m[1], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); }
         }
 
-        // Telegraph API
-        $shortName = 'pp'.substr(sha1($author),0,6);
-        $accCh = curl_init('https://api.telegra.ph/createAccount');
-        $accFields = http_build_query(['short_name'=>$shortName,'author_name'=>$author]);
-        curl_setopt_array($accCh, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_POSTFIELDS => $accFields,
-        ]);
-        $accRes = curl_exec($accCh);
-        curl_close($accCh);
-        $accData = json_decode($accRes, true);
-        $token = $accData['result']['access_token'] ?? null;
-        if (!$token) { return null; }
+        // Generate title
+        $title = $metaTitle ?: ('Overview of ' . parse_url($pageUrl, PHP_URL_HOST));
+        $title = preg_replace('~["\']~','', $title); // remove quotes
+        if (mb_strlen($title) > 120) { $title = mb_substr($title, 0, 117) . '...'; }
 
-        // Basic HTML -> node conversion (very naive): wrap as paragraph
-        $safeHtml = strip_tags($content, '<p><h2><a><strong><em><ul><ol><li><br><b><i>');
-        // Telegraph expects nodes in JSON
-        $nodes = json_encode([[ 'tag'=>'p', 'children'=>[$safeHtml] ]], JSON_UNESCAPED_UNICODE);
+        // Generate author (two-word neutral)
+        $authorPool1 = ['Global','Digital','Open','Bright','Creative','Insight'];
+        $authorPool2 = ['Studio','Media','Press','Source','Hub','Works'];
+        $author = $authorPool1[array_rand($authorPool1)] . ' ' . $authorPool2[array_rand($authorPool2)];
 
-        $pageCh = curl_init('https://api.telegra.ph/createPage');
-        $pageFields = [
-            'access_token' => $token,
-            'title' => mb_substr($title,0,128),
-            'content' => $nodes,
-            'author_name' => $author,
-        ];
-        curl_setopt_array($pageCh, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_POSTFIELDS => http_build_query($pageFields),
-        ]);
-        $pageRes = curl_exec($pageCh);
-        curl_close($pageCh);
-        $pageData = json_decode($pageRes, true);
-        $url = $pageData['result']['url'] ?? null;
-        if (!$url) { return null; }
+        // Basic content synthesis (no AI). Build paragraphs using meta description + structured expansion.
+        $domain = parse_url($pageUrl, PHP_URL_HOST);
+        $baseIntro = $metaDesc ?: ("This article provides an accessible overview of resources available at $domain.");
+        $anchorText = $anchor !== '' ? $anchor : ($metaTitle ? preg_replace('~\s+~',' ', trim(mb_substr($metaTitle,0,60))) : 'source');
+        $linkHtml = '<a href="' . htmlspecialchars($pageUrl, ENT_QUOTES) . '">' . htmlspecialchars($anchorText, ENT_QUOTES) . '</a>';
+
+        $para = [];
+        $para[] = $baseIntro . ' Below you will find a structured summary prepared in ' . $language . ' language.';
+        $para[] = 'Key reference: ' . $linkHtml . '. This link is included once and integrated naturally into the context of the discussion.';
+        $para[] = 'Overview: We examine background, core ideas, practical aspects, and implications. Each section focuses on clarity and utility for readers seeking a concise yet useful understanding.';
+        $para[] = 'Background & Context: The topic associated with the referenced resource has evolved due to broader digital adoption, shifts in user expectations, and the need for reliable knowledge presentation. Readers benefit from distilled highlights.';
+        $para[] = 'Practical Considerations: When exploring related materials from ' . $domain . ' it is helpful to evaluate credibility, structural organization, and relevance. Consistent formatting, semantic headings, and clean linking improve retention.';
+        $para[] = 'Structured Insights: 1) Core concept explanation. 2) Supporting evidence or examples. 3) Implementation notes. 4) Common pitfalls and how to mitigate them. 5) Forward-looking perspective on adaptation and scaling.';
+        $para[] = 'Further Reflection: By synthesizing descriptive data with functional interpretation, content remains approachable. Emphasis on value, precision, and minimal redundancy helps maintain engagement and trust.';
+        $para[] = 'Conclusion: Readers can leverage the referenced material as a starting point for deeper exploration, adaptation in projects, or educational purposes while maintaining mindful evaluation of updates.';
+
+        // Expand to reach ~2500+ chars
+        $content = '';
+        while (mb_strlen($content) < 2600) {
+            foreach ($para as $p) { $content .= '<p>' . $p . '</p>'; if (mb_strlen($content) > 2600) break; }
+            if (mb_strlen($content) < 2600) { $para[] = 'Supplemental Note: Iterative refinement of informational assets encourages incremental quality improvements and fosters better knowledge ecosystems.'; }
+        }
+
+        // Insert simple H2 headings
+        $content = '<h2>Introduction</h2>' . $content;
+        $content = preg_replace('~(<p>Overview:)~','<h2>Overview</h2><p>$1',$content,1);
+        $content = preg_replace('~(<p>Background & Context:)~','<h2>Background</h2><p>$1',$content,1);
+        $content = preg_replace('~(<p>Practical Considerations:)~','<h2>Practical Considerations</h2><p>$1',$content,1);
+        $content = preg_replace('~(<p>Structured Insights:)~','<h2>Structured Insights</h2><p>$1',$content,1);
+        $content = preg_replace('~(<p>Conclusion:)~','<h2>Conclusion</h2><p>$1',$content,1);
+
+        // Ensure only single link
+        // Remove accidental duplicate raw urls
+        $content = preg_replace('~https?://[^\s<>]+~','',$content);
+        // Remove additional <a> tags except the first occurrence of our $linkHtml
+        if (substr_count($content, '<a ') > 1) {
+            $firstPos = strpos($content, '<a ');
+            $after = substr($content, $firstPos + 3);
+            $after = preg_replace('~<a [^>]+>.*?</a>~is','', $after);
+            $content = substr($content,0,$firstPos+3).$after; // crude but acceptable for heuristic
+        }
+
+        // Launch headless browser and publish
+        try {
+            $browserFactory = new $browserFactoryClass();
+            $browser = $browserFactory->createBrowser([
+                'headless' => true,
+                'noSandbox' => true,
+                'enableImages' => false,
+                'customFlags' => ['--disable-dev-shm-usage','--disable-gpu']
+            ]);
+            $page = $browser->createPage();
+            $page->navigate('https://telegra.ph/')->waitForNavigation();
+
+            // Title
+            $page->evaluate('document.querySelector(\'h1[data-placeholder="Title"]\').innerText = "";');
+            $page->evaluate('document.querySelector(\'h1[data-placeholder="Title"]\').focus();');
+            $page->keyboard()->typeText($title);
+
+            // Author
+            $page->evaluate('document.querySelector(\'address[data-placeholder="Your name"]\').focus();');
+            $page->keyboard()->typeText($author);
+
+            // Content
+            $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+            $page->evaluate('document.querySelector(\'p[data-placeholder="Your story..."]\').innerHTML = ' . $escaped . ';');
+
+            // Publish
+            $page->evaluate('document.querySelector(\'button.publish_button\').click();');
+            $page->waitForNavigation();
+            $finalUrl = $page->getCurrentUrl();
+            $browser->close();
+        } catch (\Throwable $e) {
+            if (isset($browser)) { try { $browser->close(); } catch (\Throwable $e2) {} }
+            return null;
+        }
+
+        if (!filter_var($finalUrl ?? '', FILTER_VALIDATE_URL)) { return null; }
 
         return [
-            'post_url' => $url,
+            'post_url' => $finalUrl,
             'author' => $author,
             'title' => $title,
         ];
