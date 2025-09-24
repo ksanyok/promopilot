@@ -294,7 +294,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 /* Footer */
 .footer { margin-top: 24px; padding: 20px 0; background: transparent; border-top: 1px solid var(--border); }
 .footer .container { max-width: 900px; }
-.footer-logo { width: 56px; opacity: .9; margin-bottom: 8px; filter: drop-shadow(0 2px 8px rgba(0,0,0,.2)); }
 
 /* =================== Animations =================== */
 .fade-in { animation: fadeIn .5s ease both; }
@@ -674,3 +673,46 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 :root[data-theme="light"] .tooltip { --pp-tooltip-bg: color-mix(in srgb, #ffffff 94%, var(--primary) 6%); }
 :root[data-theme="light"] .tooltip .tooltip-inner { color: #111827; box-shadow: 0 6px 16px -4px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.06) inset; }
 /* =================== End tooltip overrides =================== */
+
+/* ===== Modal Interaction Fix ===== */
+.modal { z-index: 2000; }
+.modal-backdrop { z-index: 1990; }
+.modal, .modal * { pointer-events: auto; }
+
+/* ===== Link Actions Redesign ===== */
+.icon-btn {
+  --icon-size: 34px;
+  width: var(--icon-size); height: var(--icon-size);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0;
+  line-height: 1;
+  transition: background .18s ease, color .18s ease, transform .12s ease;
+}
+.icon-btn:hover { background: color-mix(in srgb, var(--surface-2) 85%, var(--primary) 15%); color: var(--primary); }
+.icon-btn:active { transform: scale(.94); }
+.icon-btn.disabled, .icon-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn-publish {
+  background: linear-gradient(135deg, var(--accent), var(--primary));
+  color: #08121c;
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, black);
+  font-weight: 600;
+  display: inline-flex; align-items: center; gap: .4em;
+  box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.btn-publish:hover { filter: brightness(1.08); }
+.btn-publish:active { filter: brightness(.95); }
+.btn-publish .bi { font-size: 1rem; }
+
+/* Compact action cell spacing */
+.table-links td.text-end .icon-btn { margin-left: .25rem; }
+.table-links td.text-end .icon-btn:first-child { margin-left: 0; }
+
+/* Responsive tweak: hide publish text on very narrow screens */
+@media (max-width: 520px) {
+  .btn-publish span.label { display: none; }
+}

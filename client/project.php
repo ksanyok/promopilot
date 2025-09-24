@@ -330,7 +330,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         <th><?php echo __('Язык'); ?></th>
                                         <th><?php echo __('Пожелание'); ?></th>
                                         <th><?php echo __('Статус'); ?></th>
-                                        <th class="text-end" style="width:220px;">&nbsp;</th>
+                                        <th class="text-end" style="width:160px;">&nbsp;</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -373,17 +373,19 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
                                             <?php if ($status === 'pending'): ?>
-                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="btn-text"><?php echo __('Отменить'); ?></span></button>
+                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
                                             <?php elseif ($status === 'not_published'): ?>
-                                                <button type="button" class="btn btn-outline-success btn-sm me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>"><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликовать'); ?></span></button>
+                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>">
+                                                    <i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
+                                                </button>
                                             <?php else: ?>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликована'); ?></span></button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="d-none d-lg-inline"><?php echo __('Опубликована'); ?></span></button>
                                             <?php endif; ?>
                                             <?php if ($canEdit): ?>
-                                                <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
-                                                <button type="button" class="btn btn-outline-danger btn-sm action-remove" data-index="<?php echo (int)$index; ?>"><i class="bi bi-trash me-1"></i><span class="btn-text"><?php echo __('Удалить'); ?></span></button>
+                                                <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                                                <button type="button" class="icon-btn action-remove" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                                             <?php elseif ($status === 'pending'): ?>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled><i class="bi bi-lock me-1"></i><span class="btn-text"><?php echo __('Редактировать'); ?></span></button>
+                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>
                                             <?php endif; ?>
                                         </td>
                                     </tr>
@@ -445,7 +447,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <th><?php echo __('Язык'); ?></th>
                         <th><?php echo __('Пожелание'); ?></th>
                         <th><?php echo __('Статус'); ?></th>
-                        <th class="text-end" style="width:220px;">&nbsp;</th>
+                        <th class="text-end" style="width:160px;">&nbsp;</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -511,9 +513,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                 </td>
                 <td class="text-end">
-                    <button type="button" class="btn btn-outline-success btn-sm me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff me-1"></i><?php echo __('Опубликовать'); ?></button>
-                    <button type="button" class="btn btn-outline-primary btn-sm action-edit"><i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?></button>
-                    <button type="button" class="btn btn-outline-danger btn-sm action-remove-new"><?php echo __('Удалить'); ?></button>
+                    <button type="button" class="btn btn-sm btn-publish me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
+                    <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                    <button type="button" class="icon-btn action-remove-new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                 </td>`;
             tbody.appendChild(tr);
 
@@ -729,13 +731,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = true; b.classList.add('disabled'); });
                         const pubBtn = actionsCell.querySelector('.action-publish');
                         if (pubBtn) {
-                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="btn-text"><?php echo __('Отменить'); ?></span></button>';
+                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>' + actionsCell.innerHTML;
                         }
                     } else if (status === 'not_published') {
-                        // restore publish button, enable edit/remove
                         const cancelBtn = actionsCell.querySelector('.action-cancel');
                         if (cancelBtn) {
-                            cancelBtn.outerHTML = '<button type="button" class="btn btn-outline-success btn-sm me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff me-1"></i><span class="btn-text"><?php echo __('Опубликовать'); ?></span></button>';
+                            cancelBtn.outerHTML = '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
                         }
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = false; b.classList.remove('disabled'); });
                     }
