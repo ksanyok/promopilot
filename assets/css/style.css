@@ -743,3 +743,58 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 @media (max-width: 520px) {
   .btn-publish span.label { display: none; }
 }
+
+/* === Modern Publish Button === */
+.btn-publish {
+  position: relative;
+  --pub-grad-1: var(--primary);
+  --pub-grad-2: var(--primary-2);
+  --pub-radius: 14px;
+  --pub-glow: 0 6px 18px -4px color-mix(in srgb, var(--primary) 60%, transparent), 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent) inset;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pub-grad-1) 85%, #fff 5%), color-mix(in srgb, var(--pub-grad-2) 90%, #000 4%));
+  border: 1px solid color-mix(in srgb, var(--pub-grad-2) 60%, #000);
+  color: #0b1220;
+  font-weight: 600;
+  letter-spacing: .2px;
+  border-radius: var(--pub-radius);
+  padding: 6px 14px 6px 12px;
+  line-height: 1.1;
+  display: inline-flex; align-items: center; gap: 6px;
+  box-shadow: var(--pub-glow);
+  transition: background .35s, box-shadow .25s, transform .18s ease, filter .35s;
+  overflow: hidden;
+}
+.btn-publish i { color: #0b1220; transition: transform .5s cubic-bezier(.19,1,.22,1); }
+.btn-publish .label { font-weight: 600; }
+.btn-publish::before, .btn-publish::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+}
+/* Soft inner shine */
+.btn-publish::before { background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.6), transparent 55%); mix-blend-mode: overlay; opacity: .55; transition: opacity .4s; }
+/* Animated diagonal sheen */
+.btn-publish::after {
+  background: linear-gradient(120deg, transparent 0%, rgba(255,255,255,.55) 48%, rgba(255,255,255,.9) 52%, transparent 60%);
+  transform: translateX(-160%) skewX(-18deg);
+  filter: blur(.5px);
+  transition: transform 1s ease;
+}
+.btn-publish:hover {
+  filter: brightness(1.06) saturate(1.15);
+  box-shadow: 0 8px 24px -6px color-mix(in srgb, var(--primary) 65%, transparent), 0 0 0 1px color-mix(in srgb, var(--primary-2) 55%, transparent) inset;
+}
+.btn-publish:hover::after { transform: translateX(180%) skewX(-18deg); }
+.btn-publish:hover i { transform: scale(1.15) rotate(-8deg); }
+.btn-publish:active { transform: translateY(1px) scale(.97); filter: brightness(.95); }
+.btn-publish:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 3px; }
+.btn-publish:disabled, .btn-publish.disabled { opacity: .55; filter: grayscale(.2); cursor: not-allowed; box-shadow: none; }
+
+/* Light theme adjustment for good contrast */
+:root[data-theme="light"] .btn-publish { color: #0a1222; }
+:root[data-theme="light"] .btn-publish i { color: #0a1222; }
+
+/* Reduce motion respect */
+@media (prefers-reduced-motion: reduce) {
+  .btn-publish, .btn-publish::after { transition: none !important; }
+}
+/* Compact size already via .btn-sm; ensure min-height consistent */
+.btn-publish.btn-sm { min-height: 34px; }
