@@ -197,7 +197,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         user_id INT,
         name VARCHAR(100),
         description TEXT,
-        links TEXT DEFAULT '[]',
+        links TEXT,
         language VARCHAR(10) DEFAULT 'ru',
         wishes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
