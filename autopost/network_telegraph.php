@@ -25,7 +25,7 @@ return [
 
         // Dynamic dependency class name
         $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
-        if (!class_exists($browserFactoryClass)) { return null; }
+        if (!class_exists($browserFactoryClass)) { if (function_exists('autopost_log')) autopost_log('telegraph: BrowserFactory class missing'); return null; }
 
         // Fetch source page meta to build content heuristically
         $fetch_html = function(string $url): string {
@@ -106,6 +106,19 @@ return [
         try {
             $browserFactory = new $browserFactoryClass();
             $chromeBinary = getenv('CHROME_PATH');
+            // Try common paths if env not set
+            if (!$chromeBinary) {
+                $candidates = [
+                    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS Chrome
+                    '/Applications/Chromium.app/Contents/MacOS/Chromium',          // macOS Chromium
+                    '/opt/homebrew/bin/chromium',                                   // macOS Homebrew ARM
+                    '/opt/homebrew/bin/google-chrome',                              // macOS Homebrew
+                    '/usr/local/bin/chromium', '/usr/local/bin/chromium-browser',
+                    '/usr/local/bin/google-chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'
+                ];
+                foreach ($candidates as $p) { if (is_file($p) && is_executable($p)) { $chromeBinary = $p; break; } }
+                if (!$chromeBinary && function_exists('autopost_log')) autopost_log('telegraph: Chrome binary not found, relying on default lookup');
+            }
             $options = array_filter([
                 'headless' => true,
                 'noSandbox' => true,
@@ -114,6 +127,7 @@ return [
                 'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'],
                 'chromeBinary' => $chromeBinary ?: null,
             ]);
+            if (function_exists('autopost_log')) autopost_log('telegraph: launching Chrome ' . ($options['chromeBinary'] ?? 'auto'));
             $browser = $browserFactory->createBrowser($options);
             $page = $browser->createPage();
             $page->navigate('https://telegra.ph/')->waitForNavigation();
@@ -166,7 +180,7 @@ return [
                 $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
                 if ($csrf) break; usleep(250000); $attempts++;
             }
-            if (!$csrf) { $browser->close(); return null; }
+            if (!$csrf) { if (function_exists('autopost_log')) autopost_log('telegraph: csrf not found'); $browser->close(); return null; }
 
             usleep(400000);
             $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b) b.click(); })();');
@@ -175,10 +189,11 @@ return [
             $browser->close();
         } catch (\Throwable $e) {
             if (isset($browser)) { try { $browser->close(); } catch (\Throwable $e2) {} }
+            if (function_exists('autopost_log')) autopost_log('telegraph exception: ' . $e->getMessage());
             return null;
         }
 
-        if (!filter_var($finalUrl ?? '', FILTER_VALIDATE_URL)) { return null; }
+        if (!filter_var($finalUrl ?? '', FILTER_VALIDATE_URL)) { if (function_exists('autopost_log')) autopost_log('telegraph: finalUrl invalid'); return null; }
 
         return [
             'post_url' => $finalUrl,

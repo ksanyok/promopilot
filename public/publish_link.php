@@ -23,6 +23,7 @@ if (!verify_csrf()) {
 $project_id = (int)($_POST['project_id'] ?? 0);
 $url = trim($_POST['url'] ?? '');
 $action = trim($_POST['action'] ?? '');
+$anchor = trim($_POST['anchor'] ?? '');
 
 if (!$project_id || !$url || !filter_var($url, FILTER_VALIDATE_URL)) {
     echo json_encode(['ok'=>false,'error'=>'BAD_INPUT']);
@@ -46,23 +47,36 @@ if (!is_admin() && (int)$proj['user_id'] !== (int)$_SESSION['user_id']) {
     $conn->close(); exit;
 }
 
-// Ищем анкор, язык, пожелание из структуры links
-$anchor='';
-$links = json_decode($proj['links'] ?? '[]', true) ?: [];
-if (is_array($links)) {
-    foreach ($links as $lnk) {
-        if (is_array($lnk) && isset($lnk['url']) && trim($lnk['url']) === $url) {
-            $anchor = trim($lnk['anchor'] ?? '');
-            break;
+// Если anchor не передан из клиента — пробуем найти его в структуре links (первое совпадение)
+if ($anchor === '') {
+    $links = json_decode($proj['links'] ?? '[]', true) ?: [];
+    if (is_array($links)) {
+        foreach ($links as $lnk) {
+            if (is_array($lnk) && isset($lnk['url']) && trim($lnk['url']) === $url) {
+                $anchor = trim($lnk['anchor'] ?? '');
+                break;
+            }
+            if (is_string($lnk) && $lnk === $url) { $anchor=''; break; }
         }
-        if (is_string($lnk) && $lnk === $url) { $anchor=''; break; }
     }
 }
 
+// Утилита: подготовка SELECT по наличию/отсутствию anchor
+$selectPub = function(mysqli $conn, int $project_id, string $url, string $anchor) {
+    if ($anchor === '') {
+        $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? AND (anchor IS NULL OR anchor = '') LIMIT 1");
+        $stmt->bind_param('is', $project_id, $url);
+        return $stmt;
+    } else {
+        $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? AND anchor = ? LIMIT 1");
+        $stmt->bind_param('iss', $project_id, $url, $anchor);
+        return $stmt;
+    }
+};
+
 if ($action === 'publish') {
     // Уже есть?
-    $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
-    $stmt->bind_param('is', $project_id, $url);
+    $stmt = $selectPub($conn, $project_id, $url, $anchor);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
@@ -71,7 +85,7 @@ if ($action === 'publish') {
             echo json_encode(['ok'=>false,'error'=>'ALREADY_PUBLISHED']);
             $conn->close(); exit;
         }
-        echo json_encode(['ok'=>true,'status'=>'pending']);
+        echo json_encode(['ok'=>true,'status'=>'pending','anchor'=>$anchor]);
         $conn->close(); exit;
     }
     $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor) VALUES (?,?,?)");
@@ -88,9 +102,9 @@ if ($action === 'publish') {
             $autoResult = null; // ignore
         }
         if (is_array($autoResult) && !empty($autoResult['post_url'])) {
-            echo json_encode(['ok'=>true,'status'=>'published','data'=>$autoResult]);
+            echo json_encode(['ok'=>true,'status'=>'published','data'=>$autoResult,'anchor'=>$anchor]);
         } else {
-            echo json_encode(['ok'=>true,'status'=>'pending']);
+            echo json_encode(['ok'=>true,'status'=>'pending','anchor'=>$anchor]);
         }
     } else {
         $stmt->close();
@@ -100,8 +114,7 @@ if ($action === 'publish') {
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url)
-    $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
-    $stmt->bind_param('is', $project_id, $url);
+    $stmt = $selectPub($conn, $project_id, $url, $anchor);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
@@ -116,7 +129,7 @@ if ($action === 'publish') {
     $stmt = $conn->prepare("DELETE FROM publications WHERE id = ? LIMIT 1");
     $stmt->bind_param('i', $row['id']);
     if ($stmt->execute()) {
-        echo json_encode(['ok'=>true,'status'=>'not_published']);
+        echo json_encode(['ok'=>true,'status'=>'not_published','anchor'=>$anchor]);
     } else {
         echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
     }
@@ -128,3 +141,4 @@ if ($action === 'publish') {
     $conn->close();
     exit;
 }
+?>
