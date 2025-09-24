@@ -24,6 +24,7 @@ function autopost_load_all(): array {
         autopost_log('Directory missing: ' . $dir);
         return $cache;
     }
+    clearstatcache(true, $dir);
     $pattern = $dir . '/network_*.php';
     $files = glob($pattern) ?: [];
     if (empty($files)) { autopost_log('No plugin files found by pattern ' . $pattern); }
