@@ -23,6 +23,7 @@ $activeGlobal = get_global_active_network_slugs();
       <li><a href="<?php echo pp_url('admin/projects.php'); ?>" class="menu-item"><i class="bi bi-folder2-open me-2"></i><?php echo __('Проекты'); ?></a></li>
       <li><a href="<?php echo pp_url('admin/settings.php'); ?>" class="menu-item"><i class="bi bi-gear me-2"></i><?php echo __('Основные настройки'); ?></a></li>
       <li><a href="<?php echo pp_url('admin/networks.php'); ?>" class="menu-item"><i class="bi bi-diagram-3 me-2"></i><?php echo __('Сети автопостинга'); ?></a></li>
+      <li><a href="<?php echo pp_url('admin/diagnostics.php'); ?>" class="menu-item"><i class="bi bi-activity me-2"></i><?php echo __('Диагностика систем'); ?></a></li>
       <?php if ($updateStatus['is_new']): ?><li><a href="<?php echo pp_url('public/update.php'); ?>" class="menu-item"><i class="bi bi-arrow-repeat me-2"></i><?php echo __('Обновление'); ?></a></li><?php endif; ?>
     </ul>
   </div>
