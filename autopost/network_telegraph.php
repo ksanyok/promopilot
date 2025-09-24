@@ -104,64 +104,72 @@ return [
 
         // Launch headless browser and publish
         try {
-            $browserFactoryClass = 'HeadlessChromium\\BrowserFactory';
-            if (!class_exists($browserFactoryClass)) { return null; }
             $browserFactory = new $browserFactoryClass();
             $chromeBinary = getenv('CHROME_PATH');
-            $browser = $browserFactory->createBrowser(array_filter([
+            $options = array_filter([
                 'headless' => true,
                 'noSandbox' => true,
                 'enableImages' => false,
+                'userAgent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'],
                 'chromeBinary' => $chromeBinary ?: null,
-            ]));
+            ]);
+            $browser = $browserFactory->createBrowser($options);
             $page = $browser->createPage();
             $page->navigate('https://telegra.ph/')->waitForNavigation();
 
-            // Wait for title field to appear (retry loop)
-            $maxWaitMs = 5000; $step = 200; $elapsed = 0; $titleSelectorReady = false;
-            while ($elapsed < $maxWaitMs) {
-                $exists = $page->evaluate('return !!document.querySelector("h1[data-placeholder=\\"Title\\"]")')->getReturnValue();
-                if ($exists) { $titleSelectorReady = true; break; }
-                usleep($step * 1000); $elapsed += $step;
+            // Wait for form + csrf (token might appear after short delay)
+            $csrf = null; $attempts=0;
+            while ($attempts < 20) { // up to ~5s
+                $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
+                if ($csrf) break; usleep(250000); $attempts++;
             }
-            if (!$titleSelectorReady) { $browser->close(); return null; }
 
-            // Title typing (clear then type to trigger events)
-            $page->evaluate('const el=document.querySelector("h1[data-placeholder=\\"Title\\"]"); el.innerText=""; el.focus();');
+            // Title
+            $page->evaluate('const el=document.querySelector("h1[data-placeholder=\\"Title\\"]"); if(el){el.innerText=""; el.focus();}');
             $page->keyboard()->typeText($title);
-            usleep(150000); // 150ms
+            usleep(200000);
 
             // Author
-            $page->evaluate('const a=document.querySelector("address[data-placeholder=\\"Your name\\"]"); if(a){a.focus(); a.textContent="";}');
+            $page->evaluate('const a=document.querySelector("address[data-placeholder=\\"Your name\\"]"); if(a){a.textContent=""; a.focus();}');
             $page->keyboard()->typeText($author);
-            usleep(120000);
+            usleep(200000);
 
-            // Content insertion using execCommand to fire input events + single link already prepared
-            $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
-            $page->evaluate('(function(html){
-                var target = document.querySelector("p[data-placeholder=\\"Your story...\\"]");
-                if(!target){ target = document.querySelector("[data-placeholder]"); }
-                if(!target){ return; }
-                target.focus();
-                try { document.execCommand("selectAll", false, null); } catch(e) {}
-                try { document.execCommand("insertHTML", false, html); } catch(e) { target.innerHTML = html; }
-                var evt = new Event("input", {bubbles:true});
-                target.dispatchEvent(evt);
-            })(' . $escaped . ');');
-            usleep(300000);
-
-            // Ensure CSRF hidden input exists (just a sanity check)
-            $hasCsrf = $page->evaluate('return !!document.querySelector("input[name=csrf]");')->getReturnValue();
-            if (!$hasCsrf) {
-                // Sometimes Telegraph loads it lazily; wait a bit more
-                usleep(500000);
-                $hasCsrf = $page->evaluate('return !!document.querySelector("input[name=csrf]");')->getReturnValue();
+            // Content insertion strategy
+            $fast = getenv('TELEGRAPH_FAST') === '1';
+            if ($fast) {
+                $escaped = json_encode($content, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+                $page->evaluate('(function(html){ var t=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(!t) return; t.focus(); try{document.execCommand("selectAll",false,null);}catch(e){}; try{document.execCommand("insertHTML",false,html);}catch(e){t.innerHTML=html;} ["input","keyup","change"].forEach(e=>t.dispatchEvent(new Event(e,{bubbles:true}))); })( ' . $escaped . ' );');
+            } else {
+                // Slow typing to trigger all events and avoid CSRF issues
+                $plain = $content;
+                // Replace headings with uppercase lines + blank line
+                $plain = preg_replace_callback('~<h2>(.*?)</h2>~i', function($m){ return "\n".strtoupper(trim(strip_tags($m[1])))."\n\n"; }, $plain);
+                // Strip remaining tags except <a>
+                $plain = strip_tags($plain, '<a>');
+                // Convert links to text anchor (Telegraph will preserve clickable link when typed fully) -> keep HTML anchor? We'll just keep plain anchor text + URL
+                $plain = preg_replace_callback('~<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>~i', function($m){ return $m[2].' ('.$m[1].')'; }, $plain);
+                $paras = preg_split('~\n{2,}~', $plain);
+                $page->evaluate('var c=document.querySelector("p[data-placeholder=\\"Your story...\\"]"); if(c){c.focus();}');
+                foreach ($paras as $idx=>$p) {
+                    $line = trim($p);
+                    if ($line==='') continue;
+                    $page->keyboard()->typeText($line);
+                    usleep(80000);
+                    if ($idx < count($paras)-1) { $page->keyboard()->typeRawKey('\n'); usleep(80000); $page->keyboard()->typeRawKey('\n'); }
+                }
             }
-            if (!$hasCsrf) { $browser->close(); return null; }
 
-            // Click publish via JS to avoid overlay issues
-            $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b){ b.click(); } })();');
+            // Poll again for csrf (typing often triggers its creation)
+            $csrf = null; $attempts=0;
+            while ($attempts < 40) { // up to ~10s total
+                $csrf = $page->evaluate('var i=document.querySelector("input[name=csrf]"); return i? i.value : null;')->getReturnValue();
+                if ($csrf) break; usleep(250000); $attempts++;
+            }
+            if (!$csrf) { $browser->close(); return null; }
+
+            usleep(400000);
+            $page->evaluate('(function(){ const b=document.querySelector("button.publish_button"); if(b) b.click(); })();');
             $page->waitForNavigation();
             $finalUrl = $page->getCurrentUrl();
             $browser->close();
