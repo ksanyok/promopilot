@@ -313,11 +313,20 @@ function get_csrf_token(): string {
 }
 
 function verify_csrf(): bool {
-    return true; // CSRF отключён по требованию
+    // Allow non-POST methods without CSRF
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    if ($method !== 'POST') return true;
+    // Validate token from POST against session
+    $token = (string)($_POST['csrf_token'] ?? '');
+    if ($token === '') return false;
+    $sessionToken = (string)($_SESSION['csrf_token'] ?? '');
+    if ($sessionToken === '') return false;
+    return hash_equals($sessionToken, $token);
 }
 
 function csrf_field(): string {
-    return ''; // не выводим токен
+    $token = htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    return '<input type="hidden" name="csrf_token" value="' . $token . '">';
 }
 
 function get_action_secret(): string {

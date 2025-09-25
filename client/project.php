@@ -711,7 +711,16 @@ document.addEventListener('DOMContentLoaded', function() {
         return s.replace(/["']/g, c => ({'"':'&quot;','\'':'&#39;'}[c]));
     }
 
-    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    // CSRF helpers: resolve token from hidden input, window, or meta tag
+    function getCsrfToken() {
+        const input = document.querySelector('input[name="csrf_token"]');
+        if (input && input.value) return input.value;
+        if (window.CSRF_TOKEN) return window.CSRF_TOKEN;
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content) return meta.content;
+        return '';
+    }
+
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
 
     function setButtonLoading(btn, loading) {
@@ -727,12 +736,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     async function sendPublishAction(btn, url, action) {
-        if (!csrfTokenInput) { alert('CSRF missing'); return; }
+        const csrf = getCsrfToken();
+        if (!csrf) { alert('CSRF missing'); return; }
         if (!url) { alert('<?php echo __('Сначала сохраните проект чтобы опубликовать новую ссылку.'); ?>'); return; }
         setButtonLoading(btn, true);
         try {
             const formData = new FormData();
-            formData.append('csrf_token', csrfTokenInput.value);
+            formData.append('csrf_token', csrf);
             formData.append('project_id', PROJECT_ID);
             formData.append('url', url);
             formData.append('action', action);
