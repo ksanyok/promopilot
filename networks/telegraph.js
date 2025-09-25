@@ -4,6 +4,8 @@
 // Reorder requires so logging is initialized before loading optional deps
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
+const fsp = fs.promises;
 
 function ensureDirSync(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
@@ -91,6 +93,111 @@ try {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function pathExists(filePath) {
+  if (!filePath) return false;
+  try {
+    await fsp.access(filePath, fs.constants.X_OK);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function collectChromeCandidates() {
+  const candidates = [];
+  const envVars = ['PUPPETEER_EXECUTABLE_PATH', 'PP_CHROME_PATH', 'CHROME_PATH', 'GOOGLE_CHROME_BIN'];
+  envVars.forEach((key) => {
+    const val = process.env[key];
+    if (val && val.trim()) { candidates.push(val.trim()); }
+  });
+
+  const commands = [
+    'command -v google-chrome',
+    'command -v google-chrome-stable',
+    'command -v chrome',
+    'command -v chromium',
+    'command -v chromium-browser',
+    'command -v headless-shell',
+    'which google-chrome',
+    'which chromium',
+  ];
+  commands.forEach((cmd) => {
+    try {
+      const out = execSync(`/bin/bash -lc "${cmd}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (out) {
+        out.split(/\s+/).forEach((entry) => {
+          if (entry && entry.includes('/')) { candidates.push(entry.trim()); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+  });
+
+  const globCandidates = [
+    '/usr/local/bin/google-chrome',
+    '/usr/local/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/bin/google-chrome',
+    '/bin/chromium',
+    '/opt/google/chrome/google-chrome',
+    '/opt/google/chrome/chrome',
+    '/opt/chrome/chrome',
+    '/snap/bin/chromium',
+    '/usr/local/sbin/google-chrome',
+    `${process.env.HOME || ''}/.local/bin/google-chrome`,
+    `${process.env.HOME || ''}/bin/google-chrome`,
+  ];
+
+  const patterns = [
+    '/opt/alt/nodejs*/usr/bin/google-chrome',
+    '/opt/alt/nodejs*/usr/bin/chromium',
+    '/opt/alt/nodejs*/bin/google-chrome',
+    '/opt/alt/chrome*/bin/google-chrome',
+    '/opt/chrome*/bin/google-chrome',
+    '/opt/google/chrome*/chrome',
+    `${process.env.HOME || ''}/.nix-profile/bin/google-chrome`,
+    `${process.env.HOME || ''}/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome`,
+  ];
+
+  patterns.forEach((pattern) => {
+    try {
+      const out = execSync(`/bin/bash -lc "ls -1 ${pattern} 2>/dev/null"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (out) {
+        out.split(/\r?\n/).forEach((entry) => {
+          if (entry) { candidates.push(entry.trim()); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+  });
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function resolveChromeExecutable(puppeteerLib) {
+  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.PP_CHROME_PATH || process.env.CHROME_PATH || process.env.GOOGLE_CHROME_BIN;
+  if (envPath && await pathExists(envPath)) {
+    return { path: envPath, source: 'env', candidates: [envPath] };
+  }
+
+  if (puppeteerLib && typeof puppeteerLib.executablePath === 'function') {
+    const bundled = puppeteerLib.executablePath();
+    if (await pathExists(bundled)) {
+      return { path: bundled, source: 'bundled', candidates: [bundled] };
+    }
+  }
+
+  const candidates = collectChromeCandidates();
+  for (const cand of candidates) {
+    if (await pathExists(cand)) {
+      return { path: cand, source: 'detected', candidates };
+    }
+  }
+
+  return { path: null, source: 'missing', candidates };
+}
+
 async function generateTextWithChat(prompt, openaiApiKey) {
   const started = Date.now();
   const payload = {
@@ -168,17 +275,28 @@ async function publishToTelegraph(job) {
 
   const cleanTitle = title.replace(/["']+/g, '').trim() || 'PromoPilot Article';
   logLine('Launching browser');
-  const launchOpts = { headless: 'new' };
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    logLine('Using custom Chromium executable', { path: process.env.PUPPETEER_EXECUTABLE_PATH });
+
+  const chromeInfo = await resolveChromeExecutable(puppeteerLib);
+  if (!chromeInfo.path) {
+    logLine('Chrome resolve failed', { candidates: chromeInfo.candidates });
+    throw new Error(`Chrome executable not found. Checked: ${chromeInfo.candidates && chromeInfo.candidates.length ? chromeInfo.candidates.join(', ') : 'none'}`);
   }
+  logLine('Chrome selected', { path: chromeInfo.path, source: chromeInfo.source });
+
+  const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
-    launchOpts.args = process.env.PUPPETEER_ARGS.split(/\s+/).filter(Boolean);
-  } else {
-    launchOpts.args = ['--no-sandbox', '--disable-setuid-sandbox'];
+    launchArgs.push(...process.env.PUPPETEER_ARGS.split(/\s+/).filter(Boolean));
   }
-  const browser = await puppeteerLib.launch(launchOpts);
+  if (Array.isArray(job.launchArgs)) {
+    launchArgs.push(...job.launchArgs.filter(Boolean));
+  }
+  const uniqueArgs = Array.from(new Set(launchArgs));
+
+  const browser = await puppeteerLib.launch({
+    headless: 'new',
+    executablePath: chromeInfo.path,
+    args: uniqueArgs,
+  });
   let page;
   try {
     page = await browser.newPage();
@@ -263,4 +381,3 @@ function readJob() {
     process.exit(1);
   }
 })();
-
