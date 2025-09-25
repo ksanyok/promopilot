@@ -43,31 +43,45 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $message = __('Ошибка сохранения архива.');
                     } else {
                         $zip = new ZipArchive();
-                        if ($zip->open($tempZip)) {
+                        if (class_exists('ZipArchive') && $zip->open($tempZip)) {
                             $extractTo = PP_ROOT_PATH . '/temp_update_' . time();
                             if (!is_dir($extractTo)) mkdir($extractTo, 0755, true);
                             if ($zip->extractTo($extractTo)) {
                                 $zip->close();
                                 $source = $extractTo . '/promopilot-' . $sha;
                                 if (is_dir($source)) {
-                                    // Функция для копирования директории
-                                    function copyDir($src, $dst) {
-                                        $dir = opendir($src);
-                                        if (!is_dir($dst)) mkdir($dst, 0755, true);
-                                        while (false !== ($file = readdir($dir))) {
-                                            if ($file != '.' && $file != '..') {
+                                    // Функция для копирования директории с исключениями
+                                    if (!function_exists('pp_copy_dir_update')) {
+                                        function pp_copy_dir_update($src, $dst, array $skip = []) {
+                                            $src = rtrim($src, '/');
+                                            $dst = rtrim($dst, '/');
+                                            $dir = opendir($src);
+                                            if (!is_dir($dst)) mkdir($dst, 0755, true);
+                                            while (false !== ($file = readdir($dir))) {
+                                                if ($file === '.' || $file === '..') continue;
                                                 $srcPath = $src . '/' . $file;
                                                 $dstPath = $dst . '/' . $file;
+                                                // Список исключений (относительные пути от корня проекта)
+                                                $rel = trim(str_replace(PP_ROOT_PATH, '', $dstPath), '/');
+                                                $relLower = strtolower($rel);
+                                                $isSkipped = in_array($relLower, $skip, true)
+                                                    || (substr($relLower, 0, 15) === 'config/sessions')
+                                                    || (substr($relLower, 0, 4) === 'logs')
+                                                    || (substr($relLower, 0, 12) === 'node_modules');
+                                                if ($isSkipped) { continue; }
                                                 if (is_dir($srcPath)) {
-                                                    copyDir($srcPath, $dstPath);
+                                                    pp_copy_dir_update($srcPath, $dstPath, $skip);
                                                 } else {
+                                                    // Не перезаписывать локальный конфиг и установщик
+                                                    if (in_array($relLower, ['config/config.php','installer.php'], true)) continue;
                                                     copy($srcPath, $dstPath);
                                                 }
                                             }
+                                            closedir($dir);
                                         }
-                                        closedir($dir);
                                     }
-                                    copyDir($source, PP_ROOT_PATH);
+                                    // Применяем копирование с безопасными исключениями
+                                    pp_copy_dir_update($source, PP_ROOT_PATH, ['config/config.php','installer.php']);
                                     rmdir_recursive($extractTo);
                                     unlink($tempZip);
                                     $message = __('Файлы обновлены успешно.');
@@ -79,7 +93,51 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 $message = __('Ошибка распаковки архива.');
                             }
                         } else {
-                            $message = __('Ошибка открытия архива.');
+                            // Fallback: try system unzip if available
+                            $extractTo = PP_ROOT_PATH . '/temp_update_' . time();
+                            if (!is_dir($extractTo)) mkdir($extractTo, 0755, true);
+                            $unzipCmd = 'unzip -q ' . escapeshellarg($tempZip) . ' -d ' . escapeshellarg($extractTo) . ' 2>&1';
+                            @exec($unzipCmd, $outUnzip, $codeUnzip);
+                            if ($codeUnzip === 0) {
+                                $source = $extractTo . '/promopilot-' . $sha;
+                                if (is_dir($source)) {
+                                    if (!function_exists('pp_copy_dir_update')) {
+                                        function pp_copy_dir_update($src, $dst, array $skip = []) {
+                                            $src = rtrim($src, '/');
+                                            $dst = rtrim($dst, '/');
+                                            $dir = opendir($src);
+                                            if (!is_dir($dst)) mkdir($dst, 0755, true);
+                                            while (false !== ($file = readdir($dir))) {
+                                                if ($file === '.' || $file === '..') continue;
+                                                $srcPath = $src . '/' . $file;
+                                                $dstPath = $dst . '/' . $file;
+                                                $rel = trim(str_replace(PP_ROOT_PATH, '', $dstPath), '/');
+                                                $relLower = strtolower($rel);
+                                                $isSkipped = in_array($relLower, $skip, true)
+                                                    || (substr($relLower, 0, 15) === 'config/sessions')
+                                                    || (substr($relLower, 0, 4) === 'logs')
+                                                    || (substr($relLower, 0, 12) === 'node_modules');
+                                                if ($isSkipped) { continue; }
+                                                if (is_dir($srcPath)) {
+                                                    pp_copy_dir_update($srcPath, $dstPath, $skip);
+                                                } else {
+                                                    if (in_array($relLower, ['config/config.php','installer.php'], true)) continue;
+                                                    copy($srcPath, $dstPath);
+                                                }
+                                            }
+                                            closedir($dir);
+                                        }
+                                    }
+                                    pp_copy_dir_update($source, PP_ROOT_PATH, ['config/config.php','installer.php']);
+                                    rmdir_recursive($extractTo);
+                                    unlink($tempZip);
+                                    $message = __('Файлы обновлены успешно.');
+                                } else {
+                                    $message = __('Ошибка: директория с файлами не найдена в архиве.');
+                                }
+                            } else {
+                                $message = __('Ошибка открытия архива.');
+                            }
                         }
                     }
                 }
