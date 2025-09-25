@@ -118,6 +118,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_update'])) {
         }
         if (empty($errors)) {
             ensure_schema();
+            // Auto-prepare runtime after update (best-effort)
+            if (function_exists('pp_ensure_node_runtime_installed')) { @pp_ensure_node_runtime_installed(); }
+            if (function_exists('pp_ensure_chromium_available')) { @pp_ensure_chromium_available(); }
             $message = __('Обновление завершено.') . ' ' . __('Текущая версия') . ': ' . htmlspecialchars(get_version());
         }
     }

@@ -272,6 +272,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         setup_database($host, $user, $pass, $db, $admin_user, $admin_pass, $errors);
     }
 
+    // 4) Автоподготовка node_runtime и Chromium (best-effort)
+    if (!$errors) {
+        $fn = __DIR__ . '/includes/functions.php';
+        if (file_exists($fn)) {
+            require_once $fn;
+            $nr = function_exists('pp_ensure_node_runtime_installed') ? @pp_ensure_node_runtime_installed() : false;
+            logmsg('node_runtime install: ' . ($nr ? 'OK' : 'SKIP/FAIL'));
+            $cr = function_exists('pp_ensure_chromium_available') ? @pp_ensure_chromium_available() : false;
+            logmsg('chromium ensure: ' . ($cr ? 'OK' : 'SKIP'));
+        } else {
+            logmsg('functions.php not found for runtime setup step.');
+        }
+    }
+
     if (!$errors) {
         $successOutput .= '<div style="padding:12px;border:1px solid #28a745;color:#155724;background:#d4edda;margin-bottom:12px;">Установка завершена!</div>';
         $successOutput .= '<p><a href="auth/login.php">Перейти на страницу входа</a></p>';

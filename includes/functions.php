@@ -412,6 +412,7 @@ function set_global_active_network_slugs(array $slugs): bool {
 
 function get_openai_api_key(): string {
     return trim((string)get_setting('openai_api_key', ''));
+
 }
 
 // Add: generation mode getter ("local" for Наш ИИ or "openai")
@@ -521,6 +522,32 @@ function rmdir_recursive($dir) {
         }
     }
     rmdir($dir);
+}
+
+// Small helper: resolve an executable to absolute, existing, executable path
+function pp_canonical_executable(string $bin): string {
+    $bin = trim($bin);
+    if ($bin === '') return '';
+    // Absolute or relative with slash provided
+    if (strpos($bin, '/') !== false) {
+        return (@is_file($bin) && @is_executable($bin)) ? $bin : '';
+    }
+    // Try command -v / which
+    if (function_exists('shell_exec')) {
+        $p = trim((string)@shell_exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null'));
+        if ($p && @is_file($p) && @is_executable($p)) return $p;
+        $p = trim((string)@shell_exec('which ' . escapeshellarg($bin) . ' 2>/dev/null'));
+        if ($p && @is_file($p) && @is_executable($p)) return $p;
+    }
+    // Walk PATH
+    $pathEnv = getenv('PATH') ?: '';
+    foreach (explode(PATH_SEPARATOR, $pathEnv) as $dir) {
+        $dir = trim($dir);
+        if ($dir === '') continue;
+        $cand = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $bin;
+        if (@is_file($cand) && @is_executable($cand)) return $cand;
+    }
+    return '';
 }
 
 // ===== Global runtime helpers for headless browser automation =====
@@ -720,22 +747,37 @@ function pp_resolve_npm_binary(bool $ignoreOverrides = false): string {
 }
 
 /**
- * Resolve command like 'node' to an absolute, executable path if possible.
+ * Resolve npx binary path from settings/env/common locations.
  */
-function pp_canonical_executable(string $bin): string {
-    $bin = trim($bin);
-    if ($bin === '') return '';
-    // Absolute or relative path with slash
-    if (strpos($bin, '/') !== false) {
-        return (@is_file($bin) && @is_executable($bin)) ? $bin : '';
+function pp_resolve_npx_binary(bool $ignoreOverrides = false): string {
+    // Admin-configured override first
+    try {
+        if (!$ignoreOverrides) {
+            $cfg = trim((string)get_setting('npx_binary_path', ''));
+            if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+        }
+    } catch (Throwable $e) { /* ignore */ }
+
+    // Try sibling next to npm
+    $npmBin = function_exists('pp_resolve_npm_binary') ? pp_resolve_npm_binary($ignoreOverrides) : '';
+    $candidates = [];
+    if ($npmBin) {
+        $dir = dirname($npmBin);
+        foreach ([$dir . '/npx', $dir . '/npx-cli', $dir . '/npx.cmd'] as $cand) { $candidates[] = $cand; }
     }
-    // Try command -v / which
-    $out = @shell_exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null');
-    if (!is_string($out) || trim($out) === '') {
-        $out = @shell_exec('which ' . escapeshellarg($bin) . ' 2>/dev/null');
+    // PATH-based
+    foreach (['npx'] as $cand) { $candidates[] = $cand; }
+    // Common locations
+    foreach (['/usr/local/bin/npx','/usr/bin/npx','/bin/npx','/opt/cpanel/ea-nodejs20/bin/npx','/opt/alt/alt-nodejs20/root/usr/bin/npx'] as $cand) { $candidates[] = $cand; }
+
+    $seen = [];
+    foreach ($candidates as $bin) {
+        if (!$bin || isset($seen[$bin])) continue; $seen[$bin] = true;
+        $abs = pp_canonical_executable($bin);
+        if (!$abs) continue;
+        $out = @shell_exec(escapeshellcmd($abs) . ' --version 2>&1');
+        if (is_string($out) && trim($out) !== '') return $abs;
     }
-    $path = trim((string)$out);
-    if ($path !== '' && @is_file($path) && @is_executable($path)) return $path;
     return '';
 }
 
@@ -769,25 +811,82 @@ function pp_autodetect_and_save_binaries(): array {
 }
 
 /**
+ * Attempt to install Chrome for Testing via Puppeteer's CLI (npx puppeteer browsers install chrome).
+ * Returns true if a Chrome binary becomes available.
+ */
+function pp_install_chrome_with_puppeteer_cli(int $timeout = 600): bool {
+    // Only meaningful on Linux servers generally used for hosting
+    $uname = function_exists('php_uname') ? strtolower((string)@php_uname()) : strtolower(PHP_OS);
+    if (strpos($uname, 'linux') === false) { return false; }
+
+    $runtimeDir = PP_ROOT_PATH . '/node_runtime';
+    $nodeModules = $runtimeDir . '/node_modules';
+    if (!is_dir($runtimeDir)) { @mkdir($runtimeDir, 0777, true); }
+
+    // Ensure node dependencies so that puppeteer package exists
+    @pp_ensure_node_runtime_installed();
+
+    $npx = pp_resolve_npx_binary();
+    if ($npx === '') { return false; }
+
+    // Prepare cache dir and environment
+    $ppCacheDir = $nodeModules . '/puppeteer/.cache/puppeteer';
+    if (!is_dir($ppCacheDir)) { @mkdir($ppCacheDir, 0777, true); }
+
+    $env = [];
+    foreach (array_merge($_ENV, $_SERVER) as $k => $v) { if (is_string($k) && is_scalar($v)) { $env[$k] = (string)$v; } }
+    $env['PUPPETEER_CACHE_DIR'] = $ppCacheDir;
+
+    $cmd = [$npx, '--yes', 'puppeteer', 'browsers', 'install', 'chrome'];
+    $desc = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+    $proc = @proc_open($cmd, $desc, $pipes, $runtimeDir, $env);
+    if (!is_resource($proc)) { return false; }
+    @fclose($pipes[0]); @stream_set_blocking($pipes[1], false); @stream_set_blocking($pipes[2], false);
+    $start = microtime(true); $out=''; $err='';
+    while (true) {
+        $st = @proc_get_status($proc);
+        $out .= (string)@stream_get_contents($pipes[1]);
+        $err .= (string)@stream_get_contents($pipes[2]);
+        if (!$st['running']) break;
+        if ((microtime(true)-$start) > $timeout) { @proc_terminate($proc, 9); break; }
+        usleep(200000);
+    }
+    @fclose($pipes[1]); @fclose($pipes[2]);
+    @proc_close($proc);
+
+    clearstatcache();
+    // Verify we can resolve chrome now
+    $bin = pp_resolve_chrome_binary(true) ?: pp_resolve_chrome_binary(false);
+    return ($bin !== '');
+}
+
+/**
  * Ensure a Chromium/Chrome binary is available.
- * If none detected, automatically downloads Chrome for Testing (linux64) and extracts it under node_runtime/chrome/.
- * Returns true if a binary is available after the call, false otherwise.
+ * If none detected, tries installing via Puppeteer CLI, then fallback to direct download.
  */
 function pp_ensure_chromium_available(): bool {
     $existing = pp_resolve_chrome_binary();
     if ($existing !== '') return true;
 
-    // Only attempt auto-download on Linux x86_64-like systems (most shared hostings)
+    // Only attempt auto-actions on Linux x86_64-like systems
     $uname = function_exists('php_uname') ? strtolower((string)@php_uname()) : strtolower(PHP_OS);
     $isLinux = strpos($uname, 'linux') !== false;
     if (!$isLinux) {
         return false; // skip auto-download on non-linux
     }
 
+    // First, try via Puppeteer CLI (npx puppeteer browsers install chrome)
+    try {
+        if (pp_install_chrome_with_puppeteer_cli()) {
+            $resolved = pp_resolve_chrome_binary();
+            if ($resolved !== '') return true;
+        }
+    } catch (Throwable $e) { /* ignore and fallback */ }
+
+    // Fallback: direct download Chrome for Testing
     $root = PP_ROOT_PATH . '/node_runtime/chrome';
     if (!is_dir($root)) { @mkdir($root, 0777, true); }
 
-    // Get last known good Chrome for Testing stable linux64
     $metaUrl = 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json';
     $ctx = stream_context_create([
         'http' => ['timeout' => 20, 'header' => "User-Agent: PromoPilot/1.0\r\n"],
@@ -805,13 +904,10 @@ function pp_ensure_chromium_available(): bool {
     }
 
     if ($url === '') {
-        // Fallback to a well-known pattern using stable version if present
-        // If we couldn't fetch metadata, give up quietly
-        return false;
+        return (pp_resolve_chrome_binary() !== '');
     }
 
     $tmpZip = $root . '/chrome-linux64.zip.tmp';
-    // Download
     $ok = false;
     $in = @fopen($url, 'rb', false, $ctx);
     if ($in) {
@@ -826,20 +922,18 @@ function pp_ensure_chromium_available(): bool {
 
     if (!$ok || !is_file($tmpZip) || filesize($tmpZip) < 1024*1024) { @unlink($tmpZip); return false; }
 
-    // Extract
+    if (!class_exists('ZipArchive')) { @unlink($tmpZip); return false; }
+
     $zip = new ZipArchive();
     if ($zip->open($tmpZip) === true) {
         $dest = $root . '/chrome-linux64';
-        // Clean previous dir if exists (best-effort)
         if (is_dir($dest)) { rmdir_recursive($dest); }
         @mkdir($dest, 0777, true);
         $zip->extractTo($root);
         $zip->close();
         @unlink($tmpZip);
-        // Ensure binary is executable
         $bin = $root . '/chrome-linux64/chrome';
         if (@is_file($bin)) { @chmod($bin, 0755); }
-        // Persist to settings for faster reuse
         if (@is_file($bin) && @is_executable($bin)) {
             @set_setting('chrome_binary_path', $bin);
             return true;
