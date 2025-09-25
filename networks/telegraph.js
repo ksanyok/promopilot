@@ -181,10 +181,16 @@ async function resolveChromeExecutable(puppeteerLib) {
     return { path: envPath, source: 'env', candidates: [envPath] };
   }
 
+  // Safely try bundled path; Puppeteer may throw if browsers are not installed
   if (puppeteerLib && typeof puppeteerLib.executablePath === 'function') {
-    const bundled = puppeteerLib.executablePath();
-    if (await pathExists(bundled)) {
-      return { path: bundled, source: 'bundled', candidates: [bundled] };
+    try {
+      const bundled = puppeteerLib.executablePath();
+      if (await pathExists(bundled)) {
+        return { path: bundled, source: 'bundled', candidates: [bundled] };
+      }
+    } catch (err) {
+      logLine('Bundled Chrome resolve failed', { error: String(err) });
+      // continue to candidate detection
     }
   }
 
