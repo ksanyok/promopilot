@@ -689,11 +689,49 @@ function pp_set_networks_enabled(array $slugsToEnable): bool {
     return true;
 }
 
+function pp_check_node_binary(string $bin, int $timeoutSeconds = 3): array {
+    $descriptor = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+    $cmd = escapeshellarg($bin) . ' -v';
+    $proc = @proc_open($cmd, $descriptor, $pipes);
+    if (!is_resource($proc)) { return ['ok'=>false, 'error'=>'PROC_OPEN_FAILED']; }
+    if (isset($pipes[0]) && is_resource($pipes[0])) { @fclose($pipes[0]); }
+    $stdout = '';
+    $stderr = '';
+    $start = time();
+    if (isset($pipes[1]) && is_resource($pipes[1])) { @stream_set_blocking($pipes[1], false); }
+    if (isset($pipes[2]) && is_resource($pipes[2])) { @stream_set_blocking($pipes[2], false); }
+    while (true) {
+        $status = @proc_get_status($proc);
+        if (!$status || !$status['running']) { break; }
+        if ((time() - $start) >= $timeoutSeconds) { @proc_terminate($proc, 9); break; }
+        usleep(100000);
+    }
+    if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); @fclose($pipes[1]); }
+    if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); @fclose($pipes[2]); }
+    $exit = @proc_close($proc);
+    $ver = trim($stdout);
+    $ok = ($exit === 0) && preg_match('~^v?(\d+\.\d+\.\d+)~', $ver);
+    return ['ok' => (bool)$ok, 'version' => $ver, 'exit_code' => $exit, 'stderr' => trim($stderr)];
+}
+
 function pp_get_node_binary(): string {
+    $candidates = [];
     $fromSetting = trim((string)get_setting('node_binary', ''));
-    if ($fromSetting !== '') { return $fromSetting; }
+    if ($fromSetting !== '') { $candidates[] = $fromSetting; }
     $env = getenv('NODE_BINARY');
-    if ($env && trim($env) !== '') { return trim($env); }
+    if ($env && trim($env) !== '') { $candidates[] = trim($env); }
+    // Common macOS paths
+    $candidates[] = '/opt/homebrew/bin/node'; // Apple Silicon Homebrew
+    $candidates[] = '/usr/local/bin/node';    // Intel Homebrew
+    $candidates[] = '/usr/bin/node';
+    // Finally, rely on PATH
+    $candidates[] = 'node';
+
+    foreach (array_unique($candidates) as $bin) {
+        $check = pp_check_node_binary($bin, 2);
+        if ($check['ok']) { return $bin; }
+    }
+    // No valid binary found; return placeholder
     return 'node';
 }
 
@@ -701,7 +739,29 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     if (!is_file($script) || !is_readable($script)) {
         return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
     }
-    $node = pp_get_node_binary();
+    // Validate node binary first to avoid silent empty output
+    $nodeCandidates = [
+        trim((string)get_setting('node_binary', '')),
+        (string)getenv('NODE_BINARY'),
+        '/opt/homebrew/bin/node',
+        '/usr/local/bin/node',
+        '/usr/bin/node',
+        'node'
+    ];
+    $node = null; $nodeVer = '';
+    foreach (array_filter(array_unique($nodeCandidates)) as $cand) {
+        $chk = pp_check_node_binary($cand, 2);
+        if ($chk['ok']) { $node = $cand; $nodeVer = $chk['version']; break; }
+    }
+    if ($node === null) {
+        return [
+            'ok' => false,
+            'error' => 'NODE_BINARY_NOT_FOUND',
+            'details' => 'Node.js is not available for the PHP process. Set settings.node_binary or NODE_BINARY env.',
+            'candidates' => $nodeCandidates,
+        ];
+    }
+
     $descriptorSpec = [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
@@ -723,7 +783,6 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         'PP_JOB' => json_encode($job, JSON_UNESCAPED_UNICODE),
         'NODE_NO_WARNINGS' => '1',
         'PP_LOG_DIR' => $logDir,
-        // hint a log file name (script may use it or its default inside PP_LOG_DIR)
         'PP_LOG_FILE' => $logDir . '/network-' . basename($script, '.js') . '-' . date('Ymd-His') . '-' . getmypid() . '.log',
         'HOME' => $homeDir,
     ]);
@@ -748,35 +807,23 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     while (true) {
         $status = @proc_get_status($process);
         if (!$status || !$status['running']) {
-            // Read any remaining data
             if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
             if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
             break;
         }
-
         $read = [];
-        if (isset($pipes[1]) && is_resource($pipes[1])) {
-            if (!@feof($pipes[1])) { $read[] = $pipes[1]; }
-        }
-        if (isset($pipes[2]) && is_resource($pipes[2])) {
-            if (!@feof($pipes[2])) { $read[] = $pipes[2]; }
-        }
+        if (isset($pipes[1]) && is_resource($pipes[1]) && !@feof($pipes[1])) { $read[] = $pipes[1]; }
+        if (isset($pipes[2]) && is_resource($pipes[2]) && !@feof($pipes[2])) { $read[] = $pipes[2]; }
         if (!$read) { break; }
         $remaining = max(1, $timeoutSeconds - (time() - $start));
         $write = null; $except = null;
         $ready = @stream_select($read, $write, $except, $remaining, 0);
-        if ($ready === false) {
-            break;
-        }
+        if ($ready === false) { break; }
         if ($ready === 0) {
-            // Timeout: terminate process
             @proc_terminate($process, 9);
             if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
             if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
-            if (isset($pipes) && is_array($pipes)) {
-                foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
-                unset($pipe);
-            }
+            if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
             @proc_close($process);
             return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
         }
@@ -791,19 +838,13 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
             @proc_terminate($process, 9);
             if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
             if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
-            if (isset($pipes) && is_array($pipes)) {
-                foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
-                unset($pipe);
-            }
+            if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
             @proc_close($process);
             return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
         }
     }
 
-    if (isset($pipes) && is_array($pipes)) {
-        foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
-        unset($pipe);
-    }
+    if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
     $exitCode = @proc_close($process);
 
     $response = ['ok' => false, 'error' => 'NODE_RETURN_EMPTY'];
@@ -818,10 +859,15 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
             $response = ['ok' => false, 'error' => 'INVALID_JSON', 'raw' => $stdoutTrim];
         }
     }
-    if (strlen($stderr) > 0) {
-        $response['stderr'] = trim($stderr);
-    }
+    if (strlen($stderr) > 0) { $response['stderr'] = trim($stderr); }
     $response['exit_code'] = $exitCode;
+    // Hint if nothing returned and exit 127 (command not found)
+    if (($response['error'] ?? '') === 'NODE_RETURN_EMPTY' && (int)$exitCode === 127) {
+        $response['error'] = 'NODE_BINARY_NOT_FOUND';
+        $response['details'] = 'Node.js command not found by PHP. Set settings.node_binary or NODE_BINARY env to full path (e.g. /opt/homebrew/bin/node).';
+    }
+    // Attach detected node version if we had it
+    if (!empty($nodeVer)) { $response['node_version'] = $nodeVer; }
     return $response;
 }
 
