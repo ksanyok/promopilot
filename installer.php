@@ -197,7 +197,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         user_id INT,
         name VARCHAR(100),
         description TEXT,
-        links TEXT,
+        links TEXT DEFAULT '[]',
         language VARCHAR(10) DEFAULT 'ru',
         wishes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -270,20 +270,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // 3) Настраиваем БД
     if (!$errors) {
         setup_database($host, $user, $pass, $db, $admin_user, $admin_pass, $errors);
-    }
-
-    // 4) Автоподготовка node_runtime и Chromium (best-effort)
-    if (!$errors) {
-        $fn = __DIR__ . '/includes/functions.php';
-        if (file_exists($fn)) {
-            require_once $fn;
-            $nr = function_exists('pp_ensure_node_runtime_installed') ? @pp_ensure_node_runtime_installed() : false;
-            logmsg('node_runtime install: ' . ($nr ? 'OK' : 'SKIP/FAIL'));
-            $cr = function_exists('pp_ensure_chromium_available') ? @pp_ensure_chromium_available() : false;
-            logmsg('chromium ensure: ' . ($cr ? 'OK' : 'SKIP'));
-        } else {
-            logmsg('functions.php not found for runtime setup step.');
-        }
     }
 
     if (!$errors) {

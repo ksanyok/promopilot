@@ -50,12 +50,6 @@ if (is_logged_in() && !is_admin()) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
-                            <li class="nav-item">
-                                <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>" class="d-inline">
-                                    <?php echo csrf_field(); ?>
-                                    <button type="submit" class="btn btn-link nav-link p-0"><i class="bi bi-box-arrow-right me-1"></i><?php echo __('Выход'); ?></button>
-                                </form>
-                            </li>
                         <?php else: ?>
                             <!-- Client navbar: avatar and name with dropdown -->
                             <?php 

@@ -163,18 +163,16 @@ $pubStatusByUrl = [];
 try {
     $conn = connect_db();
     if ($conn) {
-        $stmt = $conn->prepare("SELECT page_url, anchor, post_url FROM publications WHERE project_id = ?");
+        $stmt = $conn->prepare("SELECT page_url, post_url FROM publications WHERE project_id = ?");
         if ($stmt) {
             $stmt->bind_param('i', $id);
             $stmt->execute();
             $res = $stmt->get_result();
             while ($row = $res->fetch_assoc()) {
                 $url = (string)$row['page_url'];
-                $anc = trim((string)($row['anchor'] ?? ''));
                 $hasPost = !empty($row['post_url']);
-                $key = $url . '||' . $anc;
-                if (!isset($pubStatusByUrl[$key])) { $pubStatusByUrl[$key] = 'pending'; }
-                if ($hasPost) { $pubStatusByUrl[$key] = 'published'; }
+                if (!isset($pubStatusByUrl[$url])) { $pubStatusByUrl[$url] = 'pending'; }
+                if ($hasPost) { $pubStatusByUrl[$url] = 'published'; }
             }
             $stmt->close();
         }
@@ -338,7 +336,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <tbody>
                                     <?php foreach ($links as $index => $item):
                                         $url = $item['url']; $anchor = $item['anchor']; $lang = $item['language'];
-                                        $status = $pubStatusByUrl[$url . '||' . $anchor] ?? 'not_published';
+                                        $status = $pubStatusByUrl[$url] ?? 'not_published';
                                         $canEdit = ($status === 'not_published');
                                     ?>
                                     <tr data-index="<?php echo (int)$index; ?>">
@@ -375,9 +373,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
                                             <?php if ($status === 'pending'): ?>
-                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-anchor="<?php echo htmlspecialchars($anchor); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
+                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
                                             <?php elseif ($status === 'not_published'): ?>
-                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-anchor="<?php echo htmlspecialchars($anchor); ?>" data-index="<?php echo (int)$index; ?>">
+                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>">
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
                                                 </button>
                                             <?php else: ?>
@@ -694,7 +692,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    async function sendPublishAction(btn, url, anchor, action) {
+    async function sendPublishAction(btn, url, action) {
         if (!csrfTokenInput) { alert('CSRF missing'); return; }
         if (!url) { alert('<?php echo __('Сначала сохраните проект чтобы опубликовать новую ссылку.'); ?>'); return; }
         setButtonLoading(btn, true);
@@ -703,7 +701,6 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('csrf_token', csrfTokenInput.value);
             formData.append('project_id', PROJECT_ID);
             formData.append('url', url);
-            formData.append('anchor', anchor || '');
             formData.append('action', action);
             const res = await fetch('<?php echo pp_url('public/publish_link.php'); ?>', { method: 'POST', body: formData, credentials: 'same-origin' });
             const data = await res.json().catch(()=>({ok:false,error:'BAD_JSON'}));
@@ -714,8 +711,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('<?php echo __('Ошибка'); ?>: ' + msg);
                 return;
             }
-            const respAnchor = (data.anchor ?? anchor ?? '').toString();
-            updateRowUI(url, respAnchor, data.status);
+            updateRowUI(url, data.status);
         } catch (e) {
             alert('<?php echo __('Сетевая ошибка'); ?>');
         } finally {
@@ -723,13 +719,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function updateRowUI(url, anchor, status) {
+    function updateRowUI(url, status) {
         const rows = document.querySelectorAll('table.table-links tbody tr');
         rows.forEach(tr => {
             const linkEl = tr.querySelector('.url-cell .view-url');
             if (!linkEl) return;
-            const rowAnchor = (tr.querySelector('.anchor-cell .view-anchor')?.textContent || '').trim();
-            if (linkEl.getAttribute('href') === url && rowAnchor === (anchor || '')) {
+            if (linkEl.getAttribute('href') === url) {
                 const statusCell = tr.querySelector('td:nth-child(6)'); // status column
                 const actionsCell = tr.querySelector('td.text-end');
                 if (statusCell) {
@@ -744,12 +739,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = true; b.classList.add('disabled'); });
                         const pubBtn = actionsCell.querySelector('.action-publish');
                         if (pubBtn) {
-                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'" data-anchor="'+escapeHtml(anchor || '')+'" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>' + actionsCell.innerHTML;
+                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>' + actionsCell.innerHTML;
                         }
                     } else if (status === 'not_published') {
                         const cancelBtn = actionsCell.querySelector('.action-cancel');
                         if (cancelBtn) {
-                            cancelBtn.outerHTML = '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="'+escapeHtml(url)+'" data-anchor="'+escapeHtml(anchor || '')+'"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
+                            cancelBtn.outerHTML = '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="'+escapeHtml(url)+'"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
                         }
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = false; b.classList.remove('disabled'); });
                     }
@@ -765,21 +760,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (btn.dataset.bound==='1') return;
             btn.dataset.bound='1';
             btn.addEventListener('click', () => {
-                const tr = btn.closest('tr');
-                const url = btn.getAttribute('data-url') || (tr?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                const anchor = btn.getAttribute('data-anchor') ?? (tr?.querySelector('.anchor-cell .view-anchor')?.textContent || '').trim();
-                sendPublishAction(btn, url, anchor, 'publish');
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
+                sendPublishAction(btn, url, 'publish');
             });
         });
         document.querySelectorAll('.action-cancel').forEach(btn => {
             if (btn.dataset.bound==='1') return;
             btn.dataset.bound='1';
             btn.addEventListener('click', () => {
-                const tr = btn.closest('tr');
-                const url = btn.getAttribute('data-url') || (tr?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                const anchor = btn.getAttribute('data-anchor') ?? (tr?.querySelector('.anchor-cell .view-anchor')?.textContent || '').trim();
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
                 if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
-                sendPublishAction(btn, url, anchor, 'cancel');
+                sendPublishAction(btn, url, 'cancel');
             });
         });
         document.querySelectorAll('.action-publish-new').forEach(btn => {
