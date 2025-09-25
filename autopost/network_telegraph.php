@@ -71,8 +71,9 @@ return [
         $screenDir = $runDir . '/screens';
         @mkdir($runDir, 0777, true);
         @mkdir($screenDir, 0777, true);
+        $mainLog = $runDir . '/telegraph.log';
 
-        // Write meta for debugging
+        // Single-file log: meta header
         $meta = [
             'page_url' => $pageUrl,
             'anchor' => $anchor,
@@ -81,7 +82,13 @@ return [
             'use_openai' => $useOpenAI,
             'ts' => date('c'),
         ];
-        @file_put_contents($runDir . '/meta.json', json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+        @file_put_contents($mainLog, "[" . date('c') . "] META " . json_encode($meta, JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+
+        // Try to ensure Chromium is available (for puppeteer-core case) and log outcome
+        if (function_exists('pp_ensure_chromium_available')) {
+            $ens = @pp_ensure_chromium_available();
+            @file_put_contents($mainLog, "[" . date('c') . "] ensure_chromium=" . ($ens ? 'ok' : 'skip') . "\n", FILE_APPEND);
+        }
 
         // Compose Node.js script (OpenAI + Puppeteer) with logging & screenshots
         $js = <<<'JS'
@@ -89,9 +96,10 @@ return [
   const fs = require('fs');
   const path = require('path');
   const stamp = () => new Date().toISOString();
-  const LOG_DIR = process.env.LOG_DIR || '';
+  const LOG_FILE = process.env.LOG_FILE || '';
   const SCREEN_DIR = process.env.SCREEN_DIR || '';
-  const logFile = LOG_DIR ? path.join(LOG_DIR, 'run.log') : '';
+  const ROOT_DIR = process.env.ROOT_DIR || '';
+  const logFile = LOG_FILE;
   const log = (...args) => { try { const line = `[${stamp()}] ` + args.join(' ') + '\n'; if (logFile) fs.appendFileSync(logFile, line); } catch(e){} };
   const saveShot = async (page, name) => { try { if (!SCREEN_DIR) return; const p = path.join(SCREEN_DIR, name); await page.screenshot({ path: p, fullPage: true }); log('screenshot', name); } catch(e){ log('screenshot error', name, e && e.message ? e.message : String(e)); } };
 
@@ -104,146 +112,104 @@ return [
   const FALLBACK_TITLE = process.env.FALLBACK_TITLE || '';
   const FALLBACK_AUTHOR = process.env.FALLBACK_AUTHOR || '';
   const FALLBACK_CONTENT = decode(process.env.FALLBACK_CONTENT_B64 || '');
-  const CHROME_BIN = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  const CHROME_BIN_ENV = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const NM_DIR = process.env.PP_NODE_MODULES || '';
 
-  log('start', 'use_openai=' + USE_OPENAI, 'nm_dir=' + (NM_DIR||'n/a'), 'chrome_bin=' + (CHROME_BIN||'auto'));
-
-  // prefer built-in fetch in Node >=18
-  const httpPostJson = async (url, body, headers = {}) => {
-    const started = Date.now();
-    let status = 0; let ok = false; let err = '';
-    try {
-      const res = await fetch(url, {
-        method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers),
-        body: JSON.stringify(body)
-      });
-      status = res.status; ok = res.ok;
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-      const json = await res.json();
-      const ms = Date.now() - started;
-      log('http ok', url, 'status=' + status, 'ms=' + ms);
-      return json;
-    } catch (e) {
-      err = e && e.message ? e.message : String(e);
-      const ms = Date.now() - started;
-      log('http error', url, 'status=' + status, 'ms=' + ms, err);
-      throw e;
+  const findChromeBin = () => {
+    const cands = [];
+    if (CHROME_BIN_ENV) cands.push(CHROME_BIN_ENV);
+    // Puppeteer caches
+    if (NM_DIR) {
+      cands.push(path.join(NM_DIR, 'puppeteer', '.cache', 'puppeteer', 'chrome')); // parent
+      try {
+        const cacheRoot = path.join(NM_DIR, 'puppeteer', '.cache', 'puppeteer');
+        if (fs.existsSync(cacheRoot)) {
+          const products = fs.readdirSync(cacheRoot);
+          for (const prod of products) {
+            const prodDir = path.join(cacheRoot, prod);
+            if (!fs.statSync(prodDir).isDirectory()) continue;
+            const vers = fs.readdirSync(prodDir);
+            for (const v of vers) {
+              const b = path.join(prodDir, v, 'chrome-linux', 'chrome');
+              const b64 = path.join(prodDir, v, 'chrome-linux64', 'chrome');
+              if (fs.existsSync(b)) cands.push(b);
+              if (fs.existsSync(b64)) cands.push(b64);
+            }
+          }
+        }
+      } catch(_){}
+      try {
+        const lcRoot = path.join(NM_DIR, 'puppeteer', '.local-chromium');
+        if (fs.existsSync(lcRoot)) {
+          const plats = fs.readdirSync(lcRoot);
+          for (const p of plats) {
+            const platDir = path.join(lcRoot, p);
+            if (!fs.statSync(platDir).isDirectory()) continue;
+            const vers = fs.readdirSync(platDir);
+            for (const v of vers) {
+              const b = path.join(platDir, v, 'chrome-linux', 'chrome');
+              const b64 = path.join(platDir, v, 'chrome-linux64', 'chrome');
+              if (fs.existsSync(b)) cands.push(b);
+              if (fs.existsSync(b64)) cands.push(b64);
+            }
+          }
+        }
+      } catch(_){}
     }
+    // Our own downloaded Chrome for Testing
+    if (ROOT_DIR) {
+      const our1 = path.join(ROOT_DIR, 'node_runtime', 'chrome', 'chrome-linux64', 'chrome');
+      if (fs.existsSync(our1)) cands.push(our1);
+      try {
+        const walk = (dir) => {
+          if (!fs.existsSync(dir)) return;
+          for (const f of fs.readdirSync(dir)) {
+            const p = path.join(dir, f);
+            if (fs.statSync(p).isDirectory()) walk(p);
+            else if (f === 'chrome') cands.push(p);
+          }
+        };
+        walk(path.join(ROOT_DIR, 'node_runtime', 'chromium'));
+      } catch(_){}}
+    // Common system paths
+    cands.push('/usr/bin/google-chrome','/usr/local/bin/google-chrome','/usr/bin/chromium','/usr/local/bin/chromium','/usr/bin/chromium-browser','/usr/local/bin/chromium-browser');
+    // Dedup and return first existing
+    const seen = new Set();
+    for (const p of cands) {
+      const s = String(p || '');
+      if (!s || seen.has(s)) continue; seen.add(s);
+      try { if (fs.existsSync(s)) return s; } catch(_){ }
+    }
+    return '';
   };
 
-  async function generateWithOpenAI(pageUrl, anchorText, language, apiKey) {
-    const auth = { 'Authorization': `Bearer ${apiKey}` };
-    const ask = async (prompt, tag) => {
-      log('openai ask', tag, 'len=' + prompt.length);
-      const data = await httpPostJson('https://api.openai.com/v1/chat/completions', {
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: prompt }]
-      }, auth);
-      const txt = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-      const out = String(txt).trim();
-      log('openai answer', tag, 'len=' + out.length, out.slice(0, 160).replace(/\s+/g,' '));
-      return out;
-    };
-    const prompts = {
-      title: `What would be a good title for an article about this link without using quotes? ${pageUrl}`,
-      author: `What is a suitable author's name for an article in ${language}? Avoid using region-specific names.`,
-      content: `Please write a text in ${language} with at least 3000 characters based on the following link: ${pageUrl}. The article must include the anchor text "${anchorText}" as part of a single active link in the format <a href="${pageUrl}">${anchorText}</a>. This link should be naturally integrated into the content, ideally in the first half of the article. The content should be informative, cover the topic comprehensively, and include headings. Use <h2></h2> tags for subheadings. Please ensure the article contains only this one link and focuses on integrating the anchor text naturally within the content’s flow.`
-    };
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const title = (await ask(prompts.title, 'title')).replace(/["']+/g, '');
-    await sleep(800);
-    const author = await ask(prompts.author, 'author');
-    await sleep(800);
-    const content = await ask(prompts.content, 'content');
-    return { title, author, content };
-  }
-
-  // Load puppeteer with fallbacks
-  let puppeteer;
-  try { puppeteer = require('puppeteer'); }
-  catch (e1) {
-    try { puppeteer = require('puppeteer-core'); } catch (e2) {
-      if (NM_DIR) {
-        try { puppeteer = require(path.join(NM_DIR, 'puppeteer')); }
-        catch (e3) { puppeteer = require(path.join(NM_DIR, 'puppeteer-core')); }
-      }
-    }
-  }
-  if (!puppeteer) { log('fatal', 'puppeteer not available'); throw new Error('puppeteer not available'); }
-  try { const ver = require('puppeteer/package.json').version; log('puppeteer version', ver); } catch(e){ try { const ver = require(path.join(NM_DIR,'puppeteer/package.json')); if (ver && ver.version) log('puppeteer version', ver.version); } catch(e2){} }
-
-  let data = { title: FALLBACK_TITLE, author: FALLBACK_AUTHOR, content: FALLBACK_CONTENT };
-  if (USE_OPENAI && OPENAI_API_KEY) {
-    try { data = await generateWithOpenAI(PAGE_URL, ANCHOR || 'source', LANGUAGE, OPENAI_API_KEY); }
-    catch (e) { log('openai generation failed', e && e.message ? e.message : String(e)); }
-  }
-  const cleanTitle = String(data.title || '').replace(/["']+/g, '');
-  const articleContent = String(data.content || FALLBACK_CONTENT || '');
+  log('start', 'use_openai=' + USE_OPENAI, 'nm_dir=' + (NM_DIR||'n/a'), 'chrome_bin=auto');
+  // ...existing code...
 
   const launchOpts = { headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'] };
-  if (CHROME_BIN) { launchOpts.executablePath = CHROME_BIN; }
+  let chromePath = CHROME_BIN_ENV;
+  if (!chromePath) { chromePath = findChromeBin(); }
+  if (chromePath) { launchOpts.executablePath = chromePath; }
 
-  log('launch puppeteer', 'have_exec=' + (!!launchOpts.executablePath));
+  log('launch puppeteer', 'have_exec=' + (!!launchOpts.executablePath), 'path=' + (launchOpts.executablePath || ''));
   let browser;
   try { browser = await puppeteer.launch(launchOpts); }
   catch (e) {
     log('launch error', e && e.message ? e.message : String(e));
-    if (!launchOpts.executablePath && /executablePath|channel must be specified/i.test(String(e && e.message || ''))) {
-      if (!CHROME_BIN) throw e;
-      launchOpts.executablePath = CHROME_BIN;
-      log('retry launch with executablePath');
-      browser = await puppeteer.launch(launchOpts);
+    if (!launchOpts.executablePath) {
+      chromePath = findChromeBin();
+      if (chromePath) {
+        launchOpts.executablePath = chromePath;
+        log('retry launch with resolved executablePath', chromePath);
+        browser = await puppeteer.launch(launchOpts);
+      } else {
+        throw e;
+      }
     } else { throw e; }
   }
 
-  try {
-    const page = await browser.newPage();
-    log('goto telegra.ph');
-    await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 60000 });
-    await saveShot(page, 's1_goto.png');
-
-    log('fill title');
-    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 20000 });
-    await page.click('h1[data-placeholder="Title"]');
-    await page.keyboard.type(cleanTitle, { delay: 10 });
-    await saveShot(page, 's2_title.png');
-
-    log('fill author');
-    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 20000 });
-    await page.click('address[data-placeholder="Your name"]');
-    await page.keyboard.type(String(data.author || FALLBACK_AUTHOR || 'Author'), { delay: 10 });
-    await saveShot(page, 's3_author.png');
-
-    log('insert content');
-    await page.evaluate((html) => {
-      const el = document.querySelector('p[data-placeholder="Your story..."]');
-      if (el) el.innerHTML = html;
-    }, articleContent);
-    await saveShot(page, 's4_content.png');
-
-    log('publish');
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-      page.click('button.publish_button')
-    ]);
-
-    const url = page.url();
-    await saveShot(page, 's5_published.png');
-    log('published', url);
-    process.stdout.write(JSON.stringify({ url, title: cleanTitle, author: String(data.author || FALLBACK_AUTHOR || 'Author') }) + '\n');
-  } catch (e) {
-    try { if (browser && browser.pages) { const pages = await browser.pages(); if (pages && pages[0]) await saveShot(pages[0], 'error.png'); } } catch(_){}
-    log('fatal during publish', e && e.message ? e.message : String(e));
-    throw e;
-  } finally {
-    if (browser) await browser.close();
-    log('done');
-  }
-})().catch(err => {
-  console.error('ERR:', err && err.message ? err.message : String(err));
-  process.exit(1);
-});
+  // ...existing code...
+})();
 JS;
 
         // Resolve helpers and env
@@ -268,14 +234,15 @@ JS;
             'CHROME_BIN' => $chromeBinary,
             'NODE_PATH' => $nodePath,
             'PP_NODE_MODULES' => $localNodeModules,
-            'LOG_DIR' => $runDir,
             'SCREEN_DIR' => $screenDir,
+            'ROOT_DIR' => PP_ROOT_PATH,
+            'LOG_FILE' => $mainLog,
         ], 240);
 
-        // Persist raw outputs for diagnostics
-        @file_put_contents($runDir . '/node_stdout.log', (string)$stdout);
-        @file_put_contents($runDir . '/node_stderr.log', (string)$stderr);
-        @file_put_contents($runDir . '/exit_code.txt', is_null($code) ? 'null' : (string)$code);
+        // Single-file log: append Node outputs and exit code
+        @file_put_contents($mainLog, "[" . date('c') . "] EXIT_CODE " . (is_null($code) ? 'null' : (string)$code) . "\n", FILE_APPEND);
+        if ((string)$stdout !== '') { @file_put_contents($mainLog, "[" . date('c') . "] STDOUT\n" . $stdout . "\n", FILE_APPEND); }
+        if ((string)$stderr !== '') { @file_put_contents($mainLog, "[" . date('c') . "] STDERR\n" . $stderr . "\n", FILE_APPEND); }
 
         // Parse Node output
         $url = null; $title = $fallbackTitle; $author = $fallbackAuthor;
@@ -294,6 +261,8 @@ JS;
         }
 
         if (!filter_var($url ?? '', FILTER_VALIDATE_URL)) { return null; }
+        // Log the final URL
+        @file_put_contents($mainLog, "[" . date('c') . "] RESULT_URL " . $url . "\n", FILE_APPEND);
         return [ 'post_url' => $url, 'author' => $author, 'title' => $title ];
     }
 ];
