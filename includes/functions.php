@@ -881,6 +881,14 @@ function pp_get_chrome_info(): array {
     return $info;
 }
 
+function pp_install_chrome_browser(int $timeoutSeconds = 600): array {
+    $script = PP_ROOT_PATH . '/networks/tools/install_chrome.js';
+    if (!is_file($script)) {
+        return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
+    }
+    return pp_run_node_script($script, [], $timeoutSeconds);
+}
+
 function pp_collect_chrome_candidates(): array {
     $candidates = [];
     // From settings and env

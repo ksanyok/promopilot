@@ -161,6 +161,18 @@ async function resolveChromeExecutable(puppeteerLib) {
   ensureDirSync(cacheDir);
   const suggestions = getInstallSuggestions(cacheDir);
 
+  try {
+    const infoFile = path.join(cacheDir, 'chrome-info.json');
+    if (fs.existsSync(infoFile)) {
+      const data = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
+      if (data && data.path && await pathExists(data.path)) {
+        return { path: data.path, source: data.source || 'cache', candidates: [data.path], cacheDir, suggestions };
+      }
+    }
+  } catch (error) {
+    logLine('Chrome info read failed', { error: String(error) });
+  }
+
   const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.PP_CHROME_PATH || process.env.CHROME_PATH || process.env.GOOGLE_CHROME_BIN;
   if (envPath && await pathExists(envPath)) {
     return { path: envPath, source: 'env', candidates: [envPath], cacheDir, suggestions };

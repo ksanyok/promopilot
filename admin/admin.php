@@ -105,12 +105,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 set_setting('puppeteer_executable_path', $resolved['path']);
                 $networksMsg = sprintf(__('Chrome найден: %s (источник: %s).'), $resolved['path'], $resolved['source'] ?? '');
             } else {
-                $candidates = pp_collect_chrome_candidates();
-                $msg = __('Не удалось автоматически определить Chrome/Chromium.');
-                if (!empty($candidates)) {
-                    $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
+                $install = pp_install_chrome_browser(900);
+                if (!empty($install['ok']) && !empty($install['path'])) {
+                    set_setting('puppeteer_executable_path', $install['path']);
+                    $networksMsg = sprintf(__('Chromium загружен: %s (сборка %s).'), $install['path'], $install['buildId'] ?? __('неизвестно'));
+                } else {
+                    $candidates = pp_collect_chrome_candidates();
+                    $msg = __('Не удалось автоматически определить Chrome/Chromium.');
+                    if (!empty($candidates)) {
+                        $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
+                    }
+                    if (!empty($install['error'])) {
+                        $msg .= ' (' . htmlspecialchars($install['error']) . ')';
+                    }
+                    $networksMsg = $msg;
                 }
-                $networksMsg = $msg;
             }
         }
     }
@@ -198,16 +207,6 @@ $diagnostics = [
     ['label' => __('Команды установки Chrome'), 'value' => $chromeSuggestDisplay],
 ];
 
-// Add Chrome diagnostics
-$chromeSetting = trim((string)get_setting('puppeteer_executable_path', ''));
-$chromeArgsSetting = trim((string)get_setting('puppeteer_args', ''));
-$resolvedChrome = pp_resolve_chrome_binary();
-$chromeEffective = $resolvedChrome['path'] ?? ($chromeSetting ?: '');
-$chromeSource = $resolvedChrome['source'] ?? ($chromeSetting !== '' ? 'setting' : __('Неизвестно'));
-$puppeteerCacheDir = PP_ROOT_PATH . '/.cache/puppeteer';
-$diagnostics[] = ['label' => __('Chrome/Chromium бинарь'), 'value' => $chromeEffective !== '' ? $chromeEffective : __('Не задан')];
-$diagnostics[] = ['label' => __('Источник Chrome пути'), 'value' => $chromeEffective !== '' ? $chromeSource : __('—')];
-$diagnostics[] = ['label' => __('Puppeteer cache dir'), 'value' => $puppeteerCacheDir . (is_dir($puppeteerCacheDir) ? '' : ' (' . __('будет создан') . ')')];
 ?>
 
 <?php include '../includes/header.php'; ?>
