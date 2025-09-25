@@ -61,9 +61,40 @@ return [
         };
         [$fallbackTitle, $fallbackAuthor, $fallbackContent] = $fallback($pageUrl, $anchor, $language);
 
-        // Compose Node.js script (OpenAI + Puppeteer)
+        // Prepare per-run log directories
+        $pubId = (string)($ctx['publication_id'] ?? ($ctx['id'] ?? 'na'));
+        $logBase = PP_ROOT_PATH . '/logs/telegraph';
+        @mkdir(PP_ROOT_PATH . '/logs', 0777, true);
+        @mkdir($logBase, 0777, true);
+        $runStamp = date('Ymd_His');
+        $runDir = $logBase . '/' . $runStamp . '_pub' . $pubId;
+        $screenDir = $runDir . '/screens';
+        @mkdir($runDir, 0777, true);
+        @mkdir($screenDir, 0777, true);
+
+        // Write meta for debugging
+        $meta = [
+            'page_url' => $pageUrl,
+            'anchor' => $anchor,
+            'language' => $language,
+            'generation_mode' => $mode,
+            'use_openai' => $useOpenAI,
+            'ts' => date('c'),
+        ];
+        @file_put_contents($runDir . '/meta.json', json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+
+        // Compose Node.js script (OpenAI + Puppeteer) with logging & screenshots
         $js = <<<'JS'
 (async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const stamp = () => new Date().toISOString();
+  const LOG_DIR = process.env.LOG_DIR || '';
+  const SCREEN_DIR = process.env.SCREEN_DIR || '';
+  const logFile = LOG_DIR ? path.join(LOG_DIR, 'run.log') : '';
+  const log = (...args) => { try { const line = `[${stamp()}] ` + args.join(' ') + '\n'; if (logFile) fs.appendFileSync(logFile, line); } catch(e){} };
+  const saveShot = async (page, name) => { try { if (!SCREEN_DIR) return; const p = path.join(SCREEN_DIR, name); await page.screenshot({ path: p, fullPage: true }); log('screenshot', name); } catch(e){ log('screenshot error', name, e && e.message ? e.message : String(e)); } };
+
   const decode = (b64) => Buffer.from(b64 || '', 'base64').toString('utf8');
   const PAGE_URL = process.env.PAGE_URL || '';
   const ANCHOR = process.env.ANCHOR || '';
@@ -76,25 +107,43 @@ return [
   const CHROME_BIN = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const NM_DIR = process.env.PP_NODE_MODULES || '';
 
+  log('start', 'use_openai=' + USE_OPENAI, 'nm_dir=' + (NM_DIR||'n/a'), 'chrome_bin=' + (CHROME_BIN||'auto'));
+
   // prefer built-in fetch in Node >=18
   const httpPostJson = async (url, body, headers = {}) => {
-    const res = await fetch(url, {
-      method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers),
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-    return await res.json();
+    const started = Date.now();
+    let status = 0; let ok = false; let err = '';
+    try {
+      const res = await fetch(url, {
+        method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers),
+        body: JSON.stringify(body)
+      });
+      status = res.status; ok = res.ok;
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+      const json = await res.json();
+      const ms = Date.now() - started;
+      log('http ok', url, 'status=' + status, 'ms=' + ms);
+      return json;
+    } catch (e) {
+      err = e && e.message ? e.message : String(e);
+      const ms = Date.now() - started;
+      log('http error', url, 'status=' + status, 'ms=' + ms, err);
+      throw e;
+    }
   };
 
   async function generateWithOpenAI(pageUrl, anchorText, language, apiKey) {
     const auth = { 'Authorization': `Bearer ${apiKey}` };
-    const ask = async (prompt) => {
+    const ask = async (prompt, tag) => {
+      log('openai ask', tag, 'len=' + prompt.length);
       const data = await httpPostJson('https://api.openai.com/v1/chat/completions', {
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: prompt }]
       }, auth);
       const txt = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-      return String(txt).trim();
+      const out = String(txt).trim();
+      log('openai answer', tag, 'len=' + out.length, out.slice(0, 160).replace(/\s+/g,' '));
+      return out;
     };
     const prompts = {
       title: `What would be a good title for an article about this link without using quotes? ${pageUrl}`,
@@ -102,11 +151,11 @@ return [
       content: `Please write a text in ${language} with at least 3000 characters based on the following link: ${pageUrl}. The article must include the anchor text "${anchorText}" as part of a single active link in the format <a href="${pageUrl}">${anchorText}</a>. This link should be naturally integrated into the content, ideally in the first half of the article. The content should be informative, cover the topic comprehensively, and include headings. Use <h2></h2> tags for subheadings. Please ensure the article contains only this one link and focuses on integrating the anchor text naturally within the content’s flow.`
     };
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const title = (await ask(prompts.title)).replace(/["']+/g, '');
-    await sleep(1200);
-    const author = await ask(prompts.author);
-    await sleep(1200);
-    const content = await ask(prompts.content);
+    const title = (await ask(prompts.title, 'title')).replace(/["']+/g, '');
+    await sleep(800);
+    const author = await ask(prompts.author, 'author');
+    await sleep(800);
+    const content = await ask(prompts.content, 'content');
     return { title, author, content };
   }
 
@@ -116,17 +165,18 @@ return [
   catch (e1) {
     try { puppeteer = require('puppeteer-core'); } catch (e2) {
       if (NM_DIR) {
-        try { puppeteer = require(require('path').join(NM_DIR, 'puppeteer')); }
-        catch (e3) { puppeteer = require(require('path').join(NM_DIR, 'puppeteer-core')); }
+        try { puppeteer = require(path.join(NM_DIR, 'puppeteer')); }
+        catch (e3) { puppeteer = require(path.join(NM_DIR, 'puppeteer-core')); }
       }
     }
   }
-  if (!puppeteer) { throw new Error('puppeteer not available'); }
+  if (!puppeteer) { log('fatal', 'puppeteer not available'); throw new Error('puppeteer not available'); }
+  try { const ver = require('puppeteer/package.json').version; log('puppeteer version', ver); } catch(e){ try { const ver = require(path.join(NM_DIR,'puppeteer/package.json')); if (ver && ver.version) log('puppeteer version', ver.version); } catch(e2){} }
 
   let data = { title: FALLBACK_TITLE, author: FALLBACK_AUTHOR, content: FALLBACK_CONTENT };
   if (USE_OPENAI && OPENAI_API_KEY) {
     try { data = await generateWithOpenAI(PAGE_URL, ANCHOR || 'source', LANGUAGE, OPENAI_API_KEY); }
-    catch (e) { console.error('ERR: OpenAI generation failed:', e && e.message ? e.message : e); }
+    catch (e) { log('openai generation failed', e && e.message ? e.message : String(e)); }
   }
   const cleanTitle = String(data.title || '').replace(/["']+/g, '');
   const articleContent = String(data.content || FALLBACK_CONTENT || '');
@@ -134,43 +184,61 @@ return [
   const launchOpts = { headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'] };
   if (CHROME_BIN) { launchOpts.executablePath = CHROME_BIN; }
 
-  // Try to launch, retry with executablePath if core demands it
+  log('launch puppeteer', 'have_exec=' + (!!launchOpts.executablePath));
   let browser;
   try { browser = await puppeteer.launch(launchOpts); }
   catch (e) {
+    log('launch error', e && e.message ? e.message : String(e));
     if (!launchOpts.executablePath && /executablePath|channel must be specified/i.test(String(e && e.message || ''))) {
-      if (!CHROME_BIN) throw e; // no path provided
+      if (!CHROME_BIN) throw e;
       launchOpts.executablePath = CHROME_BIN;
+      log('retry launch with executablePath');
       browser = await puppeteer.launch(launchOpts);
     } else { throw e; }
   }
 
   try {
     const page = await browser.newPage();
+    log('goto telegra.ph');
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 60000 });
+    await saveShot(page, 's1_goto.png');
 
+    log('fill title');
     await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 20000 });
     await page.click('h1[data-placeholder="Title"]');
     await page.keyboard.type(cleanTitle, { delay: 10 });
+    await saveShot(page, 's2_title.png');
 
+    log('fill author');
     await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 20000 });
     await page.click('address[data-placeholder="Your name"]');
     await page.keyboard.type(String(data.author || FALLBACK_AUTHOR || 'Author'), { delay: 10 });
+    await saveShot(page, 's3_author.png');
 
+    log('insert content');
     await page.evaluate((html) => {
       const el = document.querySelector('p[data-placeholder="Your story..."]');
       if (el) el.innerHTML = html;
     }, articleContent);
+    await saveShot(page, 's4_content.png');
 
+    log('publish');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
       page.click('button.publish_button')
     ]);
 
     const url = page.url();
+    await saveShot(page, 's5_published.png');
+    log('published', url);
     process.stdout.write(JSON.stringify({ url, title: cleanTitle, author: String(data.author || FALLBACK_AUTHOR || 'Author') }) + '\n');
+  } catch (e) {
+    try { if (browser && browser.pages) { const pages = await browser.pages(); if (pages && pages[0]) await saveShot(pages[0], 'error.png'); } } catch(_){}
+    log('fatal during publish', e && e.message ? e.message : String(e));
+    throw e;
   } finally {
     if (browser) await browser.close();
+    log('done');
   }
 })().catch(err => {
   console.error('ERR:', err && err.message ? err.message : String(err));
@@ -200,7 +268,14 @@ JS;
             'CHROME_BIN' => $chromeBinary,
             'NODE_PATH' => $nodePath,
             'PP_NODE_MODULES' => $localNodeModules,
-        ], 180);
+            'LOG_DIR' => $runDir,
+            'SCREEN_DIR' => $screenDir,
+        ], 240);
+
+        // Persist raw outputs for diagnostics
+        @file_put_contents($runDir . '/node_stdout.log', (string)$stdout);
+        @file_put_contents($runDir . '/node_stderr.log', (string)$stderr);
+        @file_put_contents($runDir . '/exit_code.txt', is_null($code) ? 'null' : (string)$code);
 
         // Parse Node output
         $url = null; $title = $fallbackTitle; $author = $fallbackAuthor;
