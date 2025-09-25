@@ -527,6 +527,8 @@ function pp_resolve_node_binary(): string {
         '/opt/cpanel/ea-nodejs16/bin/node',
         '/opt/cpanel/ea-nodejs18/bin/node',
         '/opt/cpanel/ea-nodejs20/bin/node',
+        // Hosting-provided path example (whereis node -> /usr/local/node23/bin/node)
+        '/usr/local/node23/bin/node',
     ];
 
     foreach (array_merge($tryNames, $candidates) as $cand) {
@@ -551,55 +553,6 @@ function pp_resolve_node_binary(): string {
 }
 
 /**
- * Execute a Puppeteer JS snippet with environment and optional local NODE_PATH injection.
- * Returns [code, stdout, stderr].
- */
-function pp_run_puppeteer(string $jsCode, array $env = [], int $timeoutSec = 90): array {
-    $nodeBin = pp_resolve_node_binary();
-    if ($nodeBin === '') { return [127, '', 'Node.js not found']; }
-    $tmp = sys_get_temp_dir();
-    $script = $tmp . DIRECTORY_SEPARATOR . 'pp_puppet_' . uniqid('', true) . '.js';
-    if (@file_put_contents($script, $jsCode) === false) { return [126, '', 'Cannot write temporary script']; }
-
-    // Ensure local NODE_PATH to use project-level node_runtime if available
-    $nodePath = getenv('NODE_PATH') ?: '';
-    $localNodeModules = PP_ROOT_PATH . '/node_runtime/node_modules';
-    if (is_dir($localNodeModules)) {
-        $nodePath = $localNodeModules . ($nodePath ? PATH_SEPARATOR . $nodePath : '');
-    }
-
-    $chromePath = pp_resolve_chrome_binary();
-
-    $allEnv = array_merge([
-        'NODE_PATH' => $nodePath,
-        'PUPPETEER_EXECUTABLE_PATH' => $chromePath,
-        'CHROME_BIN' => $chromePath,
-    ], $env);
-
-    $desc = [ 0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w'] ];
-    $proc = @proc_open([$nodeBin, $script], $desc, $pipes, PP_ROOT_PATH, $allEnv);
-    if (!is_resource($proc)) { @unlink($script); return [125, '', 'Failed to start node process']; }
-    fclose($pipes[0]);
-    stream_set_blocking($pipes[1], false);
-    stream_set_blocking($pipes[2], false);
-
-    $stdout = '';$stderr='';
-    $start = microtime(true);
-    while (true) {
-        $status = proc_get_status($proc);
-        $stdout .= stream_get_contents($pipes[1]);
-        $stderr .= stream_get_contents($pipes[2]);
-        if (!$status['running']) break;
-        if ((microtime(true) - $start) > $timeoutSec) { proc_terminate($proc, 9); break; }
-        usleep(100000);
-    }
-    fclose($pipes[1]); fclose($pipes[2]);
-    $code = proc_close($proc);
-    @unlink($script);
-    return [$code, $stdout, $stderr];
-}
-
-/**
  * Resolve npm binary path from settings/env/common locations.
  */
 function pp_resolve_npm_binary(): string {
@@ -615,7 +568,8 @@ function pp_resolve_npm_binary(): string {
     foreach (array_merge($try,$candidates) as $bin) {
         if ($bin==='') continue;
         $out = @shell_exec(escapeshellcmd($bin).' --version 2>&1');
-        if (is_string($out) && trim($out)!=='') return $bin;
+        // Accept only if it looks like a version, e.g. 10.9.0
+        if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) return $bin;
     }
     return '';
 }
@@ -659,6 +613,86 @@ function pp_ensure_node_runtime_installed(): bool {
     }
     clearstatcache();
     return is_dir($mods . '/puppeteer') || is_dir($mods . '/puppeteer-core');
+}
+
+/**
+ * Run a small Node.js script (e.g., Puppeteer) with env and timeout.
+ * Returns array [exitCode|null, stdout, stderr].
+ */
+function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array {
+    $nodeBin = pp_resolve_node_binary();
+    $stdout = '';
+    $stderr = '';
+    $exitCode = null;
+
+    // Prepare working directory and NODE_PATH so require('puppeteer') can resolve
+    $runtimeDir = PP_ROOT_PATH . '/node_runtime';
+    if (!is_dir($runtimeDir)) { @mkdir($runtimeDir, 0777, true); }
+    $nodeModules = $runtimeDir . '/node_modules';
+
+    // Write JS to a temp file
+    $tmpFile = @tempnam(sys_get_temp_dir(), 'pp_js_');
+    if ($tmpFile === false) { return [null, '', 'tempnam failed']; }
+    @file_put_contents($tmpFile, $js);
+
+    // Merge env: start from current, then custom values
+    $baseEnv = [];
+    foreach (array_merge($_ENV, $_SERVER) as $k => $v) {
+        if (is_string($k) && is_scalar($v)) { $baseEnv[$k] = (string)$v; }
+    }
+
+    // Augment NODE_PATH
+    $existingNodePath = $env['NODE_PATH'] ?? getenv('NODE_PATH') ?: '';
+    $mergedNodePath = $nodeModules . ($existingNodePath ? PATH_SEPARATOR . $existingNodePath : '');
+
+    $envFinal = array_merge($baseEnv, $env, [
+        'NODE_PATH' => $mergedNodePath,
+        // In case hosting uses Puppeteer env variable
+        'PUPPETEER_CACHE_DIR' => isset($baseEnv['PUPPETEER_CACHE_DIR']) ? $baseEnv['PUPPETEER_CACHE_DIR'] : ($runtimeDir . '/.cache/puppeteer'),
+    ]);
+
+    // Prefer proc_open for control over timeout
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+
+    if ($nodeBin !== '' && function_exists('proc_open')) {
+        $cmd = [$nodeBin, $tmpFile];
+        $proc = @proc_open($cmd, $descriptors, $pipes, $runtimeDir, $envFinal);
+        if (is_resource($proc)) {
+            @fclose($pipes[0]);
+            @stream_set_blocking($pipes[1], false);
+            @stream_set_blocking($pipes[2], false);
+            $start = microtime(true);
+            while (true) {
+                $status = @proc_get_status($proc);
+                $stdout .= (string)@stream_get_contents($pipes[1]);
+                $stderr .= (string)@stream_get_contents($pipes[2]);
+                if (!$status['running']) { break; }
+                if ((microtime(true) - $start) > $timeout) { @proc_terminate($proc, 9); break; }
+                usleep(200000);
+            }
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            $exitCode = @proc_close($proc);
+        } else {
+            $stderr .= 'proc_open failed';
+        }
+    } elseif ($nodeBin !== '' && function_exists('shell_exec')) {
+        // Fallback: best-effort without reliable exit code or timeout
+        $envExport = '';
+        foreach ($envFinal as $k => $v) {
+            if ($k !== '' && strpos($k, '=') === false) {
+                $envExport .= $k . '=' . escapeshellarg((string)$v) . ' ';
+            }
+        }
+        $cmd = $envExport . escapeshellarg($nodeBin) . ' ' . escapeshellarg($tmpFile) . ' 2>&1';
+        $stdout = (string)@shell_exec('cd ' . escapeshellarg($runtimeDir) . ' && ' . $cmd);
+        $exitCode = null; // unknown in this mode
+    } else {
+        $stderr .= 'Node binary not found or no execution functions available';
+    }
+
+    @unlink($tmpFile);
+    return [$exitCode, (string)$stdout, (string)$stderr];
 }
 
 ?>
