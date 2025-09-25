@@ -59,13 +59,23 @@ return [
   const AUTHOR = process.env.AUTHOR || '';
   const CONTENT_HTML = decode(process.env.CONTENT_B64 || '');
   const CHROME_BIN = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  const NM_DIR = process.env.PP_NODE_MODULES || '';
 
   let puppeteer;
   try { puppeteer = require('puppeteer'); }
   catch (e1) {
     try { puppeteer = require('puppeteer-core'); } catch (e2) {
-      console.error('ERR: puppeteer not installed');
-      process.exit(2);
+      // Try to resolve explicitly from our node_modules dir
+      try {
+        const path = require('path');
+        if (NM_DIR) {
+          try { puppeteer = require(path.join(NM_DIR, 'puppeteer')); }
+          catch (e3) { puppeteer = require(path.join(NM_DIR, 'puppeteer-core')); }
+        }
+      } catch (e4) {
+        console.error('ERR: puppeteer not installed');
+        process.exit(2);
+      }
     }
   }
 
@@ -114,6 +124,7 @@ JS;
                     'PUPPETEER_EXECUTABLE_PATH' => $chromeBinary,
                     'CHROME_BIN' => $chromeBinary,
                     'NODE_PATH' => $nodePath,
+                    'PP_NODE_MODULES' => $localNodeModules,
                 ], 120);
                 if ($stderr) { $log('telegraph puppeteer stderr: ' . trim($stderr)); }
                 if (preg_match('~https?://telegra\.ph/[^\s\"]+~', $stdout, $m)) {
@@ -234,6 +245,14 @@ JS;
                 $browserFactory = new $browserFactoryClass();
                 // Resolve Chrome binary automatically (no admin setting)
                 $chromeBinary = function_exists('pp_resolve_chrome_binary') ? pp_resolve_chrome_binary() : '';
+                if ($chromeBinary === '') {
+                    // Try to auto-download Chromium for Linux hostings
+                    if (function_exists('pp_ensure_chromium_available')) {
+                        $ens = pp_ensure_chromium_available();
+                        if (function_exists('autopost_log')) autopost_log('telegraph: ensure chromium => ' . ($ens ? 'ok' : 'skip'));
+                        if ($ens) { $chromeBinary = pp_resolve_chrome_binary(); }
+                    }
+                }
                 if ($chromeBinary === '') { $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: ''; }
                 // Try common paths if env not set
                 if (!$chromeBinary) {
@@ -278,11 +297,29 @@ JS;
                     'enableImages' => false,
                     'userAgent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                     'customFlags' => ['--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-software-rasterizer','--no-zygote','--single-process','--disable-setuid-sandbox'],
-                    'startupTimeout' => 30000, // ms
+                    'startupTimeout' => 45000, // ms (increase for first-run extraction)
                     'chromeBinary' => $chromeBinary ?: null,
                 ]);
                 if (function_exists('autopost_log')) autopost_log('telegraph: launching Chrome ' . ($options['chromeBinary'] ?? 'auto'));
-                $browser = $browserFactory->createBrowser($options);
+
+                // Attempt 1
+                try {
+                    $browser = $browserFactory->createBrowser($options);
+                } catch (\Throwable $eLaunch) {
+                    if (function_exists('autopost_log')) autopost_log('telegraph: first Chrome launch failed: ' . $eLaunch->getMessage());
+                    // Attempt 2: relax flags known to cause issues on some hosts
+                    $opts2 = $options;
+                    $flags = $opts2['customFlags'] ?? [];
+                    $flags = array_values(array_filter($flags, function($f){ return !in_array($f, ['--single-process','--no-zygote'], true); }));
+                    // Add a few stability flags
+                    $flags[] = '--disable-background-networking';
+                    $flags[] = '--disable-software-rasterizer';
+                    $opts2['customFlags'] = array_values(array_unique($flags));
+                    $opts2['startupTimeout'] = max(60000, (int)($opts2['startupTimeout'] ?? 45000));
+                    if (function_exists('autopost_log')) autopost_log('telegraph: retry Chrome launch with safer flags');
+                    $browser = $browserFactory->createBrowser($opts2);
+                }
+
                 $page = $browser->createPage();
                 $page->navigate('https://telegra.ph/')->waitForNavigation();
 

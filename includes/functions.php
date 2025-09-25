@@ -235,7 +235,7 @@ function fetch_latest_version_info(): ?array {
     if ($commitResponse) {
         $commitData = json_decode($commitResponse, true);
         if ($commitData && isset($commitData['commit']['committer']['date'])) {
-            $ts = strtotime($commitData['commit']['committer']['date']);
+            $ts = strtotime($commitData['commit']['date']);
             if ($ts) { $published = date('Y-m-d', $ts); }
         }
     }
@@ -551,6 +551,17 @@ function pp_resolve_chrome_binary(): string {
         }
     }
 
+    // NEW: search our own downloaded runtime chrome/chromium trees (deep)
+    $ownGlobs = [
+        PP_ROOT_PATH . '/node_runtime/chrome/**/chrome',
+        PP_ROOT_PATH . '/node_runtime/chromium/**/chrome',
+    ];
+    foreach ($ownGlobs as $pattern) {
+        foreach ((array)glob($pattern, GLOB_NOSORT | GLOB_BRACE) as $cand) {
+            if (@is_file($cand) && @is_executable($cand)) return $cand;
+        }
+    }
+
     // Common candidates
     $candidates = [
         '/usr/bin/google-chrome', '/usr/local/bin/google-chrome',
@@ -566,6 +577,90 @@ function pp_resolve_chrome_binary(): string {
         if (@is_file($p) && @is_executable($p)) return $p;
     }
     return '';
+}
+
+/**
+ * Ensure a Chromium/Chrome binary is available.
+ * If none detected, automatically downloads Chrome for Testing (linux64) and extracts it under node_runtime/chrome/.
+ * Returns true if a binary is available after the call, false otherwise.
+ */
+function pp_ensure_chromium_available(): bool {
+    $existing = pp_resolve_chrome_binary();
+    if ($existing !== '') return true;
+
+    // Only attempt auto-download on Linux x86_64-like systems (most shared hostings)
+    $uname = function_exists('php_uname') ? strtolower((string)@php_uname()) : strtolower(PHP_OS);
+    $isLinux = strpos($uname, 'linux') !== false;
+    if (!$isLinux) {
+        return false; // skip auto-download on non-linux
+    }
+
+    $root = PP_ROOT_PATH . '/node_runtime/chrome';
+    if (!is_dir($root)) { @mkdir($root, 0777, true); }
+
+    // Get last known good Chrome for Testing stable linux64
+    $metaUrl = 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json';
+    $ctx = stream_context_create([
+        'http' => ['timeout' => 20, 'header' => "User-Agent: PromoPilot/1.0\r\n"],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $json = @file_get_contents($metaUrl, false, $ctx);
+    $url = '';
+    if (is_string($json) && $json !== '') {
+        $data = json_decode($json, true);
+        $stable = $data['channels']['Stable'] ?? $data['channels']['stable'] ?? null;
+        if (is_array($stable)) {
+            $dls = $stable['downloads']['chrome']['linux64'] ?? [];
+            if (!empty($dls) && isset($dls[0]['url'])) { $url = (string)$dls[0]['url']; }
+        }
+    }
+
+    if ($url === '') {
+        // Fallback to a well-known pattern using stable version if present
+        // If we couldn't fetch metadata, give up quietly
+        return false;
+    }
+
+    $tmpZip = $root . '/chrome-linux64.zip.tmp';
+    // Download
+    $ok = false;
+    $in = @fopen($url, 'rb', false, $ctx);
+    if ($in) {
+        $out = @fopen($tmpZip, 'wb');
+        if ($out) {
+            while (!feof($in)) { $buf = fread($in, 8192); if ($buf === false) break; fwrite($out, $buf); }
+            fclose($out);
+            $ok = true;
+        }
+        fclose($in);
+    }
+
+    if (!$ok || !is_file($tmpZip) || filesize($tmpZip) < 1024*1024) { @unlink($tmpZip); return false; }
+
+    // Extract
+    $zip = new ZipArchive();
+    if ($zip->open($tmpZip) === true) {
+        $dest = $root . '/chrome-linux64';
+        // Clean previous dir if exists (best-effort)
+        if (is_dir($dest)) { rmdir_recursive($dest); }
+        @mkdir($dest, 0777, true);
+        $zip->extractTo($root);
+        $zip->close();
+        @unlink($tmpZip);
+        // Ensure binary is executable
+        $bin = $root . '/chrome-linux64/chrome';
+        if (@is_file($bin)) { @chmod($bin, 0755); }
+        // Persist to settings for faster reuse
+        if (@is_file($bin) && @is_executable($bin)) {
+            @set_setting('chrome_binary_path', $bin);
+            return true;
+        }
+    } else {
+        @unlink($tmpZip);
+        return false;
+    }
+
+    return (pp_resolve_chrome_binary() !== '');
 }
 
 /**
@@ -752,7 +847,25 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
     // Write JS to a temp file INSIDE runtimeDir (so Node resolves modules relative to it)
     $tmpFile = @tempnam($runtimeDir, 'pp_js_');
     if ($tmpFile === false) { return [null, '', 'tempnam failed']; }
-    @file_put_contents($tmpFile, $js);
+
+    // Inject bootstrap that adjusts module resolution to include our node_modules explicitly
+    $bootstrap = <<<'BOOT'
+(function(){
+  try {
+    const Module = require('module');
+    const path = require('path');
+    const nm = process.env.PP_NODE_MODULES || '';
+    if (nm) {
+      if (!Module.globalPaths.includes(nm)) Module.globalPaths.unshift(nm);
+      process.env.NODE_PATH = nm + (process.env.NODE_PATH ? (path.delimiter + process.env.NODE_PATH) : '');
+      if (typeof Module._initPaths === 'function') Module._initPaths();
+    }
+  } catch (e) {
+    // ignore
+  }
+})();
+BOOT;
+    @file_put_contents($tmpFile, $bootstrap . "\n" . $js);
 
     // Merge env: start from current, then custom values
     $baseEnv = [];
@@ -775,6 +888,8 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
         'NODE_PATH' => $mergedNodePath,
         // In case hosting uses Puppeteer env variable
         'PUPPETEER_CACHE_DIR' => isset($baseEnv['PUPPETEER_CACHE_DIR']) ? $baseEnv['PUPPETEER_CACHE_DIR'] : $ppCacheDir,
+        // Provide explicit node_modules dir for our bootstrap logic
+        'PP_NODE_MODULES' => $env['PP_NODE_MODULES'] ?? $nodeModules,
     ]);
     if ($chromeBin && empty($envFinal['PUPPETEER_EXECUTABLE_PATH'])) {
         $envFinal['PUPPETEER_EXECUTABLE_PATH'] = $chromeBin;
