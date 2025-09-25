@@ -69,31 +69,44 @@ let puppeteer;
 async function loadPuppeteerOrExit() {
   try {
     if (!puppeteer) {
+      // Diagnostics: where Node would resolve these packages from
       try {
-        // Try standard package (CJS)
-        puppeteer = require('puppeteer');
-        if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
-      } catch (e1) {
+        const pPath = require.resolve('puppeteer');
+        logLine('puppeteer resolve', { path: pPath });
+      } catch (_) {}
+      try {
+        const pcPath = require.resolve('puppeteer-core');
+        logLine('puppeteer-core resolve', { path: pcPath });
+      } catch (_) {}
+      try {
+        // Prefer ESM import first to keep module graph consistent
+        const mod = await import('puppeteer');
+        puppeteer = mod.default || mod;
+      } catch (eImport) {
         try {
-          // Fallback to puppeteer-core (CJS)
-          puppeteer = require('puppeteer-core');
-          if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
-        } catch (e2) {
+          const modCore = await import('puppeteer-core');
+          puppeteer = modCore.default || modCore;
+        } catch (eImportCore) {
+          // Legacy fallback to CJS require
           try {
-            // ESM dynamic import
-            const mod = await import('puppeteer');
-            puppeteer = mod.default || mod;
-          } catch (e3) {
+            puppeteer = require('puppeteer');
+            if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
+          } catch (eReq1) {
             try {
-              const mod2 = await import('puppeteer-core');
-              puppeteer = mod2.default || mod2;
-            } catch (e4) {
-              throw e4;
+              puppeteer = require('puppeteer-core');
+              if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
+            } catch (eReq2) {
+              throw eReq2;
             }
           }
         }
       }
     }
+    // Best-effort log of package version
+    try {
+      const ver = (puppeteer && typeof puppeteer.version === 'function') ? puppeteer.version() : undefined;
+      if (ver) logLine('Puppeteer loaded', { version: ver });
+    } catch (_) {}
     return puppeteer;
   } catch (error) {
     logLine('Puppeteer load failed', { error: String(error), node: process.version });
