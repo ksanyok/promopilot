@@ -527,11 +527,13 @@ function rmdir_recursive($dir) {
 /**
  * Resolve Chrome/Chromium binary path from env/common locations.
  */
-function pp_resolve_chrome_binary(): string {
+function pp_resolve_chrome_binary(bool $ignoreOverrides = false): string {
     // Admin-configured override
     try {
-        $cfg = trim((string)get_setting('chrome_binary_path', ''));
-        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+        if (!$ignoreOverrides) {
+            $cfg = trim((string)get_setting('chrome_binary_path', ''));
+            if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+        }
     } catch (Throwable $e) { /* ignore */ }
 
     $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: getenv('PUPPETEER_EXECUTABLE_PATH') ?: '';
@@ -577,6 +579,160 @@ function pp_resolve_chrome_binary(): string {
         if (@is_file($p) && @is_executable($p)) return $p;
     }
     return '';
+}
+
+/**
+ * Resolve Node.js binary path from env/common locations (shared hosting friendly).
+ */
+function pp_resolve_node_binary(bool $ignoreOverrides = false): string {
+    // Admin-configured override first
+    try {
+        if (!$ignoreOverrides) {
+            $cfg = trim((string)get_setting('node_binary_path', ''));
+            if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+        }
+    } catch (Throwable $e) { /* ignore */ }
+
+    // Local portable node inside project
+    $localNode = PP_ROOT_PATH . '/node_runtime/bin/node';
+    if (@is_file($localNode) && @is_executable($localNode)) {
+        $out = @shell_exec(escapeshellarg($localNode) . ' --version 2>&1');
+        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $localNode;
+    }
+
+    $node = getenv('NODE_BINARY') ?: '';
+    $tryNames = [];
+    if ($node !== '') { $tryNames[] = $node; }
+    // Common executable names on various hostings
+    $tryNames = array_merge($tryNames, ['node', 'nodejs', 'node20', 'node18', 'node16']);
+
+    // Common absolute paths
+    $candidates = [
+        '/usr/local/bin/node','/usr/bin/node','/bin/node',
+        '/usr/local/bin/nodejs','/usr/bin/nodejs',
+        // CloudLinux alt-nodejs
+        '/opt/alt/alt-nodejs16/root/usr/bin/node',
+        '/opt/alt/alt-nodejs18/root/usr/bin/node',
+        '/opt/alt/alt-nodejs20/root/usr/bin/node',
+        // cPanel EA
+        '/opt/cpanel/ea-nodejs16/bin/node',
+        '/opt/cpanel/ea-nodejs18/bin/node',
+        '/opt/cpanel/ea-nodejs20/bin/node',
+        // Hosting-provided path example (whereis node -> /usr/local/node23/bin/node)
+        '/usr/local/node23/bin/node',
+    ];
+
+    foreach (array_merge($tryNames, $candidates) as $cand) {
+        if ($cand === '') continue;
+        $cmd = escapeshellcmd($cand) . ' --version 2>&1';
+        $out = @shell_exec($cmd);
+        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) {
+            return $cand; // works
+        }
+    }
+
+    // Try glob patterns
+    foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node'] as $pattern) {
+        foreach ((array)glob($pattern) as $path) {
+            if (@is_file($path) && @is_executable($path)) {
+                $out = @shell_exec(escapeshellarg($path) . ' --version 2>&1');
+                if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $path;
+            }
+        }
+    }
+    return '';
+}
+
+/**
+ * Resolve npm binary path from settings/env/common locations.
+ */
+function pp_resolve_npm_binary(bool $ignoreOverrides = false): string {
+    // Admin-configured override first
+    try {
+        if (!$ignoreOverrides) {
+            $cfg = trim((string)get_setting('npm_binary_path', ''));
+            if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+        }
+    } catch (Throwable $e) { /* ignore */ }
+
+    $npm = getenv('NPM_BINARY') ?: '';
+    $try = [];
+    if ($npm) $try[] = $npm;
+
+    // Try sibling to detected Node binary (common on shared hosting)
+    $nodeBin = function_exists('pp_resolve_node_binary') ? pp_resolve_node_binary($ignoreOverrides) : '';
+    if ($nodeBin) {
+        $dir = dirname($nodeBin);
+        foreach ([$dir . '/npm', $dir . '/npm-cli', $dir . '/npm.cmd'] as $cand) {
+            $out = @shell_exec(escapeshellcmd($cand) . ' --version 2>&1');
+            if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) {
+                return $cand;
+            }
+        }
+    }
+
+    $try = array_merge($try, ['npm','pnpm','yarn']);
+    $candidates = [
+        '/usr/local/bin/npm','/usr/bin/npm','/bin/npm',
+        '/opt/cpanel/ea-nodejs16/bin/npm','/opt/cpanel/ea-nodejs18/bin/npm','/opt/cpanel/ea-nodejs20/bin/npm',
+        '/opt/alt/alt-nodejs16/root/usr/bin/npm','/opt/alt/alt-nodejs18/root/usr/bin/npm','/opt/alt/alt-nodejs20/root/usr/bin/npm',
+    ];
+    foreach (array_merge($try,$candidates) as $bin) {
+        if ($bin==='') continue;
+        $out = @shell_exec(escapeshellcmd($bin).' --version 2>&1');
+        // Accept only if it looks like a version, e.g. 10.9.0
+        if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) return $bin;
+    }
+    return '';
+}
+
+/**
+ * Resolve command like 'node' to an absolute, executable path if possible.
+ */
+function pp_canonical_executable(string $bin): string {
+    $bin = trim($bin);
+    if ($bin === '') return '';
+    // Absolute or relative path with slash
+    if (strpos($bin, '/') !== false) {
+        return (@is_file($bin) && @is_executable($bin)) ? $bin : '';
+    }
+    // Try command -v / which
+    $out = @shell_exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null');
+    if (!is_string($out) || trim($out) === '') {
+        $out = @shell_exec('which ' . escapeshellarg($bin) . ' 2>/dev/null');
+    }
+    $path = trim((string)$out);
+    if ($path !== '' && @is_file($path) && @is_executable($path)) return $path;
+    return '';
+}
+
+/**
+ * Auto-detect Node, npm, Chrome paths and persist to settings if found.
+ */
+function pp_autodetect_and_save_binaries(): array {
+    $detected = [
+        'node' => '',
+        'npm' => '',
+        'chrome' => '',
+        'saved' => [],
+    ];
+
+    try { $node = pp_resolve_node_binary(true); } catch (Throwable $e) { $node = ''; }
+    try { $npm = pp_resolve_npm_binary(true); } catch (Throwable $e) { $npm = ''; }
+    try { $chrome = pp_resolve_chrome_binary(true); } catch (Throwable $e) { $chrome = ''; }
+
+    $detected['node'] = $node; $detected['npm'] = $npm; $detected['chrome'] = $chrome;
+
+    // Save only absolute, executable paths
+    $nodeAbs = pp_canonical_executable($node);
+    $npmAbs = pp_canonical_executable($npm);
+    $chromeAbs = pp_canonical_executable($chrome);
+
+    if ($nodeAbs) { if (set_setting('node_binary_path', $nodeAbs)) { $detected['saved'][] = 'node_binary_path'; } }
+    if ($npmAbs)  { if (set_setting('npm_binary_path', $npmAbs))   { $detected['saved'][] = 'npm_binary_path'; } }
+    if ($chromeAbs){ if (set_setting('chrome_binary_path', $chromeAbs)) { $detected['saved'][] = 'chrome_binary_path'; } }
+
+    return $detected;
 }
 
 /**
@@ -661,131 +817,6 @@ function pp_ensure_chromium_available(): bool {
     }
 
     return (pp_resolve_chrome_binary() !== '');
-}
-
-/**
- * Resolve Node.js binary path from env/common locations (shared hosting friendly).
- */
-function pp_resolve_node_binary(): string {
-    // Admin-configured override first
-    try {
-        $cfg = trim((string)get_setting('node_binary_path', ''));
-        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
-    } catch (Throwable $e) { /* ignore */ }
-
-    // Local portable node inside project
-    $localNode = PP_ROOT_PATH . '/node_runtime/bin/node';
-    if (@is_file($localNode) && @is_executable($localNode)) {
-        $out = @shell_exec(escapeshellarg($localNode) . ' --version 2>&1');
-        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $localNode;
-    }
-
-    $node = getenv('NODE_BINARY') ?: '';
-    $tryNames = [];
-    if ($node !== '') { $tryNames[] = $node; }
-    // Common executable names on various hostings
-    $tryNames = array_merge($tryNames, ['node', 'nodejs', 'node20', 'node18', 'node16']);
-
-    // Common absolute paths
-    $candidates = [
-        '/usr/local/bin/node','/usr/bin/node','/bin/node',
-        '/usr/local/bin/nodejs','/usr/bin/nodejs',
-        // CloudLinux alt-nodejs
-        '/opt/alt/alt-nodejs16/root/usr/bin/node',
-        '/opt/alt/alt-nodejs18/root/usr/bin/node',
-        '/opt/alt/alt-nodejs20/root/usr/bin/node',
-        // cPanel EA
-        '/opt/cpanel/ea-nodejs16/bin/node',
-        '/opt/cpanel/ea-nodejs18/bin/node',
-        '/opt/cpanel/ea-nodejs20/bin/node',
-        // Hosting-provided path example (whereis node -> /usr/local/node23/bin/node)
-        '/usr/local/node23/bin/node',
-    ];
-
-    foreach (array_merge($tryNames, $candidates) as $cand) {
-        if ($cand === '') continue;
-        $cmd = escapeshellcmd($cand) . ' --version 2>&1';
-        $out = @shell_exec($cmd);
-        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) {
-            return $cand; // works
-        }
-    }
-
-    // Try glob patterns
-    foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node'] as $pattern) {
-        foreach ((array)glob($pattern) as $path) {
-            if (@is_file($path) && @is_executable($path)) {
-                $out = @shell_exec(escapeshellarg($path) . ' --version 2>&1');
-                if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $path;
-            }
-        }
-    }
-    return '';
-}
-
-/**
- * Resolve npm binary path from settings/env/common locations.
- */
-function pp_resolve_npm_binary(): string {
-    // Admin-configured override first
-    try {
-        $cfg = trim((string)get_setting('npm_binary_path', ''));
-        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
-    } catch (Throwable $e) { /* ignore */ }
-
-    $npm = getenv('NPM_BINARY') ?: '';
-    $try = [];
-    if ($npm) $try[] = $npm;
-
-    // Try sibling to detected Node binary (common on shared hosting)
-    $nodeBin = function_exists('pp_resolve_node_binary') ? pp_resolve_node_binary() : '';
-    if ($nodeBin) {
-        $dir = dirname($nodeBin);
-        foreach ([$dir . '/npm', $dir . '/npm-cli', $dir . '/npm.cmd'] as $cand) {
-            $out = @shell_exec(escapeshellcmd($cand) . ' --version 2>&1');
-            if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) {
-                return $cand;
-            }
-        }
-    }
-
-    $try = array_merge($try, ['npm','pnpm','yarn']);
-    $candidates = [
-        '/usr/local/bin/npm','/usr/bin/npm','/bin/npm',
-        '/opt/cpanel/ea-nodejs16/bin/npm','/opt/cpanel/ea-nodejs18/bin/npm','/opt/cpanel/ea-nodejs20/bin/npm',
-        '/opt/alt/alt-nodejs16/root/usr/bin/npm','/opt/alt/alt-nodejs18/root/usr/bin/npm','/opt/alt/alt-nodejs20/root/usr/bin/npm',
-    ];
-    foreach (array_merge($try,$candidates) as $bin) {
-        if ($bin==='') continue;
-        $out = @shell_exec(escapeshellcmd($bin).' --version 2>&1');
-        // Accept only if it looks like a version, e.g. 10.9.0
-        if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) return $bin;
-    }
-    return '';
-}
-
-/**
- * Auto-detect Node, npm, Chrome paths and persist to settings if found.
- */
-function pp_autodetect_and_save_binaries(): array {
-    $detected = [
-        'node' => '',
-        'npm' => '',
-        'chrome' => '',
-        'saved' => [],
-    ];
-
-    try { $node = pp_resolve_node_binary(); } catch (Throwable $e) { $node = ''; }
-    try { $npm = pp_resolve_npm_binary(); } catch (Throwable $e) { $npm = ''; }
-    try { $chrome = pp_resolve_chrome_binary(); } catch (Throwable $e) { $chrome = ''; }
-
-    $detected['node'] = $node; $detected['npm'] = $npm; $detected['chrome'] = $chrome;
-
-    if ($node) { if (set_setting('node_binary_path', $node)) { $detected['saved'][] = 'node_binary_path'; } }
-    if ($npm)  { if (set_setting('npm_binary_path', $npm))   { $detected['saved'][] = 'npm_binary_path'; } }
-    if ($chrome){ if (set_setting('chrome_binary_path', $chrome)) { $detected['saved'][] = 'chrome_binary_path'; } }
-
-    return $detected;
 }
 
 /**
