@@ -8,6 +8,41 @@ $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','generator_mode','openai_api_key','telegram_token','telegram_channel'];
 $settingsMsg='';
 $settingsErr='';
+$openaiCheckMsg='';
+$openaiCheckOk=null; // null=no check, true=ok, false=fail
+$postedOverride = null;
+
+// Handle OpenAI key check without saving
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['check_openai'])) {
+    if (!verify_csrf()) { $settingsErr = __('Ошибка проверки.') . ' (CSRF)'; }
+    else {
+        $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
+        if (!in_array($currency,$allowedCurrencies,true)) { $currency='RUB'; }
+        $mode = strtolower(trim((string)($_POST['generator_mode'] ?? 'local')));
+        if (!in_array($mode, ['local','openai'], true)) { $mode = 'local'; }
+        $openai = trim((string)($_POST['openai_api_key'] ?? ''));
+        $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
+        $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
+        $postedOverride = [
+            'currency'=>$currency,
+            'generator_mode'=>$mode,
+            'openai_api_key'=>$openai,
+            'telegram_token'=>$tgToken,
+            'telegram_channel'=>$tgChannel,
+        ];
+
+        if ($openai === '') { $openaiCheckOk = false; $openaiCheckMsg = __('Введите OpenAI API ключ.'); }
+        else {
+            $valErr = null;
+            if (validate_openai_api_key($openai, $valErr)) {
+                $openaiCheckOk = true; $openaiCheckMsg = __('Ключ подтверждён.');
+            } else {
+                $openaiCheckOk = false; $openaiCheckMsg = $valErr ?: __('Не удалось подтвердить ключ OpenAI.');
+            }
+        }
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['settings_submit'])) {
     if (!verify_csrf()) { $settingsErr = __('Ошибка обновления.') . ' (CSRF)'; }
     else {
@@ -52,6 +87,12 @@ $settings = ['currency'=>'RUB','generator_mode'=>'local','openai_api_key'=>'','t
 $in = "'" . implode("','", array_map([$conn,'real_escape_string'],$settingsKeys)) . "'";
 $res = $conn->query("SELECT k,v FROM settings WHERE k IN ($in)");
 if ($res) { while ($row=$res->fetch_assoc()) { $settings[$row['k']] = (string)$row['v']; } }
+
+// If check was performed, keep posted values in the form
+if (is_array($postedOverride)) {
+    $settings = array_merge($settings, $postedOverride);
+}
+
 $conn->close();
 $updateStatus = get_update_status();
 include '../includes/header.php';
@@ -84,20 +125,39 @@ include '../includes/header.php';
           <?php endforeach; ?>
         </select>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-8">
         <label class="form-label"><?php echo __('Режим генерации'); ?></label>
-        <select name="generator_mode" class="form-select form-control" required>
-          <option value="local" <?php echo ($settings['generator_mode']==='local'?'selected':''); ?>><?php echo __('Наш ИИ'); ?></option>
-          <option value="openai" <?php echo ($settings['generator_mode']==='openai'?'selected':''); ?>>OpenAI</option>
-        </select>
+        <div class="d-flex flex-column gap-2">
+          <label class="form-check">
+            <input class="form-check-input" type="radio" name="generator_mode" value="local" <?php echo ($settings['generator_mode']==='local'?'checked':''); ?>>
+            <span class="form-check-label"><?php echo __('Наш ИИ — локальная генерация без внешних сервисов.'); ?></span>
+          </label>
+          <label class="form-check">
+            <input class="form-check-input" type="radio" name="generator_mode" value="openai" <?php echo ($settings['generator_mode']==='openai'?'checked':''); ?>>
+            <span class="form-check-label">OpenAI — <?php echo __('использует OpenAI API, требуется API ключ.'); ?></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="col-md-8">
+        <label class="form-label">OpenAI API Key</label>
+        <div class="input-group">
+          <input type="text" name="openai_api_key" class="form-control" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
+          <button type="submit" name="check_openai" value="1" class="btn btn-outline-secondary"><?php echo __('Проверить'); ?></button>
+        </div>
+        <small class="text-muted"><?php echo __('Требуется при выборе режима OpenAI. Можно проверить без сохранения.'); ?></small>
+        <?php if ($openaiCheckOk !== null): ?>
+          <div class="mt-2">
+            <?php if ($openaiCheckOk): ?>
+              <span class="badge bg-success"><?php echo htmlspecialchars($openaiCheckMsg); ?></span>
+            <?php else: ?>
+              <span class="badge bg-danger"><?php echo htmlspecialchars($openaiCheckMsg); ?></span>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
       </div>
       <div class="col-md-4"></div>
-      <div class="col-md-6">
-        <label class="form-label">OpenAI API Key</label>
-        <input type="text" name="openai_api_key" class="form-control" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
-        <small class="text-muted"><?php echo __('Требуется при выборе режима OpenAI. Ключ будет проверен при сохранении.'); ?></small>
-      </div>
-      <div class="col-md-6"></div>
+
       <div class="col-md-6">
         <label class="form-label"><?php echo __('Telegram токен'); ?></label>
         <input type="text" name="telegram_token" class="form-control" value="<?php echo htmlspecialchars($settings['telegram_token']); ?>" placeholder="1234567890:ABCDEF...">
@@ -107,9 +167,20 @@ include '../includes/header.php';
         <input type="text" name="telegram_channel" class="form-control" value="<?php echo htmlspecialchars($settings['telegram_channel']); ?>" placeholder="@channel или chat_id">
       </div>
     </div>
-    <div class="mt-3">
+    <div class="mt-3 d-flex gap-2">
       <button type="submit" name="settings_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
     </div>
   </form>
+
+  <script>
+    // Optional UX: scroll to feedback when OpenAI check done
+    (function(){
+      var checked = <?php echo json_encode($openaiCheckOk !== null); ?>;
+      if (checked) {
+        var el = document.querySelector('.badge.bg-success, .badge.bg-danger');
+        if (el && el.scrollIntoView) { el.scrollIntoView({behavior:'smooth', block:'center'}); }
+      }
+    })();
+  </script>
 </div>
 <?php include '../includes/footer.php'; ?>

@@ -749,8 +749,8 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
     if (!is_dir($runtimeDir)) { @mkdir($runtimeDir, 0777, true); }
     $nodeModules = $runtimeDir . '/node_modules';
 
-    // Write JS to a temp file
-    $tmpFile = @tempnam(sys_get_temp_dir(), 'pp_js_');
+    // Write JS to a temp file INSIDE runtimeDir (so Node resolves modules relative to it)
+    $tmpFile = @tempnam($runtimeDir, 'pp_js_');
     if ($tmpFile === false) { return [null, '', 'tempnam failed']; }
     @file_put_contents($tmpFile, $js);
 
@@ -759,6 +759,10 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
     foreach (array_merge($_ENV, $_SERVER) as $k => $v) {
         if (is_string($k) && is_scalar($v)) { $baseEnv[$k] = (string)$v; }
     }
+
+    // Ensure Puppeteer cache dir exists
+    $ppCacheDir = $runtimeDir . '/.cache/puppeteer';
+    if (!is_dir($ppCacheDir)) { @mkdir($ppCacheDir, 0777, true); }
 
     // Augment NODE_PATH
     $existingNodePath = $env['NODE_PATH'] ?? getenv('NODE_PATH') ?: '';
@@ -770,7 +774,7 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
     $envFinal = array_merge($baseEnv, $env, [
         'NODE_PATH' => $mergedNodePath,
         // In case hosting uses Puppeteer env variable
-        'PUPPETEER_CACHE_DIR' => isset($baseEnv['PUPPETEER_CACHE_DIR']) ? $baseEnv['PUPPETEER_CACHE_DIR'] : ($runtimeDir . '/.cache/puppeteer'),
+        'PUPPETEER_CACHE_DIR' => isset($baseEnv['PUPPETEER_CACHE_DIR']) ? $baseEnv['PUPPETEER_CACHE_DIR'] : $ppCacheDir,
     ]);
     if ($chromeBin && empty($envFinal['PUPPETEER_EXECUTABLE_PATH'])) {
         $envFinal['PUPPETEER_EXECUTABLE_PATH'] = $chromeBin;
@@ -781,7 +785,8 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
 
     if ($nodeBin !== '' && function_exists('proc_open')) {
         $cmd = [$nodeBin, $tmpFile];
-        $proc = @proc_open($cmd, $descriptors, $pipes, $runtimeDir);
+        // Pass working directory AND environment to the process
+        $proc = @proc_open($cmd, $descriptors, $pipes, $runtimeDir, $envFinal);
         if (is_resource($proc)) {
             @fclose($pipes[0]);
             @stream_set_blocking($pipes[1], false);
