@@ -600,47 +600,80 @@ function pp_resolve_node_binary(bool $ignoreOverrides = false): string {
         if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $localNode;
     }
 
-    $node = getenv('NODE_BINARY') ?: '';
-    $tryNames = [];
-    if ($node !== '') { $tryNames[] = $node; }
-    // Common executable names on various hostings
-    $tryNames = array_merge($tryNames, ['node', 'nodejs', 'node20', 'node18', 'node16']);
+    // Collect candidate paths from PATH, env, common locations and hosting-specific globs
+    $candidates = [];
 
-    // Common absolute paths
-    $candidates = [
-        '/usr/local/bin/node','/usr/bin/node','/bin/node',
-        '/usr/local/bin/nodejs','/usr/bin/nodejs',
-        // CloudLinux alt-nodejs
-        '/opt/alt/alt-nodejs16/root/usr/bin/node',
-        '/opt/alt/alt-nodejs18/root/usr/bin/node',
-        '/opt/alt/alt-nodejs20/root/usr/bin/node',
-        // cPanel EA
-        '/opt/cpanel/ea-nodejs16/bin/node',
-        '/opt/cpanel/ea-nodejs18/bin/node',
-        '/opt/cpanel/ea-nodejs20/bin/node',
-        // Hosting-provided path example (whereis node -> /usr/local/node23/bin/node)
-        '/usr/local/node23/bin/node',
-    ];
+    $add = function(string $p) use (&$candidates) {
+        if ($p === '') return; $p = trim($p);
+        if (strpos($p, '/') === false) {
+            // Resolve bare command names to absolute paths if possible
+            $abs = pp_canonical_executable($p);
+            if ($abs) { $p = $abs; } else { return; }
+        }
+        if (!isset($candidates[$p]) && @is_file($p) && @is_executable($p)) { $candidates[$p] = true; }
+    };
 
-    foreach (array_merge($tryNames, $candidates) as $cand) {
-        if ($cand === '') continue;
-        $cmd = escapeshellcmd($cand) . ' --version 2>&1';
-        $out = @shell_exec($cmd);
-        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) {
-            return $cand; // works
+    // From environment
+    $add(getenv('NODE_BINARY') ?: '');
+
+    // From PATH (default node first)
+    $add('node');
+    $add('nodejs');
+    // Version-suffixed names commonly available
+    foreach (['node22','node20','node18','node16'] as $name) { $add($name); }
+
+    // Standard locations
+    foreach (['/usr/local/bin/node','/usr/bin/node','/bin/node','/opt/homebrew/bin/node','/snap/bin/node'] as $p) { $add($p); }
+
+    // Hosting-specific trees discovered via glob
+    foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node','/usr/local/node*/bin/node'] as $pattern) {
+        foreach ((array)glob($pattern) as $p) { $add($p); }
+    }
+
+    // Evaluate all candidates and pick best by version policy
+    $working = [];
+    foreach (array_keys($candidates) as $path) {
+        $out = @shell_exec(escapeshellarg($path) . ' --version 2>&1');
+        if (!is_string($out)) continue;
+        if (preg_match('~v(\d+)\.(\d+)\.(\d+)~', $out, $m)) {
+            $maj = (int)$m[1]; $min = (int)$m[2]; $pat = (int)$m[3];
+            $working[] = ['path'=>$path,'major'=>$maj,'minor'=>$min,'patch'=>$pat,'ver' => sprintf('%03d.%03d.%03d',$maj,$min,$pat)];
         }
     }
 
-    // Try glob patterns
-    foreach (['/opt/alt/*nodejs*/root/usr/bin/node','/opt/cpanel/ea-nodejs*/bin/node'] as $pattern) {
-        foreach ((array)glob($pattern) as $path) {
-            if (@is_file($path) && @is_executable($path)) {
-                $out = @shell_exec(escapeshellarg($path) . ' --version 2>&1');
-                if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $path;
-            }
-        }
+    if (empty($working)) {
+        return '';
     }
-    return '';
+
+    // Preference: explicit setting preferred_node_major if provided
+    $prefMajor = (int)trim((string)get_setting('preferred_node_major', '0'));
+
+    // Known LTS majors in order of preference (2024-2025): 22, 20, 18, 16
+    $ltsMajors = [22, 20, 18, 16];
+
+    $order = [];
+    if ($prefMajor > 0) { $order[] = $prefMajor; }
+    foreach ($ltsMajors as $m) { if (!in_array($m, $order, true)) $order[] = $m; }
+
+    // Add remaining majors seen, highest first
+    $seenMajors = array_values(array_unique(array_map(fn($w) => $w['major'], $working)));
+    rsort($seenMajors, SORT_NUMERIC);
+    foreach ($seenMajors as $m) { if (!in_array($m, $order, true)) $order[] = $m; }
+
+    // Choose first available major by our order, with highest minor/patch
+    foreach ($order as $wantMaj) {
+        $subset = array_values(array_filter($working, fn($w) => $w['major'] === $wantMaj));
+        if (!$subset) continue;
+        usort($subset, function($a,$b){
+            if ($a['minor'] === $b['minor']) return $b['patch'] <=> $a['patch'];
+            return $b['minor'] <=> $a['minor'];
+        });
+        return $subset[0]['path'];
+    }
+
+    // Fallback: highest overall version
+    usort($working, function($a,$b){ return strcmp($b['ver'], $a['ver']); });
+    return $working[0]['path'] ?? '';
 }
 
 /**
