@@ -201,6 +201,8 @@ if ($action === 'publish') {
         'network_title' => $network['title'] ?? $networkSlug,
         'title' => $result['title'] ?? '',
         'author' => $result['author'] ?? '',
+        'chrome_path' => $result['chromePath'] ?? '',
+        'chrome_source' => $result['chromeSource'] ?? '',
     ]);
     exit;
 } elseif ($action === 'cancel') {

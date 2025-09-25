@@ -834,6 +834,49 @@ function pp_get_node_binary(): string {
     return 'node';
 }
 
+function pp_get_chrome_info(): array {
+    $info = [
+        'path' => '',
+        'source' => '',
+        'cache_dir' => '',
+        'candidates_sample' => [],
+    ];
+    $cacheDir = PP_ROOT_PATH . '/.cache/puppeteer';
+    $info['cache_dir'] = $cacheDir;
+    $infoFile = $cacheDir . '/chrome-info.json';
+    if (is_file($infoFile)) {
+        $data = json_decode((string)@file_get_contents($infoFile), true);
+        if (is_array($data)) {
+            $info['path'] = (string)($data['path'] ?? '');
+            $info['source'] = (string)($data['source'] ?? '');
+        }
+    }
+    if (!$info['path']) {
+        $envVars = ['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','CHROME_PATH','GOOGLE_CHROME_BIN'];
+        foreach ($envVars as $env) {
+            $val = getenv($env);
+            if ($val) {
+                $info['path'] = $val;
+                $info['source'] = 'env:' . $env;
+                break;
+            }
+        }
+    }
+    // Provide sample candidate directories for troubleshooting
+    $candidateDirs = [
+        '/usr/bin',
+        '/usr/local/bin',
+        '/opt/google/chrome',
+        '/opt/chrome',
+        '/opt/alt/nodejs',
+        $cacheDir,
+    ];
+    foreach ($candidateDirs as $dir) {
+        if (is_dir($dir)) { $info['candidates_sample'][] = $dir; }
+    }
+    return $info;
+}
+
 function pp_collect_chrome_candidates(): array {
     $candidates = [];
     // From settings and env

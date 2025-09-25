@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const fsp = fs.promises;
+const { execSync } = require('child_process');
+const fsp = fs.promises;
 
 function ensureDirSync(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
@@ -92,6 +94,169 @@ try {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getChromeCacheDir() {
+  const custom = process.env.PP_CHROME_CACHE;
+  if (custom && custom.trim()) { return custom.trim(); }
+  return path.join(process.cwd(), '.cache', 'puppeteer');
+}
+
+async function pathExists(filePath) {
+  if (!filePath) return false;
+  try {
+    await fsp.access(filePath, fs.constants.X_OK);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function getNpxCandidates() {
+  const list = [];
+  if (process.env.PP_NPX_PATH) { list.push(process.env.PP_NPX_PATH); }
+  const nodePath = process.execPath;
+  if (nodePath) {
+    const dir = path.dirname(nodePath);
+    list.push(path.join(dir, 'npx'));
+    list.push(path.join(dir, 'npx-cli.js'));
+  }
+  list.push('npx');
+  return Array.from(new Set(list.filter(Boolean)));
+}
+
+function runCommand(command, envExtras = {}) {
+  const env = { ...process.env, ...envExtras };
+  return execSync(command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env });
+}
+
+async function installChromiumViaNpx(cacheDir) {
+  const npxCandidates = getNpxCandidates();
+  for (const npxPath of npxCandidates) {
+    try {
+      const cmd = `/bin/bash -lc "${npxPath} puppeteer browsers install chrome --path \"${cacheDir}\""`;
+      logLine('Attempting Chromium download', { npx: npxPath, cacheDir });
+      runCommand(cmd, { PUPPETEER_CACHE_DIR: cacheDir, HOME: process.env.HOME || process.cwd() });
+      logLine('Chromium download success', { npx: npxPath });
+      return true;
+    } catch (error) {
+      logLine('Chromium download attempt failed', { npx: npxPath, error: String(error) });
+    }
+  }
+  return false;
+}
+
+function collectChromeCandidates(extraCacheDir) {
+  const candidates = [];
+
+  const envVars = ['PUPPETEER_EXECUTABLE_PATH', 'PP_CHROME_PATH', 'CHROME_PATH', 'GOOGLE_CHROME_BIN'];
+  envVars.forEach((key) => {
+    const val = process.env[key];
+    if (val && val.trim()) { candidates.push(val.trim()); }
+  });
+
+  const commands = [
+    'command -v google-chrome',
+    'command -v google-chrome-stable',
+    'command -v chrome',
+    'command -v chromium',
+    'command -v chromium-browser',
+    'command -v headless-shell',
+    'which google-chrome',
+    'which chromium',
+  ];
+  commands.forEach((cmd) => {
+    try {
+      const out = runCommand(cmd).trim();
+      if (out) {
+        out.split(/\s+/).forEach((entry) => {
+          if (entry && entry.includes('/')) { candidates.push(entry.trim()); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+  });
+
+  const globCandidates = [
+    '/usr/local/bin/google-chrome',
+    '/usr/local/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/bin/google-chrome',
+    '/bin/chromium',
+    '/opt/google/chrome/google-chrome',
+    '/opt/google/chrome/chrome',
+    '/opt/chrome/chrome',
+    '/snap/bin/chromium',
+    '/usr/local/sbin/google-chrome',
+    `${process.env.HOME || ''}/.local/bin/google-chrome`,
+    `${process.env.HOME || ''}/bin/google-chrome`,
+  ];
+  globCandidates.forEach((candidate) => candidates.push(candidate));
+
+  const patterns = [
+    '/opt/alt/nodejs*/usr/bin/google-chrome',
+    '/opt/alt/nodejs*/usr/bin/chromium',
+    '/opt/alt/nodejs*/bin/google-chrome',
+    '/opt/alt/chrome*/bin/google-chrome',
+    '/opt/chrome*/bin/google-chrome',
+    '/opt/google/chrome*/chrome',
+    `${process.env.HOME || ''}/.nix-profile/bin/google-chrome`,
+  ];
+  if (extraCacheDir) {
+    patterns.push(path.join(extraCacheDir, 'chrome', 'linux-*', 'chrome-linux64', 'chrome'));
+    patterns.push(path.join(extraCacheDir, 'chrome', 'linux-*', 'chrome-linux', 'chrome'));
+  }
+
+  patterns.forEach((pattern) => {
+    try {
+      const out = runCommand(`/bin/bash -lc "ls -1 ${pattern} 2>/dev/null"`).trim();
+      if (out) {
+        out.split(/\r?\n/).forEach((entry) => {
+          if (entry) { candidates.push(entry.trim()); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+  });
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function resolveChromeExecutable(puppeteerLib) {
+  const cacheDir = getChromeCacheDir();
+  ensureDirSync(cacheDir);
+
+  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.PP_CHROME_PATH || process.env.CHROME_PATH || process.env.GOOGLE_CHROME_BIN;
+  if (envPath && await pathExists(envPath)) {
+    return { path: envPath, source: 'env', candidates: [envPath], cacheDir };
+  }
+
+  if (puppeteerLib && typeof puppeteerLib.executablePath === 'function') {
+    const bundled = puppeteerLib.executablePath();
+    if (await pathExists(bundled)) {
+      return { path: bundled, source: 'bundled', candidates: [bundled], cacheDir };
+    }
+  }
+
+  let candidates = collectChromeCandidates(cacheDir);
+  for (const cand of candidates) {
+    if (await pathExists(cand)) {
+      return { path: cand, source: 'detected', candidates, cacheDir };
+    }
+  }
+
+  const downloaded = await installChromiumViaNpx(cacheDir);
+  if (downloaded) {
+    candidates = collectChromeCandidates(cacheDir);
+    for (const cand of candidates) {
+      if (await pathExists(cand)) {
+        return { path: cand, source: 'downloaded', candidates, cacheDir };
+      }
+    }
+  }
+
+  return { path: null, source: 'missing', candidates, cacheDir };
+}
 
 async function pathExists(filePath) {
   if (!filePath) return false;
@@ -288,6 +453,17 @@ async function publishToTelegraph(job) {
     throw new Error(`Chrome executable not found. Checked: ${chromeInfo.candidates && chromeInfo.candidates.length ? chromeInfo.candidates.join(', ') : 'none'}`);
   }
   logLine('Chrome selected', { path: chromeInfo.path, source: chromeInfo.source });
+  try {
+    const infoFile = path.join(getChromeCacheDir(), 'chrome-info.json');
+    ensureDirSync(path.dirname(infoFile));
+    fs.writeFileSync(infoFile, JSON.stringify({
+      path: chromeInfo.path,
+      source: chromeInfo.source,
+      timestamp: new Date().toISOString(),
+    }, null, 2));
+  } catch (error) {
+    logLine('Failed to write chrome-info.json', { error: String(error) });
+  }
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
@@ -344,6 +520,8 @@ async function publishToTelegraph(job) {
       publishedUrl,
       title: cleanTitle,
       author,
+      chromePath: chromeInfo.path,
+      chromeSource: chromeInfo.source,
       logFile: LOG_FILE,
     };
     logLine('Success result', result);

@@ -168,6 +168,9 @@ elseif ($npmVersionRaw === '') { $npmVersionRaw = __('Недоступно'); }
 
 $puppeteerInstalled = is_dir(PP_ROOT_PATH . '/node_modules/puppeteer');
 $nodeFetchInstalled = is_dir(PP_ROOT_PATH . '/node_modules/node-fetch');
+$chromeInfo = pp_get_chrome_info();
+$chromePathDisplay = $chromeInfo['path'] ?: __('Не задан');
+$chromeSourceDisplay = $chromeInfo['source'] ?: __('—');
 $packageJsonExists = is_file(PP_ROOT_PATH . '/package.json');
 $networksDir = pp_networks_dir();
 $networksDirWritable = is_writable($networksDir);
@@ -188,6 +191,9 @@ $diagnostics = [
     ['label' => __('Директория сетей доступна на запись'), 'value' => $networksDirWritable ? __('Да') : __('Нет')],
     ['label' => __('OpenAI API Key настроен'), 'value' => $openAiConfigured ? __('Да') : __('Нет')],
     ['label' => __('Последнее обновление сетей'), 'value' => $networksLastRefresh],
+    ['label' => __('Chrome/Chromium бинарь'), 'value' => $chromePathDisplay],
+    ['label' => __('Источник Chrome пути'), 'value' => $chromeSourceDisplay],
+    ['label' => __('Puppeteer cache dir'), 'value' => $chromeInfo['cache_dir']],
 ];
 
 // Add Chrome diagnostics
