@@ -1,5 +1,20 @@
 <?php
+// Begin with strict JSON-safety guards BEFORE any includes
+@ini_set('display_errors', '0');
+@ini_set('log_errors', '1');
+@error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
+if (!headers_sent()) { ob_start(); }
+register_shutdown_function(function() {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        if (!headers_sent()) { header('Content-Type: application/json; charset=utf-8'); }
+        echo json_encode(['ok'=>false,'error'=>'FATAL','details'=>$e['message']]);
+    }
+});
+
 require_once __DIR__ . '/../includes/init.php';
+
 header('Content-Type: application/json; charset=utf-8');
 
 @set_time_limit(600);

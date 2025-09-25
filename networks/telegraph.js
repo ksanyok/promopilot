@@ -140,7 +140,19 @@ async function publishToTelegraph(job) {
 
   const cleanTitle = title.replace(/["']+/g, '').trim() || 'PromoPilot Article';
   logLine('Launching browser');
-  const browser = await puppeteer.launch({ headless: 'new' });
+  const launchOpts = { headless: 'new' };
+  // Prefer explicit executable path when provided
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    logLine('Using custom Chromium executable', { path: process.env.PUPPETEER_EXECUTABLE_PATH });
+  }
+  // Allow passing extra args via env; default to no-sandbox for shared hosts
+  if (process.env.PUPPETEER_ARGS) {
+    launchOpts.args = process.env.PUPPETEER_ARGS.split(/\s+/).filter(Boolean);
+  } else {
+    launchOpts.args = ['--no-sandbox', '--disable-setuid-sandbox'];
+  }
+  const browser = await puppeteer.launch(launchOpts);
   let page;
   try {
     page = await browser.newPage();

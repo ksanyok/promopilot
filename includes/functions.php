@@ -717,9 +717,10 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         return ['ok' => false, 'error' => 'PROC_OPEN_FAILED'];
     }
 
-    fclose($pipes[0]);
-    stream_set_blocking($pipes[1], false);
-    stream_set_blocking($pipes[2], false);
+    // Close STDIN of the child if exists to avoid hanging
+    if (isset($pipes[0]) && is_resource($pipes[0])) { @fclose($pipes[0]); $pipes[0] = null; }
+    if (isset($pipes[1]) && is_resource($pipes[1])) { @stream_set_blocking($pipes[1], false); }
+    if (isset($pipes[2]) && is_resource($pipes[2])) { @stream_set_blocking($pipes[2], false); }
 
     $stdout = '';
     $stderr = '';
@@ -729,16 +730,22 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         $status = @proc_get_status($process);
         if (!$status || !$status['running']) {
             // Read any remaining data
-            $stdout .= stream_get_contents($pipes[1]);
-            $stderr .= stream_get_contents($pipes[2]);
+            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
+            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
             break;
         }
 
         $read = [];
-        if (!feof($pipes[1])) { $read[] = $pipes[1]; }
-        if (!feof($pipes[2])) { $read[] = $pipes[2]; }
+        if (isset($pipes[1]) && is_resource($pipes[1])) {
+            // feof requires a valid resource
+            if (!@feof($pipes[1])) { $read[] = $pipes[1]; }
+        }
+        if (isset($pipes[2]) && is_resource($pipes[2])) {
+            if (!@feof($pipes[2])) { $read[] = $pipes[2]; }
+        }
         if (!$read) { break; }
         $remaining = max(1, $timeoutSeconds - (time() - $start));
+        $write = null; $except = null;
         $ready = @stream_select($read, $write, $except, $remaining, 0);
         if ($ready === false) {
             break;
@@ -746,34 +753,46 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         if ($ready === 0) {
             // Timeout: terminate process
             @proc_terminate($process, 9);
-            $stdout .= stream_get_contents($pipes[1]);
-            $stderr .= stream_get_contents($pipes[2]);
-            foreach ($pipes as $pipe) { @fclose($pipe); }
+            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
+            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
+            if (isset($pipes) && is_array($pipes)) {
+                foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
+                unset($pipe);
+            }
             @proc_close($process);
             return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
         }
         foreach ($read as $stream) {
-            $chunk = stream_get_contents($stream);
-            if ($stream === $pipes[1]) { $stdout .= $chunk; }
-            else { $stderr .= $chunk; }
+            if (is_resource($stream)) {
+                $chunk = @stream_get_contents($stream);
+                if ($stream === ($pipes[1] ?? null)) { $stdout .= (string)$chunk; }
+                else { $stderr .= (string)$chunk; }
+            }
         }
         if ((time() - $start) >= $timeoutSeconds) {
             @proc_terminate($process, 9);
-            $stdout .= stream_get_contents($pipes[1]);
-            $stderr .= stream_get_contents($pipes[2]);
-            foreach ($pipes as $pipe) { @fclose($pipe); }
+            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
+            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
+            if (isset($pipes) && is_array($pipes)) {
+                foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
+                unset($pipe);
+            }
             @proc_close($process);
             return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
         }
     }
 
-    foreach ($pipes as $pipe) { @fclose($pipe); }
+    if (isset($pipes) && is_array($pipes)) {
+        foreach ($pipes as &$pipe) { if (is_resource($pipe)) { @fclose($pipe); } $pipe = null; }
+        unset($pipe);
+    }
     $exitCode = @proc_close($process);
 
     $response = ['ok' => false, 'error' => 'NODE_RETURN_EMPTY'];
     $stdoutTrim = trim($stdout);
     if ($stdoutTrim !== '') {
-        $lastLine = trim(substr($stdoutTrim, strrpos($stdoutTrim, "\n") ?: 0));
+        $pos = strrpos($stdoutTrim, "\n");
+        $lastLine = trim($pos === false ? $stdoutTrim : substr($stdoutTrim, $pos + 1));
         $decoded = json_decode($lastLine, true);
         if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
             $response = $decoded;
@@ -781,7 +800,7 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
             $response = ['ok' => false, 'error' => 'INVALID_JSON', 'raw' => $stdoutTrim];
         }
     }
-    if (!empty($stderr)) {
+    if (strlen($stderr) > 0) {
         $response['stderr'] = trim($stderr);
     }
     $response['exit_code'] = $exitCode;
