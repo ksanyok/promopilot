@@ -64,13 +64,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $enabledSlugs = array_keys($_POST['enable']);
             }
             $nodeBinaryNew = trim((string)($_POST['node_binary'] ?? ''));
-            set_setting('node_binary', $nodeBinaryNew);
-            // Save Chrome/Puppeteer options
-            $chromePathNew = trim((string)($_POST['puppeteer_executable_path'] ?? ''));
-            $chromeArgsNew = trim((string)($_POST['puppeteer_args'] ?? ''));
+            $puppeteerExecNew = trim((string)($_POST['puppeteer_executable_path'] ?? ''));
+            $puppeteerArgsNew = trim((string)($_POST['puppeteer_args'] ?? ''));
             set_settings([
-                'puppeteer_executable_path' => $chromePathNew,
-                'puppeteer_args' => $chromeArgsNew,
+                'node_binary' => $nodeBinaryNew,
+                'puppeteer_executable_path' => $puppeteerExecNew,
+                'puppeteer_args' => $puppeteerArgsNew,
             ]);
             if (pp_set_networks_enabled($enabledSlugs)) {
                 $networksMsg = __('Параметры сетей сохранены.');
@@ -94,32 +93,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
                 }
                 $networksMsg = $msg;
-            }
-        }
-    } elseif (isset($_POST['detect_chrome'])) {
-        if (!verify_csrf()) {
-            $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
-        } else {
-            $resolved = pp_resolve_chrome_binary();
-            if ($resolved) {
-                set_setting('puppeteer_executable_path', $resolved['path']);
-                $networksMsg = sprintf(__('Chrome найден: %s (источник: %s).'), $resolved['path'], $resolved['source'] ?? '');
-            } else {
-                $install = pp_install_chrome_browser(900);
-                if (!empty($install['ok']) && !empty($install['path'])) {
-                    set_setting('puppeteer_executable_path', $install['path']);
-                    $networksMsg = sprintf(__('Chromium загружен: %s (сборка %s).'), $install['path'], $install['buildId'] ?? __('неизвестно'));
-                } else {
-                    $candidates = pp_collect_chrome_candidates();
-                    $msg = __('Не удалось автоматически определить Chrome/Chromium.');
-                    if (!empty($candidates)) {
-                        $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
-                    }
-                    if (!empty($install['error'])) {
-                        $msg .= ' (' . htmlspecialchars($install['error']) . ')';
-                    }
-                    $networksMsg = $msg;
-                }
             }
         }
     }
@@ -148,6 +121,8 @@ $updateStatus = get_update_status();
 pp_refresh_networks(false);
 $networks = pp_get_networks(false, true);
 $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
+$puppeteerExecStored = trim((string)get_setting('puppeteer_executable_path', ''));
+$puppeteerArgsStored = trim((string)get_setting('puppeteer_args', ''));
 $resolvedNode = pp_resolve_node_binary(2, true);
 $nodeBinaryEffective = $resolvedNode['path'] ?? pp_get_node_binary();
 $canRunShell = function_exists('shell_exec');
@@ -177,10 +152,6 @@ elseif ($npmVersionRaw === '') { $npmVersionRaw = __('Недоступно'); }
 
 $puppeteerInstalled = is_dir(PP_ROOT_PATH . '/node_modules/puppeteer');
 $nodeFetchInstalled = is_dir(PP_ROOT_PATH . '/node_modules/node-fetch');
-$chromeInfo = pp_get_chrome_info();
-$chromePathDisplay = $chromeInfo['path'] ?: __('Не задан');
-$chromeSourceDisplay = $chromeInfo['source'] ?: __('—');
-$chromeSuggestDisplay = !empty($chromeInfo['suggestions']) ? implode(' | ', $chromeInfo['suggestions']) : __('Рекомендации отсутствуют');
 $packageJsonExists = is_file(PP_ROOT_PATH . '/package.json');
 $networksDir = pp_networks_dir();
 $networksDirWritable = is_writable($networksDir);
@@ -201,12 +172,7 @@ $diagnostics = [
     ['label' => __('Директория сетей доступна на запись'), 'value' => $networksDirWritable ? __('Да') : __('Нет')],
     ['label' => __('OpenAI API Key настроен'), 'value' => $openAiConfigured ? __('Да') : __('Нет')],
     ['label' => __('Последнее обновление сетей'), 'value' => $networksLastRefresh],
-    ['label' => __('Chrome/Chromium бинарь'), 'value' => $chromePathDisplay],
-    ['label' => __('Источник Chrome пути'), 'value' => $chromeSourceDisplay],
-    ['label' => __('Puppeteer cache dir'), 'value' => $chromeInfo['cache_dir']],
-    ['label' => __('Команды установки Chrome'), 'value' => $chromeSuggestDisplay],
 ];
-
 ?>
 
 <?php include '../includes/header.php'; ?>
@@ -446,17 +412,15 @@ $diagnostics = [
             </div>
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Путь до Chrome/Chromium (необязательно)'); ?></label>
-                <?php $chromeSettingVal = htmlspecialchars($chromeSetting); ?>
-                <input type="text" name="puppeteer_executable_path" class="form-control" value="<?php echo $chromeSettingVal; ?>" placeholder="/usr/bin/google-chrome, /Applications/Google Chrome.app/...">
-                <div class="form-text"><?php echo __('Если не задан, будет использоваться системный браузер или встроенный Puppeteer (при наличии).'); ?></div>
+                <input type="text" name="puppeteer_executable_path" class="form-control" value="<?php echo htmlspecialchars($puppeteerExecStored); ?>" placeholder="/home/user/promopilot/node_runtime/chrome/chrome">
+                <div class="form-text"><?php echo __('Если пусто — используется авто‑поиск или браузер Puppeteer.'); ?></div>
             </div>
+        </div>
+        <div class="row g-3 align-items-end mt-0">
             <div class="col-md-12">
-                <label class="form-label"><?php echo __('Доп. аргументы Puppeteer'); ?></label>
-                <input type="text" name="puppeteer_args" class="form-control" value="<?php echo htmlspecialchars($chromeArgsSetting); ?>" placeholder="--no-sandbox --disable-setuid-sandbox">
+                <label class="form-label"><?php echo __('Доп. аргументы для Puppeteer'); ?></label>
+                <input type="text" name="puppeteer_args" class="form-control" value="<?php echo htmlspecialchars($puppeteerArgsStored); ?>" placeholder="--no-sandbox --disable-setuid-sandbox">
                 <div class="form-text"><?php echo __('Аргументы будут добавлены к запуску браузера.'); ?></div>
-            </div>
-            <div class="col-md-6 text-md-end">
-                <button type="submit" name="networks_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
             </div>
         </div>
         <div class="table-responsive mt-3">
@@ -503,18 +467,17 @@ $diagnostics = [
                 <p class="text-muted mb-0"><?php echo __('Сети не обнаружены. Добавьте файлы в директорию networks и обновите список.'); ?></p>
             <?php endif; ?>
         </div>
+        <div class="mt-3 text-md-end">
+            <button type="submit" name="networks_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+        </div>
     </form>
     <form method="post" class="d-inline me-2">
         <?php echo csrf_field(); ?>
         <button type="submit" name="refresh_networks" value="1" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i><?php echo __('Обновить список сетей'); ?></button>
     </form>
-    <form method="post" class="d-inline me-2">
-        <?php echo csrf_field(); ?>
-        <button type="submit" name="detect_node" value="1" class="btn btn-outline-success"><i class="bi bi-magic me-1"></i><?php echo __('Автоопределение Node.js'); ?></button>
-    </form>
     <form method="post" class="d-inline">
         <?php echo csrf_field(); ?>
-        <button type="submit" name="detect_chrome" value="1" class="btn btn-outline-success"><i class="bi bi-magic me-1"></i><?php echo __('Автоопределение Chrome'); ?></button>
+        <button type="submit" name="detect_node" value="1" class="btn btn-outline-success"><i class="bi bi-magic me-1"></i><?php echo __('Автоопределение Node.js'); ?></button>
     </form>
 </div>
 

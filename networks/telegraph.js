@@ -4,7 +4,6 @@
 // Reorder requires so logging is initialized before loading optional deps
 const fs = require('fs');
 const path = require('path');
-const fsp = fs.promises;
 const { execSync } = require('child_process');
 const fsp = fs.promises;
 
@@ -67,13 +66,38 @@ process.on('unhandledRejection', (reason) => {
 });
 
 let puppeteer;
-function loadPuppeteerOrExit() {
+async function loadPuppeteerOrExit() {
   try {
-    if (!puppeteer) puppeteer = require('puppeteer');
+    if (!puppeteer) {
+      try {
+        // Try standard package (CJS)
+        puppeteer = require('puppeteer');
+        if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
+      } catch (e1) {
+        try {
+          // Fallback to puppeteer-core (CJS)
+          puppeteer = require('puppeteer-core');
+          if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
+        } catch (e2) {
+          try {
+            // ESM dynamic import
+            const mod = await import('puppeteer');
+            puppeteer = mod.default || mod;
+          } catch (e3) {
+            try {
+              const mod2 = await import('puppeteer-core');
+              puppeteer = mod2.default || mod2;
+            } catch (e4) {
+              throw e4;
+            }
+          }
+        }
+      }
+    }
     return puppeteer;
   } catch (error) {
-    logLine('Puppeteer load failed', { error: String(error) });
-    console.log(JSON.stringify({ ok: false, error: 'PUPPETEER_LOAD_FAILED', details: String(error) }));
+    logLine('Puppeteer load failed', { error: String(error), node: process.version });
+    console.log(JSON.stringify({ ok: false, error: 'PUPPETEER_LOAD_FAILED', details: String(error), node: process.version }));
     process.exit(1);
   }
 }
@@ -94,107 +118,6 @@ try {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function getChromeCacheDir() {
-  const custom = process.env.PP_CHROME_CACHE;
-  if (custom && custom.trim()) { return custom.trim(); }
-  return path.join(process.cwd(), '.cache', 'puppeteer');
-}
-
-async function pathExists(filePath) {
-  if (!filePath) return false;
-  try {
-    await fsp.access(filePath, fs.constants.X_OK);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-function collectChromeCandidates(cacheDir) {
-  const candidates = new Set();
-  ['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','CHROME_PATH','GOOGLE_CHROME_BIN'].forEach((env) => {
-    const val = process.env[env];
-    if (val && val.trim()) { candidates.add(val.trim()); }
-  });
-
-  const common = [
-    '/usr/local/bin/google-chrome',
-    '/usr/local/bin/google-chrome-stable',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/bin/google-chrome',
-    '/bin/chromium',
-    '/opt/google/chrome/google-chrome',
-    '/opt/google/chrome/chrome',
-    '/opt/chrome/chrome',
-    '/opt/alt/google-chrome/bin/google-chrome',
-    '/opt/alt/chrome/bin/google-chrome',
-    '/opt/alt/chromium/bin/chromium',
-    `${process.env.HOME || ''}/.local/bin/google-chrome`,
-    `${process.env.HOME || ''}/bin/google-chrome`,
-  ];
-  common.forEach((item) => candidates.add(item));
-
-  if (cacheDir) {
-    candidates.add(path.join(cacheDir, 'chrome', 'linux-127.0.6533.88', 'chrome-linux64', 'chrome'));
-    candidates.add(path.join(cacheDir, 'chrome', 'linux-127.0.6533.88', 'chrome-linux', 'chrome'));
-    candidates.add(path.join(cacheDir, 'chrome', 'linux-122.0.6261.0', 'chrome-linux64', 'chrome'));
-  }
-
-  return Array.from(candidates);
-}
-
-function getInstallSuggestions(cacheDir) {
-  const suggestions = [];
-  const nodePath = process.execPath;
-  const nodeDir = nodePath ? path.dirname(nodePath) : '';
-  const npxCandidate = nodeDir ? path.join(nodeDir, 'npx') : 'npx';
-  suggestions.push(`${npxCandidate} puppeteer browsers install chrome --path "${cacheDir}"`);
-  suggestions.push(`npm install puppeteer --save`);
-  suggestions.push(`PUPPETEER_EXECUTABLE_PATH=/path/to/chrome node script.js`);
-  return suggestions;
-}
-
-async function resolveChromeExecutable(puppeteerLib) {
-  const cacheDir = getChromeCacheDir();
-  ensureDirSync(cacheDir);
-  const suggestions = getInstallSuggestions(cacheDir);
-
-  try {
-    const infoFile = path.join(cacheDir, 'chrome-info.json');
-    if (fs.existsSync(infoFile)) {
-      const data = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
-      if (data && data.path && await pathExists(data.path)) {
-        return { path: data.path, source: data.source || 'cache', candidates: [data.path], cacheDir, suggestions };
-      }
-    }
-  } catch (error) {
-    logLine('Chrome info read failed', { error: String(error) });
-  }
-
-  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.PP_CHROME_PATH || process.env.CHROME_PATH || process.env.GOOGLE_CHROME_BIN;
-  if (envPath && await pathExists(envPath)) {
-    return { path: envPath, source: 'env', candidates: [envPath], cacheDir, suggestions };
-  }
-
-  if (puppeteerLib && typeof puppeteerLib.executablePath === 'function') {
-    const bundled = puppeteerLib.executablePath();
-    if (await pathExists(bundled)) {
-      return { path: bundled, source: 'bundled', candidates: [bundled], cacheDir, suggestions };
-    }
-  }
-
-  const candidates = collectChromeCandidates(cacheDir);
-  for (const cand of candidates) {
-    if (await pathExists(cand)) {
-      return { path: cand, source: 'detected', candidates, cacheDir, suggestions };
-    }
-  }
-
-  return { path: null, source: 'missing', candidates, cacheDir, suggestions };
-}
-
 async function pathExists(filePath) {
   if (!filePath) return false;
   try {
@@ -207,7 +130,7 @@ async function pathExists(filePath) {
 
 function collectChromeCandidates() {
   const candidates = [];
-  const envVars = ['PUPPETEER_EXECUTABLE_PATH', 'PP_CHROME_PATH', 'CHROME_PATH', 'GOOGLE_CHROME_BIN'];
+  const envVars = ['PUPPETEER_EXECUTABLE_PATH', 'PP_CHROME_PATH', 'CHROME_PATH', 'GOOGLE_CHROME_BIN', 'CHROME_BIN'];
   envVars.forEach((key) => {
     const val = process.env[key];
     if (val && val.trim()) { candidates.push(val.trim()); }
@@ -250,6 +173,10 @@ function collectChromeCandidates() {
     '/usr/local/sbin/google-chrome',
     `${process.env.HOME || ''}/.local/bin/google-chrome`,
     `${process.env.HOME || ''}/bin/google-chrome`,
+    // Project-local portable Chrome
+    path.join(process.cwd(), 'node_runtime', 'chrome', 'chrome'),
+    path.join(process.cwd(), 'node_runtime', 'chrome', 'chrome-linux64', 'chrome'),
+    path.join(process.cwd(), 'node_runtime', 'chrome', 'headless_shell'),
   ];
 
   const patterns = [
@@ -261,6 +188,9 @@ function collectChromeCandidates() {
     '/opt/google/chrome*/chrome',
     `${process.env.HOME || ''}/.nix-profile/bin/google-chrome`,
     `${process.env.HOME || ''}/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome`,
+    // Project-local portable Chrome (globbed)
+    `${process.cwd()}/node_runtime/chrome/*/chrome`,
+    `${process.cwd()}/node_runtime/chrome/*/chrome-linux64/chrome`,
   ];
 
   patterns.forEach((pattern) => {
@@ -283,16 +213,10 @@ async function resolveChromeExecutable(puppeteerLib) {
     return { path: envPath, source: 'env', candidates: [envPath] };
   }
 
-  // Safely try bundled path; Puppeteer may throw if browsers are not installed
   if (puppeteerLib && typeof puppeteerLib.executablePath === 'function') {
-    try {
-      const bundled = puppeteerLib.executablePath();
-      if (await pathExists(bundled)) {
-        return { path: bundled, source: 'bundled', candidates: [bundled] };
-      }
-    } catch (err) {
-      logLine('Bundled Chrome resolve failed', { error: String(err) });
-      // continue to candidate detection
+    const bundled = puppeteerLib.executablePath();
+    if (await pathExists(bundled)) {
+      return { path: bundled, source: 'bundled', candidates: [bundled] };
     }
   }
 
@@ -300,6 +224,35 @@ async function resolveChromeExecutable(puppeteerLib) {
   for (const cand of candidates) {
     if (await pathExists(cand)) {
       return { path: cand, source: 'detected', candidates };
+    }
+  }
+
+  // Attempt one-time auto-install via CLI if allowed
+  if (process.env.PP_AUTO_INSTALL_CHROME !== '0') {
+    try {
+      const cacheDir = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), 'node_runtime');
+      ensureDirSync(cacheDir);
+      logLine('Attempting Chrome auto-install', { cacheDir });
+      const env = Object.assign({}, process.env, {
+        PUPPETEER_CACHE_DIR: cacheDir,
+        PUPPETEER_PRODUCT: 'chrome',
+      });
+      // Use npx to install Chrome for Testing
+      execSync('/bin/bash -lc "npx --yes puppeteer browsers install chrome"', {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+        encoding: 'utf8',
+      });
+      logLine('Chrome auto-install finished');
+      // Re-collect candidates
+      const after = collectChromeCandidates();
+      for (const cand of after) {
+        if (await pathExists(cand)) {
+          return { path: cand, source: 'auto-installed', candidates: after };
+        }
+      }
+    } catch (e) {
+      logLine('Chrome auto-install failed', { error: String(e) });
     }
   }
 
@@ -339,7 +292,7 @@ async function generateTextWithChat(prompt, openaiApiKey) {
 async function publishToTelegraph(job) {
   logLine('Job received', job);
   // Ensure puppeteer is available (and report cleanly if not)
-  const puppeteerLib = loadPuppeteerOrExit();
+  const puppeteerLib = await loadPuppeteerOrExit();
   const {
     url: pageUrl,
     anchor = '',
@@ -386,23 +339,10 @@ async function publishToTelegraph(job) {
 
   const chromeInfo = await resolveChromeExecutable(puppeteerLib);
   if (!chromeInfo.path) {
-    logLine('Chrome resolve failed', { candidates: chromeInfo.candidates, cacheDir: chromeInfo.cacheDir });
-    const suggestionText = chromeInfo.suggestions ? chromeInfo.suggestions.join(' | ') : '';
-    throw new Error(`Chrome executable not found. Checked: ${chromeInfo.candidates && chromeInfo.candidates.length ? chromeInfo.candidates.join(', ') : 'none'}. Install using: ${suggestionText}`);
+    logLine('Chrome resolve failed', { candidates: chromeInfo.candidates });
+    throw new Error(`Chrome executable not found. Checked: ${chromeInfo.candidates && chromeInfo.candidates.length ? chromeInfo.candidates.join(', ') : 'none'}`);
   }
   logLine('Chrome selected', { path: chromeInfo.path, source: chromeInfo.source });
-  try {
-    const infoFile = path.join(getChromeCacheDir(), 'chrome-info.json');
-    ensureDirSync(path.dirname(infoFile));
-    fs.writeFileSync(infoFile, JSON.stringify({
-      path: chromeInfo.path,
-      source: chromeInfo.source,
-      timestamp: new Date().toISOString(),
-      suggestions: chromeInfo.suggestions || [],
-    }, null, 2));
-  } catch (error) {
-    logLine('Failed to write chrome-info.json', { error: String(error) });
-  }
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
@@ -414,7 +354,7 @@ async function publishToTelegraph(job) {
   const uniqueArgs = Array.from(new Set(launchArgs));
 
   const browser = await puppeteerLib.launch({
-    headless: 'new',
+    headless: true,
     executablePath: chromeInfo.path,
     args: uniqueArgs,
   });
@@ -459,9 +399,6 @@ async function publishToTelegraph(job) {
       publishedUrl,
       title: cleanTitle,
       author,
-      chromePath: chromeInfo.path,
-      chromeSource: chromeInfo.source,
-      chromeSuggestions: chromeInfo.suggestions || [],
       logFile: LOG_FILE,
     };
     logLine('Success result', result);

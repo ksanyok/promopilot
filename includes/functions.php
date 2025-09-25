@@ -834,164 +834,6 @@ function pp_get_node_binary(): string {
     return 'node';
 }
 
-function pp_get_chrome_info(): array {
-    $info = [
-        'path' => '',
-        'source' => '',
-        'cache_dir' => '',
-        'candidates_sample' => [],
-        'suggestions' => [],
-    ];
-    $cacheDir = PP_ROOT_PATH . '/.cache/puppeteer';
-    $info['cache_dir'] = $cacheDir;
-    $infoFile = $cacheDir . '/chrome-info.json';
-    if (is_file($infoFile)) {
-        $data = json_decode((string)@file_get_contents($infoFile), true);
-        if (is_array($data)) {
-            $info['path'] = (string)($data['path'] ?? '');
-            $info['source'] = (string)($data['source'] ?? '');
-            if (!empty($data['suggestions']) && is_array($data['suggestions'])) {
-                $info['suggestions'] = array_values(array_filter(array_map('strval', $data['suggestions'])));
-            }
-        }
-    }
-    if (!$info['path']) {
-        $envVars = ['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','CHROME_PATH','GOOGLE_CHROME_BIN'];
-        foreach ($envVars as $env) {
-            $val = getenv($env);
-            if ($val) {
-                $info['path'] = $val;
-                $info['source'] = 'env:' . $env;
-                break;
-            }
-        }
-    }
-    // Provide sample candidate directories for troubleshooting
-    $candidateDirs = [
-        '/usr/bin',
-        '/usr/local/bin',
-        '/opt/google/chrome',
-        '/opt/chrome',
-        '/opt/alt/nodejs',
-        $cacheDir,
-    ];
-    foreach ($candidateDirs as $dir) {
-        if (is_dir($dir)) { $info['candidates_sample'][] = $dir; }
-    }
-    return $info;
-}
-
-function pp_install_chrome_browser(int $timeoutSeconds = 600): array {
-    $script = PP_ROOT_PATH . '/networks/tools/install_chrome.js';
-    if (!is_file($script)) {
-        return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
-    }
-    return pp_run_node_script($script, [], $timeoutSeconds);
-}
-
-function pp_collect_chrome_candidates(): array {
-    $candidates = [];
-    // From settings and env
-    $setting = trim((string)get_setting('puppeteer_executable_path', ''));
-    if ($setting !== '') { $candidates[] = $setting; }
-    foreach (['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','CHROME_PATH','GOOGLE_CHROME_BIN'] as $envKey) {
-        $val = getenv($envKey);
-        if ($val && trim($val) !== '') { $candidates[] = trim($val); }
-    }
-
-    // which/command -v lookups (Linux/macOS)
-    if (function_exists('shell_exec')) {
-        $commands = [
-            "/bin/bash -lc 'command -v google-chrome 2>/dev/null'",
-            "/bin/bash -lc 'command -v google-chrome-stable 2>/dev/null'",
-            "/bin/bash -lc 'command -v chromium 2>/dev/null'",
-            "/bin/bash -lc 'command -v chromium-browser 2>/dev/null'",
-            "/bin/bash -lc 'which google-chrome 2>/dev/null'",
-            "/bin/bash -lc 'which chromium 2>/dev/null'",
-        ];
-        foreach ($commands as $cmd) {
-            $out = trim((string)@shell_exec($cmd));
-            if ($out === '') { continue; }
-            foreach (preg_split('~[\s\r\n]+~', $out) as $p) {
-                $p = trim($p);
-                if ($p !== '' && strpos($p, '/') !== false) { $candidates[] = $p; }
-            }
-        }
-    }
-
-    // Known locations (Linux)
-    $globPaths = [
-        '/usr/local/bin/google-chrome',
-        '/usr/local/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/bin/google-chrome',
-        '/bin/chromium',
-        '/opt/google/chrome/google-chrome',
-        '/opt/google/chrome/chrome',
-        '/opt/chrome/chrome',
-        '/snap/bin/chromium',
-        '/usr/local/sbin/google-chrome',
-    ];
-    foreach ($globPaths as $p) { $candidates[] = $p; }
-
-    // macOS app bundles
-    $macPaths = [
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-        '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    ];
-    foreach ($macPaths as $p) { $candidates[] = $p; }
-
-    // HOME-based caches
-    $home = getenv('HOME') ?: ((isset($_SERVER['HOME']) && $_SERVER['HOME']) ? $_SERVER['HOME'] : '');
-    if ($home) {
-        $home = rtrim($home, '/');
-        $candidates[] = $home . '/.local/bin/google-chrome';
-        $candidates[] = $home . '/bin/google-chrome';
-        foreach (@glob($home . '/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome') ?: [] as $p) { $candidates[] = $p; }
-    }
-
-    // De-dup
-    $result = [];
-    foreach ($candidates as $c) {
-        $c = trim((string)$c);
-        if ($c === '') { continue; }
-        $result[$c] = $c;
-    }
-    return array_values($result);
-}
-
-function pp_resolve_chrome_binary(): ?array {
-    // 1) Explicit setting
-    $setting = trim((string)get_setting('puppeteer_executable_path', ''));
-    if ($setting !== '' && is_executable($setting)) {
-        return ['path' => $setting, 'source' => 'setting'];
-    }
-    // 2) Env vars
-    foreach (['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','CHROME_PATH','GOOGLE_CHROME_BIN'] as $envKey) {
-        $val = getenv($envKey);
-        if ($val && trim($val) !== '' && is_executable($val)) {
-            return ['path' => trim($val), 'source' => $envKey];
-        }
-    }
-    // 3) Candidates scan
-    foreach (pp_collect_chrome_candidates() as $cand) {
-        if (is_executable($cand)) { return ['path' => $cand, 'source' => 'detected']; }
-    }
-    return null;
-}
-
-function pp_get_chrome_binary(): string {
-    $resolved = pp_resolve_chrome_binary();
-    if ($resolved && !empty($resolved['path'])) { return $resolved['path']; }
-    return '';
-}
-
 function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 480): array {
     if (!is_file($script) || !is_readable($script)) {
         return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
@@ -1019,27 +861,28 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     $logDir = PP_ROOT_PATH . '/logs';
     if (!is_dir($logDir)) { @mkdir($logDir, 0775, true); }
     if (!is_writable($logDir)) { @chmod($logDir, 0775); }
-    $cacheDir = PP_ROOT_PATH . '/.cache';
-    if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0775, true); }
+    $homeDir = PP_ROOT_PATH . '/.cache';
+    if (!is_dir($homeDir)) { @mkdir($homeDir, 0775, true); }
 
     // Optional puppeteer settings from app settings
     $puppeteerExec = trim((string)get_setting('puppeteer_executable_path', ''));
     $puppeteerArgs = trim((string)get_setting('puppeteer_args', ''));
-    $resolvedChrome = pp_resolve_chrome_binary();
 
     $env = array_merge($_ENV, $_SERVER, [
         'PP_JOB' => json_encode($job, JSON_UNESCAPED_UNICODE),
         'NODE_NO_WARNINGS' => '1',
         'PP_LOG_DIR' => $logDir,
         'PP_LOG_FILE' => $logDir . '/network-' . basename($script, '.js') . '-' . date('Ymd-His') . '-' . getmypid() . '.log',
-        // Make caches predictable and avoid double .cache path
-        'HOME' => PP_ROOT_PATH,
-        'XDG_CACHE_HOME' => $cacheDir,
-        'PUPPETEER_CACHE_DIR' => $cacheDir . '/puppeteer',
+        'HOME' => $homeDir,
     ]);
-    if ($puppeteerExec !== '') { $env['PUPPETEER_EXECUTABLE_PATH'] = $puppeteerExec; }
+    if ($puppeteerExec !== '') {
+        $env['PUPPETEER_EXECUTABLE_PATH'] = $puppeteerExec;
+        $env['PP_CHROME_PATH'] = $puppeteerExec;
+        $env['GOOGLE_CHROME_BIN'] = $puppeteerExec;
+        $env['CHROME_PATH'] = $puppeteerExec;
+        $env['CHROME_BIN'] = $puppeteerExec;
+    }
     if ($puppeteerArgs !== '') { $env['PUPPETEER_ARGS'] = $puppeteerArgs; }
-    if ($resolvedChrome && !empty($resolvedChrome['path'])) { $env['PP_CHROME_PATH'] = $resolvedChrome['path']; }
 
     $cmd = $node . ' ' . escapeshellarg($script);
     $process = @proc_open($cmd, $descriptorSpec, $pipes, PP_ROOT_PATH, $env);
