@@ -294,7 +294,7 @@ async function resolveChromeExecutable(puppeteerLib) {
     }
   }
 
-  // Attempt one-time auto-install via CLI if allowed
+  // Attempt one-time auto-install via CLI or programmatically if allowed
   if (process.env.PP_AUTO_INSTALL_CHROME !== '0') {
     try {
       const cacheDir = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), 'node_runtime');
@@ -304,18 +304,49 @@ async function resolveChromeExecutable(puppeteerLib) {
         PUPPETEER_CACHE_DIR: cacheDir,
         PUPPETEER_PRODUCT: 'chrome',
       });
-      // Use npx to install Chrome for Testing
-      execSync('/bin/bash -lc "npx --yes puppeteer browsers install chrome"', {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env,
-        encoding: 'utf8',
-      });
-      logLine('Chrome auto-install finished');
-      // Re-collect candidates
-      const after = collectChromeCandidates();
-      for (const cand of after) {
-        if (await pathExists(cand)) {
-          return { path: cand, source: 'auto-installed', candidates: after };
+      let installed = false;
+      // 1) Try npx puppeteer browsers install chrome
+      try {
+        const hasNpx = execSync('/bin/bash -lc "command -v npx || true"', { encoding: 'utf8' }).trim();
+        if (hasNpx) {
+          execSync('/bin/bash -lc "npx --yes puppeteer browsers install chrome"', { stdio: ['ignore', 'pipe', 'pipe'], env, encoding: 'utf8' });
+          installed = true;
+        }
+      } catch (e1) {
+        logLine('Chrome auto-install via npx failed', { error: String(e1) });
+      }
+      // 2) Try npm exec (some hosts have npm but no npx)
+      if (!installed) {
+        try {
+          const hasNpm = execSync('/bin/bash -lc "command -v npm || true"', { encoding: 'utf8' }).trim();
+          if (hasNpm) {
+            execSync('/bin/bash -lc "npm exec puppeteer browsers install chrome"', { stdio: ['ignore', 'pipe', 'pipe'], env, encoding: 'utf8' });
+            installed = true;
+          }
+        } catch (e2) {
+          logLine('Chrome auto-install via npm exec failed', { error: String(e2) });
+        }
+      }
+      // 3) Programmatic install via @puppeteer/browsers
+      if (!installed) {
+        try {
+          const mod = await import('@puppeteer/browsers');
+          const Browser = mod.Browser || { CHROME: 'chrome' };
+          const buildId = 'stable';
+          const res = await mod.install({ browser: Browser.CHROME, cacheDir, buildId });
+          logLine('Chrome installed programmatically', { path: res.executablePath || res.path || '' });
+          installed = true;
+        } catch (e3) {
+          logLine('Chrome programmatic install failed', { error: String(e3) });
+        }
+      }
+
+      if (installed) {
+        const after = collectChromeCandidates();
+        for (const cand of after) {
+          if (await pathExists(cand)) {
+            return { path: cand, source: 'auto-installed', candidates: after };
+          }
         }
       }
     } catch (e) {
