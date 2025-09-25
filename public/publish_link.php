@@ -55,6 +55,10 @@ $projectLanguage = trim((string)($proj['language'] ?? 'ru')) ?: 'ru';
 $projectWish = trim((string)($proj['wishes'] ?? ''));
 $projectName = trim((string)($proj['name'] ?? ''));
 
+// Initialize with project-level defaults to avoid undefined variable notices
+$linkLanguage = $projectLanguage;
+$linkWish = $projectWish;
+
 if (is_array($links)) {
     foreach ($links as $lnk) {
         if (is_array($lnk) && isset($lnk['url']) && trim($lnk['url']) === $url) {
