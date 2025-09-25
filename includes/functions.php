@@ -414,6 +414,82 @@ function get_openai_api_key(): string {
     return trim((string)get_setting('openai_api_key', ''));
 }
 
+// Add: generation mode getter ("local" for Наш ИИ or "openai")
+function get_generation_mode(): string {
+    $mode = strtolower((string)get_setting('generator_mode', 'local'));
+    return in_array($mode, ['local','openai'], true) ? $mode : 'local';
+}
+
+// Add: validate OpenAI API key by calling OpenAI models endpoint
+function validate_openai_api_key(string $apiKey, ?string &$error = null, int $timeout = 6): bool {
+    $error = null;
+    $apiKey = trim($apiKey);
+    if ($apiKey === '') { $error = __('Ключ OpenAI пуст.'); return false; }
+    // Basic format hint (not a strict validator)
+    if (strpos($apiKey, 'sk-') !== 0) {
+        // Not failing hard, but warn via error for user feedback
+        $error = __('Ключ OpenAI обычно начинается с sk-. Проверьте правильность.');
+        // Continue to try network validation
+    }
+
+    $url = 'https://api.openai.com/v1/models';
+    $headers = [
+        'Authorization: Bearer ' . $apiKey,
+        'Accept: application/json',
+        // User-Agent to avoid some hostings blocking
+        'User-Agent: PromoPilot/1.0'
+    ];
+
+    $httpCode = 0; $body = '';
+
+    if (function_exists('curl_init')) {
+        $ch = @curl_init($url);
+        if ($ch) {
+            @curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            @curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+            @curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+            @curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, min(3, $timeout));
+            @curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            @curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+            $body = (string)@curl_exec($ch);
+            $httpCode = (int)@curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            if ($body === false) { $body = ''; }
+            @curl_close($ch);
+        }
+    } else {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => implode("\r\n", $headers) . "\r\n",
+                'timeout' => $timeout,
+                'ignore_errors' => true,
+            ],
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+            ],
+        ]);
+        $body = @file_get_contents($url, false, $context);
+        if (isset($http_response_header) && is_array($http_response_header)) {
+            foreach ($http_response_header as $h) {
+                if (preg_match('~^HTTP/\S+\s+(\d+)~', $h, $m)) { $httpCode = (int)$m[1]; break; }
+            }
+        }
+        if (!is_string($body)) { $body = ''; }
+    }
+
+    if ($httpCode === 200) { return true; }
+    if ($httpCode === 401) { $error = __('Неверный OpenAI API ключ (401 Unauthorized).'); return false; }
+
+    // Other codes: network or policy issues; return false with message
+    if ($httpCode > 0) {
+        $error = sprintf(__('Не удалось подтвердить ключ OpenAI (HTTP %d).'), $httpCode);
+    } else {
+        $error = __('Не удалось соединиться с OpenAI для проверки ключа.');
+    }
+    return false;
+}
+
 function get_currency_code(): string {
     $cur = strtoupper((string)get_setting('currency', 'RUB'));
     $allowed = ['RUB','USD','EUR','GBP','UAH'];
@@ -556,9 +632,28 @@ function pp_resolve_node_binary(): string {
  * Resolve npm binary path from settings/env/common locations.
  */
 function pp_resolve_npm_binary(): string {
+    // Admin-configured override first
+    try {
+        $cfg = trim((string)get_setting('npm_binary_path', ''));
+        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+    } catch (Throwable $e) { /* ignore */ }
+
     $npm = getenv('NPM_BINARY') ?: '';
     $try = [];
     if ($npm) $try[] = $npm;
+
+    // Try sibling to detected Node binary (common on shared hosting)
+    $nodeBin = function_exists('pp_resolve_node_binary') ? pp_resolve_node_binary() : '';
+    if ($nodeBin) {
+        $dir = dirname($nodeBin);
+        foreach ([$dir . '/npm', $dir . '/npm-cli', $dir . '/npm.cmd'] as $cand) {
+            $out = @shell_exec(escapeshellcmd($cand) . ' --version 2>&1');
+            if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) {
+                return $cand;
+            }
+        }
+    }
+
     $try = array_merge($try, ['npm','pnpm','yarn']);
     $candidates = [
         '/usr/local/bin/npm','/usr/bin/npm','/bin/npm',
@@ -572,6 +667,30 @@ function pp_resolve_npm_binary(): string {
         if (is_string($out) && preg_match('~^\d+\.\d+\.\d+~', trim($out))) return $bin;
     }
     return '';
+}
+
+/**
+ * Auto-detect Node, npm, Chrome paths and persist to settings if found.
+ */
+function pp_autodetect_and_save_binaries(): array {
+    $detected = [
+        'node' => '',
+        'npm' => '',
+        'chrome' => '',
+        'saved' => [],
+    ];
+
+    try { $node = pp_resolve_node_binary(); } catch (Throwable $e) { $node = ''; }
+    try { $npm = pp_resolve_npm_binary(); } catch (Throwable $e) { $npm = ''; }
+    try { $chrome = pp_resolve_chrome_binary(); } catch (Throwable $e) { $chrome = ''; }
+
+    $detected['node'] = $node; $detected['npm'] = $npm; $detected['chrome'] = $chrome;
+
+    if ($node) { if (set_setting('node_binary_path', $node)) { $detected['saved'][] = 'node_binary_path'; } }
+    if ($npm)  { if (set_setting('npm_binary_path', $npm))   { $detected['saved'][] = 'npm_binary_path'; } }
+    if ($chrome){ if (set_setting('chrome_binary_path', $chrome)) { $detected['saved'][] = 'chrome_binary_path'; } }
+
+    return $detected;
 }
 
 /**
@@ -645,18 +764,24 @@ function pp_run_puppeteer(string $js, array $env = [], int $timeout = 60): array
     $existingNodePath = $env['NODE_PATH'] ?? getenv('NODE_PATH') ?: '';
     $mergedNodePath = $nodeModules . ($existingNodePath ? PATH_SEPARATOR . $existingNodePath : '');
 
+    // Provide Chrome path to Puppeteer if we know it
+    $chromeBin = pp_resolve_chrome_binary();
+
     $envFinal = array_merge($baseEnv, $env, [
         'NODE_PATH' => $mergedNodePath,
         // In case hosting uses Puppeteer env variable
         'PUPPETEER_CACHE_DIR' => isset($baseEnv['PUPPETEER_CACHE_DIR']) ? $baseEnv['PUPPETEER_CACHE_DIR'] : ($runtimeDir . '/.cache/puppeteer'),
     ]);
+    if ($chromeBin && empty($envFinal['PUPPETEER_EXECUTABLE_PATH'])) {
+        $envFinal['PUPPETEER_EXECUTABLE_PATH'] = $chromeBin;
+    }
 
     // Prefer proc_open for control over timeout
     $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 
     if ($nodeBin !== '' && function_exists('proc_open')) {
         $cmd = [$nodeBin, $tmpFile];
-        $proc = @proc_open($cmd, $descriptors, $pipes, $runtimeDir, $envFinal);
+        $proc = @proc_open($cmd, $descriptors, $pipes, $runtimeDir);
         if (is_resource($proc)) {
             @fclose($pipes[0]);
             @stream_set_blocking($pipes[1], false);

@@ -88,6 +88,24 @@ function pp_collect_diagnostics(): array {
 
 $diag = pp_collect_diagnostics();
 
+// Handle admin actions: autodetect binaries and install node_runtime
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    if (!verify_csrf()) {
+        $msg = __('Ошибка выполнения действия.') . ' (CSRF)';
+    } else {
+        if (isset($_POST['autodetect_binaries'])) {
+            $res = function_exists('pp_autodetect_and_save_binaries') ? pp_autodetect_and_save_binaries() : ['node'=>'','npm'=>'','chrome'=>'','saved'=>[]];
+            $saved = !empty($res['saved']) ? (' · ' . __('Сохранено') . ': ' . implode(', ', $res['saved'])) : '';
+            $msg = __('Автообнаружение выполнено') . '. Node: ' . ($res['node'] ?: __('не найден')) . '; npm: ' . ($res['npm'] ?: __('не найден')) . '; Chrome: ' . ($res['chrome'] ?: __('не найден')) . $saved;
+            $diag = pp_collect_diagnostics();
+        } elseif (isset($_POST['install_node_runtime'])) {
+            $ok = function_exists('pp_ensure_node_runtime_installed') ? pp_ensure_node_runtime_installed() : false;
+            $msg = $ok ? __('Установка node_runtime завершена (или уже установлено).') : __('Не удалось установить node_runtime. Проверьте доступность npm и права.');
+            $diag = pp_collect_diagnostics();
+        }
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report'])) {
     if (!verify_csrf()) {
         $msg = __('Ошибка сохранения отчёта.') . ' (CSRF)';
@@ -169,6 +187,15 @@ include '../includes/header.php';
     <button type="submit" name="save_report" value="1" class="btn btn-sm btn-outline-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить отчёт в logs'); ?></button>
     <span class="text-muted ms-2 small"><?php echo __('Путь'); ?>: <?php echo htmlspecialchars(PP_ROOT_PATH . '/logs'); ?></span>
   </form>
+
+  <div class="card p-3 mb-3">
+    <div class="h5 mb-2"><?php echo __('Действия'); ?></div>
+    <form method="post" class="d-flex flex-wrap gap-2">
+      <?php echo csrf_field(); ?>
+      <button type="submit" name="autodetect_binaries" value="1" class="btn btn-sm btn-outline-secondary"><i class="bi bi-search me-1"></i><?php echo __('Автообнаружить пути (Node/npm/Chrome)'); ?></button>
+      <button type="submit" name="install_node_runtime" value="1" class="btn btn-sm btn-outline-secondary"><i class="bi bi-download me-1"></i><?php echo __('Установить/проверить node_runtime'); ?></button>
+    </form>
+  </div>
 
   <div class="card p-3 mb-3">
     <div class="h5 mb-2">PHP</div>
