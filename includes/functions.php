@@ -974,4 +974,78 @@ function pp_publish_via_network(array $network, array $job, int $timeoutSeconds 
     return pp_run_node_script($network['handler_abs'], $job, $timeoutSeconds);
 }
 
+function pp_collect_chrome_candidates(): array {
+    $candidates = [];
+
+    // 1) From settings and env
+    $setting = trim((string)get_setting('puppeteer_executable_path', ''));
+    if ($setting !== '') { $candidates[] = $setting; }
+    $envVars = ['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','GOOGLE_CHROME_BIN','CHROME_PATH','CHROME_BIN'];
+    foreach ($envVars as $k) {
+        $v = getenv($k);
+        if ($v && trim($v) !== '') { $candidates[] = trim($v); }
+    }
+
+    // 2) Common system locations
+    $common = [
+        '/usr/local/bin/google-chrome',
+        '/usr/local/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/bin/google-chrome',
+        '/bin/chromium',
+        '/opt/google/chrome/google-chrome',
+        '/opt/google/chrome/chrome',
+        '/opt/chrome/chrome',
+        '/snap/bin/chromium',
+    ];
+    foreach ($common as $p) { $candidates[] = $p; }
+
+    // 3) Project-local portable Chrome
+    $base = rtrim(PP_ROOT_PATH, '/');
+    $projectLocal = [
+        $base . '/node_runtime/chrome/chrome',
+        $base . '/node_runtime/chrome/chrome-linux64/chrome',
+    ];
+    foreach ($projectLocal as $p) { $candidates[] = $p; }
+
+    // 4) Glob project-local versions (e.g., linux-xxx)
+    foreach (@glob($base . '/node_runtime/chrome/*/chrome-linux64/chrome') ?: [] as $p) { $candidates[] = $p; }
+
+    // 5) PATH lookups via shell, if available
+    if (function_exists('shell_exec')) {
+        $cmds = [
+            "command -v google-chrome 2>/dev/null",
+            "command -v google-chrome-stable 2>/dev/null",
+            "command -v chromium 2>/dev/null",
+            "command -v chromium-browser 2>/dev/null",
+        ];
+        foreach ($cmds as $cmd) {
+            $out = trim((string)@shell_exec($cmd));
+            if ($out !== '' && strpos($out, '/') !== false) { $candidates[] = $out; }
+        }
+    }
+
+    // Deduplicate
+    $map = [];
+    foreach ($candidates as $cand) {
+        $cand = trim((string)$cand);
+        if ($cand === '') continue;
+        if (!isset($map[$cand])) $map[$cand] = $cand;
+    }
+    return array_values($map);
+}
+
+function pp_resolve_chrome_path(): ?string {
+    $cands = pp_collect_chrome_candidates();
+    foreach ($cands as $cand) {
+        if (@is_file($cand) && @is_executable($cand)) {
+            return $cand;
+        }
+    }
+    return null;
+}
+
 ?>

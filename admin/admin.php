@@ -12,6 +12,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KE
 
 $settingsMsg = '';
 $networksMsg = '';
+$diagnosticsMsg = '';
 $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
 
@@ -95,6 +96,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $networksMsg = $msg;
             }
         }
+    } elseif (isset($_POST['detect_chrome'])) {
+        if (!verify_csrf()) {
+            $diagnosticsMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $found = pp_resolve_chrome_path();
+            if ($found) {
+                set_setting('puppeteer_executable_path', $found);
+                $diagnosticsMsg = sprintf(__('Chrome найден: %s. Путь сохранён в настройках.'), $found);
+            } else {
+                $diagnosticsMsg = __('Не удалось автоматически определить Chrome. Проверьте подсказки ниже и установите браузер в корне проекта.');
+            }
+        }
     }
 }
 
@@ -158,6 +171,8 @@ $networksDirWritable = is_writable($networksDir);
 $openAiConfigured = trim($settings['openai_api_key'] ?? '') !== '';
 $networksLastRefreshTs = (int)get_setting('networks_last_refresh', 0);
 $networksLastRefresh = $networksLastRefreshTs ? date('Y-m-d H:i:s', $networksLastRefreshTs) : __('Не выполнялось');
+$chromeResolved = pp_resolve_chrome_path();
+$chromeInstalled = $chromeResolved !== null;
 
 $diagnostics = [
     ['label' => __('PHP версия'), 'value' => PHP_VERSION],
@@ -167,6 +182,8 @@ $diagnostics = [
     ['label' => __('NPM версия'), 'value' => $npmVersionRaw],
     ['label' => __('package.json'), 'value' => $packageJsonExists ? __('Найден') : __('Не найден')],
     ['label' => __('Puppeteer установлен'), 'value' => $puppeteerInstalled ? __('Да') : __('Нет')],
+    ['label' => __('Chrome установлен'), 'value' => $chromeInstalled ? __('Да') : __('Нет')],
+    ['label' => __('Путь до Chrome'), 'value' => $chromeInstalled ? $chromeResolved : __('Не найден')],
     ['label' => __('node-fetch установлен'), 'value' => $nodeFetchInstalled ? __('Да') : __('Нет')],
     ['label' => __('Директория сетей'), 'value' => $networksDir],
     ['label' => __('Директория сетей доступна на запись'), 'value' => $networksDirWritable ? __('Да') : __('Нет')],
@@ -483,6 +500,9 @@ $diagnostics = [
 
 <div id="diagnostics-section" style="display:none;">
     <h3><?php echo __('Диагностика системы'); ?></h3>
+    <?php if ($diagnosticsMsg): ?>
+        <div class="alert alert-info fade-in"><?php echo htmlspecialchars($diagnosticsMsg); ?></div>
+    <?php endif; ?>
     <div class="card">
         <div class="card-body">
             <div class="table-responsive">
@@ -497,6 +517,27 @@ $diagnostics = [
                     </tbody>
                 </table>
             </div>
+            <div class="mt-3 d-flex gap-2">
+                <form method="post" class="d-inline">
+                    <?php echo csrf_field(); ?>
+                    <button type="submit" name="detect_chrome" value="1" class="btn btn-outline-primary">
+                        <i class="bi bi-search"></i> <?php echo __('Автоопределение Chrome'); ?>
+                    </button>
+                </form>
+            </div>
+            <?php if (!$chromeInstalled): ?>
+            <div class="alert alert-warning mt-3 mb-0">
+                <div class="mb-1"><strong><?php echo __('Chrome не найден.'); ?></strong> <?php echo __('Установите Chrome for Testing в корне проекта и повторите автоопределение. Команды выполнять в каталоге проекта.'); ?></div>
+                <ol class="mb-2">
+                    <li><?php echo __('Перейдите в каталог проекта'); ?>: <code>cd /path/to/promopilot</code></li>
+                    <li><?php echo __('Установите кеш‑папку'); ?>: <code>export PUPPETEER_CACHE_DIR="$PWD/node_runtime"</code></li>
+                    <li><?php echo __('Укажите продукт'); ?>: <code>export PUPPETEER_PRODUCT=chrome</code></li>
+                    <li><?php echo __('Установите браузер'); ?>: <code>npm exec puppeteer browsers install chrome</code></li>
+                </ol>
+                <div class="mb-1"><?php echo __('После установки укажите путь в'); ?> «<?php echo __('Путь до Chrome/Chromium'); ?>» <?php echo __('или нажмите'); ?> «<?php echo __('Автоопределение Chrome'); ?>».</div>
+                <div class="small text-muted"><?php echo __('Примечание: при отсутствии npm exec попробуйте'); ?> <code>npx --yes puppeteer browsers install chrome</code>.</div>
+            </div>
+            <?php endif; ?>
             <?php if (!$puppeteerInstalled || !$nodeFetchInstalled): ?>
             <div class="alert alert-warning mt-3 mb-0">
                 <i class="bi bi-exclamation-triangle me-1"></i><?php echo __('Установите зависимости Node.js командой'); ?> <code>npm install</code> <?php echo __('в корне проекта.'); ?>
