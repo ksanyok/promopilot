@@ -65,6 +65,29 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
+function parseSemver(v) {
+  const m = String(v || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return { major: 0, minor: 0, patch: 0 };
+  return { major: +m[1], minor: +m[2], patch: +m[3] };
+}
+function cmpSemver(a, b) {
+  const A = parseSemver(a), B = parseSemver(b);
+  if (A.major !== B.major) return A.major - B.major;
+  if (A.minor !== B.minor) return A.minor - B.minor;
+  return A.patch - B.patch;
+}
+function getPkgInfo(pkgName) {
+  try {
+    const pkgJsonPath = require.resolve(`${pkgName}/package.json`);
+    const json = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    return { version: json.version || '', pkgJsonPath };
+  } catch (e) {
+    return { version: '', pkgJsonPath: null };
+  }
+}
+
+const MIN_PPTR_VERSION = process.env.PP_MIN_PPTR_VERSION || '24.10.2';
+
 let puppeteer;
 async function loadPuppeteerOrExit() {
   try {
@@ -78,28 +101,59 @@ async function loadPuppeteerOrExit() {
         const pcPath = require.resolve('puppeteer-core');
         logLine('puppeteer-core resolve', { path: pcPath });
       } catch (_) {}
-      try {
-        // Prefer ESM import first to keep module graph consistent
-        const mod = await import('puppeteer');
-        puppeteer = mod.default || mod;
-      } catch (eImport) {
+
+      const pInfo = getPkgInfo('puppeteer');
+      const pcInfo = getPkgInfo('puppeteer-core');
+      if (pInfo.version) logLine('puppeteer version', pInfo);
+      if (pcInfo.version) logLine('puppeteer-core version', pcInfo);
+
+      const tryList = [];
+      if (pInfo.version && cmpSemver(pInfo.version, MIN_PPTR_VERSION) >= 0) tryList.push({ type: 'import', name: 'puppeteer' });
+      if (pcInfo.version && cmpSemver(pcInfo.version, MIN_PPTR_VERSION) >= 0) tryList.push({ type: 'import', name: 'puppeteer-core' });
+
+      // If none meet minimum, still attempt modern import order but will emit helpful error
+      if (tryList.length === 0) {
+        logLine('puppeteer min version unmet', { min: MIN_PPTR_VERSION, puppeteer: pInfo, puppeteerCore: pcInfo });
+        // Prefer puppeteer-core first when both are old to avoid bundled-browser issues
+        tryList.push({ type: 'import', name: 'puppeteer-core' });
+        tryList.push({ type: 'import', name: 'puppeteer' });
+      }
+
+      let lastErr;
+      for (const attempt of tryList) {
         try {
-          const modCore = await import('puppeteer-core');
-          puppeteer = modCore.default || modCore;
-        } catch (eImportCore) {
-          // Legacy fallback to CJS require
-          try {
-            puppeteer = require('puppeteer');
-            if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
-          } catch (eReq1) {
-            try {
-              puppeteer = require('puppeteer-core');
-              if (puppeteer && puppeteer.default) puppeteer = puppeteer.default;
-            } catch (eReq2) {
-              throw eReq2;
-            }
+          if (attempt.type === 'import') {
+            const mod = await import(attempt.name);
+            puppeteer = mod.default || mod;
+          } else if (attempt.type === 'require') {
+            let mod = require(attempt.name);
+            puppeteer = mod && mod.default ? mod.default : mod;
           }
+          // Basic sanity check: launch function exists
+          if (puppeteer && typeof puppeteer.launch === 'function') {
+            break;
+          }
+          lastErr = new Error('Loaded module lacks launch()');
+          puppeteer = undefined;
+        } catch (e) {
+          lastErr = e;
+          puppeteer = undefined;
         }
+      }
+
+      if (!puppeteer) {
+        const payload = {
+          ok: false,
+          error: 'PUPPETEER_VERSION_UNSUPPORTED',
+          details: String(lastErr || 'Unknown error'),
+          node: process.version,
+          minRequired: MIN_PPTR_VERSION,
+          detected: { puppeteer: pInfo, puppeteerCore: pcInfo },
+          hint: 'Update on server: npm i puppeteer@^24.10.2 puppeteer-core@^24.10.2',
+        };
+        logLine('Puppeteer load failed', payload);
+        console.log(JSON.stringify(payload));
+        process.exit(1);
       }
     }
     // Best-effort log of package version
