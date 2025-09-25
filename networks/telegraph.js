@@ -1,19 +1,7 @@
 // Network: Telegraph Publication
 // Description: Publishes rich articles to https://telegra.ph/ using Puppeteer automation.
 
-const puppeteer = require('puppeteer');
-let fetch;
-try {
-  // node-fetch v2 (CommonJS)
-  fetch = require('node-fetch');
-} catch (error) {
-  if (typeof global.fetch === 'function') {
-    fetch = global.fetch;
-  } else {
-    throw error;
-  }
-}
-
+// Reorder requires so logging is initialized before loading optional deps
 const fs = require('fs');
 const path = require('path');
 
@@ -63,6 +51,44 @@ function logLine(message, data) {
   } catch (_) {}
 }
 
+// Global guards to always emit JSON on unexpected failures
+process.on('uncaughtException', (err) => {
+  logLine('uncaughtException', { error: String(err), stack: err && err.stack });
+  try { console.log(JSON.stringify({ ok: false, error: 'UNCAUGHT', details: String(err) })); } catch (_) {}
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  logLine('unhandledRejection', { reason: String(reason) });
+  try { console.log(JSON.stringify({ ok: false, error: 'UNHANDLED_REJECTION', details: String(reason) })); } catch (_) {}
+  process.exit(1);
+});
+
+let puppeteer;
+function loadPuppeteerOrExit() {
+  try {
+    if (!puppeteer) puppeteer = require('puppeteer');
+    return puppeteer;
+  } catch (error) {
+    logLine('Puppeteer load failed', { error: String(error) });
+    console.log(JSON.stringify({ ok: false, error: 'PUPPETEER_LOAD_FAILED', details: String(error) }));
+    process.exit(1);
+  }
+}
+
+let fetch;
+try {
+  // node-fetch v2 (CommonJS)
+  fetch = require('node-fetch');
+} catch (error) {
+  if (typeof global.fetch === 'function') {
+    fetch = global.fetch;
+  } else {
+    logLine('node-fetch load failed', { error: String(error) });
+    console.log(JSON.stringify({ ok: false, error: 'FETCH_LOAD_FAILED', details: String(error) }));
+    process.exit(1);
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function generateTextWithChat(prompt, openaiApiKey) {
@@ -97,6 +123,8 @@ async function generateTextWithChat(prompt, openaiApiKey) {
 
 async function publishToTelegraph(job) {
   logLine('Job received', job);
+  // Ensure puppeteer is available (and report cleanly if not)
+  const puppeteerLib = loadPuppeteerOrExit();
   const {
     url: pageUrl,
     anchor = '',
@@ -141,18 +169,16 @@ async function publishToTelegraph(job) {
   const cleanTitle = title.replace(/["']+/g, '').trim() || 'PromoPilot Article';
   logLine('Launching browser');
   const launchOpts = { headless: 'new' };
-  // Prefer explicit executable path when provided
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
     launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
     logLine('Using custom Chromium executable', { path: process.env.PUPPETEER_EXECUTABLE_PATH });
   }
-  // Allow passing extra args via env; default to no-sandbox for shared hosts
   if (process.env.PUPPETEER_ARGS) {
     launchOpts.args = process.env.PUPPETEER_ARGS.split(/\s+/).filter(Boolean);
   } else {
     launchOpts.args = ['--no-sandbox', '--disable-setuid-sandbox'];
   }
-  const browser = await puppeteer.launch(launchOpts);
+  const browser = await puppeteerLib.launch(launchOpts);
   let page;
   try {
     page = await browser.newPage();

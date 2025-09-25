@@ -151,7 +151,13 @@ if ($action === 'publish') {
         $conn->close();
         $errCode = 'NETWORK_ERROR';
         $details = is_array($result) ? ($result['error'] ?? 'UNKNOWN') : 'NO_RESPONSE';
-        echo json_encode(['ok'=>false,'error'=>$errCode,'details'=>$details]);
+        $payload = ['ok'=>false,'error'=>$errCode,'details'=>$details];
+        if (is_array($result)) {
+            if (!empty($result['stderr'])) { $payload['stderr'] = $result['stderr']; }
+            if (!empty($result['raw'])) { $payload['raw'] = $result['raw']; }
+            if (isset($result['exit_code'])) { $payload['exit_code'] = $result['exit_code']; }
+        }
+        echo json_encode($payload);
         exit;
     }
 

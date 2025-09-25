@@ -707,10 +707,29 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         1 => ['pipe', 'w'],
         2 => ['pipe', 'w'],
     ];
+
+    // Prepare writable paths for logs and caches
+    $logDir = PP_ROOT_PATH . '/logs';
+    if (!is_dir($logDir)) { @mkdir($logDir, 0775, true); }
+    if (!is_writable($logDir)) { @chmod($logDir, 0775); }
+    $homeDir = PP_ROOT_PATH . '/.cache';
+    if (!is_dir($homeDir)) { @mkdir($homeDir, 0775, true); }
+
+    // Optional puppeteer settings from app settings
+    $puppeteerExec = trim((string)get_setting('puppeteer_executable_path', ''));
+    $puppeteerArgs = trim((string)get_setting('puppeteer_args', ''));
+
     $env = array_merge($_ENV, $_SERVER, [
         'PP_JOB' => json_encode($job, JSON_UNESCAPED_UNICODE),
         'NODE_NO_WARNINGS' => '1',
+        'PP_LOG_DIR' => $logDir,
+        // hint a log file name (script may use it or its default inside PP_LOG_DIR)
+        'PP_LOG_FILE' => $logDir . '/network-' . basename($script, '.js') . '-' . date('Ymd-His') . '-' . getmypid() . '.log',
+        'HOME' => $homeDir,
     ]);
+    if ($puppeteerExec !== '') { $env['PUPPETEER_EXECUTABLE_PATH'] = $puppeteerExec; }
+    if ($puppeteerArgs !== '') { $env['PUPPETEER_ARGS'] = $puppeteerArgs; }
+
     $cmd = $node . ' ' . escapeshellarg($script);
     $process = @proc_open($cmd, $descriptorSpec, $pipes, PP_ROOT_PATH, $env);
     if (!is_resource($process)) {
@@ -737,7 +756,6 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
 
         $read = [];
         if (isset($pipes[1]) && is_resource($pipes[1])) {
-            // feof requires a valid resource
             if (!@feof($pipes[1])) { $read[] = $pipes[1]; }
         }
         if (isset($pipes[2]) && is_resource($pipes[2])) {
