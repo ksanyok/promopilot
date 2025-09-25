@@ -452,8 +452,28 @@ function rmdir_recursive($dir) {
  * Resolve Chrome/Chromium binary path from env/common locations.
  */
 function pp_resolve_chrome_binary(): string {
+    // Admin-configured override
+    try {
+        $cfg = trim((string)get_setting('chrome_binary_path', ''));
+        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+    } catch (Throwable $e) { /* ignore */ }
+
     $chromeBinary = getenv('CHROME_PATH') ?: getenv('CHROME_BIN') ?: getenv('PUPPETEER_EXECUTABLE_PATH') ?: '';
     if ($chromeBinary && @is_file($chromeBinary)) return $chromeBinary;
+
+    // Look for Chromium bundled by Puppeteer within node_runtime
+    $base = PP_ROOT_PATH . '/node_runtime/node_modules/puppeteer';
+    $globs = [
+        $base . '/.local-chromium/*/chrome-linux/chrome',
+        $base . '/.local-chromium/*/chrome-linux64/chrome',
+        $base . '/.cache/puppeteer/*/*/chrome',
+        $base . '/.cache/puppeteer/chrome/*/chrome-linux*/chrome',
+    ];
+    foreach ($globs as $pattern) {
+        foreach ((array)glob($pattern) as $cand) {
+            if (@is_file($cand) && @is_executable($cand)) return $cand;
+        }
+    }
 
     // Common candidates
     $candidates = [
@@ -462,6 +482,9 @@ function pp_resolve_chrome_binary(): string {
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         '/Applications/Chromium.app/Contents/MacOS/Chromium',
         '/opt/homebrew/bin/google-chrome', '/opt/homebrew/bin/chromium',
+        // Portable in repo (if user uploaded)
+        PP_ROOT_PATH . '/node_runtime/chrome/chrome',
+        PP_ROOT_PATH . '/node_runtime/chromium/chrome',
     ];
     foreach ($candidates as $p) {
         if (@is_file($p) && @is_executable($p)) return $p;
@@ -473,6 +496,19 @@ function pp_resolve_chrome_binary(): string {
  * Resolve Node.js binary path from env/common locations (shared hosting friendly).
  */
 function pp_resolve_node_binary(): string {
+    // Admin-configured override first
+    try {
+        $cfg = trim((string)get_setting('node_binary_path', ''));
+        if ($cfg && @is_file($cfg) && @is_executable($cfg)) return $cfg;
+    } catch (Throwable $e) { /* ignore */ }
+
+    // Local portable node inside project
+    $localNode = PP_ROOT_PATH . '/node_runtime/bin/node';
+    if (@is_file($localNode) && @is_executable($localNode)) {
+        $out = @shell_exec(escapeshellarg($localNode) . ' --version 2>&1');
+        if (is_string($out) && preg_match('~v\d+\.\d+\.\d+~', $out)) return $localNode;
+    }
+
     $node = getenv('NODE_BINARY') ?: '';
     $tryNames = [];
     if ($node !== '') { $tryNames[] = $node; }
@@ -532,10 +568,12 @@ function pp_run_puppeteer(string $jsCode, array $env = [], int $timeoutSec = 90)
         $nodePath = $localNodeModules . ($nodePath ? PATH_SEPARATOR . $nodePath : '');
     }
 
+    $chromePath = pp_resolve_chrome_binary();
+
     $allEnv = array_merge([
         'NODE_PATH' => $nodePath,
-        'PUPPETEER_EXECUTABLE_PATH' => pp_resolve_chrome_binary(),
-        'CHROME_BIN' => pp_resolve_chrome_binary(),
+        'PUPPETEER_EXECUTABLE_PATH' => $chromePath,
+        'CHROME_BIN' => $chromePath,
     ], $env);
 
     $desc = [ 0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w'] ];
