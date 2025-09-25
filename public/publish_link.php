@@ -203,6 +203,7 @@ if ($action === 'publish') {
         'author' => $result['author'] ?? '',
         'chrome_path' => $result['chromePath'] ?? '',
         'chrome_source' => $result['chromeSource'] ?? '',
+        'chrome_suggestions' => $result['chromeSuggestions'] ?? [],
     ]);
     exit;
 } elseif ($action === 'cancel') {

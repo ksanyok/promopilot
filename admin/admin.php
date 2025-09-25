@@ -171,6 +171,7 @@ $nodeFetchInstalled = is_dir(PP_ROOT_PATH . '/node_modules/node-fetch');
 $chromeInfo = pp_get_chrome_info();
 $chromePathDisplay = $chromeInfo['path'] ?: __('Не задан');
 $chromeSourceDisplay = $chromeInfo['source'] ?: __('—');
+$chromeSuggestDisplay = !empty($chromeInfo['suggestions']) ? implode(' | ', $chromeInfo['suggestions']) : __('Рекомендации отсутствуют');
 $packageJsonExists = is_file(PP_ROOT_PATH . '/package.json');
 $networksDir = pp_networks_dir();
 $networksDirWritable = is_writable($networksDir);
@@ -194,6 +195,7 @@ $diagnostics = [
     ['label' => __('Chrome/Chromium бинарь'), 'value' => $chromePathDisplay],
     ['label' => __('Источник Chrome пути'), 'value' => $chromeSourceDisplay],
     ['label' => __('Puppeteer cache dir'), 'value' => $chromeInfo['cache_dir']],
+    ['label' => __('Команды установки Chrome'), 'value' => $chromeSuggestDisplay],
 ];
 
 // Add Chrome diagnostics

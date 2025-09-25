@@ -840,6 +840,7 @@ function pp_get_chrome_info(): array {
         'source' => '',
         'cache_dir' => '',
         'candidates_sample' => [],
+        'suggestions' => [],
     ];
     $cacheDir = PP_ROOT_PATH . '/.cache/puppeteer';
     $info['cache_dir'] = $cacheDir;
@@ -849,6 +850,9 @@ function pp_get_chrome_info(): array {
         if (is_array($data)) {
             $info['path'] = (string)($data['path'] ?? '');
             $info['source'] = (string)($data['source'] ?? '');
+            if (!empty($data['suggestions']) && is_array($data['suggestions'])) {
+                $info['suggestions'] = array_values(array_filter(array_map('strval', $data['suggestions'])));
+            }
         }
     }
     if (!$info['path']) {
