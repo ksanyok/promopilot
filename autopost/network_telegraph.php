@@ -180,7 +180,7 @@ return [
             }
           }
         }
-      } catch(_){}
+      } catch(_){ }
     }
     // Our own downloaded Chrome for Testing
     if (ROOT_DIR) {
@@ -210,7 +210,45 @@ return [
   };
 
   log('start', 'use_openai=' + USE_OPENAI, 'nm_dir=' + (NM_DIR||'n/a'), 'chrome_bin=auto');
-  // ...existing code...
+  // Fill in generation utilities and helpers
+  async function generateContent() {
+    if (USE_OPENAI && OPENAI_API_KEY) {
+      try {
+        const sys = [
+          'You write concise, clear articles in strictly valid HTML.',
+          'Output only HTML without surrounding <html> or <body>.',
+          'Allowed tags: h2,p,a,ul,ol,li,strong,em,blockquote,code,pre.',
+          'Include exactly one hyperlink to the provided URL using the given anchor text. Do not add UTM.'
+        ].join(' ');
+        const prompt = `Language: ${LANGUAGE}\nURL: ${PAGE_URL}\nAnchor: ${ANCHOR || 'source'}\nWrite ~6-10 short sections with headings and paragraphs; keep it neutral and informative.`;
+        const body = {
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.7,
+          max_tokens: 1000
+        };
+        const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const c = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+          if (c && typeof c === 'string') return c.trim();
+          log('openai warn', 'no content');
+        } else {
+          log('openai http', String(resp.status));
+        }
+      } catch (e) {
+        log('openai error', e && e.message ? e.message : String(e));
+      }
+    }
+    return FALLBACK_CONTENT;
+  }
 
   const launchOpts = { headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-default-browser-check'] };
   let chromePath = CHROME_BIN_ENV;
@@ -234,7 +272,112 @@ return [
     } else { throw e; }
   }
 
-  // ...existing code...
+  // Drive the editor: fill and publish
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 });
+    await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36');
+
+    await page.goto('https://telegra.ph/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await saveShot(page, '01_editor.png');
+
+    // Wait for at least one contenteditable to appear
+    await page.waitForSelector('[data-placeholder], [contenteditable="true"]', { timeout: 45000 });
+
+    // Fill title and author
+    await page.evaluate(({ title, author }) => {
+      const findByPH = (arr) => {
+        for (const ph of arr) {
+          const el = document.querySelector(`[data-placeholder="${ph}"]`);
+          if (el) return el;
+        }
+        return null;
+      };
+      const allCE = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+      const titleEl = findByPH(['Title','Заголовок']) || allCE[0] || null;
+      const authorEl = findByPH(['Your name','Ваше имя','Автор']) || allCE[1] || null;
+      if (titleEl) { titleEl.focus(); try { titleEl.innerHTML = ''; document.execCommand('insertText', false, title); } catch(_) { titleEl.textContent = title; } }
+      if (authorEl) { authorEl.focus(); try { authorEl.innerHTML = ''; document.execCommand('insertText', false, author); } catch(_) { authorEl.textContent = author; } }
+    }, { title: FALLBACK_TITLE, author: FALLBACK_AUTHOR });
+
+    const html = await generateContent();
+
+    // Insert content HTML
+    await page.evaluate((html) => {
+      const findByPH = (arr) => {
+        for (const ph of arr) {
+          const el = document.querySelector(`[data-placeholder="${ph}"]`);
+          if (el) return el;
+        }
+        return null;
+      };
+      const allCE = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+      let contentEl = findByPH(['Your story','Ваша история','Текст']) || allCE[2] || allCE[allCE.length - 1] || null;
+      if (contentEl) {
+        contentEl.focus();
+        try {
+          // Prefer HTML insertion
+          contentEl.innerHTML = html;
+        } catch (e) {
+          // Fallback: insert as plain text
+          const tmp = document.createElement('div'); tmp.innerHTML = html;
+          const text = tmp.textContent || tmp.innerText || '';
+          try { document.execCommand('insertText', false, text); } catch (_) { contentEl.textContent = text; }
+        }
+      }
+    }, html);
+
+    await page.waitForTimeout(800);
+    await saveShot(page, '02_filled.png');
+
+    // Try to publish: click button if present, otherwise Ctrl+Enter
+    let published = false;
+    try {
+      const btns = await page.$$eval('button', els => els.map(e => (e.innerText || e.textContent || '').trim()));
+      const idx = btns.findIndex(t => /publish/i.test(t));
+      if (idx >= 0) {
+        const btn = (await page.$$('button'))[idx];
+        await btn.click();
+        published = true;
+      }
+    } catch(_) {}
+
+    if (!published) {
+      try {
+        await page.keyboard.down('Control');
+        await page.keyboard.press('Enter');
+        await page.keyboard.up('Control');
+        published = true;
+      } catch(_) {}
+    }
+
+    // Wait for navigation to published page (URL changes to /<slug>)
+    try {
+      await page.waitForNavigation({ timeout: 45000, waitUntil: 'domcontentloaded' });
+    } catch(_) { /* continue even if not detected */ }
+
+    await saveShot(page, '03_published.png');
+
+    const outUrl = page.url();
+    log('published url', outUrl);
+
+    if (/^https?:\/\/telegra\.ph\//i.test(outUrl)) {
+      console.log(JSON.stringify({ url: outUrl, title: FALLBACK_TITLE, author: FALLBACK_AUTHOR }));
+    } else {
+      // Some deployments use the editor path; try to extract link from DOM
+      try {
+        const maybeLink = await page.evaluate(() => {
+          const a = document.querySelector('a[href^="https://telegra.ph/"]');
+          return a ? a.getAttribute('href') : '';
+        });
+        if (maybeLink) {
+          console.log(JSON.stringify({ url: maybeLink, title: FALLBACK_TITLE, author: FALLBACK_AUTHOR }));
+        }
+      } catch(_){ }
+    }
+  } finally {
+    try { await browser.close(); } catch(_){ }
+  }
 })();
 JS;
 
