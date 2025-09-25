@@ -726,6 +726,41 @@ function pp_collect_node_candidates(): array {
         if ($whichNode !== '') { $candidates[] = $whichNode; }
         $whichNodeJs = trim((string)@shell_exec('command -v nodejs 2>/dev/null'));
         if ($whichNodeJs !== '') { $candidates[] = $whichNodeJs; }
+
+        $bashPaths = [
+            "/bin/bash -lc 'command -v node' 2>/dev/null",
+            "/bin/bash -lc 'which node' 2>/dev/null",
+            "/bin/bash -lc 'command -v nodejs' 2>/dev/null",
+            "/bin/bash -lc 'which nodejs' 2>/dev/null",
+            "/bin/bash -lc 'whereis -b node' 2>/dev/null",
+        ];
+        foreach ($bashPaths as $cmd) {
+            $out = trim((string)@shell_exec($cmd));
+            if ($out === '') { continue; }
+            $parts = preg_split('~[\s]+~', $out);
+            foreach ($parts as $part) {
+                $part = trim($part);
+                if ($part === '' || strpos($part, '/') === false) { continue; }
+                $candidates[] = $part;
+            }
+        }
+
+        $bashLists = [
+            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/bin/node 2>/dev/null'",
+            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/usr/bin/node 2>/dev/null'",
+            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/root/usr/bin/node 2>/dev/null'",
+            "/bin/bash -lc 'ls -1 /opt/nodejs*/bin/node 2>/dev/null'",
+            "/bin/bash -lc 'ls -1 \$HOME/.nodebrew/current/bin/node 2>/dev/null'",
+            "/bin/bash -lc 'ls -1 \$HOME/.nvm/versions/node/*/bin/node 2>/dev/null'",
+        ];
+        foreach ($bashLists as $cmd) {
+            $out = trim((string)@shell_exec($cmd));
+            if ($out === '') { continue; }
+            foreach (preg_split('~[\r\n]+~', $out) as $line) {
+                $line = trim($line);
+                if ($line !== '') { $candidates[] = $line; }
+            }
+        }
     }
 
     $pathEnv = (string)($_SERVER['PATH'] ?? getenv('PATH') ?? '');

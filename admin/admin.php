@@ -71,6 +71,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $networksMsg = __('Не удалось обновить параметры сетей.');
             }
         }
+    } elseif (isset($_POST['detect_node'])) {
+        if (!verify_csrf()) {
+            $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $resolved = pp_resolve_node_binary(5, true);
+            if ($resolved) {
+                $path = $resolved['path'];
+                $ver = $resolved['version'] ?? __('Неизвестно');
+                $networksMsg = sprintf(__('Node.js найден: %s (версия %s).'), $path, $ver);
+            } else {
+                $candidates = pp_collect_node_candidates();
+                $msg = __('Не удалось автоматически определить Node.js.');
+                if (!empty($candidates)) {
+                    $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
+                }
+                $networksMsg = $msg;
+            }
+        }
     }
 }
 
@@ -100,9 +118,18 @@ $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
 $resolvedNode = pp_resolve_node_binary(2, true);
 $nodeBinaryEffective = $resolvedNode['path'] ?? pp_get_node_binary();
 $canRunShell = function_exists('shell_exec');
+$nodeAutoDetected = (bool)$resolvedNode;
+
+if (!$nodeAutoDetected) {
+    if ($nodeBinaryStored !== '') {
+        $nodeBinaryEffective = $nodeBinaryStored;
+    } elseif ($nodeBinaryEffective === 'node') {
+        $nodeBinaryEffective = __('Не найден');
+    }
+}
 
 $nodeVersionRaw = $resolvedNode['version'] ?? '';
-if ($nodeVersionRaw === '' && $canRunShell && $nodeBinaryEffective !== '') {
+if ($nodeVersionRaw === '' && $canRunShell && $nodeAutoDetected && $nodeBinaryEffective !== '') {
     $nodeVersionRaw = trim((string)@shell_exec(escapeshellarg($nodeBinaryEffective) . ' -v 2>&1'));
 }
 if (stripos($nodeVersionRaw, 'not found') !== false) { $nodeVersionRaw = __('Не найден'); }
@@ -424,9 +451,13 @@ $diagnostics = [
             <?php endif; ?>
         </div>
     </form>
-    <form method="post" class="d-inline">
+    <form method="post" class="d-inline me-2">
         <?php echo csrf_field(); ?>
         <button type="submit" name="refresh_networks" value="1" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i><?php echo __('Обновить список сетей'); ?></button>
+    </form>
+    <form method="post" class="d-inline">
+        <?php echo csrf_field(); ?>
+        <button type="submit" name="detect_node" value="1" class="btn btn-outline-success"><i class="bi bi-magic me-1"></i><?php echo __('Автоопределение Node.js'); ?></button>
     </form>
 </div>
 
