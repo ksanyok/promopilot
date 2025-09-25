@@ -714,24 +714,88 @@ function pp_check_node_binary(string $bin, int $timeoutSeconds = 3): array {
     return ['ok' => (bool)$ok, 'version' => $ver, 'exit_code' => $exit, 'stderr' => trim($stderr)];
 }
 
-function pp_get_node_binary(): string {
+function pp_collect_node_candidates(): array {
     $candidates = [];
-    $fromSetting = trim((string)get_setting('node_binary', ''));
-    if ($fromSetting !== '') { $candidates[] = $fromSetting; }
+    $setting = trim((string)get_setting('node_binary', ''));
+    if ($setting !== '') { $candidates[] = $setting; }
     $env = getenv('NODE_BINARY');
     if ($env && trim($env) !== '') { $candidates[] = trim($env); }
-    // Common macOS paths
-    $candidates[] = '/opt/homebrew/bin/node'; // Apple Silicon Homebrew
-    $candidates[] = '/usr/local/bin/node';    // Intel Homebrew
-    $candidates[] = '/usr/bin/node';
-    // Finally, rely on PATH
-    $candidates[] = 'node';
 
-    foreach (array_unique($candidates) as $bin) {
-        $check = pp_check_node_binary($bin, 2);
-        if ($check['ok']) { return $bin; }
+    if (function_exists('shell_exec')) {
+        $whichNode = trim((string)@shell_exec('command -v node 2>/dev/null'));
+        if ($whichNode !== '') { $candidates[] = $whichNode; }
+        $whichNodeJs = trim((string)@shell_exec('command -v nodejs 2>/dev/null'));
+        if ($whichNodeJs !== '') { $candidates[] = $whichNodeJs; }
     }
-    // No valid binary found; return placeholder
+
+    $pathEnv = (string)($_SERVER['PATH'] ?? getenv('PATH') ?? '');
+    if ($pathEnv !== '') {
+        $parts = preg_split('~' . preg_quote(PATH_SEPARATOR, '~') . '~', $pathEnv);
+        foreach ($parts as $dir) {
+            $dir = trim($dir);
+            if ($dir === '') { continue; }
+            $dir = rtrim($dir, '/\\');
+            $candidates[] = $dir . '/node';
+            $candidates[] = $dir . '/nodejs';
+        }
+    }
+
+    $home = getenv('HOME') ?: ((isset($_SERVER['HOME']) && $_SERVER['HOME']) ? $_SERVER['HOME'] : '');
+    if ($home) {
+        $home = rtrim($home, '/');
+        $candidates[] = $home . '/.local/bin/node';
+        $candidates[] = $home . '/bin/node';
+        foreach (@glob($home . '/.nvm/versions/node/*/bin/node') ?: [] as $path) { $candidates[] = $path; }
+        foreach (@glob($home . '/.asdf/installs/nodejs/*/bin/node') ?: [] as $path) { $candidates[] = $path; }
+    }
+
+    $globPaths = [
+        '/usr/local/bin/node',
+        '/usr/bin/node',
+        '/bin/node',
+        '/usr/local/node/bin/node',
+        '/usr/local/share/node/bin/node',
+        '/opt/homebrew/bin/node',
+        '/opt/local/bin/node',
+        '/snap/bin/node',
+    ];
+    foreach (['/opt/node*/bin/node','/opt/nodejs*/bin/node','/opt/alt/*/bin/node','/opt/alt/*/usr/bin/node','/opt/alt/*/root/usr/bin/node'] as $pattern) {
+        foreach (@glob($pattern) ?: [] as $path) { $globPaths[] = $path; }
+    }
+    foreach ($globPaths as $path) { $candidates[] = $path; }
+
+    $candidates[] = 'node';
+    $candidates[] = 'nodejs';
+
+    $result = [];
+    foreach ($candidates as $cand) {
+        $cand = trim((string)$cand);
+        if ($cand === '') { continue; }
+        if (!isset($result[$cand])) { $result[$cand] = $cand; }
+    }
+    return array_values($result);
+}
+
+function pp_resolve_node_binary(int $timeoutSeconds = 3, bool $persist = true): ?array {
+    $candidates = pp_collect_node_candidates();
+    foreach ($candidates as $cand) {
+        $check = pp_check_node_binary($cand, $timeoutSeconds);
+        if ($check['ok']) {
+            if ($persist) {
+                $current = trim((string)get_setting('node_binary', ''));
+                if ($current !== $cand) {
+                    set_setting('node_binary', $cand);
+                }
+            }
+            return ['path' => $cand, 'version' => $check['version'], 'diagnostics' => $check];
+        }
+    }
+    return null;
+}
+
+function pp_get_node_binary(): string {
+    $resolved = pp_resolve_node_binary(3, true);
+    if ($resolved) { return $resolved['path']; }
     return 'node';
 }
 
@@ -739,28 +803,18 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     if (!is_file($script) || !is_readable($script)) {
         return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
     }
-    // Validate node binary first to avoid silent empty output
-    $nodeCandidates = [
-        trim((string)get_setting('node_binary', '')),
-        (string)getenv('NODE_BINARY'),
-        '/opt/homebrew/bin/node',
-        '/usr/local/bin/node',
-        '/usr/bin/node',
-        'node'
-    ];
-    $node = null; $nodeVer = '';
-    foreach (array_filter(array_unique($nodeCandidates)) as $cand) {
-        $chk = pp_check_node_binary($cand, 2);
-        if ($chk['ok']) { $node = $cand; $nodeVer = $chk['version']; break; }
-    }
-    if ($node === null) {
+    $resolved = pp_resolve_node_binary(3, true);
+    $nodeCandidates = pp_collect_node_candidates();
+    if (!$resolved) {
         return [
             'ok' => false,
             'error' => 'NODE_BINARY_NOT_FOUND',
-            'details' => 'Node.js is not available for the PHP process. Set settings.node_binary or NODE_BINARY env.',
+            'details' => 'Node.js is not available for the PHP process. Настройте путь в админке или переменную NODE_BINARY.',
             'candidates' => $nodeCandidates,
         ];
     }
+    $node = $resolved['path'];
+    $nodeVer = $resolved['version'] ?? '';
 
     $descriptorSpec = [
         0 => ['pipe', 'r'],

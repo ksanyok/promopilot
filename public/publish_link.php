@@ -150,12 +150,22 @@ if ($action === 'publish') {
         }
         $conn->close();
         $errCode = 'NETWORK_ERROR';
-        $details = is_array($result) ? ($result['error'] ?? 'UNKNOWN') : 'NO_RESPONSE';
-        $payload = ['ok'=>false,'error'=>$errCode,'details'=>$details];
+        $details = 'NO_RESPONSE';
+        $payload = ['ok'=>false,'error'=>$errCode];
         if (is_array($result)) {
-            if (!empty($result['stderr'])) { $payload['stderr'] = $result['stderr']; }
+            if (!empty($result['details'])) { $details = (string)$result['details']; }
+            elseif (!empty($result['error'])) { $details = (string)$result['error']; }
+            elseif (!empty($result['stderr'])) { $details = (string)$result['stderr']; }
+            $payload['details'] = $details;
+            if (!empty($result['stderr'])) { $payload['stderr'] = (string)$result['stderr']; }
             if (!empty($result['raw'])) { $payload['raw'] = $result['raw']; }
-            if (isset($result['exit_code'])) { $payload['exit_code'] = $result['exit_code']; }
+            if (!empty($result['node_version'])) { $payload['node_version'] = $result['node_version']; }
+            if (!empty($result['candidates']) && is_array($result['candidates'])) {
+                $payload['candidates'] = $result['candidates'];
+            }
+            if (isset($result['exit_code'])) { $payload['exit_code'] = (int)$result['exit_code']; }
+        } else {
+            $payload['details'] = $details;
         }
         echo json_encode($payload);
         exit;

@@ -97,20 +97,23 @@ $updateStatus = get_update_status();
 pp_refresh_networks(false);
 $networks = pp_get_networks(false, true);
 $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
-$nodeBinaryEffective = pp_get_node_binary();
+$resolvedNode = pp_resolve_node_binary(2, true);
+$nodeBinaryEffective = $resolvedNode['path'] ?? pp_get_node_binary();
 $canRunShell = function_exists('shell_exec');
 
-$nodeVersionRaw = '';
-if ($canRunShell && $nodeBinaryEffective !== '') {
+$nodeVersionRaw = $resolvedNode['version'] ?? '';
+if ($nodeVersionRaw === '' && $canRunShell && $nodeBinaryEffective !== '') {
     $nodeVersionRaw = trim((string)@shell_exec(escapeshellarg($nodeBinaryEffective) . ' -v 2>&1'));
 }
+if (stripos($nodeVersionRaw, 'not found') !== false) { $nodeVersionRaw = __('Не найден'); }
 $nodeVersion = $nodeVersionRaw !== '' ? $nodeVersionRaw : __('Недоступно');
 
 $npmVersionRaw = '';
 if ($canRunShell) {
     $npmVersionRaw = trim((string)@shell_exec('npm -v 2>&1'));
 }
-$npmVersion = $npmVersionRaw !== '' ? $npmVersionRaw : __('Недоступно');
+if (stripos($npmVersionRaw, 'not found') !== false) { $npmVersionRaw = __('Не найден'); }
+elseif ($npmVersionRaw === '') { $npmVersionRaw = __('Недоступно'); }
 
 $puppeteerInstalled = is_dir(PP_ROOT_PATH . '/node_modules/puppeteer');
 $nodeFetchInstalled = is_dir(PP_ROOT_PATH . '/node_modules/node-fetch');
@@ -126,7 +129,7 @@ $diagnostics = [
     ['label' => __('PHP бинарник'), 'value' => PHP_BINARY],
     ['label' => __('Node.js бинарь'), 'value' => $nodeBinaryEffective ?: __('Не задан')],
     ['label' => __('Node.js версия'), 'value' => $nodeVersion],
-    ['label' => __('NPM версия'), 'value' => $npmVersion],
+    ['label' => __('NPM версия'), 'value' => $npmVersionRaw],
     ['label' => __('package.json'), 'value' => $packageJsonExists ? __('Найден') : __('Не найден')],
     ['label' => __('Puppeteer установлен'), 'value' => $puppeteerInstalled ? __('Да') : __('Нет')],
     ['label' => __('node-fetch установлен'), 'value' => $nodeFetchInstalled ? __('Да') : __('Нет')],
