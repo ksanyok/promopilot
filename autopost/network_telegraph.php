@@ -115,12 +115,38 @@ return [
   const CHROME_BIN_ENV = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const NM_DIR = process.env.PP_NODE_MODULES || '';
 
+  // Load puppeteer with fallbacks and log attempts
+  let puppeteer; const loadErrs = [];
+  try { puppeteer = require('puppeteer'); log('puppeteer load', 'puppeteer'); }
+  catch (e1) {
+    loadErrs.push(e1 && e1.message ? e1.message : String(e1));
+    try { puppeteer = require('puppeteer-core'); log('puppeteer load', 'puppeteer-core'); }
+    catch (e2) {
+      loadErrs.push(e2 && e2.message ? e2.message : String(e2));
+      if (NM_DIR) {
+        try { puppeteer = require(path.join(NM_DIR, 'puppeteer')); log('puppeteer load', 'nm puppeteer'); }
+        catch (e3) {
+          loadErrs.push(e3 && e3.message ? e3.message : String(e3));
+          try { puppeteer = require(path.join(NM_DIR, 'puppeteer-core')); log('puppeteer load', 'nm puppeteer-core'); }
+          catch (e4) { loadErrs.push(e4 && e4.message ? e4.message : String(e4)); }
+        }
+      }
+    }
+  }
+  if (!puppeteer) { log('fatal', 'puppeteer not available', loadErrs.join(' | ')); throw new Error('puppeteer not available'); }
+  try {
+    let ver = '';
+    try { ver = require('puppeteer/package.json').version; }
+    catch(_) { try { ver = require(path.join(NM_DIR, 'puppeteer', 'package.json')).version; } catch(__){} }
+    if (ver) log('puppeteer version', ver);
+  } catch(_){ }
+
   const findChromeBin = () => {
     const cands = [];
     if (CHROME_BIN_ENV) cands.push(CHROME_BIN_ENV);
     // Puppeteer caches
     if (NM_DIR) {
-      cands.push(path.join(NM_DIR, 'puppeteer', '.cache', 'puppeteer', 'chrome')); // parent
+      cands.push(path.join(NM_DIR, 'puppeteer', '.cache', 'puppeteer', 'chrome'));
       try {
         const cacheRoot = path.join(NM_DIR, 'puppeteer', '.cache', 'puppeteer');
         if (fs.existsSync(cacheRoot)) {
