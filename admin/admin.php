@@ -11,35 +11,65 @@ $conn = connect_db();
 $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KEY,\n  v TEXT,\n  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
 $settingsMsg = '';
+$networksMsg = '';
 $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
-    if (!verify_csrf()) {
-        $settingsMsg = __('Ошибка обновления.') . ' (CSRF)';
-    } else {
-        $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
-        if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
-        $openai = trim((string)($_POST['openai_api_key'] ?? ''));
-        $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
-        $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
-
-        $pairs = [
-            ['currency', $currency],
-            ['openai_api_key', $openai],
-            ['telegram_token', $tgToken],
-            ['telegram_channel', $tgChannel],
-        ];
-        $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
-        if ($stmt) {
-            foreach ($pairs as [$k, $v]) {
-                $stmt->bind_param('ss', $k, $v);
-                $stmt->execute();
-            }
-            $stmt->close();
-            $settingsMsg = __('Настройки сохранены.');
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['settings_submit'])) {
+        if (!verify_csrf()) {
+            $settingsMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $settingsMsg = __('Ошибка сохранения настроек.');
+            $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
+            if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
+            $openai = trim((string)($_POST['openai_api_key'] ?? ''));
+            $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
+            $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
+
+            $pairs = [
+                ['currency', $currency],
+                ['openai_api_key', $openai],
+                ['telegram_token', $tgToken],
+                ['telegram_channel', $tgChannel],
+            ];
+            $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt) {
+                foreach ($pairs as [$k, $v]) {
+                    $stmt->bind_param('ss', $k, $v);
+                    $stmt->execute();
+                }
+                $stmt->close();
+                $settingsMsg = __('Настройки сохранены.');
+            } else {
+                $settingsMsg = __('Ошибка сохранения настроек.');
+            }
+        }
+    } elseif (isset($_POST['refresh_networks'])) {
+        if (!verify_csrf()) {
+            $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            try {
+                pp_refresh_networks(true);
+                $networksMsg = __('Список сетей обновлён.');
+            } catch (Throwable $e) {
+                $networksMsg = __('Ошибка обновления списка сетей.');
+            }
+        }
+    } elseif (isset($_POST['networks_submit'])) {
+        if (!verify_csrf()) {
+            $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $enabledSlugs = [];
+            if (!empty($_POST['enable']) && is_array($_POST['enable'])) {
+                $enabledSlugs = array_keys($_POST['enable']);
+            }
+            $nodeBinaryNew = trim((string)($_POST['node_binary'] ?? ''));
+            set_setting('node_binary', $nodeBinaryNew);
+            if (pp_set_networks_enabled($enabledSlugs)) {
+                $networksMsg = __('Параметры сетей сохранены.');
+            } else {
+                $networksMsg = __('Не удалось обновить параметры сетей.');
+            }
         }
     }
 }
@@ -63,6 +93,48 @@ $projects = $conn->query("SELECT p.id, p.name, p.description, p.created_at, u.us
 $conn->close();
 
 $updateStatus = get_update_status();
+
+pp_refresh_networks(false);
+$networks = pp_get_networks(false, true);
+$nodeBinaryStored = trim((string)get_setting('node_binary', ''));
+$nodeBinaryEffective = pp_get_node_binary();
+$canRunShell = function_exists('shell_exec');
+
+$nodeVersionRaw = '';
+if ($canRunShell && $nodeBinaryEffective !== '') {
+    $nodeVersionRaw = trim((string)@shell_exec(escapeshellarg($nodeBinaryEffective) . ' -v 2>&1'));
+}
+$nodeVersion = $nodeVersionRaw !== '' ? $nodeVersionRaw : __('Недоступно');
+
+$npmVersionRaw = '';
+if ($canRunShell) {
+    $npmVersionRaw = trim((string)@shell_exec('npm -v 2>&1'));
+}
+$npmVersion = $npmVersionRaw !== '' ? $npmVersionRaw : __('Недоступно');
+
+$puppeteerInstalled = is_dir(PP_ROOT_PATH . '/node_modules/puppeteer');
+$nodeFetchInstalled = is_dir(PP_ROOT_PATH . '/node_modules/node-fetch');
+$packageJsonExists = is_file(PP_ROOT_PATH . '/package.json');
+$networksDir = pp_networks_dir();
+$networksDirWritable = is_writable($networksDir);
+$openAiConfigured = trim($settings['openai_api_key'] ?? '') !== '';
+$networksLastRefreshTs = (int)get_setting('networks_last_refresh', 0);
+$networksLastRefresh = $networksLastRefreshTs ? date('Y-m-d H:i:s', $networksLastRefreshTs) : __('Не выполнялось');
+
+$diagnostics = [
+    ['label' => __('PHP версия'), 'value' => PHP_VERSION],
+    ['label' => __('PHP бинарник'), 'value' => PHP_BINARY],
+    ['label' => __('Node.js бинарь'), 'value' => $nodeBinaryEffective ?: __('Не задан')],
+    ['label' => __('Node.js версия'), 'value' => $nodeVersion],
+    ['label' => __('NPM версия'), 'value' => $npmVersion],
+    ['label' => __('package.json'), 'value' => $packageJsonExists ? __('Найден') : __('Не найден')],
+    ['label' => __('Puppeteer установлен'), 'value' => $puppeteerInstalled ? __('Да') : __('Нет')],
+    ['label' => __('node-fetch установлен'), 'value' => $nodeFetchInstalled ? __('Да') : __('Нет')],
+    ['label' => __('Директория сетей'), 'value' => $networksDir],
+    ['label' => __('Директория сетей доступна на запись'), 'value' => $networksDirWritable ? __('Да') : __('Нет')],
+    ['label' => __('OpenAI API Key настроен'), 'value' => $openAiConfigured ? __('Да') : __('Нет')],
+    ['label' => __('Последнее обновление сетей'), 'value' => $networksLastRefresh],
+];
 ?>
 
 <?php include '../includes/header.php'; ?>
@@ -99,6 +171,32 @@ $updateStatus = get_update_status();
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.4l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10.5 2.28V2a2 2 0 1 1 4 0v.09c0 .67.39 1.27 1 1.51h.01c.63.25 1.35.11 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.44.47-.58 1.19-.33 1.82v.01c.24.61.84 1 1.51 1H22a2 2 0 1 1 0 4h-.09c-.67 0-1.27.39-1.51 1z"/>
                     </svg>
                     <?php echo __('Основные настройки'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('networks')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <circle cx="12" cy="5" r="2"/>
+                        <circle cx="5" cy="19" r="2"/>
+                        <circle cx="19" cy="19" r="2"/>
+                        <path d="M12 7v6"/>
+                        <path d="M5 17l5-4"/>
+                        <path d="M19 17l-5-4"/>
+                    </svg>
+                    <?php echo __('Сети'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('diagnostics')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <polyline points="4 14 10 14 12 10 16 18 20 8"/>
+                        <circle cx="4" cy="14" r="1"/>
+                        <circle cx="10" cy="14" r="1"/>
+                        <circle cx="12" cy="10" r="1"/>
+                        <circle cx="16" cy="18" r="1"/>
+                        <circle cx="20" cy="8" r="1"/>
+                    </svg>
+                    <?php echo __('Диагностика'); ?>
                 </a>
             </li>
         </ul>
@@ -225,7 +323,25 @@ $updateStatus = get_update_status();
             <div class="col-md-8"></div>
             <div class="col-md-6">
                 <label class="form-label">OpenAI API Key</label>
-                <input type="text" name="openai_api_key" class="form-control" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
+                <div class="input-group">
+                    <input type="text" name="openai_api_key" class="form-control" id="openaiApiKeyInput" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
+                    <button type="button" class="btn btn-outline-secondary" id="checkOpenAiKey" data-check-url="<?php echo pp_url('public/check_openai.php'); ?>">
+                        <i class="bi bi-shield-check me-1"></i><?php echo __('Проверить'); ?>
+                    </button>
+                </div>
+                <div class="form-text" id="openaiCheckStatus"></div>
+                <div id="openaiCheckMessages" class="d-none"
+                     data-empty="<?php echo htmlspecialchars(__('Введите ключ перед проверкой.')); ?>"
+                     data-checking="<?php echo htmlspecialchars(__('Проверяем ключ...')); ?>"
+                     data-ok="<?php echo htmlspecialchars(__('Ключ подтверждён. Доступно моделей:')); ?>"
+                     data-error="<?php echo htmlspecialchars(__('Ошибка сервиса OpenAI.')); ?>"
+                     data-request="<?php echo htmlspecialchars(__('Не удалось выполнить запрос.')); ?>"
+                     data-no-curl="<?php echo htmlspecialchars(__('Расширение cURL недоступно.')); ?>"
+                     data-unauthorized="<?php echo htmlspecialchars(__('Неверный ключ или нет доступа.')); ?>"
+                     data-forbidden="<?php echo htmlspecialchars(__('Нет прав.')); ?>"
+                     data-connection="<?php echo htmlspecialchars(__('Не удалось соединиться с OpenAI.')); ?>"
+                     data-checking-short="<?php echo htmlspecialchars(__('Проверка...')); ?>"
+                ></div>
             </div>
             <div class="col-md-6"></div>
             <div class="col-md-6">
@@ -241,6 +357,99 @@ $updateStatus = get_update_status();
             <button type="submit" name="settings_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
         </div>
     </form>
+</div>
+
+<div id="networks-section" style="display:none;">
+    <h3><?php echo __('Сети публикации'); ?></h3>
+    <?php if ($networksMsg): ?>
+        <div class="alert alert-info fade-in"><?php echo htmlspecialchars($networksMsg); ?></div>
+    <?php endif; ?>
+    <form method="post" class="card p-3 mb-3" autocomplete="off">
+        <?php echo csrf_field(); ?>
+        <div class="row g-3 align-items-end">
+            <div class="col-md-6">
+                <label class="form-label"><?php echo __('Путь до Node.js'); ?></label>
+                <input type="text" name="node_binary" class="form-control" value="<?php echo htmlspecialchars($nodeBinaryStored); ?>" placeholder="node">
+                <div class="form-text"><?php echo __('Оставьте пустым, чтобы использовать системный путь по умолчанию.'); ?></div>
+            </div>
+            <div class="col-md-6 text-md-end">
+                <button type="submit" name="networks_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+            </div>
+        </div>
+        <div class="table-responsive mt-3">
+            <?php if (!empty($networks)): ?>
+            <table class="table table-striped align-middle">
+                <thead>
+                <tr>
+                    <th style="width:70px;">&nbsp;</th>
+                    <th><?php echo __('Сеть'); ?></th>
+                    <th><?php echo __('Описание'); ?></th>
+                    <th><?php echo __('Обработчик'); ?></th>
+                    <th><?php echo __('Статус'); ?></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($networks as $network): ?>
+                    <?php $isMissing = $network['is_missing']; ?>
+                    <tr class="<?php echo $isMissing ? 'table-warning' : ''; ?>">
+                        <td>
+                            <div class="form-check mb-0">
+                                <input type="checkbox" class="form-check-input" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="net-<?php echo htmlspecialchars($network['slug']); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?>>
+                            </div>
+                        </td>
+                        <td>
+                            <strong><?php echo htmlspecialchars($network['title']); ?></strong>
+                            <div class="text-muted small"><?php echo htmlspecialchars($network['slug']); ?></div>
+                        </td>
+                        <td><?php echo htmlspecialchars($network['description']); ?></td>
+                        <td><code><?php echo htmlspecialchars($network['handler']); ?></code></td>
+                        <td>
+                            <?php if ($isMissing): ?>
+                                <span class="badge bg-warning text-dark"><?php echo __('Файл не найден'); ?></span>
+                            <?php elseif ($network['enabled']): ?>
+                                <span class="badge badge-success"><?php echo __('Активна'); ?></span>
+                            <?php else: ?>
+                                <span class="badge badge-secondary"><?php echo __('Отключена'); ?></span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php else: ?>
+                <p class="text-muted mb-0"><?php echo __('Сети не обнаружены. Добавьте файлы в директорию networks и обновите список.'); ?></p>
+            <?php endif; ?>
+        </div>
+    </form>
+    <form method="post" class="d-inline">
+        <?php echo csrf_field(); ?>
+        <button type="submit" name="refresh_networks" value="1" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i><?php echo __('Обновить список сетей'); ?></button>
+    </form>
+</div>
+
+<div id="diagnostics-section" style="display:none;">
+    <h3><?php echo __('Диагностика системы'); ?></h3>
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <tbody>
+                    <?php foreach ($diagnostics as $row): ?>
+                        <tr>
+                            <th style="width:260px;" scope="row"><?php echo htmlspecialchars($row['label']); ?></th>
+                            <td><?php echo htmlspecialchars($row['value']); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php if (!$puppeteerInstalled || !$nodeFetchInstalled): ?>
+            <div class="alert alert-warning mt-3 mb-0">
+                <i class="bi bi-exclamation-triangle me-1"></i><?php echo __('Установите зависимости Node.js командой'); ?> <code>npm install</code> <?php echo __('в корне проекта.'); ?>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
 </div>
 
 </div><!-- /.main-content -->

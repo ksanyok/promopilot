@@ -163,7 +163,7 @@ $pubStatusByUrl = [];
 try {
     $conn = connect_db();
     if ($conn) {
-        $stmt = $conn->prepare("SELECT page_url, post_url FROM publications WHERE project_id = ?");
+        $stmt = $conn->prepare("SELECT page_url, post_url, network FROM publications WHERE project_id = ?");
         if ($stmt) {
             $stmt->bind_param('i', $id);
             $stmt->execute();
@@ -171,8 +171,16 @@ try {
             while ($row = $res->fetch_assoc()) {
                 $url = (string)$row['page_url'];
                 $hasPost = !empty($row['post_url']);
-                if (!isset($pubStatusByUrl[$url])) { $pubStatusByUrl[$url] = 'pending'; }
-                if ($hasPost) { $pubStatusByUrl[$url] = 'published'; }
+                $info = [
+                    'status' => $hasPost ? 'published' : 'pending',
+                    'post_url' => (string)($row['post_url'] ?? ''),
+                    'network' => trim((string)($row['network'] ?? '')),
+                ];
+                if (!isset($pubStatusByUrl[$url])) {
+                    $pubStatusByUrl[$url] = $info;
+                } elseif ($hasPost) {
+                    $pubStatusByUrl[$url] = $info;
+                }
             }
             $stmt->close();
         }
@@ -335,11 +343,22 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 </thead>
                                 <tbody>
                                     <?php foreach ($links as $index => $item):
-                                        $url = $item['url']; $anchor = $item['anchor']; $lang = $item['language'];
-                                        $status = $pubStatusByUrl[$url] ?? 'not_published';
+                                        $url = $item['url'];
+                                        $anchor = $item['anchor'];
+                                        $lang = $item['language'];
+                                        $pubInfo = $pubStatusByUrl[$url] ?? null;
+                                        if (is_array($pubInfo)) {
+                                            $status = $pubInfo['status'] ?? 'not_published';
+                                            $postUrl = $pubInfo['post_url'] ?? '';
+                                            $networkSlug = $pubInfo['network'] ?? '';
+                                        } else {
+                                            $status = is_string($pubInfo) ? $pubInfo : 'not_published';
+                                            $postUrl = '';
+                                            $networkSlug = '';
+                                        }
                                         $canEdit = ($status === 'not_published');
                                     ?>
-                                    <tr data-index="<?php echo (int)$index; ?>">
+                                    <tr data-index="<?php echo (int)$index; ?>" data-post-url="<?php echo htmlspecialchars($postUrl); ?>" data-network="<?php echo htmlspecialchars($networkSlug); ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($url); ?></a>
@@ -362,11 +381,20 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <div class="view-wish small text-truncate" style="max-width:180px;" title="<?php echo htmlspecialchars($item['wish'] ?? ''); ?>"><?php echo htmlspecialchars($wishPreview); ?><?php echo (isset($item['wish']) && mb_strlen($item['wish'])>40)?'…':''; ?></div>
                                             <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$index; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($item['wish'] ?? ''); ?></textarea>
                                         </td>
-                                        <td data-label="<?php echo __('Статус'); ?>">
+                                        <td data-label="<?php echo __('Статус'); ?>" class="status-cell">
                                             <?php if ($status === 'published'): ?>
                                                 <span class="badge badge-success"><?php echo __('Опубликована'); ?></span>
+                                                <?php if (!empty($postUrl)): ?>
+                                                    <div class="small mt-1"><a href="<?php echo htmlspecialchars($postUrl); ?>" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>
+                                                <?php endif; ?>
+                                                <?php if (!empty($networkSlug)): ?>
+                                                    <div class="text-muted small"><?php echo __('Сеть'); ?>: <?php echo htmlspecialchars($networkSlug); ?></div>
+                                                <?php endif; ?>
                                             <?php elseif ($status === 'pending'): ?>
                                                 <span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>
+                                                <?php if (!empty($networkSlug)): ?>
+                                                    <div class="text-muted small"><?php echo __('Сеть'); ?>: <?php echo htmlspecialchars($networkSlug); ?></div>
+                                                <?php endif; ?>
                                             <?php else: ?>
                                                 <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                                             <?php endif; ?>
@@ -379,7 +407,11 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
                                                 </button>
                                             <?php else: ?>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="d-none d-lg-inline"><?php echo __('Опубликована'); ?></span></button>
+                                                <?php if (!empty($postUrl)): ?>
+                                                    <a href="<?php echo htmlspecialchars($postUrl); ?>" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm me-1"><i class="bi bi-box-arrow-up-right me-1"></i><span class="d-none d-lg-inline"><?php echo __('Открыть'); ?></span></a>
+                                                <?php else: ?>
+                                                    <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="d-none d-lg-inline"><?php echo __('Опубликована'); ?></span></button>
+                                                <?php endif; ?>
                                             <?php endif; ?>
                                             <?php if ($canEdit): ?>
                                                 <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
@@ -501,6 +533,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const tr = document.createElement('tr');
             tr.setAttribute('data-index', 'new');
             tr.setAttribute('data-added-index', String(idx));
+            tr.dataset.postUrl = '';
+            tr.dataset.network = '';
             tr.innerHTML = `
                 <td></td>
                 <td class="url-cell">
@@ -517,7 +551,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <td>
                     <span class="small text-truncate d-inline-block" style="max-width:160px" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</span>
                 </td>
-                <td>
+                <td class="status-cell">
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                 </td>
                 <td class="text-end">
@@ -706,12 +740,25 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await res.json().catch(()=>({ok:false,error:'BAD_JSON'}));
             if (!data.ok) {
                 let msg = data.error || 'ERROR';
-                const map = { 'ALREADY_PUBLISHED':'<?php echo __('Уже опубликована'); ?>', 'DB_ERROR':'<?php echo __('Ошибка базы данных'); ?>', 'PROJECT_NOT_FOUND':'<?php echo __('Проект не найден'); ?>', 'FORBIDDEN':'<?php echo __('Нет прав'); ?>', 'NOT_PENDING':'<?php echo __('Не в ожидании'); ?>', 'BAD_ACTION':'<?php echo __('Неверное действие'); ?>'};
+                const map = {
+                    'ALREADY_PUBLISHED':'<?php echo __('Уже опубликована'); ?>',
+                    'DB_ERROR':'<?php echo __('Ошибка базы данных'); ?>',
+                    'PROJECT_NOT_FOUND':'<?php echo __('Проект не найден'); ?>',
+                    'FORBIDDEN':'<?php echo __('Нет прав'); ?>',
+                    'NOT_PENDING':'<?php echo __('Не в ожидании'); ?>',
+                    'BAD_ACTION':'<?php echo __('Неверное действие'); ?>',
+                    'NO_ENABLED_NETWORKS':'<?php echo __('Нет доступных сетей публикации. Проверьте настройки.'); ?>',
+                    'MISSING_OPENAI_KEY':'<?php echo __('Укажите OpenAI API Key в настройках.'); ?>',
+                    'NETWORK_ERROR':'<?php echo __('Ошибка при публикации через сеть'); ?>'
+                };
                 if (map[msg]) msg = map[msg];
+                if (data.error === 'NETWORK_ERROR' && data.details) {
+                    msg += ' (' + data.details + ')';
+                }
                 alert('<?php echo __('Ошибка'); ?>: ' + msg);
                 return;
             }
-            updateRowUI(url, data.status);
+            updateRowUI(url, data.status, data);
         } catch (e) {
             alert('<?php echo __('Сетевая ошибка'); ?>');
         } finally {
@@ -719,19 +766,59 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function updateRowUI(url, status) {
+    function updateRowUI(url, status, payload = {}) {
         const rows = document.querySelectorAll('table.table-links tbody tr');
         rows.forEach(tr => {
             const linkEl = tr.querySelector('.url-cell .view-url');
             if (!linkEl) return;
             if (linkEl.getAttribute('href') === url) {
-                const statusCell = tr.querySelector('td:nth-child(6)'); // status column
+                const statusCell = tr.querySelector('.status-cell') || tr.querySelector('td:nth-child(6)');
                 const actionsCell = tr.querySelector('td.text-end');
+                if (status === 'published') {
+                    const postUrl = payload.post_url || '';
+                    const networkLabel = payload.network_title || payload.network || '';
+                    if (tr) {
+                        tr.dataset.postUrl = postUrl;
+                        tr.dataset.network = networkLabel;
+                    }
+                    if (statusCell) {
+                        let html = '<span class="badge badge-success"><?php echo __('Опубликована'); ?></span>';
+                        if (postUrl) {
+                            html += '<div class="small mt-1"><a href="'+escapeHtml(postUrl)+'" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>';
+                        }
+                        if (networkLabel) {
+                            html += '<div class="text-muted small"><?php echo __('Сеть'); ?>: '+escapeHtml(networkLabel)+'</div>';
+                        }
+                        statusCell.innerHTML = html;
+                    }
+                    if (actionsCell) {
+                        let html = '';
+                        if (postUrl) {
+                            html += '<a href="'+escapeAttribute(postUrl)+'" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm me-1"><i class="bi bi-box-arrow-up-right me-1"></i><span class="d-none d-lg-inline"><?php echo __('Открыть'); ?></span></a>';
+                        }
+                        html += '<button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-rocket-takeoff me-1"></i><span class="d-none d-lg-inline"><?php echo __('Опубликована'); ?></span></button>';
+                        actionsCell.innerHTML = html;
+                    }
+                    const editBtns = tr.querySelectorAll('.action-edit, .action-remove');
+                    editBtns.forEach(btn => {
+                        btn.classList.add('disabled');
+                        btn.setAttribute('disabled', 'disabled');
+                    });
+                    bindDynamicPublishButtons();
+                    return;
+                }
                 if (statusCell) {
                     if (status === 'pending') {
                         statusCell.innerHTML = '<span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>';
+                        if (tr) {
+                            tr.dataset.network = payload.network || '';
+                        }
                     } else if (status === 'not_published') {
                         statusCell.innerHTML = '<span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>';
+                        if (tr) {
+                            tr.dataset.postUrl = '';
+                            tr.dataset.network = '';
+                        }
                     }
                 }
                 if (actionsCell) {

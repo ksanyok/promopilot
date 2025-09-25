@@ -160,9 +160,47 @@ function ensure_schema(): void {
         }
     }
 
+    // Networks registry tracks available publication handlers
+    $netCols = $getCols('networks');
+    if (empty($netCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `networks` (
+            `slug` VARCHAR(120) NOT NULL,
+            `title` VARCHAR(255) NOT NULL,
+            `description` TEXT NULL,
+            `handler` VARCHAR(255) NOT NULL,
+            `handler_type` VARCHAR(50) NOT NULL DEFAULT 'node',
+            `meta` TEXT NULL,
+            `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+            `is_missing` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`slug`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAdd = function(string $field, string $definition) use ($netCols, $conn) {
+            if (!isset($netCols[$field])) {
+                @$conn->query("ALTER TABLE `networks` ADD COLUMN {$definition}");
+            }
+        };
+        $maybeAdd('description', "`description` TEXT NULL AFTER `title`");
+        $maybeAdd('handler', "`handler` VARCHAR(255) NOT NULL DEFAULT '' AFTER `description`");
+        $maybeAdd('handler_type', "`handler_type` VARCHAR(50) NOT NULL DEFAULT 'node' AFTER `handler`");
+        $maybeAdd('meta', "`meta` TEXT NULL AFTER `handler_type`");
+        $maybeAdd('enabled', "`enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `meta`");
+        $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `enabled`");
+        $maybeAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `is_missing`");
+        $maybeAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+    }
+
     // Settings table optional—skip if missing
 
     @$conn->close();
+
+    try {
+        pp_refresh_networks(false);
+    } catch (Throwable $e) {
+        // ignore auto refresh errors during bootstrap
+    }
 }
 
 function is_logged_in() {
@@ -340,8 +378,40 @@ function get_setting(string $key, $default = null) {
         } catch (Throwable $e) {
             // ignore
         }
+        $GLOBALS['pp_settings_cache'] = &$cache;
     }
     return $cache[$key] ?? $default;
+}
+
+function set_setting(string $key, $value): bool {
+    return set_settings([$key => $value]);
+}
+
+function set_settings(array $pairs): bool {
+    if (empty($pairs)) { return true; }
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return false;
+    }
+    if (!$conn) { return false; }
+    $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
+    if (!$stmt) { $conn->close(); return false; }
+    foreach ($pairs as $k => $v) {
+        $ks = (string)$k;
+        $vs = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
+        $stmt->bind_param('ss', $ks, $vs);
+        $stmt->execute();
+    }
+    $stmt->close();
+    $conn->close();
+
+    if (isset($GLOBALS['pp_settings_cache']) && is_array($GLOBALS['pp_settings_cache'])) {
+        foreach ($pairs as $k => $v) {
+            $GLOBALS['pp_settings_cache'][(string)$k] = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
+        }
+    }
+    return true;
 }
 
 function get_currency_code(): string {
@@ -375,6 +445,346 @@ function rmdir_recursive($dir) {
         }
     }
     rmdir($dir);
+}
+
+// ---------- Publication networks helpers ----------
+
+function pp_networks_dir(): string {
+    $dir = PP_ROOT_PATH . '/networks';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    return $dir;
+}
+
+function pp_normalize_slug(string $slug): string {
+    $slug = strtolower(trim($slug));
+    $slug = preg_replace('~[^a-z0-9_\-]+~', '-', $slug);
+    return trim($slug, '-_');
+}
+
+function pp_path_to_relative(string $path): string {
+    $path = str_replace(['\\', '\\'], '/', $path);
+    $root = str_replace(['\\', '\\'], '/', PP_ROOT_PATH);
+    if (strpos($path, $root) === 0) {
+        $rel = ltrim(substr($path, strlen($root)), '/');
+        return $rel === '' ? '.' : $rel;
+    }
+    return $path;
+}
+
+function pp_network_descriptor_from_file(string $file): ?array {
+    if (!is_file($file)) { return null; }
+    try {
+        /** @noinspection PhpIncludeInspection */
+        $descriptor = @include $file;
+    } catch (Throwable $e) {
+        return null;
+    }
+    if (!is_array($descriptor)) { return null; }
+    $descriptor['slug'] = pp_normalize_slug((string)($descriptor['slug'] ?? ''));
+    if ($descriptor['slug'] === '') { return null; }
+    $descriptor['title'] = trim((string)($descriptor['title'] ?? ucfirst($descriptor['slug'])));
+    $descriptor['description'] = trim((string)($descriptor['description'] ?? ''));
+    $descriptor['handler'] = trim((string)($descriptor['handler'] ?? ''));
+    if ($descriptor['handler'] === '') { return null; }
+
+    // Resolve handler path
+    $handler = $descriptor['handler'];
+    $isAbsolute = preg_match('~^([a-zA-Z]:[\\/]|/)~', $handler) === 1;
+    if (!$isAbsolute) {
+        $handler = realpath(dirname($file) . '/' . $handler) ?: (dirname($file) . '/' . $handler);
+    }
+    $handlerAbs = realpath($handler) ?: $handler;
+
+    $descriptor['handler_type'] = strtolower(trim((string)($descriptor['handler_type'] ?? 'node')));
+    $descriptor['enabled'] = isset($descriptor['enabled']) ? (bool)$descriptor['enabled'] : true;
+    $descriptor['meta'] = is_array($descriptor['meta'] ?? null) ? $descriptor['meta'] : [];
+    $descriptor['source_file'] = $file;
+    $descriptor['handler_abs'] = $handlerAbs;
+    $descriptor['handler_rel'] = pp_path_to_relative($handlerAbs);
+
+    return $descriptor;
+}
+
+function pp_refresh_networks(bool $force = false): array {
+    if (!$force) {
+        $last = (int)get_setting('networks_last_refresh', 0);
+        if ($last && (time() - $last) < 300) {
+            return pp_get_networks(false, true);
+        }
+    }
+
+    $dir = pp_networks_dir();
+    $files = glob($dir . '/*.php') ?: [];
+    $descriptors = [];
+    foreach ($files as $file) {
+        $descriptor = pp_network_descriptor_from_file($file);
+        if ($descriptor) {
+            $descriptors[$descriptor['slug']] = $descriptor;
+        }
+    }
+
+    $conn = null;
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        $conn = null;
+    }
+    if (!$conn) { return array_values($descriptors); }
+
+    // snapshot existing enabled flags
+    $existing = [];
+    if ($res = @$conn->query("SELECT slug, enabled FROM networks")) {
+        while ($row = $res->fetch_assoc()) {
+            $existing[$row['slug']] = (int)$row['enabled'];
+        }
+        $res->free();
+    }
+
+    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, enabled, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
+    if ($stmt) {
+        foreach ($descriptors as $slug => $descriptor) {
+            $enabled = $descriptor['enabled'] ? 1 : 0;
+            if (array_key_exists($slug, $existing)) {
+                $enabled = $existing[$slug];
+            }
+            $metaJson = json_encode($descriptor['meta'], JSON_UNESCAPED_UNICODE);
+            $stmt->bind_param(
+                'ssssssi',
+                $descriptor['slug'],
+                $descriptor['title'],
+                $descriptor['description'],
+                $descriptor['handler_rel'],
+                $descriptor['handler_type'],
+                $metaJson,
+                $enabled
+            );
+            $stmt->execute();
+        }
+        $stmt->close();
+    }
+
+    $knownSlugs = array_keys($descriptors);
+    if (!empty($knownSlugs)) {
+        $placeholders = implode(',', array_fill(0, count($knownSlugs), '?'));
+        $query = $conn->prepare("UPDATE networks SET is_missing = 1, enabled = 0 WHERE slug NOT IN ($placeholders)");
+        if ($query) {
+            $types = str_repeat('s', count($knownSlugs));
+            $query->bind_param($types, ...$knownSlugs);
+            $query->execute();
+            $query->close();
+        }
+    } else {
+        @$conn->query("UPDATE networks SET is_missing = 1, enabled = 0");
+    }
+
+    $conn->close();
+    set_setting('networks_last_refresh', (string)time());
+
+    return array_values($descriptors);
+}
+
+function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false): array {
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return [];
+    }
+    if (!$conn) { return []; }
+
+    $where = [];
+    if ($onlyEnabled) { $where[] = "enabled = 1"; }
+    if (!$includeMissing) { $where[] = "is_missing = 0"; }
+    $sql = "SELECT slug, title, description, handler, handler_type, meta, enabled, is_missing, created_at, updated_at FROM networks";
+    if ($where) { $sql .= ' WHERE ' . implode(' AND ', $where); }
+    $sql .= ' ORDER BY title ASC';
+    $rows = [];
+    if ($res = @$conn->query($sql)) {
+        while ($row = $res->fetch_assoc()) {
+            $rel = (string)$row['handler'];
+            $isAbsolute = preg_match('~^([a-zA-Z]:[\\/]|/)~', $rel) === 1;
+            if ($rel === '.') {
+                $abs = PP_ROOT_PATH;
+            } elseif ($isAbsolute) {
+                $abs = $rel;
+            } else {
+                $abs = PP_ROOT_PATH . '/' . ltrim($rel, '/');
+            }
+            $absReal = realpath($abs);
+            if ($absReal) { $abs = $absReal; }
+            $rows[] = [
+                'slug' => (string)$row['slug'],
+                'title' => (string)$row['title'],
+                'description' => (string)$row['description'],
+                'handler' => $rel,
+                'handler_abs' => $abs,
+                'handler_type' => (string)$row['handler_type'],
+                'meta' => $row['meta'] ? json_decode($row['meta'], true) ?: [] : [],
+                'enabled' => (bool)$row['enabled'],
+                'is_missing' => (bool)$row['is_missing'],
+                'created_at' => $row['created_at'],
+                'updated_at' => $row['updated_at'],
+            ];
+        }
+        $res->free();
+    }
+
+    $conn->close();
+    return $rows;
+}
+
+function pp_get_network(string $slug): ?array {
+    $slug = pp_normalize_slug($slug);
+    $all = pp_get_networks(false, true);
+    foreach ($all as $network) {
+        if ($network['slug'] === $slug) { return $network; }
+    }
+    return null;
+}
+
+function pp_pick_network(): ?array {
+    $nets = pp_get_networks(true, false);
+    return $nets[0] ?? null;
+}
+
+function pp_set_networks_enabled(array $slugsToEnable): bool {
+    $map = [];
+    foreach ($slugsToEnable as $slug) {
+        $norm = pp_normalize_slug((string)$slug);
+        if ($norm !== '') { $map[$norm] = true; }
+    }
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return false;
+    }
+    if (!$conn) { return false; }
+
+    $allSlugs = [];
+    if ($res = @$conn->query("SELECT slug FROM networks")) {
+        while ($row = $res->fetch_assoc()) { $allSlugs[] = (string)$row['slug']; }
+        $res->free();
+    }
+
+    $stmt = $conn->prepare("UPDATE networks SET enabled = ? WHERE slug = ?");
+    if ($stmt) {
+        foreach ($allSlugs as $slug) {
+            $enabled = isset($map[$slug]) ? 1 : 0;
+            $stmt->bind_param('is', $enabled, $slug);
+            $stmt->execute();
+        }
+        $stmt->close();
+    }
+    $conn->close();
+    return true;
+}
+
+function pp_get_node_binary(): string {
+    $fromSetting = trim((string)get_setting('node_binary', ''));
+    if ($fromSetting !== '') { return $fromSetting; }
+    $env = getenv('NODE_BINARY');
+    if ($env && trim($env) !== '') { return trim($env); }
+    return 'node';
+}
+
+function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 480): array {
+    if (!is_file($script) || !is_readable($script)) {
+        return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
+    }
+    $node = pp_get_node_binary();
+    $descriptorSpec = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $env = array_merge($_ENV, $_SERVER, [
+        'PP_JOB' => json_encode($job, JSON_UNESCAPED_UNICODE),
+        'NODE_NO_WARNINGS' => '1',
+    ]);
+    $cmd = $node . ' ' . escapeshellarg($script);
+    $process = @proc_open($cmd, $descriptorSpec, $pipes, PP_ROOT_PATH, $env);
+    if (!is_resource($process)) {
+        return ['ok' => false, 'error' => 'PROC_OPEN_FAILED'];
+    }
+
+    fclose($pipes[0]);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $stdout = '';
+    $stderr = '';
+    $start = time();
+
+    while (true) {
+        $status = @proc_get_status($process);
+        if (!$status || !$status['running']) {
+            // Read any remaining data
+            $stdout .= stream_get_contents($pipes[1]);
+            $stderr .= stream_get_contents($pipes[2]);
+            break;
+        }
+
+        $read = [];
+        if (!feof($pipes[1])) { $read[] = $pipes[1]; }
+        if (!feof($pipes[2])) { $read[] = $pipes[2]; }
+        if (!$read) { break; }
+        $remaining = max(1, $timeoutSeconds - (time() - $start));
+        $ready = @stream_select($read, $write, $except, $remaining, 0);
+        if ($ready === false) {
+            break;
+        }
+        if ($ready === 0) {
+            // Timeout: terminate process
+            @proc_terminate($process, 9);
+            $stdout .= stream_get_contents($pipes[1]);
+            $stderr .= stream_get_contents($pipes[2]);
+            foreach ($pipes as $pipe) { @fclose($pipe); }
+            @proc_close($process);
+            return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
+        }
+        foreach ($read as $stream) {
+            $chunk = stream_get_contents($stream);
+            if ($stream === $pipes[1]) { $stdout .= $chunk; }
+            else { $stderr .= $chunk; }
+        }
+        if ((time() - $start) >= $timeoutSeconds) {
+            @proc_terminate($process, 9);
+            $stdout .= stream_get_contents($pipes[1]);
+            $stderr .= stream_get_contents($pipes[2]);
+            foreach ($pipes as $pipe) { @fclose($pipe); }
+            @proc_close($process);
+            return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
+        }
+    }
+
+    foreach ($pipes as $pipe) { @fclose($pipe); }
+    $exitCode = @proc_close($process);
+
+    $response = ['ok' => false, 'error' => 'NODE_RETURN_EMPTY'];
+    $stdoutTrim = trim($stdout);
+    if ($stdoutTrim !== '') {
+        $lastLine = trim(substr($stdoutTrim, strrpos($stdoutTrim, "\n") ?: 0));
+        $decoded = json_decode($lastLine, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            $response = $decoded;
+        } else {
+            $response = ['ok' => false, 'error' => 'INVALID_JSON', 'raw' => $stdoutTrim];
+        }
+    }
+    if (!empty($stderr)) {
+        $response['stderr'] = trim($stderr);
+    }
+    $response['exit_code'] = $exitCode;
+    return $response;
+}
+
+function pp_publish_via_network(array $network, array $job, int $timeoutSeconds = 480): array {
+    $type = strtolower((string)($network['handler_type'] ?? ''));
+    if ($type !== 'node') {
+        return ['ok' => false, 'error' => 'UNSUPPORTED_HANDLER'];
+    }
+    return pp_run_node_script($network['handler_abs'], $job, $timeoutSeconds);
 }
 
 ?>

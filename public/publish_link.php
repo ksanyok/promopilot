@@ -2,6 +2,8 @@
 require_once __DIR__ . '/../includes/init.php';
 header('Content-Type: application/json; charset=utf-8');
 
+@set_time_limit(600);
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED']);
@@ -31,7 +33,7 @@ if (!$project_id || !$url || !filter_var($url, FILTER_VALIDATE_URL)) {
 
 $conn = connect_db();
 // Проверка прав
-$stmt = $conn->prepare("SELECT user_id, links FROM projects WHERE id = ? LIMIT 1");
+$stmt = $conn->prepare("SELECT user_id, links, language, wishes, name FROM projects WHERE id = ? LIMIT 1");
 $stmt->bind_param('i', $project_id);
 $stmt->execute();
 $res = $stmt->get_result();
@@ -49,15 +51,23 @@ if (!is_admin() && (int)$proj['user_id'] !== (int)$_SESSION['user_id']) {
 // Ищем анкор, язык, пожелание из структуры links
 $anchor='';
 $links = json_decode($proj['links'] ?? '[]', true) ?: [];
+$projectLanguage = trim((string)($proj['language'] ?? 'ru')) ?: 'ru';
+$projectWish = trim((string)($proj['wishes'] ?? ''));
+$projectName = trim((string)($proj['name'] ?? ''));
+
 if (is_array($links)) {
     foreach ($links as $lnk) {
         if (is_array($lnk) && isset($lnk['url']) && trim($lnk['url']) === $url) {
             $anchor = trim($lnk['anchor'] ?? '');
+            $linkLanguage = trim((string)($lnk['language'] ?? '')) ?: $projectLanguage;
+            $linkWish = trim((string)($lnk['wish'] ?? '')) ?: $projectWish;
             break;
         }
         if (is_string($lnk) && $lnk === $url) { $anchor=''; break; }
     }
 }
+$linkLanguage = $linkLanguage ?? $projectLanguage;
+$linkWish = $linkWish ?? $projectWish;
 
 if ($action === 'publish') {
     // Уже есть?
@@ -75,15 +85,88 @@ if ($action === 'publish') {
         echo json_encode(['ok'=>true,'status'=>'pending']);
         $conn->close(); exit;
     }
-    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor) VALUES (?,?,?)");
-    $stmt->bind_param('iss', $project_id, $url, $anchor);
-    if ($stmt->execute()) {
-        echo json_encode(['ok'=>true,'status'=>'pending']);
-    } else {
-        echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
+    $network = pp_pick_network();
+    if (!$network) {
+        $conn->close();
+        echo json_encode(['ok'=>false,'error'=>'NO_ENABLED_NETWORKS']);
+        exit;
     }
+    $openaiKey = trim((string)get_setting('openai_api_key', ''));
+    if ($openaiKey === '') {
+        $conn->close();
+        echo json_encode(['ok'=>false,'error'=>'MISSING_OPENAI_KEY']);
+        exit;
+    }
+
+    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network) VALUES (?,?,?,?)");
+    $networkSlug = $network['slug'];
+    $stmt->bind_param('isss', $project_id, $url, $anchor, $networkSlug);
+    if (!$stmt->execute()) {
+        $stmt->close();
+        $conn->close();
+        echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
+        exit;
+    }
+    $pubId = (int)$conn->insert_id;
     $stmt->close();
+
+    $job = [
+        'url' => $url,
+        'anchor' => $anchor,
+        'language' => $linkLanguage,
+        'wish' => $linkWish,
+        'projectId' => $project_id,
+        'projectName' => $projectName,
+        'openaiApiKey' => $openaiKey,
+        'waitBetweenCallsMs' => 5000,
+    ];
+
+    $result = pp_publish_via_network($network, $job, 600);
+    if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
+        $del = $conn->prepare("DELETE FROM publications WHERE id = ? LIMIT 1");
+        if ($del) {
+            $del->bind_param('i', $pubId);
+            $del->execute();
+            $del->close();
+        }
+        $conn->close();
+        $errCode = 'NETWORK_ERROR';
+        $details = is_array($result) ? ($result['error'] ?? 'UNKNOWN') : 'NO_RESPONSE';
+        echo json_encode(['ok'=>false,'error'=>$errCode,'details'=>$details]);
+        exit;
+    }
+
+    $publishedUrl = trim((string)$result['publishedUrl']);
+    $publishedBy = 'system';
+    $userStmt = $conn->prepare("SELECT username FROM users WHERE id = ? LIMIT 1");
+    if ($userStmt) {
+        $uid = (int)($_SESSION['user_id'] ?? 0);
+        $userStmt->bind_param('i', $uid);
+        $userStmt->execute();
+        $userStmt->bind_result($uName);
+        if ($userStmt->fetch()) {
+            $publishedBy = (string)$uName;
+        }
+        $userStmt->close();
+    }
+
+    $update = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ? WHERE id = ? LIMIT 1");
+    if ($update) {
+        $update->bind_param('sssi', $publishedUrl, $networkSlug, $publishedBy, $pubId);
+        $update->execute();
+        $update->close();
+    }
+
     $conn->close();
+    echo json_encode([
+        'ok' => true,
+        'status' => 'published',
+        'post_url' => $publishedUrl,
+        'network' => $networkSlug,
+        'network_title' => $network['title'] ?? $networkSlug,
+        'title' => $result['title'] ?? '',
+        'author' => $result['author'] ?? '',
+    ]);
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url)

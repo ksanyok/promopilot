@@ -2,7 +2,7 @@
 require_once __DIR__ . '/init.php';
 // Fetch current client user short info for navbar avatar/name
 $pp_nav_user = null;
-if (is_logged_in() && !is_admin()) {
+if (is_logged_in()) {
     try {
         $conn = connect_db();
         $uid = (int)($_SESSION['user_id'] ?? 0);
@@ -50,34 +50,39 @@ if (is_logged_in() && !is_admin()) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
-                        <?php else: ?>
-                            <!-- Client navbar: avatar and name with dropdown -->
-                            <?php 
-                                $dispName = '';
-                                $avatarUrl = asset_url('img/logo.png');
-                                if ($pp_nav_user) {
-                                    $dispName = trim((string)($pp_nav_user['full_name'] ?: $pp_nav_user['username']));
-                                    if (!empty($pp_nav_user['avatar'])) { $avatarUrl = pp_url($pp_nav_user['avatar']); }
-                                }
-                            ?>
-                            <li class="nav-item dropdown">
-                                <a class="nav-link dropdown-toggle d-flex align-items-center gap-2" href="#" id="userMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                    <img src="<?php echo htmlspecialchars($avatarUrl); ?>" alt="avatar" class="nav-avatar">
-                                    <span class="d-none d-sm-inline"><?php echo htmlspecialchars($dispName ?: __('Профиль')); ?></span>
-                                </a>
-                                <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userMenu">
+                        <?php endif; ?>
+                        <?php 
+                            $dispName = '';
+                            $avatarUrl = asset_url('img/logo.png');
+                            if ($pp_nav_user) {
+                                $dispName = trim((string)($pp_nav_user['full_name'] ?: $pp_nav_user['username']));
+                                if (!empty($pp_nav_user['avatar'])) { $avatarUrl = pp_url($pp_nav_user['avatar']); }
+                            }
+                            if ($dispName === '') {
+                                $dispName = is_admin() ? __('Администратор') : __('Профиль');
+                            }
+                        ?>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle d-flex align-items-center gap-2" href="#" id="userMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <img src="<?php echo htmlspecialchars($avatarUrl); ?>" alt="avatar" class="nav-avatar">
+                                <span class="d-none d-sm-inline"><?php echo htmlspecialchars($dispName); ?></span>
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userMenu">
+                                <?php if (is_admin()): ?>
+                                    <li><a class="dropdown-item" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-2"></i><?php echo __('Админка'); ?></a></li>
+                                <?php else: ?>
                                     <li><a class="dropdown-item" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-2"></i><?php echo __('Дашборд'); ?></a></li>
                                     <li><a class="dropdown-item" href="<?php echo pp_url('client/settings.php'); ?>"><i class="bi bi-gear me-2"></i><?php echo __('Настройки'); ?></a></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li>
-                                        <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>" class="px-3 py-1">
-                                            <?php echo csrf_field(); ?>
-                                            <button type="submit" class="btn btn-link p-0 text-start"><i class="bi bi-box-arrow-right me-2"></i><?php echo __('Выход'); ?></button>
-                                        </form>
-                                    </li>
-                                </ul>
-                            </li>
-                        <?php endif; ?>
+                                <?php endif; ?>
+                                <li><hr class="dropdown-divider"></li>
+                                <li>
+                                    <form method="post" action="<?php echo pp_url('auth/logout.php'); ?>" class="px-3 py-1">
+                                        <?php echo csrf_field(); ?>
+                                        <button type="submit" class="btn btn-link p-0 text-start"><i class="bi bi-box-arrow-right me-2"></i><?php echo __('Выход'); ?></button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </li>
                         <?php if (isset($_SESSION['admin_user_id'])): ?>
                             <?php $retToken = action_token('admin_return', (string)$_SESSION['admin_user_id']); ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin_return.php?t=' . urlencode($retToken)); ?>"><i class="bi bi-arrow-return-left me-1"></i><?php echo __('Вернуться в админку'); ?></a></li>

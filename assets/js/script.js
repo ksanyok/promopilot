@@ -105,21 +105,96 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Admin sections toggle (now supports users, projects, settings)
-    const sections = {
-        users: document.getElementById('users-section'),
-        projects: document.getElementById('projects-section'),
-        settings: document.getElementById('settings-section')
-    };
-    if (sections.users || sections.projects || sections.settings) {
+    // Admin sections toggle (users, projects, settings, networks, diagnostics)
+    const sectionKeys = ['users','projects','settings','networks','diagnostics'];
+    const sections = {};
+    sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
+    const hasSections = Object.values(sections).some(Boolean);
+    if (hasSections) {
+        const storageAvailable = (() => { try { return !!window.localStorage; } catch (_) { return false; } })();
         function show(sectionKey) {
             Object.keys(sections).forEach(k => {
                 if (sections[k]) sections[k].style.display = (k === sectionKey) ? 'block' : 'none';
             });
+            if (storageAvailable) {
+                try { localStorage.setItem('pp-admin-section', sectionKey); } catch (_) { /* ignore */ }
+            }
         }
         window.ppShowSection = show;
-        // default
-        if (sections.users) show('users');
+        let initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
+        if (!initial || !sections[initial]) {
+            initial = sections.users ? 'users' : (sections.projects ? 'projects' : (sections.settings ? 'settings' : (sections.networks ? 'networks' : Object.keys(sections).find(k => sections[k]))));
+        }
+        show(initial || 'users');
+    }
+
+    // OpenAI key checker (admin settings)
+    const checkBtn = document.getElementById('checkOpenAiKey');
+    if (checkBtn) {
+        const input = document.getElementById('openaiApiKeyInput');
+        const statusEl = document.getElementById('openaiCheckStatus');
+        const msgBox = document.getElementById('openaiCheckMessages');
+        const msg = msgBox ? msgBox.dataset : {};
+        const defaultText = statusEl ? statusEl.textContent : '';
+        const runCheck = async () => {
+            if (!input) return;
+            const key = input.value.trim();
+            if (!statusEl) return;
+            if (key === '') {
+                statusEl.className = 'form-text text-danger';
+                statusEl.textContent = msg.empty || 'Введите ключ перед проверкой.';
+                return;
+            }
+            const url = checkBtn.dataset.checkUrl;
+            if (!url) return;
+            checkBtn.disabled = true;
+            const prevHtml = checkBtn.innerHTML;
+            checkBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + (msg.checkingShort || 'Проверка...');
+            statusEl.className = 'form-text text-muted';
+            statusEl.textContent = msg.checking || 'Проверяем ключ...';
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'key=' + encodeURIComponent(key),
+                    credentials: 'same-origin'
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!data.ok) {
+                    let message = data.error || 'Ошибка';
+                    const map = {
+                        'EMPTY_KEY': msg.empty,
+                        'UNAUTHORIZED': msg.unauthorized,
+                        'NO_CURL': msg.noCurl,
+                        'REQUEST_FAILED': msg.request,
+                        'API_ERROR': msg.error,
+                        'FORBIDDEN': msg.forbidden,
+                    };
+                    if (message && map[message]) { message = map[message]; }
+                    if (data.details) {
+                        message += ' (' + data.details + ')';
+                    }
+                    statusEl.className = 'form-text text-danger';
+                    statusEl.textContent = message;
+                } else {
+                    const cnt = typeof data.models === 'number' ? data.models : 0;
+                    const okMsg = (msg.ok || 'Ключ подтверждён. Доступно моделей:') + ' ' + cnt;
+                    statusEl.className = 'form-text text-success';
+                    statusEl.textContent = okMsg;
+                }
+            } catch (err) {
+                statusEl.className = 'form-text text-danger';
+                statusEl.textContent = msg.connection || 'Не удалось соединиться с OpenAI.';
+            } finally {
+                checkBtn.disabled = false;
+                checkBtn.innerHTML = prevHtml;
+            }
+        };
+        checkBtn.addEventListener('click', runCheck);
+        if (statusEl) {
+            statusEl.className = 'form-text';
+            statusEl.textContent = defaultText;
+        }
     }
 
     // Futuristic neutral background (particle network)

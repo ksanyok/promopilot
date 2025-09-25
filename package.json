@@ -1,0 +1,13 @@
+{
+  "name": "promopilot-networks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automation scripts for PromoPilot publication networks.",
+  "scripts": {
+    "test": "echo \"No tests defined\" && exit 0"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.9",
+    "puppeteer": "^22.9.0"
+  }
+}
