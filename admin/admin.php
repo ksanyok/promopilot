@@ -18,8 +18,6 @@ $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'
 // Extend settings keys: AI provider and Google OAuth
 $settingsKeys = array_merge($settingsKeys, [
     'ai_provider',              // openai | byoa
-    'custom_ai_endpoint',       // URL of custom AI endpoint
-    'custom_ai_token',          // auth token/key for custom AI
     'google_oauth_enabled',     // 0/1
     'google_client_id',
     'google_client_secret',
@@ -36,10 +34,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
             $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
 
-            // AI provider selection
+            // AI provider selection (OpenAI or BYOA only; no custom fields)
             $aiProvider = in_array(($_POST['ai_provider'] ?? 'openai'), ['openai','byoa'], true) ? $_POST['ai_provider'] : 'openai';
-            $customAiEndpoint = trim((string)($_POST['custom_ai_endpoint'] ?? ''));
-            $customAiToken = trim((string)($_POST['custom_ai_token'] ?? ''));
 
             // Google OAuth config
             $googleEnabled = isset($_POST['google_oauth_enabled']) ? '1' : '0';
@@ -51,11 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['openai_api_key', $openai],
                 ['telegram_token', $tgToken],
                 ['telegram_channel', $tgChannel],
-                // AI provider
                 ['ai_provider', $aiProvider],
-                ['custom_ai_endpoint', $customAiEndpoint],
-                ['custom_ai_token', $customAiToken],
-                // Google OAuth
                 ['google_oauth_enabled', $googleEnabled],
                 ['google_client_id', $googleClientId],
                 ['google_client_secret', $googleClientSecret],
@@ -142,12 +134,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $settings = ['currency' => 'RUB', 'openai_api_key' => '', 'telegram_token' => '', 'telegram_channel' => ''];
 // Defaults for new settings
 $settings += [
-    'ai_provider' => 'openai',
-    'custom_ai_endpoint' => '',
-    'custom_ai_token' => '',
-    'google_oauth_enabled' => '0',
-    'google_client_id' => '',
-    'google_client_secret' => '',
+    'ai_provider' => $settings['ai_provider'] ?? 'openai',
+    'google_oauth_enabled' => $settings['google_oauth_enabled'] ?? '0',
+    'google_client_id' => $settings['google_client_id'] ?? '',
+    'google_client_secret' => $settings['google_client_secret'] ?? '',
 ];
 $in = "'" . implode("','", array_map([$conn, 'real_escape_string'], $settingsKeys)) . "'";
 $res = $conn->query("SELECT k, v FROM settings WHERE k IN ($in)");
@@ -400,9 +390,9 @@ $diagnostics = [
     <?php if ($settingsMsg): ?>
         <div class="alert alert-success fade-in"><?php echo htmlspecialchars($settingsMsg); ?></div>
     <?php endif; ?>
-    <form method="post" class="card p-3" autocomplete="off">
+    <form method="post" class="card settings-card p-3" autocomplete="off">
         <?php echo csrf_field(); ?>
-        <div class="row g-3">
+        <div class="row g-4">
             <div class="col-md-4">
                 <label class="form-label"><?php echo __('Валюта'); ?></label>
                 <select name="currency" class="form-select form-control" required>
@@ -410,19 +400,19 @@ $diagnostics = [
                         <option value="<?php echo $cur; ?>" <?php echo ($settings['currency'] === $cur ? 'selected' : ''); ?>><?php echo $cur; ?></option>
                     <?php endforeach; ?>
                 </select>
+                <div class="form-text"><?php echo __('Используется в биллинге и отчетах.'); ?></div>
             </div>
             <div class="col-md-8"></div>
+
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Провайдер ИИ'); ?></label>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="ai_provider" id="aiOpenAi" value="openai" <?php echo ($settings['ai_provider']==='openai'?'checked':''); ?>>
-                    <label class="form-check-label" for="aiOpenAi">OpenAI (рекомендуется)</label>
+                <div class="pp-segmented" role="group" aria-label="AI provider">
+                    <input type="radio" id="provOpenAI" name="ai_provider" value="openai" <?php echo ($settings['ai_provider']==='openai'?'checked':''); ?>>
+                    <label for="provOpenAI">OpenAI</label>
+                    <input type="radio" id="provByoa" name="ai_provider" value="byoa" <?php echo ($settings['ai_provider']==='byoa'?'checked':''); ?>>
+                    <label for="provByoa"><?php echo __('Свой ИИ'); ?></label>
                 </div>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="ai_provider" id="aiByoa" value="byoa" <?php echo ($settings['ai_provider']==='byoa'?'checked':''); ?>>
-                    <label class="form-check-label" for="aiByoa">Свой ИИ (Bring Your Own AI)</label>
-                </div>
-                <div class="form-text"><?php echo __('Выберите источник для генерации контента.'); ?></div>
+                <div class="form-text"><?php echo __('Выберите источник генерации. Для OpenAI укажите API ключ ниже.'); ?></div>
             </div>
             <div class="col-md-6">
                 <label class="form-label">OpenAI API Key</label>
@@ -446,21 +436,13 @@ $diagnostics = [
                      data-checking-short="<?php echo htmlspecialchars(__('Проверка...')); ?>"
                 ></div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label"><?php echo __('Свой ИИ — Endpoint'); ?></label>
-                <input type="text" name="custom_ai_endpoint" class="form-control" value="<?php echo htmlspecialchars($settings['custom_ai_endpoint']); ?>" placeholder="https://api.example.com/generate">
-                <div class="form-text"><?php echo __('Укажите URL вашего сервиса генерации (POST JSON).'); ?></div>
-            </div>
-            <div class="col-md-6">
-                <label class="form-label"><?php echo __('Свой ИИ — Токен'); ?></label>
-                <input type="text" name="custom_ai_token" class="form-control" value="<?php echo htmlspecialchars($settings['custom_ai_token']); ?>" placeholder="Bearer ...">
-                <div class="form-text"><?php echo __('Токен авторизации для вашего сервиса.'); ?></div>
-            </div>
+
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Google OAuth'); ?></label>
-                <div class="form-check form-switch mb-2">
+                <div class="pp-switch mb-2">
                     <input class="form-check-input" type="checkbox" name="google_oauth_enabled" id="googleEnabled" <?php echo ($settings['google_oauth_enabled']==='1'?'checked':''); ?>>
-                    <label class="form-check-label" for="googleEnabled"><?php echo __('Разрешить вход через Google'); ?></label>
+                    <span class="track"><span class="thumb"></span></span>
+                    <label for="googleEnabled" class="ms-1"><?php echo __('Разрешить вход через Google'); ?></label>
                 </div>
                 <div class="row g-2">
                     <div class="col-md-6">
@@ -472,10 +454,11 @@ $diagnostics = [
                 </div>
                 <div class="form-text mt-1">
                     <?php echo __('Redirect URI'); ?>: <code><?php echo htmlspecialchars(pp_google_redirect_url()); ?></code>
-                    <button type="button" class="btn btn-link btn-sm p-0 ms-2" onclick="document.getElementById('googleHelpModal').style.display='block'"><?php echo __('Как настроить?'); ?></button>
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-2" id="openGoogleHelp"><?php echo __('Как настроить?'); ?></button>
                 </div>
             </div>
             <div class="col-md-6"></div>
+
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Telegram токен'); ?></label>
                 <input type="text" name="telegram_token" class="form-control" value="<?php echo htmlspecialchars($settings['telegram_token']); ?>" placeholder="1234567890:ABCDEF...">
@@ -490,25 +473,51 @@ $diagnostics = [
         </div>
     </form>
 
-    <!-- Google Help Modal (simple) -->
-    <div id="googleHelpModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:1000;">
-        <div style="max-width:720px; margin:5% auto; background:#fff; border-radius:8px; padding:20px; position:relative;">
-            <button type="button" onclick="document.getElementById('googleHelpModal').style.display='none'" style="position:absolute; right:12px; top:12px;" class="btn btn-sm btn-outline-secondary">×</button>
-            <h5 class="mb-3"><?php echo __('Настройка входа через Google'); ?></h5>
-            <ol class="mb-3">
-                <li><?php echo __('Откройте'); ?> <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console → APIs & Services → Credentials</a>.</li>
-                <li><?php echo __('Создайте OAuth 2.0 Client ID (тип Web application).'); ?></li>
-                <li><?php echo __('В Authorized redirect URIs добавьте'); ?>: <code><?php echo htmlspecialchars(pp_google_redirect_url()); ?></code></li>
-                <li><?php echo __('Скопируйте Client ID и Client Secret и вставьте в поля настроек.'); ?></li>
-                <li><?php echo __('Включите переключатель «Разрешить вход через Google» и сохраните.'); ?></li>
-                <li><?php echo __('На страницах входа/регистрации появится кнопка «Войти через Google».'); ?></li>
-            </ol>
-            <div class="text-end">
-                <button type="button" class="btn btn-primary" onclick="document.getElementById('googleHelpModal').style.display='none'"><?php echo __('Понятно'); ?></button>
+    <!-- Google Help Modal (scrollable, high-contrast) -->
+    <div id="googleHelpModal" class="pp-modal" aria-hidden="true" role="dialog" aria-labelledby="googleHelpTitle">
+        <div class="pp-modal-dialog">
+            <div class="pp-modal-header">
+                <div class="pp-modal-title" id="googleHelpTitle"><?php echo __('Настройка входа через Google'); ?></div>
+                <button type="button" class="pp-close" data-pp-close>&times;</button>
+            </div>
+            <div class="pp-modal-body">
+                <p><?php echo __('Эта инструкция поможет подключить вход через Google в несколько шагов. Выполняйте в Google Cloud Console.'); ?></p>
+                <ol>
+                    <li><?php echo __('Откройте'); ?> <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">APIs &amp; Services → Credentials</a> (<?php echo __('создайте проект при необходимости'); ?>).</li>
+                    <li><?php echo __('На вкладке OAuth consent screen задайте тип (External), название приложения и email поддержки. Сохраните.'); ?></li>
+                    <li><?php echo __('Перейдите в Credentials → Create Credentials → OAuth client ID и выберите Web application.'); ?></li>
+                    <li><?php echo __('В Authorized redirect URIs добавьте'); ?>: <code><?php echo htmlspecialchars(pp_google_redirect_url()); ?></code></li>
+                    <li><?php echo __('Сохраните и скопируйте Client ID и Client Secret. Вставьте их в поля настроек на этой странице.'); ?></li>
+                    <li><?php echo __('Включите переключатель «Разрешить вход через Google» и нажмите «Сохранить».'); ?></li>
+                </ol>
+                <h6 class="mt-3"><?php echo __('Проверка'); ?></h6>
+                <p><?php echo __('Откройте страницу входа. Появится кнопка «Войти через Google». Авторизуйтесь и подтвердите права.'); ?></p>
+                <h6 class="mt-3"><?php echo __('Советы и устранение неполадок'); ?></h6>
+                <ul>
+                    <li><?php echo __('Если видите ошибку redirect_uri_mismatch — проверьте точное совпадение Redirect URI.'); ?></li>
+                    <li><?php echo __('Для публикации за пределами тестовых пользователей переведите приложение в статус In production на странице OAuth consent screen.'); ?></li>
+                    <li><?php echo __('Проверьте, что время на сервере синхронизировано (NTP), иначе подпись токена может считаться просроченной.'); ?></li>
+                    <li><?php echo __('Ограничьте доступ при необходимости, проверяя домен email в обработчике после входа.'); ?></li>
+                </ul>
+            </div>
+            <div class="pp-modal-footer">
+                <button type="button" class="btn btn-outline-primary" data-pp-close><?php echo __('Готово'); ?></button>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+(function(){
+  const modal = document.getElementById('googleHelpModal');
+  const openBtn = document.getElementById('openGoogleHelp');
+  function close(){ modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); }
+  function open(){ modal.classList.add('show'); modal.removeAttribute('aria-hidden'); }
+  if (openBtn) openBtn.addEventListener('click', open);
+  modal?.addEventListener('click', function(e){ if (e.target === modal || e.target.closest('[data-pp-close]')) close(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && modal.classList.contains('show')) close(); });
+})();
+</script>
 
 <div id="networks-section" style="display:none;">
     <h3><?php echo __('Сети публикации'); ?></h3>

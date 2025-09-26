@@ -1,0 +1,161 @@
+/* Admin custom styles
+   High-contrast, consistent spacing, and improved modal.
+*/
+
+:root {
+  --pp-bg: #0e0f13;
+  --pp-card: #161822;
+  --pp-text: #e6e9ef;
+  --pp-muted: #9aa4b2;
+  --pp-primary: #4da3ff;
+  --pp-accent: #7c4dff;
+  --pp-border: #2a2f3a;
+  --pp-success: #3ddc97;
+  --pp-warning: #ffb020;
+  --pp-danger: #ff6b6b;
+}
+
+/* Settings layout polish */
+.settings-card {
+  background: var(--pp-card);
+  border: 1px solid var(--pp-border);
+  color: var(--pp-text);
+}
+.settings-card .form-label,
+.settings-card .form-text,
+.settings-card .card-title,
+.settings-card .card-header,
+.settings-card label {
+  color: var(--pp-text);
+}
+.settings-card .form-text { color: var(--pp-muted); }
+.settings-card .form-control,
+.settings-card .form-select {
+  background-color: #0f1117;
+  border-color: var(--pp-border);
+  color: var(--pp-text);
+}
+.settings-card .form-control::placeholder { color: #60697a; }
+.settings-card .form-control:focus,
+.settings-card .form-select:focus {
+  border-color: var(--pp-primary);
+  box-shadow: 0 0 0 .2rem rgba(77,163,255,.15);
+}
+
+/* Segmented control for provider */
+.pp-segmented {
+  display: inline-flex;
+  border: 1px solid var(--pp-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f1117;
+}
+.pp-segmented input { display: none; }
+.pp-segmented label {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--pp-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: all .15s ease;
+}
+.pp-segmented label + label { border-left: 1px solid var(--pp-border); }
+.pp-segmented input:checked + label {
+  color: var(--pp-text);
+  background: #121521;
+}
+
+/* Pretty switch */
+.pp-switch {
+  --h: 24px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.pp-switch input { display:none; }
+.pp-switch .track {
+  width: 46px; height: var(--h);
+  background: #2a2f3a;
+  border-radius: calc(var(--h) / 2);
+  position: relative;
+  transition: background .2s ease;
+}
+.pp-switch .thumb {
+  width: calc(var(--h) - 6px);
+  height: calc(var(--h) - 6px);
+  background: #fff;
+  border-radius: 50%;
+  position: absolute;
+  top: 3px; left: 3px;
+  transition: transform .2s ease, background .2s ease;
+}
+.pp-switch input:checked + .track { background: var(--pp-primary); }
+.pp-switch input:checked + .track .thumb { transform: translateX(22px); }
+
+/* Modal (scrollable, high-contrast) */
+.pp-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(6,7,10,.7);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1055;
+}
+.pp-modal.show { display: flex; }
+.pp-modal .pp-modal-dialog {
+  width: min(800px, 92vw);
+  max-height: 90vh;
+  background: #0f1117;
+  border: 1px solid var(--pp-border);
+  border-radius: 12px;
+  color: var(--pp-text);
+  box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  display: flex; flex-direction: column;
+}
+.pp-modal .pp-modal-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--pp-border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.pp-modal .pp-modal-title { font-size: 1.05rem; font-weight: 600; }
+.pp-modal .pp-modal-body {
+  padding: 16px 18px;
+  overflow: auto;
+}
+.pp-modal .pp-modal-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--pp-border);
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.pp-modal .pp-close {
+  background: transparent; color: var(--pp-muted); border: 0; font-size: 20px; line-height: 1; cursor: pointer;
+}
+.pp-modal code { color: #b0d4ff; background: #0b0d12; border: 1px solid #1e2530; padding: 2px 6px; border-radius: 6px; }
+.pp-modal a { color: var(--pp-primary); }
+
+/* Diagnostics pills */
+.diagnostics-pill {
+  font-size: .85rem;
+  background: #121521; color: var(--pp-text);
+  border: 1px solid var(--pp-border);
+  padding: 4px 8px; border-radius: 999px;
+}
+
+/* Buttons */
+.btn-primary { background-color: var(--pp-primary); border-color: var(--pp-primary); }
+.btn-outline-primary { color: var(--pp-primary); border-color: var(--pp-primary); }
+.btn-outline-primary:hover { background: rgba(77,163,255,.1); }
+
+/* Alerts */
+.alert-info { background: #0c1a2b; color: #d9ecff; border-color: #15314e; }
+.alert-warning { background: #2b2410; color: #ffe6a3; border-color: #4a3f1a; }
+.alert-success { background: #0f231c; color: #cef2e3; border-color: #194635; }
+
+/* Tables */
+.table { color: var(--pp-text); }
+.table thead { color: #c9d3df; }
+.table-striped>tbody>tr:nth-of-type(odd)>* { background: #121521; }
+.table-striped>tbody>tr:nth-of-type(even)>* { background: #0f1117; }
+.table > :not(caption) > * > * { border-bottom-color: var(--pp-border); }

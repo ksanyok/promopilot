@@ -46,6 +46,22 @@ function connect_db() {
     return $conn;
 }
 
+// Add a small helper to check index existence for older MySQL versions (no IF NOT EXISTS support)
+if (!function_exists('pp_mysql_index_exists')) {
+    function pp_mysql_index_exists(mysqli $conn, string $table, string $index): bool {
+        $table = preg_replace('~[^a-zA-Z0-9_]+~', '', $table);
+        $index = preg_replace('~[^a-zA-Z0-9_]+~', '', $index);
+        $sql = "SHOW INDEX FROM `{$table}` WHERE Key_name = '{$index}'";
+        $res = @$conn->query($sql);
+        if ($res instanceof mysqli_result) {
+            $exists = $res->num_rows > 0;
+            $res->close();
+            return $exists;
+        }
+        return false;
+    }
+}
+
 // Ensure DB schema has required columns/tables
 function ensure_schema(): void {
     try {
@@ -128,10 +144,17 @@ function ensure_schema(): void {
         // Google OAuth fields
         if (!isset($usersCols['google_id'])) {
             @$conn->query("ALTER TABLE `users` ADD COLUMN `google_id` VARCHAR(64) NULL AFTER `avatar`");
-            @$conn->query("CREATE UNIQUE INDEX IF NOT EXISTS `uniq_users_google_id` ON `users`(`google_id`)");
         }
         if (!isset($usersCols['google_picture'])) {
             @$conn->query("ALTER TABLE `users` ADD COLUMN `google_picture` VARCHAR(255) NULL AFTER `google_id`");
+        }
+        // Ensure unique index on google_id (compat with MySQL 5.7: no IF NOT EXISTS)
+        if (pp_mysql_index_exists($conn, 'users', 'uniq_users_google_id') === false) {
+            // Only create index when column exists
+            $usersCols2 = $getCols('users');
+            if (isset($usersCols2['google_id'])) {
+                @$conn->query("CREATE UNIQUE INDEX `uniq_users_google_id` ON `users`(`google_id`)");
+            }
         }
     }
 

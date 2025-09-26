@@ -32,6 +32,8 @@ if (is_logged_in()) {
     <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
     <meta name="csrf-token" content="<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
     <script>window.CSRF_TOKEN = '<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8"); ?>';</script>
+    <?php $ppBase = function_exists('pp_guess_base_url') ? pp_guess_base_url() : ''; ?>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars($ppBase . '/assets/css/admin.css'); ?>">
 </head>
 <body>
     <!-- Futuristic neutral background canvas -->
