@@ -32,8 +32,10 @@ function logLine(msg, data){
   try { console.log(line); } catch(_) {}
 }
 
-// Unified AI call: try Responses API first, fallback-friendly parsing
-async function generateTextWithAI(prompt, openaiApiKey) {
+// Unified AI call with logging and small retries
+async function generateTextWithAI(prompt, openaiApiKey, kind = 'generic', attempt = 1) {
+  const started = Date.now();
+  logLine('OpenAI request', { kind, attempt, promptChars: String(prompt || '').length });
   try {
     const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -44,13 +46,14 @@ async function generateTextWithAI(prompt, openaiApiKey) {
       body: JSON.stringify({ model: 'gpt-5-mini', input: String(prompt || ''), reasoning: { effort: 'low' } })
     });
     const raw = await r.text().catch(()=> '');
-    if (!r.ok) {
-      logLine('OpenAI HTTP error', { status: r.status, statusText: r.statusText, body: raw.slice(0, 200) });
-      return '';
-    }
-
+    const ms = Date.now() - started;
     let data = null;
     try { data = JSON.parse(raw); } catch(_) {}
+
+    if (!r.ok) {
+      logLine('OpenAI response', { kind, attempt, status: r.status, ms, bodyPreview: raw.slice(0, 200) });
+      return '';
+    }
 
     let text = '';
     if (data) {
@@ -61,11 +64,24 @@ async function generateTextWithAI(prompt, openaiApiKey) {
         text = data.choices[0].message.content;
       }
     }
-    return String(text || '').trim();
+    text = String(text || '').trim();
+    logLine('OpenAI parsed', { kind, attempt, ms, textLen: text.length, textPreview: text.slice(0, 120) });
+    return text;
   } catch (e) {
-    logLine('OpenAI request failed', { error: String(e && e.message || e) });
+    const ms = Date.now() - started;
+    logLine('OpenAI request failed', { kind, attempt, ms, error: String(e && e.message || e) });
     return '';
   }
+}
+
+async function aiWithRetries(kind, prompt, key, tries = 3) {
+  let out = '';
+  for (let i = 1; i <= Math.max(1, tries); i++) {
+    out = await generateTextWithAI(prompt, key, kind, i);
+    if (out && out.trim().length > 3) return out.trim();
+    await new Promise(r => setTimeout(r, 500 * i));
+  }
+  return String(out || '').trim();
 }
 
 function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
@@ -161,48 +177,120 @@ function toTelegraphHtml(raw) {
   return s;
 }
 
+function ensureInlineAnchorInFirstParagraph(html, pageUrl, anchorText) {
+  let s = String(html || '');
+  const escapeRegExp = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hrefRe = new RegExp(`<a\\s+[^>]*href=[\"\']${escapeRegExp(pageUrl)}[\"\']`, 'i');
+
+  // If multiple anchors exist, keep the first, remove the rest
+  if (hrefRe.test(s)) {
+    const anchorRe = new RegExp('(<a[^>]+href=["\']' + escapeRegExp(pageUrl) + '["\'][^>]*>[^<]*<\\/a>)', 'i');
+    const parts = s.split(anchorRe);
+    if (parts.length > 3) {
+      let seen = false;
+      s = parts.map(p => {
+        if (/<a/i.test(p)) {
+          if (!seen) { seen = true; return p; }
+          return p.replace(/<a[^>]+>([^<]*)<\/a>/gi, '$1');
+        }
+        return p;
+      }).join('');
+    }
+    return s;
+  }
+
+  // Insert into first <p>
+  const pMatch = s.match(/<p[^>]*>[\s\S]*?<\/p>/i);
+  if (pMatch) {
+    const full = pMatch[0];
+    const inner = full.replace(/^<p[^>]*>/i, '').replace(/<\/p>$/i, '');
+    let injected = inner;
+    const dot = injected.indexOf('.');
+    if (dot !== -1 && dot < 300) {
+      injected = injected.slice(0, dot + 1) + ` <a href="${pageUrl}">${anchorText}</a>` + injected.slice(dot + 1);
+    } else {
+      injected = ` <a href="${pageUrl}">${anchorText}</a> ` + injected;
+    }
+    s = s.replace(full, `<p>${injected}</p>`);
+    return s;
+  }
+  return `<p><a href="${pageUrl}">${anchorText}</a></p>\n` + s;
+}
+
+async function maybeRephraseTitleIfCopied(metaTitle, currentTitle, language, openaiApiKey) {
+  const a = String(metaTitle || '').toLowerCase().trim();
+  const b = String(currentTitle || '').toLowerCase().trim();
+  if (!a || !b) return currentTitle;
+  const tooSimilar = a === b || a.includes(b) || b.includes(a);
+  if (!tooSimilar) return currentTitle;
+  const prompt = (
+    `Перефразируй заголовок (${language}) так, чтобы он не повторял исходный, ` +
+    `был конкретным и без кавычек и точки в конце.\nИсходный: "${currentTitle}"`
+  );
+  const re = await aiWithRetries('title_rephrase', prompt, openaiApiKey, 2);
+  const cleaned = cleanTitle(re) || currentTitle;
+  if (cleaned !== currentTitle) logLine('Title rephrased', { from: currentTitle.slice(0, 80), to: cleaned.slice(0, 80) });
+  return cleaned;
+}
+
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   logLine('Publish start', { pageUrl, language });
   const meta = await extractPageMeta(pageUrl);
 
-  const simpleRules = `Правила форматирования:\n- Используй подзаголовки только тегом <h3> (не <h2>). Минимум 3 подзаголовка.\n- Обычный текст — в <p>. Без пустых <p> и без <br> для отступов.\n- Списки — <ul>/<ol> с <li>.\n- Одна органичная ссылка внутри предложения: <a href="${pageUrl}">${anchorText}</a>. Не добавляй другие ссылки.`;
+  // Generate organic anchor text if missing or looks like URL
+  let anchorTextEffective = String(anchorText || '').trim();
+  if (!anchorTextEffective || /^https?:/i.test(anchorTextEffective)) {
+    const anchorPrompt = (
+      `Сгенерируй короткий якорный текст (2–5 слов) на языке ${language}, ` +
+      `который органично впишется в статью по теме страницы ${pageUrl}. ` +
+      `Только слова, без кавычек и без URL. Примеры формата: "подробный обзор", "что нового", "подробности здесь".`
+    );
+    const aiAnchor = await aiWithRetries('anchor', anchorPrompt, openaiApiKey, 3);
+    anchorTextEffective = (aiAnchor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'подробности здесь';
+  }
+
+  const simpleRules = `Правила форматирования:\n- Подзаголовки — только <h3>. 4–6 подзаголовков.\n- Абзацы — <p>. Без пустых <p> и без <br>.\n- Списки — <ul>/<ol> с <li>.\n- Ровно ОДНА органичная ссылка в одном из первых 3 абзацев: <a href=\"${pageUrl}\">${anchorTextEffective}</a>. Никаких других ссылок.`;
 
   const prompts = {
     title: (
-      `Напиши лаконичный и конкретный заголовок (${language}). Без кавычек и точки в конце.\n` +
-      `Ориентируйся на:\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
+      `Сгенерируй новый заголовок (${language}) для статьи по теме страницы ниже.\n` +
+      `Не копируй исходный Title дословно, перефразируй и сделай понятным и конкретным. Без кавычек и точки в конце.\n` +
+      `Контекст:\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
     ),
     author: (
-      `Предложи нейтральное имя автора на языке ${language}.` +
-      ` Используй алфавит ${language}. 1–2 слова. Ответь только именем.`
+      `Сгенерируй нейтральное имя автора на языке ${language}. 1–2 слова. Ответ должен содержать только имя автора без кавычек.`
     ),
     content: (
-      `Подготовь статью на языке ${language} объёмом не менее 3000 знаков по странице: ${pageUrl}.\n` +
+      `Сгенерируй оригинальную article-разметку HTML на языке ${language} объёмом не менее 3000 знаков по теме страницы: ${pageUrl}.\n` +
       `Контекст: title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
       `${simpleRules}\n` +
-      `Разметка HTML только: <p>, <h3>, <ul>, <ol>, <li>, <a>, <strong>, <em>, <blockquote>. Без картинок и стилей.`
+      `Разрешённые теги: <p>, <h3>, <ul>, <ol>, <li>, <a>, <strong>, <em>, <blockquote>. Без картинок, без инлайновых стилей.`
     )
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const rawTitle = await generateTextWithAI(prompts.title, openaiApiKey);
-  await sleep(400);
-  const rawAuthor = await generateTextWithAI(prompts.author, openaiApiKey);
-  await sleep(400);
-  const rawContent = await generateTextWithAI(prompts.content, openaiApiKey);
+  const rawTitle = await aiWithRetries('title', prompts.title, openaiApiKey, 3);
+  await sleep(250);
+  const rawAuthor = await aiWithRetries('author', prompts.author, openaiApiKey, 3);
+  await sleep(250);
+  const rawContent = await aiWithRetries('content', prompts.content, openaiApiKey, 3);
 
-  const title = cleanTitle(rawTitle);
+  logLine('AI outputs', { titleLen: rawTitle.length, authorLen: rawAuthor.length, contentLen: rawContent.length, anchorText: anchorTextEffective });
+
+  let title = cleanTitle(rawTitle);
+  title = await maybeRephraseTitleIfCopied(meta.title, title, language, openaiApiKey);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
 
   let content = toTelegraphHtml(rawContent);
+  let usedFallback = false;
   if (!content) {
-    // Simple fallback to avoid empty articles
-    const safeTitle = title !== 'Untitled' ? title : (meta.title || 'Обзор и ключевые моменты');
+    usedFallback = true;
+    const safeTitle = title !== 'Untitled' ? title : 'Обзор и ключевые моменты';
     content = [
       `<h3>${safeTitle}</h3>`,
       `<p>Этот материал основан на открытых данных страницы и кратко описывает ключевые моменты и преимущества решения.</p>`,
-      `<p>Подробнее см. в материале <a href="${pageUrl}">${anchorText}</a>, где приводятся практические детали и контекст.</p>`,
+      `<p>Подробнее см. в материале <a href="${pageUrl}">${anchorTextEffective}</a>, где приводятся практические детали и контекст.</p>`,
       `<h3>Основные особенности</h3>`,
       `<ul><li>Краткое описание ценности</li><li>Сценарии применения</li><li>Полезные выводы</li></ul>`,
       `<h3>Итоги</h3>`,
@@ -210,12 +298,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     ].join('\n');
   }
 
-  // Ensure we have at least one inline anchor to pageUrl
-  const escapeRegExp = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const hrefRe = new RegExp(`<a\\s+[^>]*href=[\"\']${escapeRegExp(pageUrl)}[\"\']`, 'i');
-  if (!hrefRe.test(content)) {
-    content += `\n<p>Подробнее: <a href="${pageUrl}">${anchorText}</a></p>`;
-  }
+  // Ensure single inline anchor presence in early paragraph
+  content = ensureInlineAnchorInFirstParagraph(content, pageUrl, anchorTextEffective);
+  logLine('Content prepared', { usedFallback, hasAnchor: /<a\s+[^>]*href=/.test(content), contentPreview: content.slice(0, 160) });
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
