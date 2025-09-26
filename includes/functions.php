@@ -1276,13 +1276,19 @@ function pp_collect_chrome_candidates(): array {
                 foreach (preg_split('~[\r\n]+~', $out) as $appPath) {
                     $appPath = trim($appPath);
                     if ($appPath === '' || strpos($appPath, '.app') === false) continue;
-                    // Derive binary path inside bundle
-                    $bin = $appPath . '/Contents/MacOS/'
-                        . (stripos($appPath, 'Edge') !== false ? 'Microsoft Edge'
-                        : (stripos($appPath, 'Chromium') !== false ? 'Chromium'
-                        : (stripos($appPath, 'Canary') !== false ? 'Google Chrome Canary'
-                        : (stripos($appPath, 'Brave') !== false ? 'Brave Browser'
-                        : 'Google Chrome'))));
+                    // Derive binary path inside bundle (avoid nested ternary for PHP 7.4+)
+                    $binName = 'Google Chrome';
+                    $ap = $appPath;
+                    if (stripos($ap, 'Edge') !== false) {
+                        $binName = 'Microsoft Edge';
+                    } elseif (stripos($ap, 'Chromium') !== false) {
+                        $binName = 'Chromium';
+                    } elseif (stripos($ap, 'Canary') !== false) {
+                        $binName = 'Google Chrome Canary';
+                    } elseif (stripos($ap, 'Brave') !== false) {
+                        $binName = 'Brave Browser';
+                    }
+                    $bin = $appPath . '/Contents/MacOS/' . $binName;
                     $candidates[] = $bin;
                 }
             }

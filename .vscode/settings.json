@@ -1,0 +1,4 @@
+{
+  // Disable TypeScript project diagnostics to avoid errors from nested node_modules tsconfigs
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false
+}
