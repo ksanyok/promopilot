@@ -96,7 +96,7 @@ async function extractPageMeta(url) {
     const ogTitleTag = html.match(/<meta[^>]+property=[\"\']og:title[\"\'][^>]*>/i);
     const ogTitle = ogTitleTag ? extractAttr(ogTitleTag[0], 'content') : '';
     const ogDescTag = html.match(/<meta[^>]+property=[\"\']og:description[\"\'][^>]*>/i);
-    const ogDesc = ogDescTag ? extractAttr(ogDesc[0], 'content') : '';
+    const ogDesc = ogDescTag ? extractAttr(ogDescTag[0], 'content') : '';
 
     const twTitleTag = html.match(/<meta[^>]+name=[\"\']twitter:title[\"\'][^>]*>/i);
     const twTitle = twTitleTag ? extractAttr(twTitleTag[0], 'content') : '';
@@ -222,9 +222,14 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
   }
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  let effectiveExecPath = execPath;
+  try {
+    const bad = !execPath || !fs.existsSync(execPath) || (/linux/i.test(execPath) && process.platform === 'darwin');
+    if (bad) effectiveExecPath = '';
+  } catch(_) { effectiveExecPath = ''; }
   const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
-  if (execPath) launchOpts.executablePath = execPath;
-  logLine('Launching browser', { executablePath: execPath || 'default' });
+  if (effectiveExecPath) launchOpts.executablePath = effectiveExecPath;
+  logLine('Launching browser', { executablePath: effectiveExecPath || 'default' });
 
   const browser = await puppeteer.launch(launchOpts);
   let page;
@@ -251,33 +256,44 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
       // Trigger change so Telegraph registers content
       const evt = new InputEvent('input', { bubbles: true, cancelable: true });
       root.dispatchEvent(evt);
+      try {
+        // Nudge Quill to register change
+        root.focus();
+        document.execCommand && document.execCommand('insertText', false, ' ');
+        document.execCommand && document.execCommand('delete', false);
+      } catch(_) {}
     }, content);
+
+    // Scroll to bottom to ensure the Publish button is in view
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
 
     // Publish
     const oldUrl = page.url();
-    // Click publish via robust selector set
     await page.evaluate(() => {
-      let btn = document.querySelector('button.publish_button, button.button.primary, button.button');
-      if (!btn) {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        btn = buttons.find(b => /publish/i.test(b.textContent || '')) || null;
-      }
+      const candidates = Array.from(document.querySelectorAll('button, a'));
+      const btn = candidates.find(b => /publish|опубликовать/i.test((b.textContent || '').trim()))
+        || document.querySelector('button.publish_button, button.button.primary, button.button');
       if (!btn) throw new Error('Publish button not found');
       (btn).click();
     });
 
-    // Wait for resulting article page (handle same-tab or new target)
+    // Wait for resulting article page
+    const urlRegex = /^https?:\/\/telegra\.ph\/[A-Za-z0-9\-_%]+-\d{2}-\d{2}(?:-\d{2})?\/?$/;
+
     let targetPage = null;
     try {
       const maybeTarget = await Promise.race([
         (async () => {
-          try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 120000 }); return null; } catch { return null; }
+          try {
+            await page.waitForFunction((re) => new RegExp(re).test(location.href), { timeout: 120000 }, urlRegex.source);
+            return null;
+          } catch { return null; }
         })(),
         (async () => {
           try {
             const t = await browser.waitForTarget(t => {
               const u = t.url();
-              return /^https?:\/\/telegra\.ph\//.test(u) && u !== oldUrl && !/\/$/.test(u);
+              return urlRegex.test(u);
             }, { timeout: 120000 });
             return t || null;
           } catch { return null; }
@@ -290,12 +306,12 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
 
     const finalPage = targetPage || page;
 
-    // Wait for content to render on the article page
-    try {
-      await finalPage.waitForSelector('article, .tl_article, h1, header', { timeout: 60000 });
-    } catch(_) {}
+    try { await finalPage.waitForFunction((re) => new RegExp(re).test(location.href), { timeout: 60000 }, urlRegex.source); } catch(_) {}
 
     const publishedUrl = finalPage.url();
+    if (!urlRegex.test(publishedUrl)) {
+      throw new Error(`Unexpected publish URL: ${publishedUrl}`);
+    }
     logLine('Published', { publishedUrl });
 
     return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
