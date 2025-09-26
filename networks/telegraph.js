@@ -136,31 +136,96 @@ function cleanTitle(t) {
   return t;
 }
 
-function integrateSingleAnchor(html, pageUrl, anchorText) {
-  let s = String(html || '');
-  // Remove all anchors except those that point to pageUrl
-  s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
-    const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
-    const href = m && m[1] ? m[1] : '';
-    if (href && href.replace(/\/$/, '') === String(pageUrl).replace(/\/$/, '')) return full; // keep only our link
-    return text; // unwrap others
+function normalizeArticleHtml(raw, pageUrl, anchorText) {
+  let s = String(raw || '').replace(/\r\n/g, '\n');
+
+  // Trim and collapse excessive blank lines in plain text
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+
+  // Remove all <br> artifacts that Telegraph later renders as gaps
+  s = s.replace(/<br[^>]*>/gi, '');
+
+  // If content is mostly plain text, split into paragraphs by blank lines
+  if (!/<\s*(p|h2|ul|ol|li|blockquote|a)\b/i.test(s)) {
+    const blocks = s.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
+    s = blocks.map(p => `<p>${p}</p>`).join('\n');
+  }
+
+  // Convert markdown-like headings to <h2>
+  s = s.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
+
+  // Convert bold-only or colon-ending paragraphs to <h2>
+  s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*:<\/p>/gi, '<h2>$1</h2>');
+  s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*<\/p>\s*(?=<p>)/gi, (m, text) => {
+    // Heuristic: short line without punctuation becomes a subheading
+    const t = String(text || '').trim();
+    if (/^[^.!?\n]{3,80}$/.test(t)) return `<h2>${t}</h2>`; 
+    return m;
   });
 
-  const linkRe = new RegExp('<a\\s+[^>]*href=[\\"\']' + pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\"\']', 'i');
-  if (linkRe.test(s)) return s; // already present
+  // Convert bullet-like paragraphs to <ul><li>
+  s = s.replace(/(?:\s*<p>\s*(?:[-*•·–—]|\d+[.)])\s+([^<]+?)\s*<\/p>\s*){2,}/gi, (full) => {
+    const items = Array.from(full.matchAll(/<p>\s*(?:[-*•·–—]|\d+[.)])\s+([^<]+?)\s*<\/p>/gi)).map(m => `<li>${m[1].trim()}</li>`);
+    return `<ul>${items.join('')}</ul>`;
+  });
 
-  // Otherwise, inject into the first sufficiently long paragraph
+  // Remove any <br> inside list items and paragraphs again (safety)
+  s = s.replace(/(<li[^>]*>)\s*(?:<br[^>]*>\s*)+/gi, '$1');
+  s = s.replace(/(<p[^>]*>)\s*(?:<br[^>]*>\s*)+/gi, '$1');
+
+  // Remove empty paragraphs
+  s = s.replace(/<p>\s*<\/p>/gi, '');
+
+  // Strip all anchors completely; will inject exactly one later
+  s = s.replace(/<a\s+[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+
+  // Deduplicate excessive newlines introduced by replacements
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+
+  // Ensure at least one <h2>
+  if (!/<h2[\s>]/i.test(s)) {
+    // Try to promote the first short paragraph into a heading
+    const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
+    if (firstP) {
+      const text = stripTags(firstP[0]);
+      if (/^[^.!?\n]{3,80}$/.test(text)) {
+        s = s.replace(firstP[0], `<h2>${text}</h2>`);
+      } else {
+        s = `<h2>Основные моменты</h2>\n` + s;
+      }
+    } else {
+      s = `<h2>Основные моменты</h2>`;
+    }
+  }
+
+  // Inject our single anchor organically
+  s = integrateSingleAnchor(s, pageUrl, anchorText);
+
+  return s;
+}
+
+function integrateSingleAnchor(html, pageUrl, anchorText) {
+  let s = String(html || '');
+  // Remove any anchor to start from a clean state
+  s = s.replace(/<a\s+[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+
+  // Inject into the first sufficiently long paragraph in the first half of the text
   const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
   if (paras.length) {
-    for (let i = 0; i < paras.length; i++) {
+    const limit = Math.max(1, Math.floor(paras.length / 2));
+    for (let i = 0; i < limit; i++) {
       const p = paras[i];
       const text = stripTags(p);
       if (text.length < 120) continue;
       const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${anchorText}</a></p>`);
       return s.replace(p, injected);
     }
+    // Fallback to the first paragraph
+    const p = paras[0];
+    const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${anchorText}</a></p>`);
+    return s.replace(p, injected);
   }
-  // Fallback: prepend link as a separate paragraph under the first heading
+  // Fallback: add a paragraph after the first <h2>
   return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${anchorText}</a></p>`);
 }
 
@@ -203,21 +268,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
   logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
 
-  // Basic content cleanup and link normalization
-  let content = String(rawContent || '').trim();
-  // Remove disallowed tags
-  content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
-  // Wrap free text lines into <p> if no tags present
-  if (!/<\s*(p|h2|ul|li|blockquote|a)\b/i.test(content)) {
-    const parts = content.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p>${p}</p>`);
-    content = parts.join('\n');
-  }
-  // Ensure at least one <h2>
-  if (!/<h2[\s>]/i.test(content)) {
-    // Convert markdown-like headings to <h2>
-    content = content.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
-  }
-  content = integrateSingleAnchor(content, pageUrl, anchorText);
+  // Normalize and structure content to avoid stray breaks and gaps
+  let content = normalizeArticleHtml(rawContent, pageUrl, anchorText);
 
   // Launch Puppeteer with optional explicit executable path
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
