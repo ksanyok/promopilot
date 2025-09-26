@@ -14,132 +14,142 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $current_version = get_version();
 
         // Скачать и распаковать свежие файлы из GitHub
-        $commitUrl = 'https://api.github.com/repos/ksanyok/promopilot/commits/main';
+        $owner = 'ksanyok';
+        $repo = 'promopilot';
+        $ua = 'PromoPilot/Updater (+https://github.com/ksanyok/promopilot)';
+
+        // 1) Узнать текущий SHA ветки main
+        $sha = '';
+        $commitUrl = "https://api.github.com/repos/{$owner}/{$repo}/commits/main";
         $commitResponse = @file_get_contents($commitUrl, false, stream_context_create([
             'http' => [
-                'header' => "User-Agent: PromoPilot\r\nAccept: application/vnd.github+json",
-                'timeout' => 10,
+                'header' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: application/vnd.github+json',
+                    'X-GitHub-Api-Version: 2022-11-28',
+                ],
+                'timeout' => 12,
+                'ignore_errors' => true,
             ],
             'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
         ]));
-        if (!$commitResponse) {
-            $message = __('Ошибка получения информации о коммите.');
-        } else {
+        if ($commitResponse) {
             $commitData = json_decode($commitResponse, true);
-            if (!$commitData || !isset($commitData['sha'])) {
-                $message = __('Ошибка парсинга данных коммита.');
+            if (is_array($commitData) && isset($commitData['sha'])) {
+                $sha = (string)$commitData['sha'];
+            }
+        }
+
+        // 2) Сформировать список URL для загрузки архива (пробуем по очереди)
+        $zipUrls = [];
+        if ($sha !== '') {
+            // Быстрый codeload по SHA
+            $zipUrls[] = "https://codeload.github.com/{$owner}/{$repo}/zip/{$sha}";
+            // Обычный archive по SHA
+            $zipUrls[] = "https://github.com/{$owner}/{$repo}/archive/{$sha}.zip";
+        }
+        // Фоллбек: zip для ветки main
+        $zipUrls[] = "https://github.com/{$owner}/{$repo}/archive/refs/heads/main.zip";
+        $zipUrls[] = "https://codeload.github.com/{$owner}/{$repo}/zip/refs/heads/main";
+
+        $zipContent = false;
+        $usedUrl = '';
+        foreach ($zipUrls as $zurl) {
+            $zipContent = @file_get_contents($zurl, false, stream_context_create([
+                'http' => [
+                    'header' => [
+                        'User-Agent: ' . $ua,
+                        'Accept: application/zip',
+                    ],
+                    'timeout' => 60,
+                    'ignore_errors' => true,
+                ],
+                'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+            ]));
+            if ($zipContent && strlen($zipContent) > 1024) { $usedUrl = $zurl; break; }
+        }
+
+        if (!$zipContent) {
+            $message = __('Ошибка скачивания архива.');
+        } else {
+            $tempZip = tempnam(sys_get_temp_dir(), 'promo') . '.zip';
+            if (file_put_contents($tempZip, $zipContent) === false) {
+                $message = __('Ошибка сохранения архива.');
             } else {
-                $sha = $commitData['sha'];
-                $zipUrl = "https://github.com/ksanyok/promopilot/archive/{$sha}.zip";
-                $zipContent = @file_get_contents($zipUrl, false, stream_context_create([
-                    'http' => ['timeout' => 60],
-                    'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-                ]));
-                if (!$zipContent) {
-                    $message = __('Ошибка скачивания архива.');
+                $zip = new ZipArchive();
+                $extracted = false; $extractTo = PP_ROOT_PATH . '/temp_update_' . time();
+                if (!is_dir($extractTo)) mkdir($extractTo, 0755, true);
+
+                if (class_exists('ZipArchive') && $zip->open($tempZip)) {
+                    if ($zip->extractTo($extractTo)) { $extracted = true; }
+                    $zip->close();
                 } else {
-                    $tempZip = tempnam(sys_get_temp_dir(), 'promo') . '.zip';
-                    if (file_put_contents($tempZip, $zipContent) === false) {
-                        $message = __('Ошибка сохранения архива.');
-                    } else {
-                        $zip = new ZipArchive();
-                        if (class_exists('ZipArchive') && $zip->open($tempZip)) {
-                            $extractTo = PP_ROOT_PATH . '/temp_update_' . time();
-                            if (!is_dir($extractTo)) mkdir($extractTo, 0755, true);
-                            if ($zip->extractTo($extractTo)) {
-                                $zip->close();
-                                $source = $extractTo . '/promopilot-' . $sha;
-                                if (is_dir($source)) {
-                                    // Функция для копирования директории с исключениями
-                                    if (!function_exists('pp_copy_dir_update')) {
-                                        function pp_copy_dir_update($src, $dst, array $skip = []) {
-                                            $src = rtrim($src, '/');
-                                            $dst = rtrim($dst, '/');
-                                            $dir = opendir($src);
-                                            if (!is_dir($dst)) mkdir($dst, 0755, true);
-                                            while (false !== ($file = readdir($dir))) {
-                                                if ($file === '.' || $file === '..') continue;
-                                                $srcPath = $src . '/' . $file;
-                                                $dstPath = $dst . '/' . $file;
-                                                // Список исключений (относительные пути от корня проекта)
-                                                $rel = trim(str_replace(PP_ROOT_PATH, '', $dstPath), '/');
-                                                $relLower = strtolower($rel);
-                                                $isSkipped = in_array($relLower, $skip, true)
-                                                    || (substr($relLower, 0, 15) === 'config/sessions')
-                                                    || (substr($relLower, 0, 4) === 'logs')
-                                                    || (substr($relLower, 0, 12) === 'node_modules');
-                                                if ($isSkipped) { continue; }
-                                                if (is_dir($srcPath)) {
-                                                    pp_copy_dir_update($srcPath, $dstPath, $skip);
-                                                } else {
-                                                    // Не перезаписывать локальный конфиг и установщик
-                                                    if (in_array($relLower, ['config/config.php','installer.php'], true)) continue;
-                                                    copy($srcPath, $dstPath);
-                                                }
-                                            }
-                                            closedir($dir);
-                                        }
+                    // Fallback: try system unzip if available
+                    $unzipCmd = 'unzip -q ' . escapeshellarg($tempZip) . ' -d ' . escapeshellarg($extractTo) . ' 2>&1';
+                    @exec($unzipCmd, $outUnzip, $codeUnzip);
+                    if ((int)$codeUnzip === 0) { $extracted = true; }
+                }
+
+                if ($extracted) {
+                    // Определяем имя корневой директории внутри архива
+                    $possibleDirs = [];
+                    if ($sha !== '') { $possibleDirs[] = $extractTo . '/promopilot-' . $sha; }
+                    $possibleDirs[] = $extractTo . '/promopilot-main';
+                    $possibleDirs[] = $extractTo . '/ksanyok-promopilot-' . $sha; // иногда codeload так именует
+
+                    $source = '';
+                    foreach ($possibleDirs as $dir) { if ($sha === '' && strpos($dir, $sha) !== false) continue; if (is_dir($dir)) { $source = $dir; break; } }
+                    if ($source === '') {
+                        // попробуем найти первую директорию внутри распаковки
+                        $entries = @scandir($extractTo) ?: [];
+                        foreach ($entries as $e) { if ($e === '.' || $e === '..') continue; $p = $extractTo . '/' . $e; if (is_dir($p)) { $source = $p; break; } }
+                    }
+
+                    if ($source && is_dir($source)) {
+                        // Функция для копирования директории с исключениями
+                        if (!function_exists('pp_copy_dir_update')) {
+                            function pp_copy_dir_update($src, $dst, array $skip = []) {
+                                $src = rtrim($src, '/');
+                                $dst = rtrim($dst, '/');
+                                $dir = opendir($src);
+                                if (!is_dir($dst)) mkdir($dst, 0755, true);
+                                while (false !== ($file = readdir($dir))) {
+                                    if ($file === '.' || $file === '..') continue;
+                                    $srcPath = $src . '/' . $file;
+                                    $dstPath = $dst . '/' . $file;
+                                    // Список исключений (относительные пути от корня проекта)
+                                    $rel = trim(str_replace(PP_ROOT_PATH, '', $dstPath), '/');
+                                    $relLower = strtolower($rel);
+                                    $isSkipped = in_array($relLower, $skip, true)
+                                        || (substr($relLower, 0, 15) === 'config/sessions')
+                                        || (substr($relLower, 0, 4) === 'logs')
+                                        || (substr($relLower, 0, 12) === 'node_modules');
+                                    if ($isSkipped) { continue; }
+                                    if (is_dir($srcPath)) {
+                                        pp_copy_dir_update($srcPath, $dstPath, $skip);
+                                    } else {
+                                        // Не перезаписывать локальный конфиг и установщик
+                                        if (in_array($relLower, ['config/config.php','installer.php'], true)) continue;
+                                        copy($srcPath, $dstPath);
                                     }
-                                    // Применяем копирование с безопасными исключениями
-                                    pp_copy_dir_update($source, PP_ROOT_PATH, ['config/config.php','installer.php']);
-                                    rmdir_recursive($extractTo);
-                                    unlink($tempZip);
-                                    $message = __('Файлы обновлены успешно.');
-                                } else {
-                                    $message = __('Ошибка: директория с файлами не найдена в архиве.');
                                 }
-                            } else {
-                                $zip->close();
-                                $message = __('Ошибка распаковки архива.');
-                            }
-                        } else {
-                            // Fallback: try system unzip if available
-                            $extractTo = PP_ROOT_PATH . '/temp_update_' . time();
-                            if (!is_dir($extractTo)) mkdir($extractTo, 0755, true);
-                            $unzipCmd = 'unzip -q ' . escapeshellarg($tempZip) . ' -d ' . escapeshellarg($extractTo) . ' 2>&1';
-                            @exec($unzipCmd, $outUnzip, $codeUnzip);
-                            if ($codeUnzip === 0) {
-                                $source = $extractTo . '/promopilot-' . $sha;
-                                if (is_dir($source)) {
-                                    if (!function_exists('pp_copy_dir_update')) {
-                                        function pp_copy_dir_update($src, $dst, array $skip = []) {
-                                            $src = rtrim($src, '/');
-                                            $dst = rtrim($dst, '/');
-                                            $dir = opendir($src);
-                                            if (!is_dir($dst)) mkdir($dst, 0755, true);
-                                            while (false !== ($file = readdir($dir))) {
-                                                if ($file === '.' || $file === '..') continue;
-                                                $srcPath = $src . '/' . $file;
-                                                $dstPath = $dst . '/' . $file;
-                                                $rel = trim(str_replace(PP_ROOT_PATH, '', $dstPath), '/');
-                                                $relLower = strtolower($rel);
-                                                $isSkipped = in_array($relLower, $skip, true)
-                                                    || (substr($relLower, 0, 15) === 'config/sessions')
-                                                    || (substr($relLower, 0, 4) === 'logs')
-                                                    || (substr($relLower, 0, 12) === 'node_modules');
-                                                if ($isSkipped) { continue; }
-                                                if (is_dir($srcPath)) {
-                                                    pp_copy_dir_update($srcPath, $dstPath, $skip);
-                                                } else {
-                                                    if (in_array($relLower, ['config/config.php','installer.php'], true)) continue;
-                                                    copy($srcPath, $dstPath);
-                                                }
-                                            }
-                                            closedir($dir);
-                                        }
-                                    }
-                                    pp_copy_dir_update($source, PP_ROOT_PATH, ['config/config.php','installer.php']);
-                                    rmdir_recursive($extractTo);
-                                    unlink($tempZip);
-                                    $message = __('Файлы обновлены успешно.');
-                                } else {
-                                    $message = __('Ошибка: директория с файлами не найдена в архиве.');
-                                }
-                            } else {
-                                $message = __('Ошибка открытия архива.');
+                                closedir($dir);
                             }
                         }
+                        // Применяем копирование с безопасными исключениями
+                        pp_copy_dir_update($source, PP_ROOT_PATH, ['config/config.php','installer.php']);
+
+                        // Очистить временные файлы и кэш статуса обновления
+                        rmdir_recursive($extractTo);
+                        @unlink($tempZip);
+                        @unlink(PP_ROOT_PATH . '/.cache/update_status.json');
+
+                        $message = __('Файлы обновлены успешно.');
+                    } else {
+                        $message = __('Ошибка: директория с файлами не найдена в архиве.');
                     }
+                } else {
+                    $message = __('Ошибка распаковки архива.');
                 }
             }
         }

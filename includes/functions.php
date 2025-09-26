@@ -342,7 +342,7 @@ if (!function_exists('get_update_status')) {
         // Fetch from GitHub releases API (latest)
         $latest = $current;
         $publishedAt = '';
-        $ok = false; $err = '';
+        $ok = false; $err = ''; $source = '';
         $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
         $ua = 'PromoPilot/UpdateChecker (+https://github.com/ksanyok/promopilot)';
         $resp = '';
@@ -390,7 +390,60 @@ if (!function_exists('get_update_status')) {
                 $tag = ltrim($tag, 'vV');
                 $name = ltrim($name, 'vV');
                 $candidate = $tag ?: $name;
-                if ($candidate !== '') { $latest = $candidate; }
+                if ($candidate !== '') { $latest = $candidate; $source = 'releases'; }
+            }
+        }
+
+        // Fallback: read version directly from main branch if releases are missing or not newer
+        if (!$ok || !version_compare($latest, $current, '>')) {
+            $rawUrl = 'https://raw.githubusercontent.com/ksanyok/promopilot/main/config/version.php';
+            $rawResp = '';
+            $rawOk = false; $rawErr = '';
+            if (function_exists('curl_init')) {
+                $ch = curl_init($rawUrl);
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS => 3,
+                    CURLOPT_TIMEOUT => 8,
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_SSL_VERIFYHOST => 2,
+                    CURLOPT_USERAGENT => $ua,
+                    CURLOPT_HTTPHEADER => [
+                        'Accept: text/plain',
+                    ],
+                ]);
+                $rawResp = (string)curl_exec($ch);
+                $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+                if ($rawResp !== '' && $code >= 200 && $code < 300) { $rawOk = true; }
+                else { $rawErr = 'HTTP ' . $code; }
+                curl_close($ch);
+            } else {
+                $ctx = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'timeout' => 8,
+                        'ignore_errors' => true,
+                        'header' => [
+                            'User-Agent: ' . $ua,
+                            'Accept: text/plain',
+                        ],
+                    ],
+                    'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+                ]);
+                $rawResp = @file_get_contents($rawUrl, false, $ctx);
+                $rawOk = $rawResp !== false && $rawResp !== '';
+            }
+            if ($rawOk) {
+                if (preg_match('~\$version\s*=\s*([\'\"])([^\'\"]+)\1\s*;~', (string)$rawResp, $m)) {
+                    $remoteVer = trim($m[2]);
+                    if ($remoteVer !== '' && version_compare($remoteVer, $latest, '>')) {
+                        $latest = $remoteVer;
+                        $source = 'raw';
+                    }
+                }
+            } else {
+                if ($err === '' && $rawErr !== '') { $err = $rawErr; }
             }
         }
 
@@ -399,8 +452,9 @@ if (!function_exists('get_update_status')) {
             'fetched_at' => $now,
             'latest' => $latest,
             'published_at' => $publishedAt,
-            'ok' => $ok,
-            'error' => $ok ? '' : $err,
+            'ok' => ($latest !== $current),
+            'error' => ($latest !== $current) ? '' : $err,
+            'source' => $source ?: 'remote',
         ];
         @file_put_contents($cacheFile, json_encode($payload, JSON_UNESCAPED_UNICODE), LOCK_EX);
 
@@ -409,7 +463,7 @@ if (!function_exists('get_update_status')) {
             'latest' => $latest,
             'published_at' => $publishedAt,
             'is_new' => version_compare($latest, $current, '>'),
-            'source' => 'remote',
+            'source' => $source ?: 'remote',
         ];
     }
 }
