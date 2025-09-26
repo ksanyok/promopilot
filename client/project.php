@@ -884,8 +884,6 @@ document.addEventListener('DOMContentLoaded', function() {
         return '';
     }
 
-    const PROJECT_ID = <?php echo (int)$project['id']; ?>;
-
     function setButtonLoading(btn, loading) {
         if (!btn) return;
         if (loading) {
