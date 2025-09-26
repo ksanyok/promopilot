@@ -97,6 +97,7 @@ function ensure_schema(): void {
             `links` TEXT NULL,
             `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
             `wishes` TEXT NULL,
+            `domain_host` VARCHAR(190) NULL,
             `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
@@ -116,6 +117,10 @@ function ensure_schema(): void {
         }
         if (!isset($projectsCols['wishes'])) {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL");
+        }
+        // New: domain restriction host
+        if (!isset($projectsCols['domain_host'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `domain_host` VARCHAR(190) NULL AFTER `wishes`");
         }
     }
 

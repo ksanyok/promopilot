@@ -43,13 +43,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         $newName = trim($_POST['project_name'] ?? '');
         $newDesc = trim($_POST['project_description'] ?? '');
         $newWishes = trim($_POST['project_wishes'] ?? '');
+        // New: allow changing project language from modal
+        $allowedLangs = ['ru','en','es','fr','de'];
+        $newLang = trim($_POST['project_language'] ?? ($project['language'] ?? 'ru'));
+        if (!in_array($newLang, $allowedLangs, true)) { $newLang = $project['language'] ?? 'ru'; }
         if ($newName) {
             $conn = connect_db();
-            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ? WHERE id = ?");
-            $stmt->bind_param('sssi', $newName, $newDesc, $newWishes, $id);
+            // include language in update
+            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ?, language = ? WHERE id = ?");
+            $stmt->bind_param('ssssi', $newName, $newDesc, $newWishes, $newLang, $id);
             if ($stmt->execute()) {
                 $message = __('Основная информация обновлена.');
-                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes;
+                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes; $project['language'] = $newLang;
             } else {
                 $message = __('Ошибка сохранения основной информации.');
             }
@@ -76,6 +81,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
             ];
         }, $links);
 
+        // Allowed languages
+        $allowedLangs = ['ru','en','es','fr','de'];
+
         // Удаление
         $removeIdx = array_map('intval', ($_POST['remove_links'] ?? []));
         rsort($removeIdx);
@@ -90,6 +98,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 $anchor = trim($row['anchor'] ?? '');
                 $lang = trim($row['language'] ?? $links[$i]['language']);
                 $wish = trim($row['wish'] ?? $links[$i]['wish']);
+                // sanitize language
+                if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
                     $links[$i]['url'] = $url;
                     $links[$i]['anchor'] = $anchor;
@@ -105,8 +115,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 if (!is_array($row)) continue;
                 $url = trim($row['url'] ?? '');
                 $anchor = trim($row['anchor'] ?? '');
-                $lang = trim($row['language'] ?? 'ru');
+                $lang = trim($row['language'] ?? ($project['language'] ?? 'ru'));
                 $wish = trim($row['wish'] ?? '');
+                if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
                     $links[] = ['url' => $url, 'anchor' => $anchor, 'language'=>$lang ?: 'ru', 'wish'=>$wish];
                 }
@@ -114,7 +125,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         } else {
             $new_link = trim($_POST['new_link'] ?? '');
             $new_anchor = trim($_POST['new_anchor'] ?? '');
-            $new_language = trim($_POST['new_language'] ?? 'ru');
+            $new_language = trim($_POST['new_language'] ?? ($project['language'] ?? 'ru'));
+            if (!in_array($new_language, $allowedLangs, true)) { $new_language = $project['language'] ?? 'ru'; }
             $new_wish = trim($_POST['new_wish'] ?? '');
             if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
                 $links[] = ['url' => $new_link, 'anchor' => $new_anchor, 'language'=>$new_language ?: 'ru', 'wish'=>$new_wish];
@@ -202,6 +214,12 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 <div class="main-content fade-in">
     <div class="row">
         <div class="col-12">
+            <?php if (!empty($message)): ?>
+                <div class="alert alert-info alert-dismissible fade show" role="alert">
+                    <?php echo $message; ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endif; ?>
             <!-- Project hero -->
             <div class="card project-hero mb-3">
                 <div class="card-body">
@@ -218,6 +236,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="meta-list">
                                 <div class="meta-item"><i class="bi bi-calendar3"></i><span><?php echo __('Дата создания'); ?>: <?php echo htmlspecialchars($project['created_at']); ?></span></div>
                                 <div class="meta-item"><i class="bi bi-translate"></i><span><?php echo __('Язык страницы'); ?>: <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></span></div>
+                                <?php if (!empty($project['domain_host'])): ?>
+                                <div class="meta-item"><i class="bi bi-globe2"></i><span><?php echo __('Домен'); ?>: <?php echo htmlspecialchars($project['domain_host']); ?></span></div>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <div class="text-end">
@@ -260,6 +281,16 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                         <textarea name="project_wishes" class="form-control" rows="5" placeholder="<?php echo __('Стиль, тематика, распределение анкоров, брендовые упоминания...'); ?>"><?php echo htmlspecialchars($project['wishes'] ?? ''); ?></textarea>
                         <div class="form-text"><?php echo __('Используется по умолчанию при добавлении новых ссылок (можно вставить в индивидуальное поле).'); ?></div>
                       </div>
+                      <!-- New: language selector -->
+                      <div class="mb-3">
+                        <label class="form-label"><?php echo __('Язык страницы'); ?></label>
+                        <select name="project_language" class="form-select">
+                          <?php foreach (['ru'=>'RU','en'=>'EN','es'=>'ES','fr'=>'FR','de'=>'DE'] as $lv=>$lt): ?>
+                            <option value="<?php echo $lv; ?>" <?php echo ($project['language'] ?? 'ru')===$lv?'selected':''; ?>><?php echo $lt; ?></option>
+                          <?php endforeach; ?>
+                        </select>
+                        <div class="form-text"><?php echo __('Влияет на язык по умолчанию для новых ссылок.'); ?></div>
+                      </div>
                     </div>
                     <div class="modal-footer justify-content-between">
                       <div class="text-muted small"><i class="bi bi-info-circle me-1"></i><?php echo __('Изменения применяются после сохранения.'); ?></div>
@@ -292,11 +323,11 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="col-lg-3"><input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>"></div>
                             <div class="col-lg-2">
                                 <select name="new_language" class="form-select">
-                                    <option value="ru">RU</option>
-                                    <option value="en">EN</option>
-                                    <option value="es">ES</option>
-                                    <option value="fr">FR</option>
-                                    <option value="de">DE</option>
+                                    <option value="ru" <?php echo ($project['language'] ?? 'ru')==='ru'?'selected':''; ?>>RU</option>
+                                    <option value="en" <?php echo ($project['language'] ?? 'ru')==='en'?'selected':''; ?>>EN</option>
+                                    <option value="es" <?php echo ($project['language'] ?? 'ru')==='es'?'selected':''; ?>>ES</option>
+                                    <option value="fr" <?php echo ($project['language'] ?? 'ru')==='fr'?'selected':''; ?>>FR</option>
+                                    <option value="de" <?php echo ($project['language'] ?? 'ru')==='de'?'selected':''; ?>>DE</option>
                                 </select>
                             </div>
                             <div class="col-lg-2 d-grid">
@@ -369,7 +400,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$index; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="language-cell" data-label="<?php echo __('Язык'); ?>">
-                                            <span class="badge bg-secondary-subtle text-light-emphasis view-language"><?php echo htmlspecialchars($lang); ?></span>
+                                            <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase"><?php echo htmlspecialchars($lang); ?></span>
                                             <select class="form-select form-select-sm d-none edit-language" name="edited_links[<?php echo (int)$index; ?>][language]" <?php echo $canEdit ? '' : 'disabled'; ?>>
                                                 <?php foreach (['ru'=>'RU','en'=>'EN','es'=>'ES','fr'=>'FR','de'=>'DE'] as $lv=>$lt): ?>
                                                     <option value="<?php echo $lv; ?>" <?php echo $lv===$lang?'selected':''; ?>><?php echo $lt; ?></option>
@@ -436,6 +467,14 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 </div>
 
 <script>
+// Initialize Bootstrap tooltips
+(function(){
+    if (window.bootstrap) {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) { try { new bootstrap.Tooltip(tooltipTriggerEl); } catch(e){} });
+    }
+})();
+
 document.addEventListener('DOMContentLoaded', function() {
     // ==== FIX: вынести модалку из-под возможного stacking context (.main-content / анимации) ====
     // Если любой предок имел transform/animation, modal не может перекрыть backdrop (который добавляется к body)
@@ -472,8 +511,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Create the links table if it doesn't exist (when first link is added)
     function ensureLinksTable() {
         if (linksTbody) return linksTbody;
-        const empty = document.querySelector('.card.section .card-body .empty-state');
-        const cardBody = empty ? empty.closest('.card-body') : document.querySelector('.card.section .card-body');
+        const empty = document.querySelector('#links-card .card-body .empty-state');
+        const cardBody = document.querySelector('#links-card .card-body');
         if (!cardBody) return null;
         const wrapper = document.createElement('div');
         wrapper.className = 'table-responsive';
@@ -492,8 +531,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </thead>
                 <tbody></tbody>
             </table>`;
-        if (empty) empty.replaceWith(wrapper);
-        else cardBody.prepend(wrapper);
+        if (empty) empty.replaceWith(wrapper); else cardBody.prepend(wrapper);
         linksTable = wrapper.querySelector('table');
         linksTbody = linksTable.querySelector('tbody');
         return linksTbody;
@@ -517,7 +555,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
         const idx = addIndex++;
 
-        // Hidden inputs stored separately for submission
         const wrap = document.createElement('div');
         wrap.className = 'added-pair';
         wrap.id = 'added-' + idx;
@@ -527,7 +564,7 @@ document.addEventListener('DOMContentLoaded', function() {
         wrap.appendChild(makeHidden('added_links['+idx+'][wish]', wish));
         addedHidden.appendChild(wrap);
 
-        // New: also render a visual row into the links table
+        // New: also render a visual row into the links table with editable language and wish
         const tbody = ensureLinksTable();
         if (tbody) {
             const tr = document.createElement('tr');
@@ -545,11 +582,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="view-anchor">${escapeHtml(anchor)}</span>
                     <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
                 </td>
-                <td>
-                    <span class="badge bg-secondary-subtle text-light-emphasis">${lang}</span>
+                <td class="language-cell">
+                    <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
+                    <select class="form-select form-select-sm d-none edit-language">
+                        ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
+                    </select>
                 </td>
-                <td>
-                    <span class="small text-truncate d-inline-block" style="max-width:160px" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</span>
+                <td class="wish-cell">
+                    <div class="view-wish small text-truncate" style="max-width:180px;" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</div>
+                    <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
                 </td>
                 <td class="status-cell">
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
@@ -559,6 +600,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
                     <button type="button" class="icon-btn action-remove-new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                 </td>`;
+
             tbody.appendChild(tr);
 
             // Attach listeners for this new row
@@ -567,45 +609,61 @@ document.addEventListener('DOMContentLoaded', function() {
             const publishBtn = tr.querySelector('.action-publish-new');
             const urlCell = tr.querySelector('.url-cell');
             const anchorCell = tr.querySelector('.anchor-cell');
+            const langCell = tr.querySelector('.language-cell');
+            const wishCell = tr.querySelector('.wish-cell');
             const viewUrl = urlCell.querySelector('.view-url');
             const viewAnchor = anchorCell.querySelector('.view-anchor');
+            const viewLang = langCell.querySelector('.view-language');
+            const viewWish = wishCell.querySelector('.view-wish');
             const editUrl = urlCell.querySelector('.edit-url');
             const editAnchor = anchorCell.querySelector('.edit-anchor');
+            const editLang = langCell.querySelector('.edit-language');
+            const editWish = wishCell.querySelector('.edit-wish');
 
             function syncHidden() {
                 const holder = document.getElementById('added-' + idx);
                 if (!holder) return;
                 const urlInput = holder.querySelector(`input[name="added_links[${idx}][url]"]`);
                 const anchorInput = holder.querySelector(`input[name="added_links[${idx}][anchor]"]`);
-                if (urlInput) urlInput.value = editUrl.value.trim();
-                if (anchorInput) anchorInput.value = editAnchor.value.trim();
-                viewUrl.textContent = editUrl.value.trim();
-                viewUrl.href = editUrl.value.trim();
-                viewAnchor.textContent = editAnchor.value.trim();
+                const langInput = holder.querySelector(`input[name="added_links[${idx}][language]"]`);
+                const wishInput = holder.querySelector(`input[name="added_links[${idx}][wish]"]`);
+                if (urlInput) { urlInput.value = editUrl.value.trim(); viewUrl.textContent = editUrl.value.trim(); viewUrl.href = editUrl.value.trim(); }
+                if (anchorInput) { anchorInput.value = editAnchor.value.trim(); viewAnchor.textContent = editAnchor.value.trim(); }
+                if (editLang && langInput) { langInput.value = editLang.value; viewLang.textContent = editLang.value.toUpperCase(); }
+                if (editWish && wishInput) { wishInput.value = editWish.value.trim(); viewWish.textContent = (editWish.value.trim().length>40?editWish.value.trim().slice(0,40)+'…':editWish.value.trim()); viewWish.setAttribute('title', editWish.value.trim()); }
             }
 
             editUrl.addEventListener('input', syncHidden);
             editAnchor.addEventListener('input', syncHidden);
+            editLang.addEventListener('change', syncHidden);
+            editWish.addEventListener('input', syncHidden);
 
             editBtn.addEventListener('click', function() {
                 const editing = !editUrl.classList.contains('d-none');
                 if (editing) {
                     editUrl.classList.add('d-none');
                     editAnchor.classList.add('d-none');
+                    editLang.classList.add('d-none');
+                    editWish.classList.add('d-none');
                     viewUrl.classList.remove('d-none');
                     viewAnchor.classList.remove('d-none');
+                    viewLang.classList.remove('d-none');
+                    viewWish.classList.remove('d-none');
                     this.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
                 } else {
                     editUrl.classList.remove('d-none');
                     editAnchor.classList.remove('d-none');
+                    editLang.classList.remove('d-none');
+                    editWish.classList.remove('d-none');
                     viewUrl.classList.add('d-none');
                     viewAnchor.classList.add('d-none');
+                    viewLang.classList.add('d-none');
+                    viewWish.classList.add('d-none');
                     this.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
                 }
             });
 
             removeBtn.addEventListener('click', function() {
-                // Remove hidden inputs and the row
                 const holder = document.getElementById('added-' + idx);
                 if (holder) holder.remove();
                 tr.remove();
@@ -820,15 +878,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (statusCell) {
                     if (status === 'pending') {
                         statusCell.innerHTML = '<span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>';
-                        if (tr) {
-                            tr.dataset.network = payload.network || '';
-                        }
+                        if (tr) { tr.dataset.network = payload.network || ''; }
                     } else if (status === 'not_published') {
                         statusCell.innerHTML = '<span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>';
-                        if (tr) {
-                            tr.dataset.postUrl = '';
-                            tr.dataset.network = '';
-                        }
+                        if (tr) { tr.dataset.postUrl = ''; tr.dataset.network = ''; }
                     }
                 }
                 if (actionsCell) {
@@ -836,7 +889,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = true; b.classList.add('disabled'); });
                         const pubBtn = actionsCell.querySelector('.action-publish');
                         if (pubBtn) {
-                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>' + actionsCell.innerHTML;
+                            // Replace publish button with cancel button only (no duplication)
+                            pubBtn.outerHTML = '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="'+escapeHtml(url)+'" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>';
                         }
                     } else if (status === 'not_published') {
                         const cancelBtn = actionsCell.querySelector('.action-cancel');
@@ -845,7 +899,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         actionsCell.querySelectorAll('.action-edit,.action-remove').forEach(b=>{ b.disabled = false; b.classList.remove('disabled'); });
                     }
-                    // Re-bind handlers after DOM changes
                     bindDynamicPublishButtons();
                 }
             }
