@@ -25,6 +25,13 @@ if ($result->num_rows == 0) {
 $project = $result->fetch_assoc();
 $conn->close();
 
+// Helper: normalize host (strip www)
+$pp_normalize_host = function(?string $host): string {
+    $h = strtolower(trim((string)$host));
+    if (strpos($h, 'www.') === 0) { $h = substr($h, 4); }
+    return $h;
+};
+
 // Проверить доступ: админ или владелец
 if (!is_admin() && $project['user_id'] != $user_id) {
     include '../includes/header.php';
@@ -84,6 +91,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         // Allowed languages
         $allowedLangs = ['ru','en','es','fr','de'];
 
+        // Enforce single-domain policy
+        $projectHost = $pp_normalize_host($project['domain_host'] ?? '');
+        $domainToSet = '';
+        $domainErrors = 0;
+
         // Удаление
         $removeIdx = array_map('intval', ($_POST['remove_links'] ?? []));
         rsort($removeIdx);
@@ -101,10 +113,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 // sanitize language
                 if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
-                    $links[$i]['url'] = $url;
-                    $links[$i]['anchor'] = $anchor;
-                    $links[$i]['language'] = $lang ?: 'ru';
-                    $links[$i]['wish'] = $wish;
+                    // domain check
+                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
+                    if ($projectHost === '') {
+                        $domainToSet = $uHost; // set later with update
+                        $projectHost = $uHost;
+                    }
+                    if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
+                        // Skip updating this URL, keep old; count error
+                        $domainErrors++;
+                    } else {
+                        $links[$i]['url'] = $url;
+                        $links[$i]['anchor'] = $anchor;
+                        $links[$i]['language'] = $lang ?: 'ru';
+                        $links[$i]['wish'] = $wish;
+                    }
                 }
             }
         }
@@ -119,6 +142,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 $wish = trim($row['wish'] ?? '');
                 if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
+                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
+                    if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
+                    if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
+                        $domainErrors++;
+                        continue; // reject cross-domain
+                    }
                     $links[] = ['url' => $url, 'anchor' => $anchor, 'language'=>$lang ?: 'ru', 'wish'=>$wish];
                 }
             }
@@ -129,7 +158,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
             if (!in_array($new_language, $allowedLangs, true)) { $new_language = $project['language'] ?? 'ru'; }
             $new_wish = trim($_POST['new_wish'] ?? '');
             if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
-                $links[] = ['url' => $new_link, 'anchor' => $new_anchor, 'language'=>$new_language ?: 'ru', 'wish'=>$new_wish];
+                $uHost = $pp_normalize_host(parse_url($new_link, PHP_URL_HOST) ?: '');
+                if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
+                if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
+                    $domainErrors++;
+                } else {
+                    $links[] = ['url' => $new_link, 'anchor' => $new_anchor, 'language'=>$new_language ?: 'ru', 'wish'=>$new_wish];
+                }
             }
         }
 
@@ -142,11 +177,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         $language = $project['language'] ?? 'ru'; // язык проекта не редактируется здесь
 
         $conn = connect_db();
-        $stmt = $conn->prepare("UPDATE projects SET links = ?, language = ?, wishes = ? WHERE id = ?");
         $links_json = json_encode(array_values($links), JSON_UNESCAPED_UNICODE);
-        $stmt->bind_param('sssi', $links_json, $language, $wishes, $id);
+        if ($domainToSet !== '') {
+            $stmt = $conn->prepare("UPDATE projects SET links = ?, language = ?, wishes = ?, domain_host = ? WHERE id = ?");
+            $stmt->bind_param('ssssi', $links_json, $language, $wishes, $domainToSet, $id);
+            $project['domain_host'] = $domainToSet;
+        } else {
+            $stmt = $conn->prepare("UPDATE projects SET links = ?, language = ?, wishes = ? WHERE id = ?");
+            $stmt->bind_param('sssi', $links_json, $language, $wishes, $id);
+        }
         if ($stmt->execute()) {
             $message = __('Проект обновлен.');
+            if ($domainErrors > 0) { $message .= ' ' . sprintf(__('Отклонено ссылок с другим доменом: %d.'), $domainErrors); }
             $project['links'] = $links_json;
             $project['language'] = $language;
             $project['wishes'] = $wishes;
@@ -238,6 +280,8 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <div class="meta-item"><i class="bi bi-translate"></i><span><?php echo __('Язык страницы'); ?>: <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></span></div>
                                 <?php if (!empty($project['domain_host'])): ?>
                                 <div class="meta-item"><i class="bi bi-globe2"></i><span><?php echo __('Домен'); ?>: <?php echo htmlspecialchars($project['domain_host']); ?></span></div>
+                                <?php else: ?>
+                                <div class="meta-item"><i class="bi bi-globe2"></i><span class="text-warning"><?php echo __('Домен будет зафиксирован по первой добавленной ссылке.'); ?></span></div>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -319,7 +363,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                     </div>
                     <div class="card-body">
                         <div class="row g-2 align-items-stretch mb-3">
-                            <div class="col-lg-5"><input type="url" name="new_link" class="form-control" placeholder="<?php echo __('URL'); ?> *"></div>
+                            <div class="col-lg-5"><input type="url" name="new_link" class="form-control" placeholder="<?php echo !empty($project['domain_host']) ? htmlspecialchars('https://' . $project['domain_host'] . '/...') : __('URL'); ?> *"></div>
                             <div class="col-lg-3"><input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>"></div>
                             <div class="col-lg-2">
                                 <select name="new_language" class="form-select">
@@ -334,6 +378,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <button type="button" class="btn btn-gradient w-100" id="add-link"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
                             </div>
                         </div>
+                        <?php if (!empty($project['domain_host'])): ?>
+                        <div class="small text-muted mb-3"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
+                        <?php endif; ?>
                         <div class="mb-3">
                             <label class="form-label mb-1"><?php echo __('Пожелание для этой ссылки'); ?></label>
                             <textarea name="new_wish" id="new_wish" rows="3" class="form-control" placeholder="<?php echo __('Если нужно индивидуальное ТЗ (иначе можно использовать глобальное)'); ?>"></textarea>
@@ -369,7 +416,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         <th><?php echo __('Язык'); ?></th>
                                         <th><?php echo __('Пожелание'); ?></th>
                                         <th><?php echo __('Статус'); ?></th>
-                                        <th class="text-end" style="width:160px;">&nbsp;</th>
+                                        <th class="text-end" style="width:200px;">&nbsp;</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -388,11 +435,18 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             $networkSlug = '';
                                         }
                                         $canEdit = ($status === 'not_published');
+                                        $pu = @parse_url($url);
+                                        $hostDisp = $pp_normalize_host($pu['host'] ?? '');
+                                        $pathDisp = (string)($pu['path'] ?? '/');
+                                        if (!empty($pu['query'])) { $pathDisp .= '?' . $pu['query']; }
+                                        if (!empty($pu['fragment'])) { $pathDisp .= '#' . $pu['fragment']; }
+                                        if ($pathDisp === '') { $pathDisp = '/'; }
                                     ?>
                                     <tr data-index="<?php echo (int)$index; ?>" data-post-url="<?php echo htmlspecialchars($postUrl); ?>" data-network="<?php echo htmlspecialchars($networkSlug); ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
-                                            <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url"><?php echo htmlspecialchars($url); ?></a>
+                                            <div class="small text-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
+                                            <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
                                             <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$index; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
@@ -431,6 +485,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php endif; ?>
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
+                                            <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
                                             <?php if ($status === 'pending'): ?>
                                                 <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
                                             <?php elseif ($status === 'not_published'): ?>
@@ -466,6 +521,28 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
     </div>
 </div>
 
+<!-- Analyze Modal -->
+<div class="modal fade modal-fixed-center" id="analyzeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-search me-2"></i><?php echo __('Анализ страницы'); ?></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="analyze-loading" class="text-center py-3 d-none">
+          <div class="spinner-border" role="status"></div>
+          <div class="mt-2 small text-muted"><?php echo __('Идет анализ...'); ?></div>
+        </div>
+        <div id="analyze-result" class="d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // Initialize Bootstrap tooltips
 (function(){
@@ -476,13 +553,11 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
 })();
 
 document.addEventListener('DOMContentLoaded', function() {
-    // ==== FIX: вынести модалку из-под возможного stacking context (.main-content / анимации) ====
-    // Если любой предок имел transform/animation, modal не может перекрыть backdrop (который добавляется к body)
-    // Поэтому переносим саму .modal прямо в <body> сразу после загрузки DOM.
+    // Move modals to body
     const projectInfoModalEl = document.getElementById('projectInfoModal');
-    if (projectInfoModalEl && projectInfoModalEl.parentElement !== document.body) {
-        document.body.appendChild(projectInfoModalEl);
-    }
+    if (projectInfoModalEl && projectInfoModalEl.parentElement !== document.body) { document.body.appendChild(projectInfoModalEl); }
+    const analyzeModalEl = document.getElementById('analyzeModal');
+    if (analyzeModalEl && analyzeModalEl.parentElement !== document.body) { document.body.appendChild(analyzeModalEl); }
 
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
@@ -491,10 +566,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const newAnchorInput = form.querySelector('input[name="new_anchor"]');
     const newLangSelect = form.querySelector('select[name="new_language"]');
     const newWish = form.querySelector('#new_wish');
-    const globalWish = document.querySelector('#global_wishes'); // теперь hidden
+    const globalWish = document.querySelector('#global_wishes');
     const useGlobal = form.querySelector('#use_global_wish');
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
+
+    const PROJECT_ID = <?php echo (int)$project['id']; ?>;
+    const PROJECT_HOST = '<?php echo htmlspecialchars($pp_normalize_host($project['domain_host'] ?? '')); ?>';
 
     // New: references for links table (may not exist initially)
     let linksTable = document.querySelector('.table-links');
@@ -526,7 +604,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <th><?php echo __('Язык'); ?></th>
                         <th><?php echo __('Пожелание'); ?></th>
                         <th><?php echo __('Статус'); ?></th>
-                        <th class="text-end" style="width:160px;">&nbsp;</th>
+                        <th class="text-end" style="width:200px;">&nbsp;</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -553,6 +631,15 @@ document.addEventListener('DOMContentLoaded', function() {
         const lang = newLangSelect.value.trim();
         const wish = newWish.value.trim();
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
+        // Domain restriction (client-side)
+        try {
+            const u = new URL(url);
+            const host = (u.hostname || '').toLowerCase().replace(/^www\./,'');
+            if (PROJECT_HOST && host !== PROJECT_HOST) {
+                alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + PROJECT_HOST);
+                return;
+            }
+        } catch (e) {}
         const idx = addIndex++;
 
         const wrap = document.createElement('div');
@@ -564,7 +651,7 @@ document.addEventListener('DOMContentLoaded', function() {
         wrap.appendChild(makeHidden('added_links['+idx+'][wish]', wish));
         addedHidden.appendChild(wrap);
 
-        // New: also render a visual row into the links table with editable language and wish
+        // Render a visual row into the links table
         const tbody = ensureLinksTable();
         if (tbody) {
             const tr = document.createElement('tr');
@@ -572,10 +659,13 @@ document.addEventListener('DOMContentLoaded', function() {
             tr.setAttribute('data-added-index', String(idx));
             tr.dataset.postUrl = '';
             tr.dataset.network = '';
+            const pathDisp = pathFromUrl(url);
+            const hostDisp = hostFromUrl(url);
             tr.innerHTML = `
                 <td></td>
                 <td class="url-cell">
-                    <a href="${escapeHtml(url)}" target="_blank" class="view-url">${escapeHtml(url)}</a>
+                    <div class="small text-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
+                    <a href="${escapeHtml(url)}" target="_blank" class="view-url" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
                     <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
                 </td>
                 <td class="anchor-cell">
@@ -596,6 +686,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                 </td>
                 <td class="text-end">
+                    <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
                     <button type="button" class="btn btn-sm btn-publish me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
                     <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
                     <button type="button" class="icon-btn action-remove-new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
@@ -607,6 +698,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const editBtn = tr.querySelector('.action-edit');
             const removeBtn = tr.querySelector('.action-remove-new');
             const publishBtn = tr.querySelector('.action-publish-new');
+            const analyzeBtn = tr.querySelector('.action-analyze');
             const urlCell = tr.querySelector('.url-cell');
             const anchorCell = tr.querySelector('.anchor-cell');
             const langCell = tr.querySelector('.language-cell');
@@ -627,7 +719,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 const anchorInput = holder.querySelector(`input[name="added_links[${idx}][anchor]"]`);
                 const langInput = holder.querySelector(`input[name="added_links[${idx}][language]"]`);
                 const wishInput = holder.querySelector(`input[name="added_links[${idx}][wish]"]`);
-                if (urlInput) { urlInput.value = editUrl.value.trim(); viewUrl.textContent = editUrl.value.trim(); viewUrl.href = editUrl.value.trim(); }
+                if (urlInput) {
+                    const v = editUrl.value.trim();
+                    urlInput.value = v;
+                    viewUrl.textContent = pathFromUrl(v);
+                    viewUrl.href = v; viewUrl.title = v;
+                    const host = hostFromUrl(v);
+                    const hostEl = urlCell.querySelector('.small.text-muted'); if (hostEl) hostEl.textContent = host;
+                }
                 if (anchorInput) { anchorInput.value = editAnchor.value.trim(); viewAnchor.textContent = editAnchor.value.trim(); }
                 if (editLang && langInput) { langInput.value = editLang.value; viewLang.textContent = editLang.value.toUpperCase(); }
                 if (editWish && wishInput) { wishInput.value = editWish.value.trim(); viewWish.textContent = (editWish.value.trim().length>40?editWish.value.trim().slice(0,40)+'…':editWish.value.trim()); viewWish.setAttribute('title', editWish.value.trim()); }
@@ -672,6 +771,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             publishBtn.addEventListener('click', function() {
                 alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>');
+            });
+
+            analyzeBtn.addEventListener('click', function() {
+                const targetUrl = viewUrl.getAttribute('href');
+                openAnalyzeModal(targetUrl);
             });
 
             refreshRowNumbers();
@@ -762,14 +866,15 @@ document.addEventListener('DOMContentLoaded', function() {
     function isValidUrl(string) { try { new URL(string); return true; } catch (_) { return false; } }
 
     // escaping helpers for safe HTML/attribute insertion
-    function escapeHtml(s){
-        return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
-    }
-    function escapeAttribute(s){
-        return s.replace(/["']/g, c => ({'"':'&quot;','\'':'&#39;'}[c]));
-    }
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c] || c)); }
+    function escapeAttribute(s){ return String(s).replace(/["']/g, c => ({'"':'&quot;','\'':'&#39;'}[c])); }
 
-    // CSRF helpers: resolve token from hidden input, window, or meta tag
+    function pathFromUrl(u){
+        try { const {pathname, search, hash} = new URL(u); return (pathname || '/') + (search || '') + (hash || ''); } catch(e){ return u; }
+    }
+    function hostFromUrl(u){ try { const h = new URL(u).hostname.toLowerCase(); return h.replace(/^www\./,''); } catch(e){ return ''; } }
+
+    // CSRF helpers
     function getCsrfToken() {
         const input = document.querySelector('input[name="csrf_token"]');
         if (input && input.value) return input.value;
@@ -927,10 +1032,75 @@ document.addEventListener('DOMContentLoaded', function() {
             if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
             btn.addEventListener('click', () => { alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>'); });
         });
+        // Bind analyze buttons
+        document.querySelectorAll('.action-analyze').forEach(btn => {
+            if (btn.dataset.bound==='1') return;
+            btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const tr = btn.closest('tr');
+                const linkEl = tr?.querySelector('.url-cell .view-url');
+                const url = linkEl ? linkEl.getAttribute('href') : '';
+                if (url) openAnalyzeModal(url);
+            });
+        });
     }
 
     // Initial bind
     bindDynamicPublishButtons();
+
+    function openAnalyzeModal(url){
+        const modalEl = document.getElementById('analyzeModal');
+        const resEl = document.getElementById('analyze-result');
+        const loadEl = document.getElementById('analyze-loading');
+        if (!modalEl) return;
+        const m = new bootstrap.Modal(modalEl);
+        resEl.classList.add('d-none');
+        resEl.innerHTML = '';
+        loadEl.classList.remove('d-none');
+        m.show();
+        (async () => {
+            const csrf = getCsrfToken();
+            const fd = new FormData();
+            fd.append('csrf_token', csrf);
+            fd.append('project_id', String(PROJECT_ID));
+            fd.append('url', url);
+            try {
+                const resp = await fetch('<?php echo pp_url('public/analyze_url.php'); ?>', { method:'POST', body: fd, credentials:'same-origin' });
+                const data = await resp.json();
+                loadEl.classList.add('d-none');
+                if (!data || !data.ok) {
+                    resEl.innerHTML = '<div class="alert alert-danger">' + (escapeHtml(data?.error || 'ERROR')) + '</div>';
+                    resEl.classList.remove('d-none');
+                    return;
+                }
+                const d = data.data || {};
+                const rows = [];
+                const addRow = (k, v) => { if (v && String(v).trim() !== '') rows.push(`<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(String(v))}</td></tr>`); };
+                addRow('<?php echo __('URL'); ?>', d.final_url || url);
+                addRow('<?php echo __('Язык'); ?>', d.lang || '');
+                addRow('<?php echo __('Регион'); ?>', d.region || '');
+                addRow('<?php echo __('Заголовок'); ?>', d.title || '');
+                addRow('<?php echo __('Описание'); ?>', d.description || '');
+                addRow('<?php echo __('Canonical'); ?>', d.canonical || '');
+                addRow('<?php echo __('Дата публикации'); ?>', d.published_time || '');
+                addRow('<?php echo __('Дата обновления'); ?>', d.modified_time || '');
+                const extended = d.hreflang && Array.isArray(d.hreflang) && d.hreflang.length ? `<details class="mt-3"><summary class="fw-semibold"><?php echo __('Альтернативы hreflang'); ?></summary><div class="mt-2 small">${d.hreflang.map(h=>escapeHtml(`${h.hreflang || ''} → ${h.href || ''}`)).join('<br>')}</div></details>` : '';
+                resEl.innerHTML = `
+                    <div class="table-responsive">
+                      <table class="table table-sm">
+                        <tbody>${rows.join('')}</tbody>
+                      </table>
+                    </div>
+                    ${extended}
+                `;
+                resEl.classList.remove('d-none');
+            } catch (e) {
+                loadEl.classList.add('d-none');
+                resEl.innerHTML = '<div class="alert alert-danger"><?php echo __('Сетевая ошибка'); ?></div>';
+                resEl.classList.remove('d-none');
+            }
+        })();
+    }
 });
 </script>
 
