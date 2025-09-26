@@ -96,7 +96,7 @@ async function extractPageMeta(url) {
     const ogTitleTag = html.match(/<meta[^>]+property=[\"\']og:title[\"\'][^>]*>/i);
     const ogTitle = ogTitleTag ? extractAttr(ogTitleTag[0], 'content') : '';
     const ogDescTag = html.match(/<meta[^>]+property=[\"\']og:description[\"\'][^>]*>/i);
-    const ogDesc = ogDescTag ? extractAttr(ogDescTag[0], 'content') : '';
+    const ogDesc = ogDescTag ? extractAttr(ogDesc[0], 'content') : '';
 
     const twTitleTag = html.match(/<meta[^>]+name=[\"\']twitter:title[\"\'][^>]*>/i);
     const twTitle = twTitleTag ? extractAttr(twTitleTag[0], 'content') : '';
@@ -254,20 +254,48 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     }, content);
 
     // Publish
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 120000 }),
-      page.evaluate(() => {
-        let btn = document.querySelector('button.publish_button, button.button.primary, button.button');
-        if (!btn) {
-          const buttons = Array.from(document.querySelectorAll('button'));
-          btn = buttons.find(b => /publish/i.test(b.textContent || '')) || null;
-        }
-        if (!btn) throw new Error('Publish button not found');
-        btn.click();
-      })
-    ]);
+    const oldUrl = page.url();
+    // Click publish via robust selector set
+    await page.evaluate(() => {
+      let btn = document.querySelector('button.publish_button, button.button.primary, button.button');
+      if (!btn) {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        btn = buttons.find(b => /publish/i.test(b.textContent || '')) || null;
+      }
+      if (!btn) throw new Error('Publish button not found');
+      (btn).click();
+    });
 
-    const publishedUrl = page.url();
+    // Wait for resulting article page (handle same-tab or new target)
+    let targetPage = null;
+    try {
+      const maybeTarget = await Promise.race([
+        (async () => {
+          try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 120000 }); return null; } catch { return null; }
+        })(),
+        (async () => {
+          try {
+            const t = await browser.waitForTarget(t => {
+              const u = t.url();
+              return /^https?:\/\/telegra\.ph\//.test(u) && u !== oldUrl && !/\/$/.test(u);
+            }, { timeout: 120000 });
+            return t || null;
+          } catch { return null; }
+        })()
+      ]);
+      if (maybeTarget && typeof maybeTarget.page === 'function') {
+        try { targetPage = await maybeTarget.page(); } catch(_) { targetPage = null; }
+      }
+    } catch (_) { /* swallow */ }
+
+    const finalPage = targetPage || page;
+
+    // Wait for content to render on the article page
+    try {
+      await finalPage.waitForSelector('article, .tl_article, h1, header', { timeout: 60000 });
+    } catch(_) {}
+
+    const publishedUrl = finalPage.url();
     logLine('Published', { publishedUrl });
 
     return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
