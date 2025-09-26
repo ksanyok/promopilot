@@ -7,6 +7,13 @@ if (!is_logged_in() || is_admin()) {
 
 $message = '';
 
+// Build taxonomy (regions/topics) from enabled networks
+$taxonomy = pp_get_network_taxonomy(true);
+$availableRegions = $taxonomy['regions'] ?? [];
+$availableTopics  = $taxonomy['topics'] ?? [];
+if (empty($availableRegions)) { $availableRegions = ['Global']; }
+if (empty($availableTopics)) { $availableTopics = ['Paste/Text','Pages/Markdown','Blogging/Pages (micro-articles)']; }
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
@@ -17,14 +24,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $first_anchor = trim($_POST['first_anchor'] ?? '');
         $first_language = trim($_POST['first_language'] ?? 'ru');
         $global_wishes = trim($_POST['wishes'] ?? '');
+        $region = trim((string)($_POST['region'] ?? ''));
+        $topic = trim((string)($_POST['topic'] ?? ''));
+        // Validate region/topic against available lists
+        if (!in_array($region, $availableRegions, true)) { $region = $availableRegions[0] ?? ''; }
+        if (!in_array($topic, $availableTopics, true))   { $topic = $availableTopics[0] ?? ''; }
         $user_id = (int)$_SESSION['user_id'];
 
         if (!$name || !$first_url || !filter_var($first_url, FILTER_VALIDATE_URL)) {
             $message = __('Проверьте обязательные поля: название и корректный URL.');
         } else {
             $conn = connect_db();
-            $stmt = $conn->prepare("INSERT INTO projects (user_id, name, description) VALUES (?, ?, ?)");
-            $stmt->bind_param("iss", $user_id, $name, $description);
+            // Insert project with region/topic
+            $stmt = $conn->prepare("INSERT INTO projects (user_id, name, description, region, topic) VALUES (?, ?, ?, ?, ?)");
+            $stmt->bind_param("issss", $user_id, $name, $description, $region, $topic);
             if ($stmt->execute()) {
                 $project_id = $stmt->insert_id;
                 $message = __('Проект добавлен!') . ' <a href="' . pp_url('client/client.php') . '">' . __('Вернуться к дашборду') . '</a>';
@@ -104,6 +117,24 @@ $pp_container = false;
                           <option value="es">Español</option>
                           <option value="fr">Français</option>
                           <option value="de">Deutsch</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="row g-3 mb-3">
+                      <div class="col-md-6">
+                        <label class="form-label"><?php echo __('Регион проекта'); ?></label>
+                        <select name="region" class="form-select">
+                          <?php foreach ($availableRegions as $r): ?>
+                            <option value="<?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                          <?php endforeach; ?>
+                        </select>
+                      </div>
+                      <div class="col-md-6">
+                        <label class="form-label"><?php echo __('Тематика проекта'); ?></label>
+                        <select name="topic" class="form-select">
+                          <?php foreach ($availableTopics as $t): ?>
+                            <option value="<?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                          <?php endforeach; ?>
                         </select>
                       </div>
                     </div>

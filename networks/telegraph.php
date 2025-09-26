@@ -13,6 +13,10 @@ return [
     'meta' => [
         'supports' => ['articles', 'longform'],
         'docs' => 'https://telegra.ph/',
+        // New: structured classification
+        'url' => 'https://telegra.ph',
+        'regions' => ['Global'],
+        'topics' => ['Blogging/Pages (micro-articles)'],
     ],
 ];
 

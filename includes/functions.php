@@ -98,6 +98,8 @@ function ensure_schema(): void {
             `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
             `wishes` TEXT NULL,
             `domain_host` VARCHAR(190) NULL,
+            `region` VARCHAR(100) NULL,
+            `topic` VARCHAR(100) NULL,
             `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
@@ -121,6 +123,12 @@ function ensure_schema(): void {
         // New: domain restriction host
         if (!isset($projectsCols['domain_host'])) {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `domain_host` VARCHAR(190) NULL AFTER `wishes`");
+        }
+        if (!isset($projectsCols['region'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `region` VARCHAR(100) NULL");
+        }
+        if (!isset($projectsCols['topic'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `topic` VARCHAR(100) NULL");
         }
     }
 
@@ -791,6 +799,38 @@ function pp_networks_dir(): string {
         @mkdir($dir, 0775, true);
     }
     return $dir;
+}
+
+// New: aggregate networks taxonomy (regions/topics)
+function pp_get_network_taxonomy(bool $onlyEnabled = true): array {
+    $nets = pp_get_networks($onlyEnabled, true);
+    $regions = [];
+    $topics = [];
+    $canon = function(string $s): string { return trim((string)$s); };
+    foreach ($nets as $n) {
+        $meta = $n['meta'] ?? [];
+        // regions
+        $rs = $meta['regions'] ?? [];
+        if (is_string($rs)) { $rs = [$rs]; }
+        if (is_array($rs)) {
+            foreach ($rs as $r) {
+                $r = $canon((string)$r);
+                if ($r !== '') { $regions[$r] = true; }
+            }
+        }
+        // topics
+        $ts = $meta['topics'] ?? [];
+        if (is_string($ts)) { $ts = [$ts]; }
+        if (is_array($ts)) {
+            foreach ($ts as $t) {
+                $t = $canon((string)$t);
+                if ($t !== '') { $topics[$t] = true; }
+            }
+        }
+    }
+    $rList = array_keys($regions); sort($rList, SORT_NATURAL | SORT_FLAG_CASE);
+    $tList = array_keys($topics); sort($tList, SORT_NATURAL | SORT_FLAG_CASE);
+    return ['regions' => $rList, 'topics' => $tList];
 }
 
 function pp_normalize_slug(string $slug): string {
