@@ -224,6 +224,7 @@ function collectChromeCandidates() {
     } catch (_) { /* ignore */ }
   });
 
+  const home = process.env.HOME || '';
   const globCandidates = [
     '/usr/local/bin/google-chrome',
     '/usr/local/bin/google-chrome-stable',
@@ -238,8 +239,16 @@ function collectChromeCandidates() {
     '/opt/chrome/chrome',
     '/snap/bin/chromium',
     '/usr/local/sbin/google-chrome',
-    `${process.env.HOME || ''}/.local/bin/google-chrome`,
-    `${process.env.HOME || ''}/bin/google-chrome`,
+    `${home}/.local/bin/google-chrome`,
+    `${home}/bin/google-chrome`,
+    // macOS app bundle executables
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    // Per-user Applications (macOS)
+    `${home}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+    `${home}/Applications/Chromium.app/Contents/MacOS/Chromium`,
+    `${home}/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge`,
     // Project-local portable Chrome
     path.join(process.cwd(), 'node_runtime', 'chrome', 'chrome'),
     path.join(process.cwd(), 'node_runtime', 'chrome', 'chrome-linux64', 'chrome'),
@@ -253,8 +262,8 @@ function collectChromeCandidates() {
     '/opt/alt/chrome*/bin/google-chrome',
     '/opt/chrome*/bin/google-chrome',
     '/opt/google/chrome*/chrome',
-    `${process.env.HOME || ''}/.nix-profile/bin/google-chrome`,
-    `${process.env.HOME || ''}/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome`,
+    `${home}/.nix-profile/bin/google-chrome`,
+    `${home}/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome`,
     // Project-local portable Chrome (globbed)
     `${process.cwd()}/node_runtime/chrome/*/chrome`,
     `${process.cwd()}/node_runtime/chrome/*/chrome-linux64/chrome`,
@@ -270,6 +279,22 @@ function collectChromeCandidates() {
       }
     } catch (_) { /* ignore */ }
   });
+
+  // macOS Spotlight: locate app bundles and derive binary path
+  try {
+    const apps = execSync(`/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.google.Chrome || kMDItemCFBundleIdentifier==org.chromium.Chromium || kMDItemCFBundleIdentifier==com.microsoft.Edgemac' 2>/dev/null | sed -n '1,20p'`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (apps) {
+      apps.split(/\r?\n/).forEach((appPath) => {
+        appPath = appPath.trim();
+        if (!appPath || !appPath.endsWith('.app')) return;
+        let bin;
+        if (/Chromium\.app/i.test(appPath)) bin = path.join(appPath, 'Contents', 'MacOS', 'Chromium');
+        else if (/Edge\.app/i.test(appPath)) bin = path.join(appPath, 'Contents', 'MacOS', 'Microsoft Edge');
+        else bin = path.join(appPath, 'Contents', 'MacOS', 'Google Chrome');
+        candidates.push(bin);
+      });
+    }
+  } catch (_) { /* ignore */ }
 
   return Array.from(new Set(candidates.filter(Boolean)));
 }
