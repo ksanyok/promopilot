@@ -41,6 +41,13 @@ if (!is_admin() && $project['user_id'] != $user_id) {
     exit;
 }
 
+// Определяем, является ли запрос AJAX (для автосохранения при добавлении)
+$pp_is_ajax = (
+    ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest' ||
+    (isset($_POST['ajax']) && $_POST['ajax'] == '1') ||
+    (strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json') !== false)
+);
+
 // Обработка формы
 $message = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info'])) {
@@ -72,6 +79,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
     }
 // Завершаем ветку основной информации
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
+    $pp_update_ok = false;
+    $pp_domain_errors = 0;
+    $pp_domain_set = '';
+
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
     } else {
@@ -113,20 +124,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 // sanitize language
                 if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
-                    // domain check
-                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
-                    if ($projectHost === '') {
-                        $domainToSet = $uHost; // set later with update
-                        $projectHost = $uHost;
-                    }
+                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: ''); // fix undefined var
                     if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
-                        // Skip updating this URL, keep old; count error
                         $domainErrors++;
                     } else {
-                        $links[$i]['url'] = $url;
-                        $links[$i]['anchor'] = $anchor;
-                        $links[$i]['language'] = $lang ?: 'ru';
-                        $links[$i]['wish'] = $wish;
+                        $links[$i] = ['url'=>$url,'anchor'=>$anchor,'language'=>$lang,'wish'=>$wish];
+                        if ($projectHost === '' && $uHost !== '') { $domainToSet = $uHost; $projectHost = $uHost; }
                     }
                 }
             }
@@ -146,9 +149,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                     if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
                     if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
                         $domainErrors++;
-                        continue; // reject cross-domain
+                    } else {
+                        $links[] = ['url' => $url, 'anchor' => $anchor, 'language'=>$lang ?: 'ru', 'wish'=>$wish];
                     }
-                    $links[] = ['url' => $url, 'anchor' => $anchor, 'language'=>$lang ?: 'ru', 'wish'=>$wish];
                 }
             }
         } else {
@@ -187,6 +190,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
             $stmt->bind_param('sssi', $links_json, $language, $wishes, $id);
         }
         if ($stmt->execute()) {
+            $pp_update_ok = true;
             $message = __('Проект обновлен.');
             if ($domainErrors > 0) { $message .= ' ' . sprintf(__('Отклонено ссылок с другим доменом: %d.'), $domainErrors); }
             $project['links'] = $links_json;
@@ -197,6 +201,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         }
         $stmt->close();
         $conn->close();
+
+        // Для ответа AJAX вернем JSON и завершим выполнение
+        if ($pp_is_ajax) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'ok' => (bool)$pp_update_ok,
+                'message' => (string)$message,
+                'domain_errors' => (int)$domainErrors,
+                'domain_host' => (string)($project['domain_host'] ?? ''),
+                'links_count' => is_array($links) ? count($links) : 0
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
     }
 }
 
@@ -367,19 +384,19 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="col-lg-3"><input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>"></div>
                             <div class="col-lg-2">
                                 <select name="new_language" class="form-select">
-                                    <option value="ru" <?php echo ($project['language'] ?? 'ru')==='ru'?'selected':''; ?>>RU</option>
-                                    <option value="en" <?php echo ($project['language'] ?? 'ru')==='en'?'selected':''; ?>>EN</option>
-                                    <option value="es" <?php echo ($project['language'] ?? 'ru')==='es'?'selected':''; ?>>ES</option>
-                                    <option value="fr" <?php echo ($project['language'] ?? 'ru')==='fr'?'selected':''; ?>>FR</option>
-                                    <option value="de" <?php echo ($project['language'] ?? 'ru')==='de'?'selected':''; ?>>DE</option>
+                                    <?php $__langs = ['ru','en','es','fr','de']; $__plang = ($project['language'] ?? 'ru'); foreach ($__langs as $l): ?>
+                                        <option value="<?php echo htmlspecialchars($l); ?>" <?php echo $l === $__plang ? 'selected' : ''; ?>><?php echo strtoupper($l); ?></option>
+                                    <?php endforeach; ?>
                                 </select>
                             </div>
                             <div class="col-lg-2 d-grid">
-                                <button type="button" class="btn btn-gradient w-100" id="add-link"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
+                                <button type="button" id="add-link" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
                             </div>
                         </div>
                         <?php if (!empty($project['domain_host'])): ?>
-                        <div class="small text-muted mb-3"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
+                        <div class="small text-muted mb-3" id="domain-hint"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
+                        <?php else: ?>
+                        <div class="small text-muted mb-3" id="domain-hint" style="display:none"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"></code></div>
                         <?php endif; ?>
                         <div class="mb-3">
                             <label class="form-label mb-1"><?php echo __('Пожелание для этой ссылки'); ?></label>
@@ -390,9 +407,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             </div>
                         </div>
                         <div id="added-hidden"></div>
-                        <div class="text-end">
-                            <button type="submit" class="btn btn-outline-primary"><i class="bi bi-check2-circle me-1"></i><?php echo __('Сохранить изменения'); ?></button>
-                        </div>
+                        <!-- Кнопка сохранения больше не нужна: автосохранение при добавлении -->
                     </div>
                 </div>
 
@@ -573,6 +588,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
     const PROJECT_HOST = '<?php echo htmlspecialchars($pp_normalize_host($project['domain_host'] ?? '')); ?>';
+    let CURRENT_PROJECT_HOST = PROJECT_HOST;
 
     // New: references for links table (may not exist initially)
     let linksTable = document.querySelector('.table-links');
@@ -624,166 +640,116 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Fix pairing: use explicit index for url+anchor
-    addLinkBtn.addEventListener('click', function() {
+    function setButtonLoading(btn, loading) {
+        if (!btn) return;
+        if (loading) {
+            btn.dataset.originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + (btn.dataset.loadingText || btn.textContent.trim());
+        } else {
+            if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    // Fix pairing: use explicit index for url+anchor, but теперь сохраняем сразу через AJAX
+    addLinkBtn.addEventListener('click', async function() {
         const url = newLinkInput.value.trim();
         const anchor = newAnchorInput.value.trim();
-        const lang = newLangSelect.value.trim();
+        const lang = (newLangSelect ? newLangSelect.value.trim() : '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
         const wish = newWish.value.trim();
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
         // Domain restriction (client-side)
         try {
             const u = new URL(url);
             const host = (u.hostname || '').toLowerCase().replace(/^www\./,'');
-            if (PROJECT_HOST && host !== PROJECT_HOST) {
-                alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + PROJECT_HOST);
+            if (CURRENT_PROJECT_HOST && host !== CURRENT_PROJECT_HOST) {
+                alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + CURRENT_PROJECT_HOST);
                 return;
             }
         } catch (e) {}
-        const idx = addIndex++;
 
-        const wrap = document.createElement('div');
-        wrap.className = 'added-pair';
-        wrap.id = 'added-' + idx;
-        wrap.appendChild(makeHidden('added_links['+idx+'][url]', url));
-        wrap.appendChild(makeHidden('added_links['+idx+'][anchor]', anchor));
-        wrap.appendChild(makeHidden('added_links['+idx+'][language]', lang));
-        wrap.appendChild(makeHidden('added_links['+idx+'][wish]', wish));
-        addedHidden.appendChild(wrap);
+        setButtonLoading(addLinkBtn, true);
+        try {
+            const fd = new FormData();
+            fd.append('csrf_token', getCsrfToken());
+            fd.append('update_project', '1');
+            fd.append('ajax', '1');
+            fd.append('wishes', globalWish.value || '');
+            fd.append('added_links[0][url]', url);
+            fd.append('added_links[0][anchor]', anchor);
+            fd.append('added_links[0][language]', lang || '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
+            fd.append('added_links[0][wish]', wish);
 
-        // Render a visual row into the links table
-        const tbody = ensureLinksTable();
-        if (tbody) {
-            const tr = document.createElement('tr');
-            tr.setAttribute('data-index', 'new');
-            tr.setAttribute('data-added-index', String(idx));
-            tr.dataset.postUrl = '';
-            tr.dataset.network = '';
-            const pathDisp = pathFromUrl(url);
-            const hostDisp = hostFromUrl(url);
-            tr.innerHTML = `
-                <td></td>
-                <td class="url-cell">
-                    <div class="small text-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
-                    <a href="${escapeHtml(url)}" target="_blank" class="view-url" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
-                    <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
-                </td>
-                <td class="anchor-cell">
-                    <span class="view-anchor">${escapeHtml(anchor)}</span>
-                    <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
-                </td>
-                <td class="language-cell">
-                    <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
-                    <select class="form-select form-select-sm d-none edit-language">
-                        ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
-                    </select>
-                </td>
-                <td class="wish-cell">
-                    <div class="view-wish small text-truncate" style="max-width:180px;" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</div>
-                    <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
-                </td>
-                <td class="status-cell">
-                    <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
-                </td>
-                <td class="text-end">
-                    <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                    <button type="button" class="btn btn-sm btn-publish me-1 action-publish-new" data-url=""><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
-                    <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                    <button type="button" class="icon-btn action-remove-new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                </td>`;
-
-            tbody.appendChild(tr);
-
-            // Attach listeners for this new row
-            const editBtn = tr.querySelector('.action-edit');
-            const removeBtn = tr.querySelector('.action-remove-new');
-            const publishBtn = tr.querySelector('.action-publish-new');
-            const analyzeBtn = tr.querySelector('.action-analyze');
-            const urlCell = tr.querySelector('.url-cell');
-            const anchorCell = tr.querySelector('.anchor-cell');
-            const langCell = tr.querySelector('.language-cell');
-            const wishCell = tr.querySelector('.wish-cell');
-            const viewUrl = urlCell.querySelector('.view-url');
-            const viewAnchor = anchorCell.querySelector('.view-anchor');
-            const viewLang = langCell.querySelector('.view-language');
-            const viewWish = wishCell.querySelector('.view-wish');
-            const editUrl = urlCell.querySelector('.edit-url');
-            const editAnchor = anchorCell.querySelector('.edit-anchor');
-            const editLang = langCell.querySelector('.edit-language');
-            const editWish = wishCell.querySelector('.edit-wish');
-
-            function syncHidden() {
-                const holder = document.getElementById('added-' + idx);
-                if (!holder) return;
-                const urlInput = holder.querySelector(`input[name="added_links[${idx}][url]"]`);
-                const anchorInput = holder.querySelector(`input[name="added_links[${idx}][anchor]"]`);
-                const langInput = holder.querySelector(`input[name="added_links[${idx}][language]"]`);
-                const wishInput = holder.querySelector(`input[name="added_links[${idx}][wish]"]`);
-                if (urlInput) {
-                    const v = editUrl.value.trim();
-                    urlInput.value = v;
-                    viewUrl.textContent = pathFromUrl(v);
-                    viewUrl.href = v; viewUrl.title = v;
-                    const host = hostFromUrl(v);
-                    const hostEl = urlCell.querySelector('.small.text-muted'); if (hostEl) hostEl.textContent = host;
-                }
-                if (anchorInput) { anchorInput.value = editAnchor.value.trim(); viewAnchor.textContent = editAnchor.value.trim(); }
-                if (editLang && langInput) { langInput.value = editLang.value; viewLang.textContent = editLang.value.toUpperCase(); }
-                if (editWish && wishInput) { wishInput.value = editWish.value.trim(); viewWish.textContent = (editWish.value.trim().length>40?editWish.value.trim().slice(0,40)+'…':editWish.value.trim()); viewWish.setAttribute('title', editWish.value.trim()); }
+            const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
+            const data = await res.json();
+            if (!data || !data.ok) {
+                alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR'));
+                return;
+            }
+            // обновим хост проекта, если он установлен сервером при первой ссылке
+            if (data.domain_host) {
+                CURRENT_PROJECT_HOST = String(data.domain_host).toLowerCase().replace(/^www\./,'');
+                const hint = document.getElementById('domain-hint');
+                const hostCode = document.getElementById('domain-host-code');
+                if (hostCode) hostCode.textContent = data.domain_host;
+                if (hint) hint.style.display = '';
+                if (newLinkInput && CURRENT_PROJECT_HOST) newLinkInput.setAttribute('placeholder', 'https://' + CURRENT_PROJECT_HOST + '/...');
+            }
+            // Добавляем строку в таблицу (сразу обычное состояние, т.к. уже сохранено)
+            const tbody = ensureLinksTable();
+            if (tbody) {
+                const tr = document.createElement('tr');
+                tr.setAttribute('data-index', 'new');
+                tr.dataset.postUrl = '';
+                tr.dataset.network = '';
+                const pathDisp = pathFromUrl(url);
+                const hostDisp = hostFromUrl(url);
+                tr.innerHTML = `
+                    <td></td>
+                    <td class="url-cell">
+                        <div class="small text-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
+                        <a href="${escapeHtml(url)}" target="_blank" class="view-url" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
+                        <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
+                    </td>
+                    <td class="anchor-cell">
+                        <span class="view-anchor">${escapeHtml(anchor)}</span>
+                        <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
+                    </td>
+                    <td class="language-cell">
+                        <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
+                        <select class="form-select form-select-sm d-none edit-language">
+                            ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
+                        </select>
+                    </td>
+                    <td class="wish-cell">
+                        <div class="view-wish small text-truncate" style="max-width:180px;" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</div>
+                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
+                    </td>
+                    <td class="status-cell">
+                        <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
+                    </td>
+                    <td class="text-end">
+                        <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
+                        <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="${escapeHtml(url)}"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
+                        <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                        <button type="button" class="icon-btn action-remove" data-index="new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                    </td>`;
+                tbody.appendChild(tr);
+                refreshRowNumbers();
+                bindDynamicPublishButtons();
             }
 
-            editUrl.addEventListener('input', syncHidden);
-            editAnchor.addEventListener('input', syncHidden);
-            editLang.addEventListener('change', syncHidden);
-            editWish.addEventListener('input', syncHidden);
-
-            editBtn.addEventListener('click', function() {
-                const editing = !editUrl.classList.contains('d-none');
-                if (editing) {
-                    editUrl.classList.add('d-none');
-                    editAnchor.classList.add('d-none');
-                    editLang.classList.add('d-none');
-                    editWish.classList.add('d-none');
-                    viewUrl.classList.remove('d-none');
-                    viewAnchor.classList.remove('d-none');
-                    viewLang.classList.remove('d-none');
-                    viewWish.classList.remove('d-none');
-                    this.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
-                } else {
-                    editUrl.classList.remove('d-none');
-                    editAnchor.classList.remove('d-none');
-                    editLang.classList.remove('d-none');
-                    editWish.classList.remove('d-none');
-                    viewUrl.classList.add('d-none');
-                    viewAnchor.classList.add('d-none');
-                    viewLang.classList.add('d-none');
-                    viewWish.classList.add('d-none');
-                    this.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
-                }
-            });
-
-            removeBtn.addEventListener('click', function() {
-                const holder = document.getElementById('added-' + idx);
-                if (holder) holder.remove();
-                tr.remove();
-                refreshRowNumbers();
-            });
-
-            publishBtn.addEventListener('click', function() {
-                alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>');
-            });
-
-            analyzeBtn.addEventListener('click', function() {
-                const targetUrl = viewUrl.getAttribute('href');
-                openAnalyzeModal(targetUrl);
-            });
-
-            refreshRowNumbers();
+            // Очистим поля
+            newLinkInput.value = '';
+            newAnchorInput.value = '';
+            newWish.value = '';
+            if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
+        } catch (e) {
+            alert('<?php echo __('Сетевая ошибка'); ?>');
+        } finally {
+            setButtonLoading(addLinkBtn, false);
         }
-
-        newLinkInput.value = '';
-        newAnchorInput.value = '';
-        newWish.value = '';
     });
 
     // Inline edit toggle (existing rows)
@@ -826,42 +792,40 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Remove existing link by index
+    // Remove existing link by index (сохранится при следующем добавлении)
     document.querySelectorAll('.action-remove').forEach(btn => {
         btn.addEventListener('click', function() {
             const idx = btn.getAttribute('data-index');
             const hidden = makeHidden('remove_links[]', idx);
             form.appendChild(hidden);
-            // Optionally hide row immediately
             const tr = btn.closest('tr');
             if (tr) tr.remove();
             refreshRowNumbers();
         });
     });
 
-    // Заглушка для кнопок публикации
-    document.querySelectorAll('.action-publish-new').forEach(btn => {
-        btn.addEventListener('click', () => {
-            alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>');
-        });
-    });
+    // Заглушка для кнопок публикации новых строк больше не нужна (мы сохраняем сразу)
 
     if (projectInfoForm) {
         projectInfoForm.addEventListener('submit', () => {
             // При submit модалки значение hidden синхронизируется после перезагрузки страницы сервером
         });
     }
-    useGlobal.addEventListener('change', () => {
-        if (useGlobal.checked) {
-            newWish.value = globalWish.value;
-            newWish.setAttribute('readonly','readonly');
-            newWish.classList.add('bg-light');
-        } else {
-            newWish.removeAttribute('readonly');
-            newWish.classList.remove('bg-light');
-        }
-    });
-    globalWish.addEventListener('input', () => { if (useGlobal.checked) { newWish.value = globalWish.value; } });
+    if (useGlobal) {
+        useGlobal.addEventListener('change', () => {
+            if (useGlobal.checked) {
+                newWish.value = globalWish.value;
+                newWish.setAttribute('readonly','readonly');
+                newWish.classList.add('bg-light');
+            } else {
+                newWish.removeAttribute('readonly');
+                newWish.classList.remove('bg-light');
+            }
+        });
+    }
+    if (globalWish && useGlobal) {
+        globalWish.addEventListener('input', () => { if (useGlobal.checked) { newWish.value = globalWish.value; } });
+    }
 
     function isValidUrl(string) { try { new URL(string); return true; } catch (_) { return false; } }
 
@@ -882,18 +846,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const meta = document.querySelector('meta[name="csrf-token"]');
         if (meta && meta.content) return meta.content;
         return '';
-    }
-
-    function setButtonLoading(btn, loading) {
-        if (!btn) return;
-        if (loading) {
-            btn.dataset.originalHtml = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + (btn.dataset.loadingText || btn.textContent.trim());
-        } else {
-            if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
-            btn.disabled = false;
-        }
     }
 
     async function sendPublishAction(btn, url, action) {
@@ -1025,10 +977,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
                 sendPublishAction(btn, url, 'cancel');
             });
-        });
-        document.querySelectorAll('.action-publish-new').forEach(btn => {
-            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
-            btn.addEventListener('click', () => { alert('<?php echo __('Сохраните проект перед публикацией новой ссылки.'); ?>'); });
         });
         // Bind analyze buttons
         document.querySelectorAll('.action-analyze').forEach(btn => {
