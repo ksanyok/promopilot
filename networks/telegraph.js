@@ -760,6 +760,44 @@ function normalizeAuthorName(name, lang) {
   return s;
 }
 
+function imageLinkLabel(lang, title) {
+  const L = String(lang || '').toLowerCase();
+  if (L.startsWith('ru')) return 'Смотреть иллюстрацию';
+  if (L.startsWith('uk') || L.startsWith('ua')) return 'Переглянути ілюстрацію';
+  if (L.startsWith('de')) return 'Abbildung ansehen';
+  if (L.startsWith('es')) return 'Ver ilustración';
+  if (L.startsWith('fr')) return "Voir l'illustration";
+  return 'View illustration';
+}
+
+function isGenericTitle(t, lang) {
+  const s = String(t || '').trim().replace(/["'«»“”„]+/g, '').replace(/[.:!?]+$/g, '').toLowerCase();
+  if (s.length < 4) return true;
+  const common = [
+    'introduction','intro','overview','summary','conclusion','contents','table of contents','outline',
+    'введение','вступление','обзор','итоги','заключение','содержание','оглавление','резюме','описание','интро',
+    'вступ'
+  ];
+  if (common.includes(s)) return true;
+  // overly short and generic
+  if (s.length < 8) return true;
+  return false;
+}
+
+function titleFromUrl(url) {
+  try {
+    const u = new URL(String(url));
+    let seg = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
+    seg = seg.replace(/[-_]+/g, ' ').trim();
+    if (!seg) seg = u.hostname.replace(/^www\./, '');
+    // Capitalize first letter of each word
+    seg = seg.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    return seg || 'PromoPilot Article';
+  } catch (_) {
+    return 'PromoPilot Article';
+  }
+}
+
 async function publishToTelegraph(job) {
   logLine('Job received', job);
   // Ensure puppeteer is available (and report cleanly if not)
@@ -809,6 +847,7 @@ async function publishToTelegraph(job) {
   logLine('Generating author...');
   let author = (await generateTextWithChat(prompts.author, openaiApiKey)) || 'PromoPilot';
   author = normalizeAuthorName(author, language);
+  if (!author || author.length < 2) author = 'PromoPilot';
   await sleep(wait);
 
   logLine('Generating content...');
@@ -817,6 +856,8 @@ async function publishToTelegraph(job) {
 
   // Normalize/structure content, add headings and ensure link
   content = normalizeContent(content, language, pageUrl, anchorText);
+  // Reduce excessive blank lines
+  content = content.replace(/\n{3,}/g, '\n\n').trim();
 
   // Generate hero image (best-effort, prefer wide format)
   let heroUrl = '';
@@ -836,7 +877,14 @@ async function publishToTelegraph(job) {
     logLine('Hero image generation skipped', { error: String(e) });
   }
 
-  const cleanTitle = (title || '').replace(/["']+/g, '').trim() || 'PromoPilot Article';
+  // Prepare clean and robust title
+  let cleanTitle = (title || '').replace(/["']+/g, '').trim();
+  if (isGenericTitle(cleanTitle, language)) {
+    const fallback = (seo.title && !isGenericTitle(seo.title, language)) ? seo.title : '';
+    cleanTitle = (fallback || titleFromUrl(pageUrl)).trim();
+  }
+  // Safety: clip very long titles
+  if (cleanTitle.length > 140) cleanTitle = cleanTitle.slice(0, 140).replace(/\s+\S*$/, '');
 
   logLine('Launching browser');
 
@@ -889,10 +937,17 @@ async function publishToTelegraph(job) {
     await page.keyboard.type(author, { delay: 30 });
 
     logLine('Injecting content into editor');
-    // Compose final HTML with optional hero image
-    const finalHtml = heroUrl
-      ? (`<figure><img src="${escapeHtmlAttr(heroUrl)}" alt="${escapeHtmlAttr(cleanTitle)}"></figure>\n` + content)
-      : content;
+    // Insert hero image as a hyperlink (not embedded) after the first subheading
+    if (heroUrl) {
+      const label = imageLinkLabel(language, cleanTitle);
+      const linkHtml = '<p><a href="' + escapeHtmlAttr(heroUrl) + '" target="_blank" rel="noopener nofollow">' + escapeHtmlAttr(label) + '</a></p>';
+      const H = headingTag();
+      const firstHeading = content.match(new RegExp(`<${H}[^>]*>[\\s\\S]*?<\\/${H}>`, 'i'));
+      if (firstHeading) content = content.replace(firstHeading[0], firstHeading[0] + '\n' + linkHtml);
+      else content = linkHtml + '\n' + content;
+    }
+
+    const finalHtml = content;
     await page.evaluate((articleHtml) => {
       const root = document.querySelector('.tl_article .tl_article_content .ql-editor') || document.querySelector('div.ql-editor') || document.querySelector('p[data-placeholder="Your story..."]').parentElement;
       if (!root) throw new Error('Telegraph editor not ready');
