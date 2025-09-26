@@ -74,15 +74,39 @@ $projectName = trim((string)($proj['name'] ?? ''));
 $linkLanguage = $projectLanguage;
 $linkWish = $projectWish;
 
-if (is_array($links)) {
+// New: prefer normalized table project_links if present
+$urlBelongs = false;
+try {
+    if ($stmtPL = $conn->prepare('SELECT anchor, language, wish FROM project_links WHERE project_id = ? AND url = ? LIMIT 1')) {
+        $stmtPL->bind_param('is', $project_id, $url);
+        if ($stmtPL->execute()) {
+            $resPL = $stmtPL->get_result();
+            if ($rowPL = $resPL->fetch_assoc()) {
+                $urlBelongs = true;
+                $anc = trim((string)($rowPL['anchor'] ?? ''));
+                $lng = trim((string)($rowPL['language'] ?? ''));
+                $wsh = trim((string)($rowPL['wish'] ?? ''));
+                if ($anc !== '') { $anchor = $anc; }
+                if ($lng !== '') { $linkLanguage = $lng; }
+                if ($wsh !== '') { $linkWish = $wsh; }
+            }
+        }
+        $stmtPL->close();
+    }
+} catch (Throwable $e) {
+    // fallback to legacy JSON below
+}
+
+if (is_array($links) && !$urlBelongs) {
     foreach ($links as $lnk) {
         if (is_array($lnk) && isset($lnk['url']) && trim($lnk['url']) === $url) {
-            $anchor = trim($lnk['anchor'] ?? '');
-            $linkLanguage = trim((string)($lnk['language'] ?? '')) ?: $projectLanguage;
-            $linkWish = trim((string)($lnk['wish'] ?? '')) ?: $projectWish;
+            $urlBelongs = true;
+            $anchor = $anchor !== '' ? $anchor : trim($lnk['anchor'] ?? '');
+            $linkLanguage = trim((string)($lnk['language'] ?? '')) ?: $linkLanguage;
+            $linkWish = trim((string)($lnk['wish'] ?? '')) ?: $linkWish;
             break;
         }
-        if (is_string($lnk) && $lnk === $url) { $anchor=''; break; }
+        if (is_string($lnk) && $lnk === $url) { $urlBelongs = true; $anchor = $anchor !== '' ? $anchor : ''; break; }
     }
 }
 $linkLanguage = $linkLanguage ?? $projectLanguage;
@@ -103,6 +127,12 @@ if ($action === 'publish') {
         // уже pending
         echo json_encode(['ok'=>true,'status'=>'pending']);
         $conn->close(); exit;
+    }
+    // New: ensure the URL belongs to the project before creating a publication
+    if (!$urlBelongs) {
+        $conn->close();
+        echo json_encode(['ok'=>false,'error'=>'URL_NOT_IN_PROJECT']);
+        exit;
     }
     $network = pp_pick_network();
     if (!$network) {

@@ -25,6 +25,13 @@ if ($result->num_rows == 0) {
 $project = $result->fetch_assoc();
 $stmt->close();
 
+// Build taxonomy (regions/topics) from enabled networks for selectors
+$taxonomy = pp_get_network_taxonomy(true);
+$availableRegions = $taxonomy['regions'] ?? [];
+$availableTopics  = $taxonomy['topics'] ?? [];
+if (empty($availableRegions)) { $availableRegions = ['Global']; }
+if (empty($availableTopics))  { $availableTopics  = ['General']; }
+
 // Define extended language codes for link operations/UI
 $pp_lang_codes = [
     'ru','en','uk','de','fr','es','it','pt','pt-br','pl','tr','nl','cs','sk','bg','ro','el','hu','sv','da','no','fi','et','lv','lt','ka','az','kk','uz','sr','sl','hr','he','ar','fa','hi','id','ms','vi','th','zh','zh-cn','zh-tw','ja','ko'
@@ -85,14 +92,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
         $allowedLangs = ['ru','en','es','fr','de'];
         $newLang = trim($_POST['project_language'] ?? ($project['language'] ?? 'ru'));
         if (!in_array($newLang, $allowedLangs, true)) { $newLang = $project['language'] ?? 'ru'; }
+        // New: region/topic from taxonomy
+        $newRegion = trim((string)($_POST['project_region'] ?? ($project['region'] ?? '')));
+        $newTopic  = trim((string)($_POST['project_topic']  ?? ($project['topic']  ?? '')));
+        if (!in_array($newRegion, $availableRegions, true)) { $newRegion = $project['region'] ?? ($availableRegions[0] ?? ''); }
+        if (!in_array($newTopic,  $availableTopics,  true)) { $newTopic  = $project['topic']  ?? ($availableTopics[0]  ?? ''); }
         if ($newName) {
             $conn = connect_db();
-            // include language in update
-            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ?, language = ? WHERE id = ?");
-            $stmt->bind_param('ssssi', $newName, $newDesc, $newWishes, $newLang, $id);
+            // include language, region, topic in update
+            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ?, language = ?, region = ?, topic = ? WHERE id = ?");
+            $stmt->bind_param('ssssssi', $newName, $newDesc, $newWishes, $newLang, $newRegion, $newTopic, $id);
             if ($stmt->execute()) {
                 $message = __('Основная информация обновлена.');
-                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes; $project['language'] = $newLang;
+                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes; $project['language'] = $newLang; $project['region'] = $newRegion; $project['topic'] = $newTopic;
             } else {
                 $message = __('Ошибка сохранения основной информации.');
             }
@@ -413,6 +425,12 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="meta-list">
                                 <div class="meta-item"><i class="bi bi-calendar3"></i><span><?php echo __('Дата создания'); ?>: <?php echo htmlspecialchars($project['created_at']); ?></span></div>
                                 <div class="meta-item"><i class="bi bi-translate"></i><span><?php echo __('Язык страницы'); ?>: <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></span></div>
+                                <?php if (!empty($project['region'])): ?>
+                                  <div class="meta-item"><i class="bi bi-geo-alt"></i><span><?php echo __('Регион'); ?>: <?php echo htmlspecialchars($project['region']); ?></span></div>
+                                <?php endif; ?>
+                                <?php if (!empty($project['topic'])): ?>
+                                  <div class="meta-item"><i class="bi bi-tags"></i><span><?php echo __('Тематика'); ?>: <?php echo htmlspecialchars($project['topic']); ?></span></div>
+                                <?php endif; ?>
                                 <?php if (!empty($project['domain_host'])): ?>
                                 <div class="meta-item"><i class="bi bi-globe2"></i><span><?php echo __('Домен'); ?>: <?php echo htmlspecialchars($project['domain_host']); ?></span></div>
                                 <?php else: ?>
@@ -469,6 +487,25 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                           <?php endforeach; ?>
                         </select>
                         <div class="form-text"><?php echo __('Влияет на язык по умолчанию для новых ссылок.'); ?></div>
+                      </div>
+                      <!-- New: region/topic selectors -->
+                      <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                          <label class="form-label"><?php echo __('Регион проекта'); ?></label>
+                          <select name="project_region" class="form-select">
+                            <?php $curR = (string)($project['region'] ?? ''); foreach ($availableRegions as $r): ?>
+                              <option value="<?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" <?php echo ($curR===$r?'selected':''); ?>><?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                            <?php endforeach; ?>
+                          </select>
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label"><?php echo __('Тематика проекта'); ?></label>
+                          <select name="project_topic" class="form-select">
+                            <?php $curT = (string)($project['topic'] ?? ''); foreach ($availableTopics as $t): ?>
+                              <option value="<?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" <?php echo ($curT===$t?'selected':''); ?>><?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                            <?php endforeach; ?>
+                          </select>
+                        </div>
                       </div>
                     </div>
                     <div class="modal-footer justify-content-between">
@@ -1050,7 +1087,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     'BAD_ACTION':'<?php echo __('Неверное действие'); ?>',
                     'NO_ENABLED_NETWORKS':'<?php echo __('Нет доступных сетей публикации. Проверьте настройки.'); ?>',
                     'MISSING_OPENAI_KEY':'<?php echo __('Укажите OpenAI API Key в настройках.'); ?>',
-                    'NETWORK_ERROR':'<?php echo __('Ошибка при публикации через сеть'); ?>'
+                    'NETWORK_ERROR':'<?php echo __('Ошибка при публикации через сеть'); ?>',
+                    'URL_NOT_IN_PROJECT':'<?php echo __('Ссылка отсутствует в проекте'); ?>'
                 };
                 if (map[msg]) msg = map[msg];
                 if (data.error === 'NETWORK_ERROR' && data.details) {

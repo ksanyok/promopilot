@@ -1019,6 +1019,65 @@ function pp_get_network(string $slug): ?array {
     return null;
 }
 
+function pp_pick_network_for(?string $region, ?string $topic): ?array {
+    $nets = pp_get_networks(true, false);
+    if (empty($nets)) return null;
+    $region = trim((string)$region);
+    $topic  = trim((string)$topic);
+
+    // Normalize strings for comparison
+    $norm = function(string $s): string {
+        return preg_replace('~\s+~', ' ', strtolower(trim($s)));
+    };
+    $projectRegion = $norm($region);
+    $projectTopic  = $norm($topic);
+
+    $scored = [];
+    foreach ($nets as $n) {
+        $meta = $n['meta'] ?? [];
+        $regions = $meta['regions'] ?? [];
+        $topics  = $meta['topics'] ?? [];
+        if (is_string($regions)) { $regions = [$regions]; }
+        if (is_string($topics)) { $topics = [$topics]; }
+        $regions = array_map($norm, is_array($regions) ? $regions : []);
+        $topics  = array_map($norm, is_array($topics) ? $topics : []);
+
+        // Region score
+        $rScore = 0;
+        if ($projectRegion === '') {
+            $rScore = 1; // no preference
+        } else {
+            if (in_array($projectRegion, $regions, true)) { $rScore = 2; }
+            elseif (in_array('global', $regions, true)) { $rScore = 1; }
+            else { $rScore = 0; }
+        }
+        // Topic score
+        $tScore = 0;
+        if ($projectTopic === '') {
+            $tScore = 1;
+        } else {
+            if (in_array($projectTopic, $topics, true)) { $tScore = 2; }
+            elseif (in_array('general', $topics, true)) { $tScore = 1; }
+            else { $tScore = 0; }
+        }
+        $score = ($rScore * 10) + $tScore; // prioritize region
+        $scored[] = ['score' => $score, 'net' => $n, 'title' => (string)($n['title'] ?? $n['slug'])];
+    }
+
+    if (empty($scored)) return null;
+    usort($scored, function($a, $b) {
+        if ($a['score'] === $b['score']) { return strnatcasecmp($a['title'], $b['title']); }
+        return $a['score'] < $b['score'] ? 1 : -1;
+    });
+
+    $best = $scored[0];
+    if ((int)$best['score'] <= 0) {
+        // no match found; return first enabled network as fallback
+        return $nets[0];
+    }
+    return $best['net'];
+}
+
 function pp_pick_network(): ?array {
     $nets = pp_get_networks(true, false);
     return $nets[0] ?? null;
@@ -1122,10 +1181,11 @@ function pp_collect_node_candidates(): array {
         ];
         foreach ($bashLists as $cmd) {
             $out = trim((string)@shell_exec($cmd));
-            if ($out === '') { continue; }
-            foreach (preg_split('~[\r\n]+~', $out) as $line) {
-                $line = trim($line);
-                if ($line !== '') { $candidates[] = $line; }
+            if ($out !== '') {
+                foreach (preg_split('~[\r\n]+~', $out) as $line) {
+                    $line = trim($line);
+                    if ($line !== '') { $candidates[] = $line; }
+                }
             }
         }
     }
