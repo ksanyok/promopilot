@@ -474,7 +474,17 @@ async function uploadImageToTelegraph(fileBuffer, filename = 'image.png', mime =
   const blob = new Blob([fileBuffer], { type: mime });
   form.append('file', blob, filename);
   const started = Date.now();
-  const resp = await fetch('https://telegra.ph/upload', { method: 'POST', body: form });
+  const resp = await fetch('https://telegra.ph/upload', {
+    method: 'POST',
+    // Let fetch set content-type boundary automatically
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+      'Accept': 'application/json, text/plain, */*',
+      'Origin': 'https://telegra.ph',
+      'Referer': 'https://telegra.ph/',
+    },
+    body: form,
+  });
   const ms = Date.now() - started;
   if (!resp.ok) {
     const txt = await resp.text().catch(()=> '');
@@ -492,11 +502,42 @@ async function uploadImageToTelegraph(fileBuffer, filename = 'image.png', mime =
   return url;
 }
 
+// New: fallback upload inside Telegraph origin to bypass server-side 400s
+async function uploadImageToTelegraphViaBrowser(page, fileBase64, filename = 'image.png', mime = 'image/png') {
+  if (!page) throw new Error('No page for browser-side upload');
+  const res = await page.evaluate(async ({ b64, name, type }) => {
+    function b64ToUint8Array(b64) {
+      const binary = atob(b64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+    const form = new FormData();
+    const bytes = b64ToUint8Array(b64);
+    const blob = new Blob([bytes], { type });
+    form.append('file', blob, name);
+    const r = await fetch('https://telegra.ph/upload', { method: 'POST', body: form });
+    const text = await r.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { ok: r.ok, status: r.status, json, text };
+  }, { b64: fileBase64, name: filename, type: mime });
+
+  if (!res || !res.ok || !Array.isArray(res.json) || !res.json[0] || !res.json[0].src) {
+    throw new Error(`Browser upload failed: ${res && res.status}`);
+  }
+  const src = String(res.json[0].src);
+  return src.startsWith('http') ? src : `https://telegra.ph${src}`;
+}
+
 function escapeHtmlAttr(str) {
   return String(str || '').replace(/["'&<>]/g, (c)=> ({'"':'&quot;', "'":'&#39;', '&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
 
 function escapeRegExp(s) { return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function headingTag() { return 'h3'; }
 
 function headingLabelForLang(lang) {
   const L = String(lang || '').toLowerCase();
@@ -593,56 +634,77 @@ async function fetchSeoData(targetUrl) {
 // Convert simple Markdown-ish content to clean HTML and enforce structure
 function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
   let s = String(inputHtmlOrMd || '').trim();
+  const H = headingTag();
 
-  // Convert Markdown headings (##, #) to <h2>
-  s = s.replace(/^[\t ]*#{1,3}[\t ]+(.+)$/gmi, '<h2>$1</h2>');
-  // Lines that are bold-only -> treat as subheadings
-  s = s.replace(/^\s*\*\*(.+?)\*\*\s*$/gmi, '<h2>$1</h2>');
-  // Also convert lines ending with colon to <h2>
-  s = s.replace(/^\s*([^\n<]{3,80}):\s*$/gmi, '<h2>$1</h2>');
+  // Normalize Windows line breaks
+  s = s.replace(/\r\n/g, '\n');
 
-  // Convert simple markdown lists to <ul><li>
-  const lines = s.split(/\r?\n/);
+  // Convert Markdown headings (#, ##, ###) to <h3>
+  s = s.replace(/^[\t ]*#{1,6}[\t ]+(.+)$/gmi, `<${H}>$1</${H}>`);
+
+  // Convert lines that are bold-only or end with colon to headings
+  s = s.replace(/^\s*\*\*(.+?)\*\*\s*$/gmi, `<${H}>$1</${H}>`);
+  s = s.replace(/^\s*__([^_].+?)__\s*$/gmi, `<${H}>$1</${H}>`);
+  s = s.replace(/^\s*([^\n<]{3,120}):\s*$/gmi, `<${H}>$1</${H}>`);
+
+  // Convert simple bullet-like lines into <ul><li>
+  const lines = s.split(/\n/);
   const out = [];
   let inList = false;
+  const openList = () => { if (!inList) { out.push('<ul>'); inList = true; } };
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const m = line.match(/^\s*[-*]\s+(.+)/);
+    const m = line.match(/^\s*(?:[-*•·–—])\s+(.+)/); // -, *, •, ·, –, —
     if (m) {
-      if (!inList) { out.push('<ul>'); inList = true; }
+      openList();
       out.push('<li>' + m[1].trim() + '</li>');
+    } else if (/^\s*\d+[.)]\s+/.test(line)) { // ordered-like, still map to ul for simplicity
+      openList();
+      out.push('<li>' + line.replace(/^\s*\d+[.)]\s+/, '').trim() + '</li>');
     } else {
-      if (inList) { out.push('</ul>'); inList = false; }
+      closeList();
       out.push(line);
     }
   }
-  if (inList) out.push('</ul>');
+  closeList();
   s = out.join('\n');
 
   // If there are no block tags, wrap paragraphs by blank lines
-  if (!/<\s*(p|h2|ul|ol|blockquote|figure|img)\b/i.test(s)) {
+  if (!/<\s*(p|h1|h2|h3|ul|ol|blockquote|figure|img)\b/i.test(s)) {
     const paras = s.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => '<p>' + p + '</p>');
     s = paras.join('\n');
   } else {
     // Ensure standalone non-tag lines become paragraphs
     s = s.replace(/^(?!<)(.+)$/gmi, '<p>$1</p>');
     // Avoid wrapping lines already inside tags
-    s = s.replace(/<p>\s*<(h2|ul|ol|blockquote|figure|img)\b/gi, '<$1');
+    s = s.replace(new RegExp(`<p>\\s*<(${H}|ul|ol|blockquote|figure|img)\\b`, 'gi'), '<$1');
   }
 
-  // Convert short, title-like paragraphs to <h2>
-  s = s.replace(/<p>\s*([А-ЯЁA-Z][^<.!?]{3,80})\s*<\/p>/g, '<h2>$1</h2>');
+  // Convert short, title-like paragraphs (including strong/em) to headings
+  s = s.replace(new RegExp(`<p>\\s*(?:<strong>|<em>)?([^<]{5,140})(?:<\\/strong>|<\\/em>)?\\s*<\\/p>`, 'g'), `<${H}>$1</${H}>`);
 
   // Ensure at least one subheading exists
-  if (!/<h2[\s>]/i.test(s)) {
+  const hRe = new RegExp(`<${H}[\\s>]`, 'i');
+  if (!hRe.test(s)) {
     const label = headingLabelForLang(lang);
     const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
-    if (firstP) s = s.replace(firstP[0], firstP[0] + '\n<h2>' + label + '</h2>');
-    else s = '<h2>' + label + '</h2>\n' + s;
+    if (firstP) s = s.replace(firstP[0], firstP[0] + `\n<${H}>${label}</${H}>`);
+    else s = `<${H}>${label}</${H}>\n` + s;
   }
 
-  // Allow only a safe subset of tags (first pass)
-  s = s.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote|figure|img)\b)[^>]*>/gi, '');
+  // Allow only a safe subset of tags
+  s = s.replace(/<(?!\/?(p|h1|h2|h3|ul|li|a|strong|em|blockquote|figure|img)\b)[^>]*>/gi, '');
+
+  // Collapse empty paragraphs and stray bullets
+  s = s.replace(/<p>(?:\s|&nbsp;|<br\s*\/>)*<\/p>/gi, '');
+  s = s.replace(/<p>\s*[•·–—-]\s*<\/p>/gi, '');
+
+  // Merge consecutive paragraphs that are just bullets into proper list (safety pass)
+  s = s.replace(/<p>\s*[•·–—-]\s*([^<]+)<\/p>(?:\s*<p>\s*[•·–—-]\s*([^<]+)<\/p>)+/gi, (full) => {
+    const items = Array.from(full.matchAll(/<p>\s*[•·–—-]\s*([^<]+)<\/p>/gi)).map(m => `<li>${m[1].trim()}</li>`);
+    return `<ul>${items.join('')}</ul>`;
+  });
 
   // Enforce a single allowed link to the target URL: strip other anchors
   s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
@@ -653,13 +715,13 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
     return text; // drop other links
   });
 
-  // Ensure exactly one target link exists (insert if missing)
-  const hrefRe = new RegExp('<a\\s+[^>]*href=[\"\']' + escapeRegExp(pageUrl.replace(/\/$/, '')) + '[\"\']', 'ig');
+  // Ensure exactly one target link exists (insert if missing) after the first heading
+  const hrefRe = new RegExp('<a\\s+[^>]*href=[\\"\']' + escapeRegExp(pageUrl.replace(/\/$/, '')) + '[\\"\']', 'ig');
   const matches = s.match(hrefRe) || [];
   if (matches.length === 0) {
     const linkHtml = '<p><a href="' + escapeHtmlAttr(pageUrl) + '">' + escapeHtmlAttr(anchorText || pageUrl) + '</a></p>';
-    const h2 = s.match(/<h2[\s\S]*?<\/h2>/i);
-    if (h2) s = s.replace(h2[0], h2[0] + '\n' + linkHtml);
+    const firstHeading = s.match(new RegExp(`<${H}[^>]*>[\\s\\S]*?<\\/${H}>`, 'i'));
+    if (firstHeading) s = s.replace(firstHeading[0], firstHeading[0] + '\n' + linkHtml);
     else s = linkHtml + '\n' + s;
   } else if (matches.length > 1) {
     // Remove subsequent duplicates
@@ -673,6 +735,28 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
     });
   }
 
+  // Trim excessive newlines created by replacements
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s.trim();
+}
+
+// Sanitize and normalize author name from LLM
+function normalizeAuthorName(name, lang) {
+  let s = String(name || '').trim();
+  // keep only the first line
+  s = s.split(/\r?\n/)[0];
+  // strip surrounding quotes and common quote chars
+  s = s.replace(/^["'«»“”„]+|["'«»“”„]+$/g, '');
+  // collapse spaces
+  s = s.replace(/\s+/g, ' ').trim();
+  // remove trailing punctuation
+  s = s.replace(/[.,;:!?]+$/g, '');
+  // limit to max 3 words (expect 1–2)
+  const words = s.split(' ').filter(Boolean).slice(0, 3);
+  s = words.join(' ');
+  // fallbacks
+  if (!s) s = 'PromoPilot';
   return s;
 }
 
@@ -711,8 +795,8 @@ async function publishToTelegraph(job) {
 
   const prompts = {
     title: `Using the page SEO data below, write a concise, catchy ${titleLangLabel} title that reflects the same topic. No quotes, no trailing dots.\nSEO title: "${seo.title || ''}"\nSEO description: "${seo.description || ''}"\nURL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
-    author: `Propose a neutral author's name appropriate for an article in ${authorLangLabel}. Avoid region-specific or celebrity names. One or two words only.`,
-    content: `Write an article in ${contentLangLabel} of at least 3000 characters based on the page: ${pageUrl}. Use the following page SEO data and stay strictly on-topic: title: "${seo.title || ''}", description: "${seo.description || ''}". Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h2> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Do not include off-topic content.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
+    author: `Propose a neutral author's name for an article in ${authorLangLabel}. Use the ${authorLangLabel} language and its alphabet. Avoid region-specific or celebrity names. One or two words only. Respond with the name only, without quotes or extra text.`,
+    content: `Write an article in ${contentLangLabel} of at least 7000 characters based on the page: ${pageUrl}. Use the following page SEO data and stay strictly on-topic: title: "${seo.title || ''}", description: "${seo.description || ''}". Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h3> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h3>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Do not include off-topic content.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
   };
   logLine('Prompts prepared', { titlePromptPreview: prompts.title, authorPromptPreview: prompts.author, contentPromptPreview: prompts.content.slice(0, 160) + '...' });
 
@@ -723,7 +807,8 @@ async function publishToTelegraph(job) {
   await sleep(wait);
 
   logLine('Generating author...');
-  const author = (await generateTextWithChat(prompts.author, openaiApiKey)) || 'PromoPilot';
+  let author = (await generateTextWithChat(prompts.author, openaiApiKey)) || 'PromoPilot';
+  author = normalizeAuthorName(author, language);
   await sleep(wait);
 
   logLine('Generating content...');
@@ -735,15 +820,20 @@ async function publishToTelegraph(job) {
 
   // Generate hero image (best-effort, prefer wide format)
   let heroUrl = '';
+  let heroImg = null;
   try {
     const topicForImage = (seo.title || seo.description || title || anchorText || '').slice(0, 140) || anchorText;
     const imagePrompt = `High-quality ${titleLangLabel} illustration representing: "${topicForImage}". Style: modern editorial, clean composition, no text overlay, high contrast, works well as article hero. Topic source: ${pageUrl}.` + (wish ? ` Context: ${wish}.` : '');
-    const img = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1792x1024', quality: 'hd' });
-    await sleep(1500);
-    heroUrl = await uploadImageToTelegraph(img.buffer, img.filename.replace(/\.png$/, '') + '-wide.png', img.mime);
-    logLine('Hero image uploaded', { heroUrl });
+    heroImg = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1792x1024', quality: 'hd' });
+    await sleep(1200);
+    try {
+      heroUrl = await uploadImageToTelegraph(heroImg.buffer, heroImg.filename.replace(/\.png$/, '') + '-wide.png', heroImg.mime);
+      logLine('Hero image uploaded', { heroUrl });
+    } catch (e1) {
+      logLine('Telegraph upload HTTP error (server-side)', { error: String(e1) });
+    }
   } catch (e) {
-    logLine('Hero image skipped', { error: String(e) });
+    logLine('Hero image generation skipped', { error: String(e) });
   }
 
   const cleanTitle = (title || '').replace(/["']+/g, '').trim() || 'PromoPilot Article';
@@ -777,6 +867,17 @@ async function publishToTelegraph(job) {
     logLine('Navigating to Telegraph');
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
+    // If server upload failed but we have the image, try upload in-browser now
+    if (!heroUrl && heroImg && heroImg.buffer) {
+      try {
+        const b64 = heroImg.buffer.toString('base64');
+        heroUrl = await uploadImageToTelegraphViaBrowser(page, b64, heroImg.filename.replace(/\.png$/, '') + '-wide.png', heroImg.mime);
+        logLine('Hero image uploaded via browser', { heroUrl });
+      } catch (e2) {
+        logLine('Hero image skipped (browser upload failed)', { error: String(e2) });
+      }
+    }
+
     logLine('Filling title');
     await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 60000 });
     await page.click('h1[data-placeholder="Title"]');
@@ -793,7 +894,7 @@ async function publishToTelegraph(job) {
       ? (`<figure><img src="${escapeHtmlAttr(heroUrl)}" alt="${escapeHtmlAttr(cleanTitle)}"></figure>\n` + content)
       : content;
     await page.evaluate((articleHtml) => {
-      const root = document.querySelector('p[data-placeholder="Your story..."]');
+      const root = document.querySelector('.tl_article .tl_article_content .ql-editor') || document.querySelector('div.ql-editor') || document.querySelector('p[data-placeholder="Your story..."]').parentElement;
       if (!root) throw new Error('Telegraph editor not ready');
       root.innerHTML = articleHtml;
     }, finalHtml);
