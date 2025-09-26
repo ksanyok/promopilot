@@ -374,97 +374,41 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .table-links thead th { white-space: nowrap; }
 /* Prefer URL wider, anchor medium, fixed actions */
 .table-links th:nth-child(5),
-.table-links td:nth-child(5) { width: 240px; }
+.table-links td:nth-child(5) { width: 64px; } /* wish icon only */
 .table-links th:nth-child(2),
-.table-links td:nth-child(2) { min-width: 340px; }
+.table-links td:nth-child(2) { min-width: 260px; }
 .table-links th:nth-child(3),
-.table-links td:nth-child(3) { min-width: 200px; }
+.table-links td:nth-child(3) { min-width: 160px; }
 
-/* Truncation for long values */
-.table-links .url-cell a,
-.table-links .url-cell input,
-.table-links .anchor-cell .view-anchor,
-.table-links .anchor-cell .edit-anchor { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* compact spacing for tables */
-.table-sm tbody td, .table-sm thead th { padding-top: .6rem; padding-bottom: .6rem; }
-
-/* sticky inline action bar (optional) */
-.sticky-actions { position: sticky; top: calc(var(--navbar-h) + 8px); z-index: 3; }
-
-/* two-column form layout on wider screens */
-.form-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
-@media (min-width: 992px) { .form-grid { grid-template-columns: 1.2fr .8fr; } }
-
-/* Wider two-column ratio on large screens */
-@media (min-width: 1200px) { .form-grid { grid-template-columns: 2fr 1fr; } }
-
-/* subtle helper text */
-.help { color: var(--muted); font-size: .9rem; }
-
-/* === Link table layout fixes === */
-.table-links { table-layout: auto; }
-.table-links th:nth-child(1),
-.table-links td:nth-child(1) { width: 44px; }
-.table-links th:nth-child(4),
-.table-links td:nth-child(4) { width: 140px; }
-.table-links th:nth-child(5),
-.table-links td:nth-child(5) { width: 220px; }
-
-/* Prevent overflow and keep rows neat */
-.table-links .url-cell a,
-.table-links .url-cell input,
-.table-links .anchor-cell .view-anchor,
-.table-links .anchor-cell .edit-anchor {
-  display: block;
-  max-width: 100%;
+/* Truncate long anchor and url path with ellipsis; show full in tooltip */
+.table-links .text-truncate-anchor,
+.table-links .text-truncate-path {
+  display: inline-block;
+  max-width: clamp(200px, 40vw, 560px);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.table-links .host-muted {
+  display: inline-block;
+  max-width: clamp(160px, 28vw, 420px);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* On very small screens, allow full width inside stacked layout */
+@media (max-width: 640px) {
+  .table-links .text-truncate-anchor,
+  .table-links .text-truncate-path,
+  .table-links .host-muted { max-width: 100%; }
 }
 
-/* Ensure header controls wrap nicely and don't overlap */
-.section-header { flex-wrap: wrap; }
-.section-header .toolbar { flex-wrap: wrap; gap: 8px; }
+/* URL cell layout tweaks */
+.table-links .url-cell { line-height: 1.25; }
+.table-links .url-cell .view-url.text-truncate-path { color: var(--primary); text-decoration: none; }
 
-/* Slightly reduce padding for compact view */
-.table-links.table-sm thead th,
-.table-links.table-sm tbody td { padding-top: .55rem; padding-bottom: .55rem; }
-
-/* On very narrow screens, allow action column to wrap */
-@media (max-width: 576px) {
-  .table-links th:nth-child(5),
-  .table-links td:nth-child(5) { width: 180px; }
-  .main-content { padding: 14px; }
-}
-
-/* =================== Tables: readability improvements =================== */
-.table {
-  background: var(--surface);
-  border-color: var(--border);
-  --bs-table-color: var(--text);
-  --bs-table-bg: transparent;
-  --bs-table-striped-bg: rgba(255,255,255,.04);
-  --bs-table-hover-bg: rgba(255,255,255,.06);
-  --bs-table-border-color: var(--border);
-}
-.table thead th {
-  background: var(--surface-2);
-  color: color-mix(in srgb, var(--text) 86%, transparent);
-  border-bottom: 1px solid var(--border);
-  font-weight: 700;
-  letter-spacing: .01em;
-}
-.table th, .table td {
-  padding: 10px 12px;
-  vertical-align: middle;
-  line-height: 1.35;
-  font-size: .95rem;
-}
-.table-sm th, .table-sm td { padding: 8px 10px; }
-.table-striped tbody tr:nth-of-type(odd) { background-color: rgba(255,255,255,.03); }
-
-/* Long URLs and anchors should wrap nicely for readability */
+/* Truncation for long values */
 .table-links .url-cell a,
 .table-links .url-cell,
 .table-links .anchor-cell {
@@ -836,3 +780,37 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   .btn-publish:hover .rocket { transform: none; }
   .btn-publish .rocket::after { display: none; }
 }
+
+/* Truncation helpers for links table */
+.text-truncate-anchor,
+.table-links .url-cell .view-url {
+  display: inline-block;
+  max-width: clamp(160px, 32vw, 520px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+/* Host line under link (domain) */
+.table-links .url-cell .small.text-muted {
+  display: block;
+  max-width: clamp(160px, 30vw, 460px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 992px) {
+  .text-truncate-anchor,
+  .table-links .url-cell .view-url { max-width: clamp(120px, 45vw, 420px); }
+  .table-links .url-cell .small.text-muted { max-width: clamp(120px, 42vw, 380px); }
+}
+@media (max-width: 576px) {
+  .text-truncate-anchor,
+  .table-links .url-cell .view-url { max-width: clamp(100px, 58vw, 340px); }
+  .table-links .url-cell .small.text-muted { max-width: clamp(100px, 56vw, 320px); }
+}
+
+/* Icon button sizing adjustments inside table actions */
+.table-links td.text-end .icon-btn { margin-left: .25rem; }
+.table-links td.text-end .icon-btn:first-child { margin-left: 0; }

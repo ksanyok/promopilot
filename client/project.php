@@ -460,12 +460,12 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                     <tr data-index="<?php echo (int)$index; ?>" data-post-url="<?php echo htmlspecialchars($postUrl); ?>" data-network="<?php echo htmlspecialchars($networkSlug); ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
-                                            <div class="small text-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
-                                            <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
+                                            <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
+                                            <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url text-truncate-path" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
                                             <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$index; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
-                                            <span class="view-anchor"><?php echo htmlspecialchars($anchor); ?></span>
+                                            <span class="view-anchor text-truncate-anchor" title="<?php echo htmlspecialchars($anchor); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($anchor); ?></span>
                                             <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$index; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="language-cell" data-label="<?php echo __('Язык'); ?>">
@@ -477,9 +477,10 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             </select>
                                         </td>
                                         <td class="wish-cell" data-label="<?php echo __('Пожелание'); ?>">
-                                            <?php $wishPreview = mb_substr($item['wish'] ?? '',0,40); ?>
-                                            <div class="view-wish small text-truncate" style="max-width:180px;" title="<?php echo htmlspecialchars($item['wish'] ?? ''); ?>"><?php echo htmlspecialchars($wishPreview); ?><?php echo (isset($item['wish']) && mb_strlen($item['wish'])>40)?'…':''; ?></div>
-                                            <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$index; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($item['wish'] ?? ''); ?></textarea>
+                                            <?php $fullWish = (string)($item['wish'] ?? ''); ?>
+                                            <button type="button" class="icon-btn action-show-wish" data-wish="<?php echo htmlspecialchars($fullWish); ?>" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                                            <div class="view-wish d-none"><?php echo htmlspecialchars($fullWish); ?></div>
+                                            <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$index; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($fullWish); ?></textarea>
                                         </td>
                                         <td data-label="<?php echo __('Статус'); ?>" class="status-cell">
                                             <?php if ($status === 'published'): ?>
@@ -558,6 +559,25 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
   </div>
 </div>
 
+<!-- Wish Modal (показ полного текста пожелания) -->
+<div class="modal fade modal-fixed-center" id="wishModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-journal-text me-2"></i><?php echo __('Пожелание'); ?></h5>
+        <button type="button" class="btn btn-outline-secondary btn-sm me-2" id="wishCopyBtn"><i class="bi bi-clipboard"></i></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="wishContent" class="small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // Initialize Bootstrap tooltips
 (function(){
@@ -573,6 +593,9 @@ document.addEventListener('DOMContentLoaded', function() {
     if (projectInfoModalEl && projectInfoModalEl.parentElement !== document.body) { document.body.appendChild(projectInfoModalEl); }
     const analyzeModalEl = document.getElementById('analyzeModal');
     if (analyzeModalEl && analyzeModalEl.parentElement !== document.body) { document.body.appendChild(analyzeModalEl); }
+    // Ensure wish modal is attached to body
+    const wishModalEl = document.getElementById('wishModal');
+    if (wishModalEl && wishModalEl.parentElement !== document.body) { document.body.appendChild(wishModalEl); }
 
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
@@ -652,156 +675,180 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Fix pairing: use explicit index for url+anchor, but теперь сохраняем сразу через AJAX
-    addLinkBtn.addEventListener('click', async function() {
-        const url = newLinkInput.value.trim();
-        const anchor = newAnchorInput.value.trim();
-        const lang = (newLangSelect ? newLangSelect.value.trim() : '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
-        const wish = newWish.value.trim();
-        if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
-        // Domain restriction (client-side)
-        try {
-            const u = new URL(url);
-            const host = (u.hostname || '').toLowerCase().replace(/^www\./,'');
-            if (CURRENT_PROJECT_HOST && host !== CURRENT_PROJECT_HOST) {
-                alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + CURRENT_PROJECT_HOST);
-                return;
+    // Update helper: reflect edited values into the row UI
+    function updateRowView(tr, url, anchor, lang, wish) {
+        const urlCell = tr.querySelector('.url-cell');
+        const anchorCell = tr.querySelector('.anchor-cell');
+        const langCell = tr.querySelector('.language-cell');
+        const wishCell = tr.querySelector('.wish-cell');
+        // URL
+        if (urlCell) {
+            const a = urlCell.querySelector('.view-url');
+            const hostMuted = urlCell.querySelector('.host-muted');
+            const editUrl = urlCell.querySelector('.edit-url');
+            if (a) {
+                a.setAttribute('href', url);
+                a.setAttribute('title', url);
+                a.textContent = pathFromUrl(url);
             }
-        } catch (e) {}
+            if (hostMuted) hostMuted.innerHTML = '<i class="bi bi-globe2 me-1"></i>' + escapeHtml(hostFromUrl(url));
+            if (editUrl) editUrl.value = url;
+            const pubBtn = tr.querySelector('.action-publish');
+            if (pubBtn) { pubBtn.setAttribute('data-url', url); }
+        }
+        // Anchor
+        if (anchorCell) {
+            const viewAnchor = anchorCell.querySelector('.view-anchor');
+            const editAnchor = anchorCell.querySelector('.edit-anchor');
+            if (viewAnchor) { viewAnchor.textContent = anchor; viewAnchor.setAttribute('title', anchor); }
+            if (editAnchor) editAnchor.value = anchor;
+        }
+        // Language
+        if (langCell) {
+            const viewLang = langCell.querySelector('.view-language');
+            const editLang = langCell.querySelector('.edit-language');
+            if (viewLang) viewLang.textContent = (lang || '').toUpperCase();
+            if (editLang) editLang.value = lang || '';
+        }
+        // Wish
+        if (wishCell) {
+            const viewWish = wishCell.querySelector('.view-wish');
+            const editWish = wishCell.querySelector('.edit-wish');
+            const showBtn = wishCell.querySelector('.action-show-wish');
+            if (viewWish) viewWish.textContent = wish || '';
+            if (editWish) editWish.value = wish || '';
+            if (showBtn) showBtn.setAttribute('data-wish', wish || '');
+        }
+        initTooltips(tr);
+    }
 
-        setButtonLoading(addLinkBtn, true);
+    async function saveRowEdit(tr, btn) {
+        const idx = parseInt(tr.getAttribute('data-index'), 10);
+        if (Number.isNaN(idx)) { alert('<?php echo __('Невозможно сохранить: индекс строки не определен. Обновите страницу.'); ?>'); return false; }
+        const url = tr.querySelector('.url-cell .edit-url')?.value?.trim() || '';
+        const anchor = tr.querySelector('.anchor-cell .edit-anchor')?.value?.trim() || '';
+        const lang = tr.querySelector('.language-cell .edit-language')?.value?.trim() || '';
+        const wish = tr.querySelector('.wish-cell .edit-wish')?.value?.trim() || '';
+        if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return false; }
+        // Enforce domain on client
+        try { const h = new URL(url).hostname.toLowerCase().replace(/^www\./,''); if (CURRENT_PROJECT_HOST && h !== CURRENT_PROJECT_HOST) { alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + CURRENT_PROJECT_HOST); return false; } } catch(e){}
+        setButtonLoading(btn, true);
         try {
             const fd = new FormData();
             fd.append('csrf_token', getCsrfToken());
             fd.append('update_project', '1');
             fd.append('ajax', '1');
             fd.append('wishes', globalWish.value || '');
-            fd.append('added_links[0][url]', url);
-            fd.append('added_links[0][anchor]', anchor);
-            fd.append('added_links[0][language]', lang || '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
-            fd.append('added_links[0][wish]', wish);
+            fd.append(`edited_links[${idx}][url]`, url);
+            fd.append(`edited_links[${idx}][anchor]`, anchor);
+            fd.append(`edited_links[${idx}][language]`, lang);
+            fd.append(`edited_links[${idx}][wish]`, wish);
+            const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
+            const data = await res.json();
+            if (!data || !data.ok) { alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR')); return false; }
+            updateRowView(tr, url, anchor, lang, wish);
+            return true;
+        } catch (e) {
+            alert('<?php echo __('Сетевая ошибка'); ?>');
+            return false;
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    }
 
+    function toggleRowEdit(tr, editing) {
+        const urlCell = tr.querySelector('.url-cell');
+        const anchorCell = tr.querySelector('.anchor-cell');
+        const langCell = tr.querySelector('.language-cell');
+        const wishCell = tr.querySelector('.wish-cell');
+        const viewUrl = urlCell?.querySelector('.view-url');
+        const viewAnchor = anchorCell?.querySelector('.view-anchor');
+        const editUrl = urlCell?.querySelector('.edit-url');
+        const editAnchor = anchorCell?.querySelector('.edit-anchor');
+        const viewLang = langCell?.querySelector('.view-language');
+        const editLang = langCell?.querySelector('.edit-language');
+        const viewWish = wishCell?.querySelector('.view-wish');
+        const editWish = wishCell?.querySelector('.edit-wish');
+        if (!editUrl || !editAnchor) return;
+        if (editing) {
+            editUrl.classList.remove('d-none');
+            editAnchor.classList.remove('d-none');
+            viewUrl?.classList.add('d-none');
+            viewAnchor?.classList.add('d-none');
+            if (editLang) { editLang.classList.remove('d-none'); viewLang?.classList.add('d-none'); }
+            if (editWish) { editWish.classList.remove('d-none'); viewWish?.classList.add('d-none'); }
+        } else {
+            editUrl.classList.add('d-none');
+            editAnchor.classList.add('d-none');
+            viewUrl?.classList.remove('d-none');
+            viewAnchor?.classList.remove('d-none');
+            if (editLang) { editLang.classList.add('d-none'); viewLang?.classList.remove('d-none'); }
+            if (editWish) { editWish.classList.add('d-none'); viewWish?.classList.remove('d-none'); }
+        }
+    }
+
+    async function handleEditButton(btn) {
+        const tr = btn.closest('tr');
+        if (!tr) return;
+        const isEditing = !tr.querySelector('.url-cell .edit-url')?.classList.contains('d-none');
+        if (!isEditing) {
+            toggleRowEdit(tr, true);
+            btn.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
+        } else {
+            const ok = await saveRowEdit(tr, btn);
+            if (ok) {
+                toggleRowEdit(tr, false);
+                btn.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
+            }
+        }
+    }
+
+    async function handleRemoveButton(btn) {
+        const tr = btn.closest('tr');
+        if (!tr) return;
+        const idx = parseInt(btn.getAttribute('data-index') || tr.getAttribute('data-index') || '', 10);
+        if (Number.isNaN(idx)) { alert('<?php echo __('Невозможно удалить: индекс строки не определен. Обновите страницу.'); ?>'); return; }
+        if (!confirm('<?php echo __('Удалить ссылку?'); ?>')) return;
+        setButtonLoading(btn, true);
+        try {
+            const fd = new FormData();
+            fd.append('csrf_token', getCsrfToken());
+            fd.append('update_project', '1');
+            fd.append('ajax', '1');
+            fd.append('wishes', globalWish.value || '');
+            fd.append('remove_links[]', String(idx));
             const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
             const data = await res.json();
-            if (!data || !data.ok) {
-                alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR'));
-                return;
-            }
-            // обновим хост проекта, если он установлен сервером при первой ссылке
-            if (data.domain_host) {
-                CURRENT_PROJECT_HOST = String(data.domain_host).toLowerCase().replace(/^www\./,'');
-                const hint = document.getElementById('domain-hint');
-                const hostCode = document.getElementById('domain-host-code');
-                if (hostCode) hostCode.textContent = data.domain_host;
-                if (hint) hint.style.display = '';
-                if (newLinkInput && CURRENT_PROJECT_HOST) newLinkInput.setAttribute('placeholder', 'https://' + CURRENT_PROJECT_HOST + '/...');
-            }
-            // Добавляем строку в таблицу (сразу обычное состояние, т.к. уже сохранено)
-            const tbody = ensureLinksTable();
-            if (tbody) {
-                const tr = document.createElement('tr');
-                tr.setAttribute('data-index', 'new');
-                tr.dataset.postUrl = '';
-                tr.dataset.network = '';
-                const pathDisp = pathFromUrl(url);
-                const hostDisp = hostFromUrl(url);
-                tr.innerHTML = `
-                    <td></td>
-                    <td class="url-cell">
-                        <div class="small text-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
-                        <a href="${escapeHtml(url)}" target="_blank" class="view-url" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
-                        <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
-                    </td>
-                    <td class="anchor-cell">
-                        <span class="view-anchor">${escapeHtml(anchor)}</span>
-                        <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
-                    </td>
-                    <td class="language-cell">
-                        <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
-                        <select class="form-select form-select-sm d-none edit-language">
-                            ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
-                        </select>
-                    </td>
-                    <td class="wish-cell">
-                        <div class="view-wish small text-truncate" style="max-width:180px;" title="${escapeHtml(wish)}">${escapeHtml(wish.length>40?wish.slice(0,40)+'…':wish)}</div>
-                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
-                    </td>
-                    <td class="status-cell">
-                        <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
-                    </td>
-                    <td class="text-end">
-                        <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                        <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="${escapeHtml(url)}"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
-                        <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                        <button type="button" class="icon-btn action-remove" data-index="new" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                    </td>`;
-                tbody.appendChild(tr);
-                refreshRowNumbers();
-                bindDynamicPublishButtons();
-            }
-
-            // Очистим поля
-            newLinkInput.value = '';
-            newAnchorInput.value = '';
-            newWish.value = '';
-            if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
+            if (!data || !data.ok) { alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR')); return; }
+            // Remove row and renumber dataset indexes following
+            const tbody = tr.parentElement;
+            tr.remove();
+            // Decrement data-index for rows with index > removed idx
+            tbody.querySelectorAll('tr').forEach(r => {
+                const di = parseInt(r.getAttribute('data-index') || '', 10);
+                if (!Number.isNaN(di) && di > idx) {
+                    const newIdx = di - 1;
+                    r.setAttribute('data-index', String(newIdx));
+                    const delBtn = r.querySelector('.action-remove');
+                    if (delBtn) delBtn.setAttribute('data-index', String(newIdx));
+                }
+            });
+            refreshRowNumbers();
         } catch (e) {
             alert('<?php echo __('Сетевая ошибка'); ?>');
         } finally {
-            setButtonLoading(addLinkBtn, false);
+            setButtonLoading(btn, false);
         }
-    });
+    }
 
-    // Inline edit toggle (existing rows)
+    // Enhance existing bindings to use new handlers (and avoid double-binding)
     document.querySelectorAll('.action-edit').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const tr = btn.closest('tr');
-            if (!tr) return;
-            const urlCell = tr.querySelector('.url-cell');
-            const anchorCell = tr.querySelector('.anchor-cell');
-            const langCell = tr.querySelector('.language-cell');
-            const wishCell = tr.querySelector('.wish-cell');
-            const viewUrl = urlCell.querySelector('.view-url');
-            const viewAnchor = anchorCell.querySelector('.view-anchor');
-            const editUrl = urlCell.querySelector('.edit-url');
-            const editAnchor = anchorCell.querySelector('.edit-anchor'); // FIX: раньше искали в urlCell
-            const viewLang = langCell ? langCell.querySelector('.view-language') : null;
-            const editLang = langCell ? langCell.querySelector('.edit-language') : null;
-            const viewWish = wishCell ? wishCell.querySelector('.view-wish') : null;
-            const editWish = wishCell ? wishCell.querySelector('.edit-wish') : null;
-            if (editUrl && editAnchor) {
-                const editing = !editUrl.classList.contains('d-none');
-                if (editing) {
-                    editUrl.classList.add('d-none');
-                    editAnchor.classList.add('d-none');
-                    viewUrl.classList.remove('d-none');
-                    viewAnchor.classList.remove('d-none');
-                    if (editLang) { editLang.classList.add('d-none'); if (viewLang) viewLang.classList.remove('d-none'); }
-                    if (editWish) { editWish.classList.add('d-none'); if (viewWish) viewWish.classList.remove('d-none'); }
-                    btn.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
-                } else {
-                    editUrl.classList.remove('d-none');
-                    editAnchor.classList.remove('d-none');
-                    viewUrl.classList.add('d-none');
-                    viewAnchor.classList.add('d-none');
-                    if (editLang) { editLang.classList.remove('d-none'); if (viewLang) viewLang.classList.add('d-none'); }
-                    if (editWish) { editWish.classList.remove('d-none'); if (viewWish) viewWish.classList.add('d-none'); }
-                    btn.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
-                }
-            }
-        });
+        if (btn.dataset.bound === '1') return; btn.dataset.bound = '1';
+        btn.addEventListener('click', () => handleEditButton(btn));
     });
-
-    // Remove existing link by index (сохранится при следующем добавлении)
     document.querySelectorAll('.action-remove').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const idx = btn.getAttribute('data-index');
-            const hidden = makeHidden('remove_links[]', idx);
-            form.appendChild(hidden);
-            const tr = btn.closest('tr');
-            if (tr) tr.remove();
-            refreshRowNumbers();
-        });
+        if (btn.dataset.bound === '1') return; btn.dataset.bound = '1';
+        btn.addEventListener('click', () => handleRemoveButton(btn));
     });
 
     // Заглушка для кнопок публикации новых строк больше не нужна (мы сохраняем сразу)
@@ -989,10 +1036,174 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (url) openAnalyzeModal(url);
             });
         });
+        // Bind show wish buttons
+        document.querySelectorAll('.action-show-wish').forEach(btn => {
+            if (btn.dataset.bound==='1') return;
+            btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const wish = btn.getAttribute('data-wish') || btn.closest('tr')?.querySelector('.view-wish')?.textContent || '';
+                openWishModal(wish);
+            });
+        });
     }
 
     // Initial bind
     bindDynamicPublishButtons();
+
+    // Add link button handler
+    addLinkBtn.addEventListener('click', async function() {
+        const url = newLinkInput.value.trim();
+        const anchor = newAnchorInput.value.trim();
+        const lang = (newLangSelect ? newLangSelect.value.trim() : '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
+        const wish = newWish.value.trim();
+        if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
+        // Domain restriction (client-side)
+        try {
+            const u = new URL(url);
+            const host = (u.hostname || '').toLowerCase().replace(/^www\./,'');
+            if (CURRENT_PROJECT_HOST && host !== CURRENT_PROJECT_HOST) {
+                alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + CURRENT_PROJECT_HOST);
+                return;
+            }
+        } catch (e) {}
+
+        setButtonLoading(addLinkBtn, true);
+        try {
+            const fd = new FormData();
+            fd.append('csrf_token', getCsrfToken());
+            fd.append('update_project', '1');
+            fd.append('ajax', '1');
+            fd.append('wishes', globalWish.value || '');
+            fd.append('added_links[0][url]', url);
+            fd.append('added_links[0][anchor]', anchor);
+            fd.append('added_links[0][language]', lang || '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
+            fd.append('added_links[0][wish]', wish);
+
+            const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
+            const data = await res.json();
+            if (!data || !data.ok) {
+                alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR'));
+                return;
+            }
+            // обновим хост проекта, если он установлен сервером при первой ссылке
+            if (data.domain_host) {
+                CURRENT_PROJECT_HOST = String(data.domain_host).toLowerCase().replace(/^www\./,'');
+                const hint = document.getElementById('domain-hint');
+                const hostCode = document.getElementById('domain-host-code');
+                if (hostCode) hostCode.textContent = data.domain_host;
+                if (hint) hint.style.display = '';
+                if (newLinkInput && CURRENT_PROJECT_HOST) newLinkInput.setAttribute('placeholder', 'https://' + CURRENT_PROJECT_HOST + '/...');
+            }
+            // Добавляем строку в таблицу (сразу обычное состояние, т.к. уже сохранено)
+            const tbody = ensureLinksTable();
+            if (tbody) {
+                const tr = document.createElement('tr');
+                const newIndex = (data.links_count && data.links_count > 0) ? (data.links_count - 1) : 0;
+                tr.setAttribute('data-index', String(newIndex));
+                tr.dataset.postUrl = '';
+                tr.dataset.network = '';
+                const pathDisp = pathFromUrl(url);
+                const hostDisp = hostFromUrl(url);
+                tr.innerHTML = `
+                    <td></td>
+                    <td class="url-cell">
+                        <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
+                        <a href="${escapeHtml(url)}" target="_blank" class="view-url text-truncate-path" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
+                        <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
+                    </td>
+                    <td class="anchor-cell">
+                        <span class="view-anchor text-truncate-anchor" title="${escapeHtml(anchor)}" data-bs-toggle="tooltip">${escapeHtml(anchor)}</span>
+                        <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
+                    </td>
+                    <td class="language-cell">
+                        <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
+                        <select class="form-select form-select-sm d-none edit-language">
+                            ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
+                        </select>
+                    </td>
+                    <td class="wish-cell">
+                        <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                        <div class="view-wish d-none">${escapeHtml(wish)}</div>
+                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
+                    </td>
+                    <td class="status-cell">
+                        <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
+                    </td>
+                    <td class="text-end">
+                        <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
+                        <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="${escapeHtml(url)}"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
+                        <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                        <button type="button" class="icon-btn action-remove" data-index="${String(newIndex)}" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                    </td>`;
+                tbody.appendChild(tr);
+                refreshRowNumbers();
+                bindDynamicRowActions();
+                initTooltips(tr);
+            }
+
+            // Очистим поля
+            newLinkInput.value = '';
+            newAnchorInput.value = '';
+            newWish.value = '';
+            if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
+        } catch (e) {
+            alert('<?php echo __('Сетевая ошибка'); ?>');
+        } finally {
+            setButtonLoading(addLinkBtn, false);
+        }
+    });
+
+    // Extend binder to include edit/remove in addition to publish/cancel/analyze/wish
+    function bindDynamicRowActions() {
+        // publish
+        document.querySelectorAll('.action-publish').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
+                sendPublishAction(btn, url, 'publish');
+            });
+        });
+        // cancel
+        document.querySelectorAll('.action-cancel').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
+                if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
+                sendPublishAction(btn, url, 'cancel');
+            });
+        });
+        // analyze
+        document.querySelectorAll('.action-analyze').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const tr = btn.closest('tr');
+                const linkEl = tr?.querySelector('.url-cell .view-url');
+                const url = linkEl ? linkEl.getAttribute('href') : '';
+                if (url) openAnalyzeModal(url);
+            });
+        });
+        // show wish
+        document.querySelectorAll('.action-show-wish').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                const wish = btn.getAttribute('data-wish') || btn.closest('tr')?.querySelector('.view-wish')?.textContent || '';
+                openWishModal(wish);
+            });
+        });
+        // edit
+        document.querySelectorAll('.action-edit').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => handleEditButton(btn));
+        });
+        // remove
+        document.querySelectorAll('.action-remove').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => handleRemoveButton(btn));
+        });
+    }
+
+    // Initial bind
+    bindDynamicRowActions();
 
     function openAnalyzeModal(url){
         const modalEl = document.getElementById('analyzeModal');
@@ -1047,6 +1258,35 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         })();
     }
+
+    function openWishModal(text){
+        const el = document.getElementById('wishModal');
+        const body = document.getElementById('wishContent');
+        const copyBtn = document.getElementById('wishCopyBtn');
+        if (!el || !body) return;
+        body.textContent = text || '<?php echo __('Пусто'); ?>';
+        const modal = new bootstrap.Modal(el);
+        modal.show();
+        if (copyBtn) {
+            copyBtn.onclick = async () => {
+                try { await navigator.clipboard.writeText(text || ''); copyBtn.classList.add('btn-success'); setTimeout(()=>copyBtn.classList.remove('btn-success'), 1000); } catch(e) {}
+            };
+        }
+    }
+
+    // Helper: (re)initialize Bootstrap tooltips in a given container (or document)
+    function initTooltips(root) {
+        try {
+            if (!window.bootstrap || !bootstrap.Tooltip) return;
+            const scope = root || document;
+            scope.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+                try { bootstrap.Tooltip.getOrCreateInstance(el); } catch (e) {}
+            });
+        } catch (e) {}
+    }
+
+    // After initial DOM is ready, ensure tooltips are active
+    initTooltips(document);
 });
 </script>
 
