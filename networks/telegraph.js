@@ -6,9 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const fsp = fs.promises;
-// New: multipart helper for telegra.ph upload
-let FormData;
-try { FormData = require('form-data'); } catch (_) { FormData = null; }
 
 function ensureDirSync(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
@@ -151,7 +148,7 @@ async function loadPuppeteerOrExit() {
             const mod = await import(attempt.name);
             puppeteer = mod.default || mod;
           } else if (attempt.type === 'require') {
-            let mod = require(attempt.name);
+            const mod = require(attempt.name);
             puppeteer = mod && mod.default ? mod.default : mod;
           }
           // Basic sanity check: launch function exists
@@ -194,18 +191,12 @@ async function loadPuppeteerOrExit() {
   }
 }
 
-let fetch;
-try {
-  // node-fetch v2 (CommonJS)
-  fetch = require('node-fetch');
-} catch (error) {
-  if (typeof global.fetch === 'function') {
-    fetch = global.fetch;
-  } else {
-    logLine('node-fetch load failed', { error: String(error) });
-    console.log(JSON.stringify({ ok: false, error: 'FETCH_LOAD_FAILED', details: String(error) }));
-    process.exit(1);
-  }
+// Prefer built-in fetch (Node.js 18+). No external node-fetch.
+const fetch = typeof global.fetch === 'function' ? global.fetch : null;
+if (!fetch) {
+  logLine('fetch missing', { hint: 'Run on Node.js 18+ where fetch/FormData/Blob are built-in' });
+  console.log(JSON.stringify({ ok: false, error: 'FETCH_UNAVAILABLE', details: 'Global fetch not available. Use Node 18+.' }));
+  process.exit(1);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -475,12 +466,15 @@ async function generateImageWithDalle(prompt, openaiApiKey, opts = {}) {
   return { buffer: buf, mime: 'image/png', filename: `cover-${Date.now()}.png` };
 }
 
-async function uploadImageToTelegraph(file, filename = 'image.png', mime = 'image/png') {
-  if (!FormData) throw new Error('FormData not available');
+async function uploadImageToTelegraph(fileBuffer, filename = 'image.png', mime = 'image/png') {
+  if (typeof FormData === 'undefined' || typeof Blob === 'undefined') {
+    throw new Error('FormData/Blob not available (require Node.js 18+)');
+  }
   const form = new FormData();
-  form.append('file', file, { filename, contentType: mime });
+  const blob = new Blob([fileBuffer], { type: mime });
+  form.append('file', blob, filename);
   const started = Date.now();
-  const resp = await fetch('https://telegra.ph/upload', { method: 'POST', body: form, headers: form.getHeaders ? form.getHeaders() : undefined });
+  const resp = await fetch('https://telegra.ph/upload', { method: 'POST', body: form });
   const ms = Date.now() - started;
   if (!resp.ok) {
     const txt = await resp.text().catch(()=> '');
@@ -514,6 +508,88 @@ function headingLabelForLang(lang) {
   return 'Key Points';
 }
 
+// New: basic HTML helpers for SEO parsing
+function extractAttr(tagHtml, attr) {
+  const m = String(tagHtml || '').match(new RegExp(attr + '\\s*=\\s*([\"\'])(.*?)\\1', 'i'));
+  return m ? m[2] : '';
+}
+function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
+
+// New: fetch page and extract SEO title/description from meta/OG/JSON-LD/H1
+async function fetchSeoData(targetUrl) {
+  try {
+    const resp = await fetch(targetUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; PromoPilotBot/1.0; +https://example.com/bot) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8'
+      },
+      redirect: 'follow',
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const html = await resp.text();
+
+    const out = { title: '', description: '' };
+
+    // <title>
+    const tMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const htmlTitle = tMatch ? stripTags(tMatch[1]) : '';
+
+    // <meta name="description" content="...">
+    const metaDescMatch = html.match(/<meta[^>]+name=[\"\']description[\"\'][^>]*>/i);
+    const metaDesc = metaDescMatch ? extractAttr(metaDescMatch[0], 'content') : '';
+
+    // OpenGraph
+    const ogTitleMatch = html.match(/<meta[^>]+property=[\"\']og:title[\"\'][^>]*>/i);
+    const ogTitle = ogTitleMatch ? extractAttr(ogTitleMatch[0], 'content') : '';
+    const ogDescMatch = html.match(/<meta[^>]+property=[\"\']og:description[\"\'][^>]*>/i);
+    const ogDesc = ogDescMatch ? extractAttr(ogDescMatch[0], 'content') : '';
+
+    // Twitter
+    const twTitleMatch = html.match(/<meta[^>]+name=[\"\']twitter:title[\"\'][^>]*>/i);
+    const twTitle = twTitleMatch ? extractAttr(twTitleMatch[0], 'content') : '';
+    const twDescMatch = html.match(/<meta[^>]+name=[\"\']twitter:description[\"\'][^>]*>/i);
+    const twDesc = twDescMatch ? extractAttr(twDescMatch[0], 'content') : '';
+
+    // H1
+    const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+    const h1 = h1Match ? stripTags(h1Match[1]) : '';
+
+    // JSON-LD
+    let ldTitle = '', ldDesc = '';
+    const ldBlocks = html.match(/<script[^>]+type=[\"\']application\/ld\+json[\"\'][^>]*>[\s\S]*?<\/script>/gi) || [];
+    for (const block of ldBlocks) {
+      const jsonText = (block.match(/>([\s\S]*?)<\/script>/i) || [,''])[1];
+      try {
+        const data = JSON.parse(jsonText);
+        const arr = Array.isArray(data) ? data : [data];
+        for (const item of arr) {
+          const candTitle = item.headline || item.name || (item.article && item.article.headline) || '';
+          const candDesc = item.description || (item.article && item.article.description) || '';
+          if (candTitle && !ldTitle) ldTitle = String(candTitle);
+          if (candDesc && !ldDesc) ldDesc = String(candDesc);
+        }
+      } catch (_) { /* ignore bad JSON */ }
+      if (ldTitle && ldDesc) break;
+    }
+
+    // Priority selection
+    out.title = (ldTitle || ogTitle || twTitle || h1 || htmlTitle || '').trim();
+    out.description = (ldDesc || ogDesc || twDesc || metaDesc || '').trim();
+
+    // Sanitize
+    out.title = out.title.replace(/[\n\r\t]+/g, ' ').trim();
+    out.description = out.description.replace(/[\n\r\t]+/g, ' ').trim();
+
+    logLine('SEO extracted', { title: out.title.slice(0, 160), description: out.description.slice(0, 200) });
+    return out;
+  } catch (e) {
+    logLine('SEO extract failed', { error: String(e) });
+    return { title: '', description: '' };
+  }
+}
+
 // Convert simple Markdown-ish content to clean HTML and enforce structure
 function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
   let s = String(inputHtmlOrMd || '').trim();
@@ -522,6 +598,8 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
   s = s.replace(/^[\t ]*#{1,3}[\t ]+(.+)$/gmi, '<h2>$1</h2>');
   // Lines that are bold-only -> treat as subheadings
   s = s.replace(/^\s*\*\*(.+?)\*\*\s*$/gmi, '<h2>$1</h2>');
+  // Also convert lines ending with colon to <h2>
+  s = s.replace(/^\s*([^\n<]{3,80}):\s*$/gmi, '<h2>$1</h2>');
 
   // Convert simple markdown lists to <ul><li>
   const lines = s.split(/\r?\n/);
@@ -552,27 +630,48 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
     s = s.replace(/<p>\s*<(h2|ul|ol|blockquote|figure|img)\b/gi, '<$1');
   }
 
+  // Convert short, title-like paragraphs to <h2>
+  s = s.replace(/<p>\s*([А-ЯЁA-Z][^<.!?]{3,80})\s*<\/p>/g, '<h2>$1</h2>');
+
   // Ensure at least one subheading exists
   if (!/<h2[\s>]/i.test(s)) {
     const label = headingLabelForLang(lang);
-    // Insert after first paragraph if exists
     const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
     if (firstP) s = s.replace(firstP[0], firstP[0] + '\n<h2>' + label + '</h2>');
     else s = '<h2>' + label + '</h2>\n' + s;
   }
 
-  // Ensure the target link is present once
-  const hrefRe = new RegExp('<a\\s+[^>]*href=["\']' + escapeRegExp(pageUrl) + '["\']', 'i');
-  if (!hrefRe.test(s)) {
+  // Allow only a safe subset of tags (first pass)
+  s = s.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote|figure|img)\b)[^>]*>/gi, '');
+
+  // Enforce a single allowed link to the target URL: strip other anchors
+  s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
+    const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
+    const href = m && m[1] ? m[1] : '';
+    if (!href) return text;
+    if (href.replace(/\/$/, '') === String(pageUrl).replace(/\/$/, '')) return full; // keep target link
+    return text; // drop other links
+  });
+
+  // Ensure exactly one target link exists (insert if missing)
+  const hrefRe = new RegExp('<a\\s+[^>]*href=[\"\']' + escapeRegExp(pageUrl.replace(/\/$/, '')) + '[\"\']', 'ig');
+  const matches = s.match(hrefRe) || [];
+  if (matches.length === 0) {
     const linkHtml = '<p><a href="' + escapeHtmlAttr(pageUrl) + '">' + escapeHtmlAttr(anchorText || pageUrl) + '</a></p>';
-    // Insert link after the first heading if present, else prepend
     const h2 = s.match(/<h2[\s\S]*?<\/h2>/i);
     if (h2) s = s.replace(h2[0], h2[0] + '\n' + linkHtml);
     else s = linkHtml + '\n' + s;
+  } else if (matches.length > 1) {
+    // Remove subsequent duplicates
+    let seen = false;
+    s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/ig, (full, attrs, text) => {
+      const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
+      const href = m && m[1] ? m[1] : '';
+      if (href.replace(/\/$/, '') !== String(pageUrl).replace(/\/$/, '')) return text;
+      if (!seen) { seen = true; return full; }
+      return text;
+    });
   }
-
-  // Allow only a safe subset of tags
-  s = s.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote|figure|img)\b)[^>]*>/gi, '');
 
   return s;
 }
@@ -607,10 +706,13 @@ async function publishToTelegraph(job) {
   const authorLangLabel = langLabel;
   const contentLangLabel = langLabel;
 
+  // New: fetch SEO data from the target URL to anchor prompts to the correct topic
+  const seo = await fetchSeoData(pageUrl);
+
   const prompts = {
-    title: `Write a concise, catchy ${titleLangLabel} title for an article about this link. No quotes, no trailing dots. URL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
+    title: `Using the page SEO data below, write a concise, catchy ${titleLangLabel} title that reflects the same topic. No quotes, no trailing dots.\nSEO title: "${seo.title || ''}"\nSEO description: "${seo.description || ''}"\nURL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
     author: `Propose a neutral author's name appropriate for an article in ${authorLangLabel}. Avoid region-specific or celebrity names. One or two words only.`,
-    content: `Write an article in ${contentLangLabel} of at least 3000 characters based on: ${pageUrl}. Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> included naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h2> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Stay informative, helpful, and on-topic.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
+    content: `Write an article in ${contentLangLabel} of at least 3000 characters based on the page: ${pageUrl}. Use the following page SEO data and stay strictly on-topic: title: "${seo.title || ''}", description: "${seo.description || ''}". Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h2> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Do not include off-topic content.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
   };
   logLine('Prompts prepared', { titlePromptPreview: prompts.title, authorPromptPreview: prompts.author, contentPromptPreview: prompts.content.slice(0, 160) + '...' });
 
@@ -631,13 +733,14 @@ async function publishToTelegraph(job) {
   // Normalize/structure content, add headings and ensure link
   content = normalizeContent(content, language, pageUrl, anchorText);
 
-  // Generate hero image (best-effort)
+  // Generate hero image (best-effort, prefer wide format)
   let heroUrl = '';
   try {
-    const imagePrompt = `High-quality ${titleLangLabel} illustration representing: "${anchorText}". Style: modern editorial, clean composition, no text overlay, high contrast, works well as article hero. Topic source: ${pageUrl}.` + (wish ? ` Context: ${wish}.` : '');
-    const img = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1024x1024', quality: 'hd' });
+    const topicForImage = (seo.title || seo.description || title || anchorText || '').slice(0, 140) || anchorText;
+    const imagePrompt = `High-quality ${titleLangLabel} illustration representing: "${topicForImage}". Style: modern editorial, clean composition, no text overlay, high contrast, works well as article hero. Topic source: ${pageUrl}.` + (wish ? ` Context: ${wish}.` : '');
+    const img = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1792x1024', quality: 'hd' });
     await sleep(1500);
-    heroUrl = await uploadImageToTelegraph(img.buffer, img.filename, img.mime);
+    heroUrl = await uploadImageToTelegraph(img.buffer, img.filename.replace(/\.png$/, '') + '-wide.png', img.mime);
     logLine('Hero image uploaded', { heroUrl });
   } catch (e) {
     logLine('Hero image skipped', { error: String(e) });
