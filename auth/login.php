@@ -8,12 +8,14 @@ if (is_logged_in()) {
 $message = '';
 
 // Google OAuth toggle
-$googleEnabled = get_setting('google_oauth_enabled', '0') === '1';
-$googleClientId = trim((string)get_setting('google_client_id', ''));
-$googleAvailable = $googleEnabled && $googleClientId !== '';
-$nextParam = isset($_GET['next']) ? (string)$_GET['next'] : '';
-if ($nextParam !== '' && strpos($nextParam, '://') !== false) { $nextParam = ''; }
-$googleStartUrl = pp_url('public/google_oauth_start.php' . ($nextParam !== '' ? ('?next=' . urlencode($nextParam)) : ''));
+if (!isset($googleAvailable)) {
+    $googleEnabled = get_setting('google_oauth_enabled', '0') === '1';
+    $googleClientId = trim((string)get_setting('google_client_id', ''));
+    $googleAvailable = $googleEnabled && $googleClientId !== '';
+    $nextParam = isset($_GET['next']) ? (string)$_GET['next'] : '';
+    if ($nextParam !== '' && strpos($nextParam, '://') !== false) { $nextParam = ''; }
+    $googleStartUrl = pp_url('public/google_oauth_start.php' . ($nextParam !== '' ? ('?next=' . urlencode($nextParam)) : ''));
+}
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {

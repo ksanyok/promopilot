@@ -107,22 +107,22 @@ $conn = connect_db();
 $uid = null; $role = 'client';
 
 // 1) By google_id
-$st = $conn->prepare("SELECT id, role FROM users WHERE google_id = ? LIMIT 1");
+$st = $conn->prepare("SELECT id, role, avatar FROM users WHERE google_id = ? LIMIT 1");
 if ($st) {
     $st->bind_param('s', $sub);
     $st->execute();
-    $st->bind_result($id, $r);
+    $st->bind_result($id, $r, $existingAvatar);
     if ($st->fetch()) { $uid = (int)$id; $role = (string)$r; }
     $st->close();
 }
 
 // 2) Link by email if not found
 if ($uid === null && $email !== '') {
-    $st = $conn->prepare("SELECT id, role FROM users WHERE email = ? LIMIT 1");
+    $st = $conn->prepare("SELECT id, role, avatar FROM users WHERE email = ? LIMIT 1");
     if ($st) {
         $st->bind_param('s', $email);
         $st->execute();
-        $st->bind_result($id, $r);
+        $st->bind_result($id, $r, $existingAvatar);
         if ($st->fetch()) { $uid = (int)$id; $role = (string)$r; }
         $st->close();
         if ($uid !== null) {
@@ -169,6 +169,35 @@ if ($uid === null) {
     if ($uid === null) {
         $conn->close();
         pp_safe_error('Failed to create user.');
+    }
+}
+
+// Save avatar locally if missing and Google picture available
+if ($picture !== '' && $uid !== null) {
+    // Check if avatar already set
+    $hasAvatar = false;
+    $st = $conn->prepare("SELECT avatar FROM users WHERE id = ? LIMIT 1");
+    if ($st) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        $st->bind_result($av);
+        if ($st->fetch()) { $hasAvatar = trim((string)$av) !== ''; }
+        $st->close();
+    }
+    if (!$hasAvatar) {
+        $saved = pp_save_remote_avatar($picture, (int)$uid);
+        if ($saved) {
+            $st = $conn->prepare("UPDATE users SET avatar = ?, google_picture = ? WHERE id = ?");
+            if ($st) { $st->bind_param('ssi', $saved, $picture, $uid); $st->execute(); $st->close(); }
+        } else {
+            // Still update google_picture even if local save failed
+            $st = $conn->prepare("UPDATE users SET google_picture = ? WHERE id = ?");
+            if ($st) { $st->bind_param('si', $picture, $uid); $st->execute(); $st->close(); }
+        }
+    } else {
+        // Ensure google_picture stored
+        $st = $conn->prepare("UPDATE users SET google_picture = ? WHERE id = ?");
+        if ($st) { $st->bind_param('si', $picture, $uid); $st->execute(); $st->close(); }
     }
 }
 

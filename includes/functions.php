@@ -473,6 +473,73 @@ function format_currency($amount): string {
     */
 }
 
+// Save a remote avatar image locally and return relative path (uploads/avatars/u{ID}.ext)
+// Returns null on failure
+function pp_save_remote_avatar(string $url, int $userId): ?string {
+    $url = trim($url);
+    if ($url === '') return null;
+    $pu = @parse_url($url);
+    if (!$pu || !in_array(strtolower($pu['scheme'] ?? ''), ['http','https'], true)) return null;
+
+    $dir = PP_ROOT_PATH . '/uploads/avatars';
+    if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
+    if (!is_dir($dir) || !is_writable($dir)) return null;
+
+    $data = null; $ctype = '';
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_USERAGENT => 'PromoPilot/1.0',
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_HEADER => true,
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp !== false) {
+            $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+            $headers = substr($resp, 0, $headerSize);
+            $data = substr($resp, $headerSize);
+            if (preg_match('~^Content-Type:\s*([^\r\n]+)~im', (string)$headers, $m)) {
+                $ctype = trim($m[1]);
+            }
+        }
+        curl_close($ch);
+    }
+    if ($data === null) {
+        $ctx = stream_context_create([
+            'http' => ['timeout' => 10, 'ignore_errors' => true, 'header' => "User-Agent: PromoPilot/1.0\r\n"],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+        ]);
+        $data = @file_get_contents($url, false, $ctx);
+        // Cannot easily get content-type with stream wrapper; leave empty
+    }
+
+    if (!$data || strlen($data) < 128) return null; // too small to be real avatar
+    if (strlen($data) > 5 * 1024 * 1024) return null; // limit 5MB
+
+    // Detect mime
+    if (function_exists('finfo_buffer')) {
+        $f = new finfo(FILEINFO_MIME_TYPE);
+        $det = $f->buffer($data) ?: '';
+        if ($det) { $ctype = $det; }
+    }
+    $ext = 'jpg';
+    if (stripos($ctype, 'png') !== false) $ext = 'png';
+    elseif (stripos($ctype, 'webp') !== false) $ext = 'webp';
+    elseif (stripos($ctype, 'jpeg') !== false) $ext = 'jpg';
+
+    $file = $dir . '/u' . $userId . '.' . $ext;
+    $ok = @file_put_contents($file, $data) !== false;
+    if (!$ok) return null;
+    @chmod($file, 0664);
+    $rel = 'uploads/avatars/' . basename($file);
+    return $rel;
+}
+
 function rmdir_recursive($dir) {
     if (!is_dir($dir)) return;
     $files = array_diff(scandir($dir), ['.', '..']);

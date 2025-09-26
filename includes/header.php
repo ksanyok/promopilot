@@ -7,7 +7,7 @@ if (is_logged_in()) {
         $conn = connect_db();
         $uid = (int)($_SESSION['user_id'] ?? 0);
         if ($uid > 0) {
-            $st = $conn->prepare("SELECT username, full_name, avatar FROM users WHERE id = ? LIMIT 1");
+            $st = $conn->prepare("SELECT username, full_name, avatar, google_picture FROM users WHERE id = ? LIMIT 1");
             if ($st) {
                 $st->bind_param('i', $uid);
                 $st->execute();
@@ -60,7 +60,15 @@ if (is_logged_in()) {
                             $avatarUrl = asset_url('img/logo.png');
                             if ($pp_nav_user) {
                                 $dispName = trim((string)($pp_nav_user['full_name'] ?: $pp_nav_user['username']));
-                                if (!empty($pp_nav_user['avatar'])) { $avatarUrl = pp_url($pp_nav_user['avatar']); }
+                                $rawAvatar = trim((string)($pp_nav_user['avatar'] ?? ''));
+                                $googlePic = trim((string)($pp_nav_user['google_picture'] ?? ''));
+                                if ($rawAvatar !== '') {
+                                    // Assume local path
+                                    $avatarUrl = pp_url($rawAvatar);
+                                } elseif ($googlePic !== '') {
+                                    // Use Google photo URL directly
+                                    $avatarUrl = $googlePic;
+                                }
                             }
                             if ($dispName === '') {
                                 $dispName = is_admin() ? __('Администратор') : __('Профиль');
