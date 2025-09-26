@@ -617,6 +617,17 @@ document.addEventListener('DOMContentLoaded', function() {
     let linksTable = document.querySelector('.table-links');
     let linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
 
+    // Helper: apply project host coming from server and update UI hints/placeholders
+    function applyProjectHost(host) {
+        const normalized = String(host || '').toLowerCase().replace(/^www\./,'');
+        CURRENT_PROJECT_HOST = normalized;
+        const hint = document.getElementById('domain-hint');
+        const hostCode = document.getElementById('domain-host-code');
+        if (hostCode) hostCode.textContent = normalized;
+        if (hint) hint.style.display = normalized ? '' : 'none';
+        if (newLinkInput && normalized) newLinkInput.setAttribute('placeholder', 'https://' + normalized + '/...');
+    }
+
     function makeHidden(name, value) {
         const input = document.createElement('input');
         input.type = 'hidden';
@@ -746,6 +757,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
             const data = await res.json();
             if (!data || !data.ok) { alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR')); return false; }
+            // If server fixed project domain on first edit, reflect it in UI
+            if (data.domain_host) { applyProjectHost(data.domain_host); }
+            if (data.domain_errors && Number(data.domain_errors) > 0) {
+                alert('<?php echo __('Отклонено ссылок с другим доменом'); ?>: ' + data.domain_errors);
+            }
             updateRowView(tr, url, anchor, lang, wish);
             return true;
         } catch (e) {
@@ -793,12 +809,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const isEditing = !tr.querySelector('.url-cell .edit-url')?.classList.contains('d-none');
         if (!isEditing) {
             toggleRowEdit(tr, true);
-            btn.innerHTML = '<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>';
+            // Switch to check icon while editing, keep icon-only button
+            btn.dataset.originalIcon = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-check2"></i>';
+            btn.setAttribute('title', '<?php echo __('Готово'); ?>');
         } else {
             const ok = await saveRowEdit(tr, btn);
             if (ok) {
                 toggleRowEdit(tr, false);
-                btn.innerHTML = '<i class="bi bi-pencil me-1"></i><?php echo __('Редактировать'); ?>';
+                btn.innerHTML = btn.dataset.originalIcon || '<i class="bi bi-pencil"></i>';
+                btn.setAttribute('title', '<?php echo __('Редактировать'); ?>');
             }
         }
     }
@@ -1087,12 +1107,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             // обновим хост проекта, если он установлен сервером при первой ссылке
             if (data.domain_host) {
-                CURRENT_PROJECT_HOST = String(data.domain_host).toLowerCase().replace(/^www\./,'');
-                const hint = document.getElementById('domain-hint');
-                const hostCode = document.getElementById('domain-host-code');
-                if (hostCode) hostCode.textContent = data.domain_host;
-                if (hint) hint.style.display = '';
-                if (newLinkInput && CURRENT_PROJECT_HOST) newLinkInput.setAttribute('placeholder', 'https://' + CURRENT_PROJECT_HOST + '/...');
+                applyProjectHost(data.domain_host);
+            }
+            if (data.domain_errors && Number(data.domain_errors) > 0) {
+                alert('<?php echo __('Отклонено ссылок с другим доменом'); ?>: ' + data.domain_errors);
             }
             // Добавляем строку в таблицу (сразу обычное состояние, т.к. уже сохранено)
             const tbody = ensureLinksTable();
