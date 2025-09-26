@@ -7,6 +7,14 @@ if (is_logged_in()) {
 
 $message = '';
 
+// Google OAuth toggle
+$googleEnabled = get_setting('google_oauth_enabled', '0') === '1';
+$googleClientId = trim((string)get_setting('google_client_id', ''));
+$googleAvailable = $googleEnabled && $googleClientId !== '';
+$nextParam = isset($_GET['next']) ? (string)$_GET['next'] : '';
+if ($nextParam !== '' && strpos($nextParam, '://') !== false) { $nextParam = ''; }
+$googleStartUrl = pp_url('public/google_oauth_start.php' . ($nextParam !== '' ? ('?next=' . urlencode($nextParam)) : ''));
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
@@ -67,7 +75,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     </div>
                     <button type="submit" class="btn btn-primary w-100"><i class="bi bi-box-arrow-in-right me-1"></i><?php echo __('Войти'); ?></button>
                 </form>
-                <p class="mt-3 text-center"><?php echo __('Нет аккаунта?'); ?> <a href="<?php echo pp_url('auth/register.php'); ?>"><?php echo __('Зарегистрироваться'); ?></a></p>
+                <?php if ($googleAvailable): ?>
+                    <div class="text-center text-muted my-3">— <?php echo __('или'); ?> —</div>
+                    <a class="btn btn-outline-danger w-100" href="<?php echo htmlspecialchars($googleStartUrl); ?>">
+                        <i class="bi bi-google me-1"></i><?php echo __('Войти через Google'); ?>
+                    </a>
+                <?php endif; ?>
+                <p class="mt-3 text-center">&nbsp;</p>
+                <p class="mt-1 text-center"><?php echo __('Нет аккаунта?'); ?> <a href="<?php echo pp_url('auth/register.php'); ?>"><?php echo __('Зарегистрироваться'); ?></a></p>
             </div>
         </div>
     </div>

@@ -125,6 +125,14 @@ function ensure_schema(): void {
         if (!isset($usersCols['newsletter_opt_in'])) {
             @$conn->query("ALTER TABLE `users` ADD COLUMN `newsletter_opt_in` TINYINT(1) NOT NULL DEFAULT 1 AFTER `avatar`");
         }
+        // Google OAuth fields
+        if (!isset($usersCols['google_id'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `google_id` VARCHAR(64) NULL AFTER `avatar`");
+            @$conn->query("CREATE UNIQUE INDEX IF NOT EXISTS `uniq_users_google_id` ON `users`(`google_id`)");
+        }
+        if (!isset($usersCols['google_picture'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `google_picture` VARCHAR(255) NULL AFTER `google_id`");
+        }
     }
 
     // Publications table for history
@@ -1046,6 +1054,25 @@ function pp_resolve_chrome_path(): ?string {
         }
     }
     return null;
+}
+
+function pp_guess_base_url(): string {
+    if (defined('PP_BASE_URL') && PP_BASE_URL) return rtrim(PP_BASE_URL, '/');
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+    $scheme = $https ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    $script = $_SERVER['SCRIPT_NAME'] ?? '/';
+    $dir = rtrim(str_replace(['\\','//'], '/', dirname($script)), '/');
+    // Project root is one level up from current script for admin/public/auth pages
+    $base = $scheme . '://' . $host . ($dir ? $dir : '');
+    // If ends with /admin or /public or /auth, strip it
+    $base = preg_replace('~/(admin|public|auth)$~', '', $base);
+    return rtrim($base, '/');
+}
+
+function pp_google_redirect_url(): string {
+    $base = pp_guess_base_url();
+    return $base . '/public/google_oauth_callback.php';
 }
 
 ?>
