@@ -32,27 +32,40 @@ function logLine(msg, data){
   try { console.log(line); } catch(_) {}
 }
 
-async function generateTextWithChat(prompt, openaiApiKey) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${openaiApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: String(prompt || '') }],
-      temperature: 0.8,
-    })
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(()=> '');
-    logLine('OpenAI HTTP error', { status: res.status, statusText: res.statusText, body: body.slice(0, 200) });
+// Unified AI call: try Responses API (gpt-5-mini), fallback to Chat Completions
+async function generateTextWithAI(prompt, openaiApiKey) {
+  try {
+    const r = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'gpt-5-mini', input: String(prompt || ''), reasoning: { effort: 'low' } })
+    });
+    const raw = await r.text().catch(()=> '');
+    if (!r.ok) {
+      logLine('OpenAI HTTP error', { status: r.status, statusText: r.statusText, body: raw.slice(0, 200) });
+      return '';
+    }
+
+    let data = null;
+    try { data = JSON.parse(raw); } catch(_) {}
+
+    let text = '';
+    if (data) {
+      if (typeof data.output_text === 'string') text = data.output_text;
+      else if (Array.isArray(data.output) && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) {
+        text = data.output[0].content[0].text;
+      } else if (Array.isArray(data.choices) && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+        text = data.choices[0].message.content;
+      }
+    }
+    return String(text || '').trim();
+  } catch (e) {
+    logLine('OpenAI request failed', { error: String(e && e.message || e) });
     return '';
   }
-  const data = await res.json().catch(()=> null);
-  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-  return String(content).trim();
 }
 
 function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
@@ -133,6 +146,20 @@ function cleanTitle(t) {
   return t;
 }
 
+function isHeadingCandidate(text) {
+  const t = String(text || '').trim();
+  if (t.length < 3 || t.length > 100) return false;
+  const hasPeriod = /\./.test(t);
+  const endsQorEx = /[!?]$/.test(t);
+  const hasColon = /:/.test(t);
+  const tooManySentences = /[.!?].+?[.!?]/.test(t);
+  if (tooManySentences) return false;
+  if (hasColon || endsQorEx) return true;
+  // Short and no period looks like a section label
+  if (!hasPeriod && /^[^\n]{3,80}$/.test(t)) return true;
+  return false;
+}
+
 function normalizeArticleHtml(raw, pageUrl, anchorText) {
   let s = String(raw || '').replace(/\r\n/g, '\n');
 
@@ -141,7 +168,7 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
     const txt = String(inner).replace(/<br[^>]*>/gi, '\n');
     const chunks = txt.split(/\n{2,}|\n/g).map(t => t.trim()).filter(Boolean);
     if (!chunks.length) return '';
-    return chunks.map(chunk => (/^[^.!?\n]{3,80}$/.test(chunk) ? `<h2>${chunk}</h2>` : `<p>${chunk}</p>`)).join('\n');
+    return chunks.map(chunk => (isHeadingCandidate(chunk) ? `<h2>${chunk}</h2>` : `<p>${chunk}</p>`)).join('\n');
   });
 
   // Trim and collapse excessive blank lines
@@ -153,7 +180,7 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
   // If content is mostly plain text, split into paragraphs by blank lines
   if (!/<\s*(p|h2|ul|ol|li|blockquote|a)\b/i.test(s)) {
     const blocks = s.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
-    s = blocks.map(p => `<p>${p}</p>`).join('\n');
+    s = blocks.map(p => (isHeadingCandidate(p) ? `<h2>${p}</h2>` : `<p>${p}</p>`)).join('\n');
   }
 
   // Convert markdown-like headings to <h2>
@@ -161,10 +188,10 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
 
   // Convert bold-only or colon-ending paragraphs to <h2>
   s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*:<\/p>/gi, '<h2>$1</h2>');
-  s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*<\/p>\s*(?=<p>)/gi, (m, text) => {
-    const t = String(text || '').trim();
-    if (/^[^.!?\n]{3,80}$/.test(t)) return `<h2>${t}</h2>`; 
-    return m;
+  // Convert short title-like paragraphs into <h2>
+  s = s.replace(/<p>([\s\S]*?)<\/p>/gi, (full, inner) => {
+    const t = stripTags(inner);
+    return isHeadingCandidate(t) ? `<h2>${t}</h2>` : full;
   });
 
   // Convert bullet-like paragraphs to <ul><li>
@@ -173,11 +200,11 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
     return `<ul>${items.join('')}</ul>`;
   });
 
-  // Remove empty paragraphs
+  // Remove empty bullet-only paragraphs and empty paragraphs
+  s = s.replace(/<p>\s*[•·–—-]\s*<\/p>/gi, '');
   s = s.replace(/<p>\s*<\/p>/gi, '');
 
-  // Strip all anchors completely; will inject exactly one later
-  s = s.replace(/<a\s+[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+  // NOTE: do NOT strip anchors anymore; we keep the model-produced link intact
 
   // Deduplicate excessive newlines
   s = s.replace(/\n{3,}/g, '\n\n').trim();
@@ -187,7 +214,7 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
     const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
     if (firstP) {
       const text = stripTags(firstP[0]);
-      if (/^[^.!?\n]{3,80}$/.test(text)) {
+      if (isHeadingCandidate(text)) {
         s = s.replace(firstP[0], `<h2>${text}</h2>`);
       } else {
         s = `<h2>Основные моменты</h2>\n` + s;
@@ -197,40 +224,66 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
     }
   }
 
-  // Inject our single anchor organically
-  s = integrateSingleAnchor(s, pageUrl, anchorText);
+  // Simple validator (log only): ensure one anchor present and not only last paragraph
+  try {
+    const links = Array.from(s.matchAll(new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'gi')));
+    const hasExactText = links.some(m => stripTags(m[1]) === anchorText);
+    const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
+    const idx = links.length ? (paras.findIndex(p => p.includes(links[0][0])) ) : -1;
+    const okHalf = idx >= 0 ? idx < Math.ceil(paras.length * 0.5) : false;
+    if (!links.length || !hasExactText || !okHalf) {
+      logLine('Anchor validation', { links: links.length, hasExactText, okHalf, note: 'Content not auto-fixed by design' });
+    }
+  } catch(_) {}
 
   return s;
 }
 
-function integrateSingleAnchor(html, pageUrl, anchorText) {
-  let s = String(html || '');
-  // Remove any anchor to start from a clean state
-  s = s.replace(/<a\s+[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+function validateStructure(html, pageUrl, anchorText) {
+  const reasons = [];
+  const linkRe = new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'i');
+  const linkMatches = Array.from(html.matchAll(linkRe));
+  if (linkMatches.length !== 1) reasons.push('link_count');
+  const text = linkMatches[0] ? stripTags(linkMatches[0][1]) : '';
+  if (text !== anchorText) reasons.push('link_text');
 
-  // Inject into the first sufficiently long paragraph in the first half of the text
-  const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
-  if (paras.length) {
-    const limit = Math.max(1, Math.floor(paras.length / 2));
-    for (let i = 0; i < limit; i++) {
-      const p = paras[i];
-      const text = stripTags(p);
-      if (text.length < 120) continue;
-      const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${anchorText}</a></p>`);
-      return s.replace(p, injected);
-    }
-    // Fallback to the first paragraph
-    const p = paras[0];
-    const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${anchorText}</a></p>`);
-    return s.replace(p, injected);
+  const paras = html.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
+  const linkParaIndex = linkMatches.length ? paras.findIndex(p => linkMatches[0][0] && p.includes(linkMatches[0][0])) : -1;
+  if (linkParaIndex < 0) reasons.push('link_not_in_paragraph');
+  const firstHalfLimit = Math.max(1, Math.ceil(paras.length * 0.5));
+  if (linkParaIndex >= firstHalfLimit) reasons.push('link_not_in_first_half');
+  if (linkParaIndex >= 0) {
+    const pPlain = stripTags(paras[linkParaIndex]);
+    // Disallow trailing placement after the final period/question/exclamation
+    if (/([.!?])\s*$/.test(pPlain)) reasons.push('link_at_end_of_paragraph');
+    // Disallow adjacency to filler words
+    if (/(подробнее|детальнее|здесь|по\s+ссылке)\s*[.!?]?$/.i.test(pPlain)) reasons.push('link_with_filler_words');
   }
-  // Fallback: add a paragraph after the first <h2>
-  return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${anchorText}</a></p>`);
+
+  const h2Count = (html.match(/<h2[\s>]/gi) || []).length;
+  if (h2Count < 3) reasons.push('h2_missing');
+
+  // List checks: ensure <ul> exists when there are 2+ bullet-like items, and no blank gaps
+  const hasUl = /<ul[\s>][\s\S]*?<\/ul>/i.test(html);
+  const bulletParas = (html.match(/<p>\s*(?:[-*•·–—]|\d+[.)])\s+[^<]+?<\/p>/gi) || []).length;
+  if (bulletParas >= 2 && !hasUl) reasons.push('list_not_wrapped');
+  if (/<ul[\s>][\s\S]*?<\/ul>/i.test(html)) {
+    const ul = html.match(/<ul[\s>][\s\S]*?<\/ul>/i)[0];
+    if (/(<li[\s>][\s\S]*?<\/li>)\s*<p>/i.test(ul) || /<br\b/i.test(ul)) reasons.push('list_has_gaps');
+  }
+
+  return { ok: reasons.length === 0, reasons };
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   logLine('Publish start', { pageUrl, language });
   const meta = await extractPageMeta(pageUrl);
+
+  const strictAnchorRule = `Use exactly ONE hyperlink with anchor text exactly: ${anchorText} and href exactly: ${pageUrl}. It must appear INSIDE a running sentence in the FIRST HALF of the article (not the second half), not as a standalone sentence, not at the very end of a paragraph, and not near filler words like «подробнее», «детальнее», «здесь». Do not use any other links.`;
+
+  const formatRules = `Format rules:\n- Use <h2> subheadings (at least 3). Do not simulate headings with <p> or <br>.\n- Use <p> for paragraphs only. No empty <p>, no <br> for spacing.\n- If a list is needed, use one <ul> with adjacent <li> items (no blank lines or <p> between <li>).`;
+
+  const exampleRU = `Example (fragment):\n<h2>Ключевые обновления платформы</h2>\n<p>Компания представила новое решение, в котором <a href="${pageUrl}">${anchorText}</a> раскрывает практическую пользу технологии для реальных сценариев.</p>`;
 
   const prompts = {
     title: (
@@ -245,26 +298,39 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     content: (
       `Write an article in ${language} of at least 3000 characters based on the page ${pageUrl}. ` +
       `Use this context: title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
-      `Requirements:\n` +
-      `- Use clear structure: short intro, 3–5 sections with <h2> subheadings, one bulleted list where relevant, and a brief conclusion.\n` +
-      `- Include exactly one active link to <a href="${pageUrl}">${anchorText}</a> inside a paragraph in the first half of the article (organically).\n` +
-      `- Use only simple HTML tags: <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No images, scripts or inline styles.\n` +
-      `- Stay strictly on-topic and do not add unrelated content.`
+      `${formatRules}\n${strictAnchorRule}\n` +
+      `Allowed HTML only: <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No images, scripts or inline styles.\n` +
+      `${exampleRU}`
     )
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const rawTitle = await generateTextWithChat(prompts.title, openaiApiKey);
-  await sleep(1200);
-  const rawAuthor = await generateTextWithChat(prompts.author, openaiApiKey);
-  await sleep(1200);
-  const rawContent = await generateTextWithChat(prompts.content, openaiApiKey);
+  const rawTitle = await generateTextWithAI(prompts.title, openaiApiKey);
+  await sleep(800);
+  const rawAuthor = await generateTextWithAI(prompts.author, openaiApiKey);
+  await sleep(800);
+
+  let attempts = 0;
+  let content;
+  while (attempts < 3) {
+    const rawContent = await generateTextWithAI(prompts.content + (attempts ? `\n\nFix issues noted previously and regenerate.` : ''), openaiApiKey);
+    const title = cleanTitle(rawTitle);
+    const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
+
+    // Keep normalization light to avoid moving anchor; only cleaning layout
+    content = normalizeArticleHtml(rawContent, pageUrl, anchorText);
+    const v = validateStructure(content, pageUrl, anchorText);
+    if (v.ok) break;
+
+    // Strengthen prompt with feedback
+    const feedback = `Fix the following problems: ${v.reasons.join(', ')}. Preserve the required anchor <a href="${pageUrl}">${anchorText}</a> inside a sentence in the first half. Use at least three <h2>. Keep list compact.`;
+    prompts.content += `\n\nCRITICAL FIX: ${feedback}`;
+    attempts++;
+  }
 
   const title = cleanTitle(rawTitle);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
-
-  let content = normalizeArticleHtml(rawContent, pageUrl, anchorText);
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
