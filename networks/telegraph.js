@@ -706,7 +706,7 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
     return `<ul>${items.join('')}</ul>`;
   });
 
-  // Enforce a single allowed link to the target URL: strip other anchors
+  // Enforce a single allowed link to the target URL: strip other anchors, then inject inline if missing
   s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
     const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
     const href = m && m[1] ? m[1] : '';
@@ -715,25 +715,8 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
     return text; // drop other links
   });
 
-  // Ensure exactly one target link exists (insert if missing) after the first heading
-  const hrefRe = new RegExp('<a\\s+[^>]*href=[\\"\']' + escapeRegExp(pageUrl.replace(/\/$/, '')) + '[\\"\']', 'ig');
-  const matches = s.match(hrefRe) || [];
-  if (matches.length === 0) {
-    const linkHtml = '<p><a href="' + escapeHtmlAttr(pageUrl) + '">' + escapeHtmlAttr(anchorText || pageUrl) + '</a></p>';
-    const firstHeading = s.match(new RegExp(`<${H}[^>]*>[\\s\\S]*?<\\/${H}>`, 'i'));
-    if (firstHeading) s = s.replace(firstHeading[0], firstHeading[0] + '\n' + linkHtml);
-    else s = linkHtml + '\n' + s;
-  } else if (matches.length > 1) {
-    // Remove subsequent duplicates
-    let seen = false;
-    s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/ig, (full, attrs, text) => {
-      const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
-      const href = m && m[1] ? m[1] : '';
-      if (href.replace(/\/$/, '') !== String(pageUrl).replace(/\/$/, '')) return text;
-      if (!seen) { seen = true; return full; }
-      return text;
-    });
-  }
+  // Ensure exactly one target link exists (insert inline into a long paragraph)
+  s = injectTargetLinkInline(s, pageUrl, anchorText);
 
   // Trim excessive newlines created by replacements
   s = s.replace(/\n{3,}/g, '\n\n');
@@ -741,7 +724,99 @@ function normalizeContent(inputHtmlOrMd, lang, pageUrl, anchorText) {
   return s.trim();
 }
 
-// Sanitize and normalize author name from LLM
+function isGenericTitle(t, lang) {
+  const s = String(t || '').trim().replace(/["'«»“”„]+/g, '').replace(/[.:!?]+$/g, '').toLowerCase();
+  if (s.length < 4) return true;
+  const common = [
+    'introduction','intro','overview','summary','conclusion','contents','table of contents','outline','guide','basics','getting started',
+    'введение','вступление','обзор','итоги','заключение','содержание','оглавление','резюме','описание','интро','основы','начало','старт','вступ',
+    'introduction to','about','about us'
+  ];
+  if (common.includes(s)) return true;
+  // overly short and generic
+  if (s.length < 8) return true;
+  return false;
+}
+
+function titleFromUrl(url) {
+  try {
+    const u = new URL(String(url));
+    let seg = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
+    seg = seg.replace(/[-_]+/g, ' ').trim();
+    if (!seg) seg = u.hostname.replace(/^www\./, '');
+    // Capitalize first letter of each word
+    seg = seg.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    return seg || 'PromoPilot Article';
+  } catch (_) {
+    return 'PromoPilot Article';
+  }
+}
+
+// New: enforce non-generic title fallback using SEO data/url
+function makeNonGenericTitle(primary, seo, url, lang) {
+  let t = String(primary || '').trim();
+  if (!t || isGenericTitle(t, lang)) {
+    const alt = String(seo && seo.title || '').trim();
+    if (alt && !isGenericTitle(alt, lang)) t = alt;
+  }
+  if (!t || isGenericTitle(t, lang)) {
+    t = titleFromUrl(url);
+  }
+  // Final cleanup and clip
+  t = t.replace(/["'«»“”„]+/g, '').replace(/[.]+$/g, '').trim();
+  if (t.length > 140) t = t.slice(0, 140).replace(/\s+\S*$/, '');
+  return t || 'PromoPilot Article';
+}
+
+// New: Inject target link organically into a paragraph (inline), not as a standalone paragraph
+function injectTargetLinkInline(html, pageUrl, anchorText) {
+  const H = headingTag();
+  let s = String(html || '');
+  const hrefRe = new RegExp('<a\\s+[^>]*href=[\\"\']' + escapeRegExp(pageUrl.replace(/\/$/, '')) + '[\\"\']', 'ig');
+  const hasLink = (s.match(hrefRe) || []).length > 0;
+  if (hasLink) return s; // already present (kept by earlier sanitation)
+
+  const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
+  if (paras.length) {
+    for (let i = 0; i < paras.length; i++) {
+      const p = paras[i];
+      const plain = stripTags(p);
+      if (plain.length < 120) continue; // prefer a longer paragraph
+      const anchor = escapeHtmlAttr(anchorText || pageUrl);
+      // Try to wrap existing anchorText occurrence
+      const idx = p.toLowerCase().indexOf(String(anchorText || '').toLowerCase());
+      let newP;
+      if (anchorText && idx !== -1) {
+        // Replace first occurrence only
+        newP = p.replace(new RegExp('(' + escapeRegExp(anchorText) + ')','i'), '<a href="' + escapeHtmlAttr(pageUrl) + '">$1</a>');
+      } else {
+        // Append inline link near the end, before closing tag
+        newP = p.replace(/<\/p>\s*$/i, ' <a href="' + escapeHtmlAttr(pageUrl) + '">' + anchor + '</a></p>');
+      }
+      s = s.replace(p, newP);
+      return s;
+    }
+  }
+  // Fallback: insert after first heading
+  const linkHtml = '<p><a href="' + escapeHtmlAttr(pageUrl) + '">' + escapeHtmlAttr(anchorText || pageUrl) + '</a></p>';
+  const firstHeading = s.match(new RegExp(`<${H}[^>]*>[\\s\\S]*?<\/${H}>`, 'i'));
+  if (firstHeading) return s.replace(firstHeading[0], firstHeading[0] + '\n' + linkHtml);
+  return linkHtml + '\n' + s;
+}
+
+// New: Insert hero image link between paragraphs (after the second paragraph when possible)
+function insertHeroLinkBetweenParagraphs(html, heroUrl, label) {
+  if (!heroUrl) return html;
+  let s = String(html || '');
+  const linkHtml = '<p><a href="' + escapeHtmlAttr(heroUrl) + '" target="_blank" rel="noopener nofollow">' + escapeHtmlAttr(label || 'View illustration') + '</a></p>';
+  const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
+  if (paras.length >= 2) {
+    const target = paras[1]; // after second paragraph
+    return s.replace(target, target + '\n' + linkHtml);
+  }
+  return s + '\n' + linkHtml;
+}
+
 function normalizeAuthorName(name, lang) {
   let s = String(name || '').trim();
   // keep only the first line
@@ -768,34 +843,6 @@ function imageLinkLabel(lang, title) {
   if (L.startsWith('es')) return 'Ver ilustración';
   if (L.startsWith('fr')) return "Voir l'illustration";
   return 'View illustration';
-}
-
-function isGenericTitle(t, lang) {
-  const s = String(t || '').trim().replace(/["'«»“”„]+/g, '').replace(/[.:!?]+$/g, '').toLowerCase();
-  if (s.length < 4) return true;
-  const common = [
-    'introduction','intro','overview','summary','conclusion','contents','table of contents','outline',
-    'введение','вступление','обзор','итоги','заключение','содержание','оглавление','резюме','описание','интро',
-    'вступ'
-  ];
-  if (common.includes(s)) return true;
-  // overly short and generic
-  if (s.length < 8) return true;
-  return false;
-}
-
-function titleFromUrl(url) {
-  try {
-    const u = new URL(String(url));
-    let seg = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
-    seg = seg.replace(/[-_]+/g, ' ').trim();
-    if (!seg) seg = u.hostname.replace(/^www\./, '');
-    // Capitalize first letter of each word
-    seg = seg.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    return seg || 'PromoPilot Article';
-  } catch (_) {
-    return 'PromoPilot Article';
-  }
 }
 
 async function publishToTelegraph(job) {
@@ -832,16 +879,20 @@ async function publishToTelegraph(job) {
   const seo = await fetchSeoData(pageUrl);
 
   const prompts = {
-    title: `Using the page SEO data below, write a concise, catchy ${titleLangLabel} title that reflects the same topic. No quotes, no trailing dots.\nSEO title: "${seo.title || ''}"\nSEO description: "${seo.description || ''}"\nURL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
+    title: `Using the page SEO data below, write a concise, catchy ${titleLangLabel} title that reflects the same topic. No quotes, no trailing dots. Avoid generic placeholders like: Introduction, Overview, Summary, Введение, Обзор, Итоги. Prefer a concrete, specific phrase.
+SEO title: "${seo.title || ''}"
+SEO description: "${seo.description || ''}"
+URL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
     author: `Propose a neutral author's name for an article in ${authorLangLabel}. Use the ${authorLangLabel} language and its alphabet. Avoid region-specific or celebrity names. One or two words only. Respond with the name only, without quotes or extra text.`,
-    content: `Write an article in ${contentLangLabel} of at least 7000 characters based on the page: ${pageUrl}. Use the following page SEO data and stay strictly on-topic: title: "${seo.title || ''}", description: "${seo.description || ''}". Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h3> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h3>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Do not include off-topic content.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
+    content: `Write an article in ${contentLangLabel} of at least 7000 characters based on the page: ${pageUrl}. Use the following page SEO data and stay strictly on-topic: title: "${seo.title || ''}", description: "${seo.description || ''}". Requirements:\n- Include naturally one link to <a href=\"${pageUrl}\">${anchorText}</a> inline in the first half (inside a paragraph).\n- Clear structure: short introduction, 3–5 sections with <h3> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h3>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- If you output Markdown headings like ## Section, that's acceptable—they will be converted.\n- Do not include off-topic content.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
   };
   logLine('Prompts prepared', { titlePromptPreview: prompts.title, authorPromptPreview: prompts.author, contentPromptPreview: prompts.content.slice(0, 160) + '...' });
 
   const wait = Number.isFinite(job.waitBetweenCallsMs) ? Number(job.waitBetweenCallsMs) : 5000;
 
   logLine('Generating title...');
-  const title = (await generateTextWithChat(prompts.title, openaiApiKey)) || 'Untitled';
+  const rawTitle = (await generateTextWithChat(prompts.title, openaiApiKey)) || 'Untitled';
+  let title = makeNonGenericTitle(rawTitle, seo, pageUrl, language);
   await sleep(wait);
 
   logLine('Generating author...');
@@ -854,18 +905,29 @@ async function publishToTelegraph(job) {
   let content = await generateTextWithChat(prompts.content, openaiApiKey);
   logLine('Content generated', { length: content.length });
 
-  // Normalize/structure content, add headings and ensure link
+  // Normalize/structure content, add headings and ensure link inline
   content = normalizeContent(content, language, pageUrl, anchorText);
   // Reduce excessive blank lines
   content = content.replace(/\n{3,}/g, '\n\n').trim();
 
-  // Generate hero image (best-effort, prefer wide format)
+  // Generate hero image (best-effort, prefer wide format) and save locally before uploading to Telegraph
   let heroUrl = '';
   let heroImg = null;
+  let localHeroPath = '';
   try {
     const topicForImage = (seo.title || seo.description || title || anchorText || '').slice(0, 140) || anchorText;
     const imagePrompt = `High-quality ${titleLangLabel} illustration representing: "${topicForImage}". Style: modern editorial, clean composition, no text overlay, high contrast, works well as article hero. Topic source: ${pageUrl}.` + (wish ? ` Context: ${wish}.` : '');
     heroImg = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1792x1024', quality: 'hd' });
+    // Save locally
+    try {
+      const localDir = path.join(process.cwd(), 'uploads', 'generated');
+      ensureDirSync(localDir);
+      localHeroPath = path.join(localDir, heroImg.filename.replace(/\.png$/, '') + '-wide.png');
+      await fsp.writeFile(localHeroPath, heroImg.buffer);
+      logLine('Hero image saved locally', { localHeroPath });
+    } catch (eSave) {
+      logLine('Hero local save failed', { error: String(eSave) });
+    }
     await sleep(1200);
     try {
       heroUrl = await uploadImageToTelegraph(heroImg.buffer, heroImg.filename.replace(/\.png$/, '') + '-wide.png', heroImg.mime);
@@ -878,13 +940,7 @@ async function publishToTelegraph(job) {
   }
 
   // Prepare clean and robust title
-  let cleanTitle = (title || '').replace(/["']+/g, '').trim();
-  if (isGenericTitle(cleanTitle, language)) {
-    const fallback = (seo.title && !isGenericTitle(seo.title, language)) ? seo.title : '';
-    cleanTitle = (fallback || titleFromUrl(pageUrl)).trim();
-  }
-  // Safety: clip very long titles
-  if (cleanTitle.length > 140) cleanTitle = cleanTitle.slice(0, 140).replace(/\s+\S*$/, '');
+  let cleanTitle = title;
 
   logLine('Launching browser');
 
@@ -937,14 +993,10 @@ async function publishToTelegraph(job) {
     await page.keyboard.type(author, { delay: 30 });
 
     logLine('Injecting content into editor');
-    // Insert hero image as a hyperlink (not embedded) after the first subheading
+    // Insert hero image as a hyperlink between paragraphs (after the second paragraph when possible)
     if (heroUrl) {
       const label = imageLinkLabel(language, cleanTitle);
-      const linkHtml = '<p><a href="' + escapeHtmlAttr(heroUrl) + '" target="_blank" rel="noopener nofollow">' + escapeHtmlAttr(label) + '</a></p>';
-      const H = headingTag();
-      const firstHeading = content.match(new RegExp(`<${H}[^>]*>[\\s\\S]*?<\\/${H}>`, 'i'));
-      if (firstHeading) content = content.replace(firstHeading[0], firstHeading[0] + '\n' + linkHtml);
-      else content = linkHtml + '\n' + content;
+      content = insertHeroLinkBetweenParagraphs(content, heroUrl, label);
     }
 
     const finalHtml = content;
@@ -982,6 +1034,10 @@ async function publishToTelegraph(job) {
       try { await page.close(); logLine('Page closed'); } catch (_) { logLine('Page close error (ignored)'); }
     }
     try { await browser.close(); logLine('Browser closed'); } catch (_) { logLine('Browser close error (ignored)'); }
+    // Cleanup local hero image
+    if (localHeroPath) {
+      try { await fsp.unlink(localHeroPath); logLine('Local hero image deleted', { localHeroPath }); } catch (eDel) { logLine('Local hero delete failed', { error: String(eDel) }); }
+    }
   }
 }
 
