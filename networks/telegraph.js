@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const fsp = fs.promises;
+// New: multipart helper for telegra.ph upload
+let FormData;
+try { FormData = require('form-data'); } catch (_) { FormData = null; }
 
 function ensureDirSync(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
@@ -412,6 +415,84 @@ async function generateTextWithChat(prompt, openaiApiKey) {
   return content;
 }
 
+// New: Generate hero image with DALL·E 3 and upload to telegra.ph
+async function generateImageWithDalle(prompt, openaiApiKey, opts = {}) {
+  const size = opts.size || '1024x1024';
+  const quality = opts.quality || 'hd';
+  const started = Date.now();
+  logLine('OpenAI image start', { model: 'dall-e-3', size, quality, promptPreview: String(prompt || '').slice(0, 200) });
+  const resp = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${openaiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'dall-e-3',
+      prompt: String(prompt || '').slice(0, 4000),
+      n: 1,
+      size,
+      response_format: 'b64_json',
+      quality,
+    }),
+  });
+  const ms = Date.now() - started;
+  if (!resp.ok) {
+    const txt = await resp.text().catch(()=> '');
+    logLine('OpenAI image failed', { status: resp.status, statusText: resp.statusText, durationMs: ms, body: txt.slice(0, 1000) });
+    throw new Error(`OpenAI image failed: ${resp.status} ${resp.statusText}`);
+  }
+  const data = await resp.json();
+  const b64 = data && data.data && data.data[0] && (data.data[0].b64_json || '');
+  if (!b64) {
+    logLine('OpenAI image empty');
+    throw new Error('Empty image from OpenAI');
+  }
+  const buf = Buffer.from(b64, 'base64');
+  logLine('OpenAI image ok', { durationMs: ms, bytes: buf.length });
+  return { buffer: buf, mime: 'image/png', filename: `cover-${Date.now()}.png` };
+}
+
+async function uploadImageToTelegraph(file, filename = 'image.png', mime = 'image/png') {
+  if (!FormData) throw new Error('FormData not available');
+  const form = new FormData();
+  form.append('file', file, { filename, contentType: mime });
+  const started = Date.now();
+  const resp = await fetch('https://telegra.ph/upload', { method: 'POST', body: form, headers: form.getHeaders ? form.getHeaders() : undefined });
+  const ms = Date.now() - started;
+  if (!resp.ok) {
+    const txt = await resp.text().catch(()=> '');
+    logLine('Telegraph upload HTTP error', { status: resp.status, statusText: resp.statusText, durationMs: ms, body: txt.slice(0, 400) });
+    throw new Error(`Telegraph upload failed: ${resp.status} ${resp.statusText}`);
+  }
+  const json = await resp.json().catch(()=>null);
+  if (!Array.isArray(json) || !json[0] || !json[0].src) {
+    logLine('Telegraph upload bad JSON', { json });
+    throw new Error('Telegraph upload returned unexpected response');
+  }
+  const src = String(json[0].src);
+  const url = src.startsWith('http') ? src : `https://telegra.ph${src}`;
+  logLine('Telegraph upload ok', { url });
+  return url;
+}
+
+function ensureArticleStructure(html) {
+  const s = String(html || '');
+  // If no H2 present, insert a generic subheading after first paragraph
+  if (!/<h2[\s>]/i.test(s)) {
+    const m = s.match(/<p[\s>][\s\S]*?<\/p>/i);
+    if (m) {
+      return s.replace(m[0], `${m[0]}\n<h2>Key Points</h2>`);
+    }
+    return `<h2>Overview</h2>\n${s}`;
+  }
+  return s;
+}
+
+function escapeHtmlAttr(str) {
+  return String(str || '').replace(/["'&<>]/g, (c)=> ({'"':'&quot;', "'":'&#39;', '&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
 async function publishToTelegraph(job) {
   logLine('Job received', job);
   // Ensure puppeteer is available (and report cleanly if not)
@@ -436,10 +517,13 @@ async function publishToTelegraph(job) {
 
   const anchorText = anchor || pageUrl;
 
+  // Language-aware title rule: if RU -> force English title, else title in target language
+  const titleLangForPrompt = (String(language).toLowerCase().startsWith('ru')) ? 'English' : language;
+
   const prompts = {
-    title: `What would be a good title for an article about this link without using quotes? ${pageUrl}`,
-    author: `What is a suitable author's name for an article in ${language}? Avoid using region-specific names.`,
-    content: `Please write a text in ${language} with at least 3000 characters based on the following link: ${pageUrl}. The article must include the anchor text "${anchorText}" as part of a single active link in the format <a href="${pageUrl}">${anchorText}</a>. This link should be naturally integrated into the content, ideally in the first half of the article. The content should be informative, cover the topic comprehensively, and include headings. Use <h2></h2> tags for subheadings. Please ensure the article contains only this one link and focuses on integrating the anchor text naturally within the content’s flow.${wish ? ` Additional context for the article: ${wish}` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
+    title: `Write a concise, catchy ${titleLangForPrompt} title for an article about this link. No quotes, no trailing dots. URL: ${pageUrl}` + (wish ? ` | Context: ${wish}` : ''),
+    author: `Propose a neutral author's name appropriate for an article in ${language}. Avoid region-specific or celebrity names. One or two words only.`,
+    content: `Write an article in ${language} of at least 3000 characters based on: ${pageUrl}. Requirements:\n- One and only one active link: <a href=\"${pageUrl}\">${anchorText}</a> included naturally in the first half.\n- Clear structure: short introduction, 3–5 sections with <h2> subheadings, a bulleted list where relevant, and a brief conclusion.\n- Clean HTML only: use <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No external images, scripts or inline styles.\n- Stay informative, helpful, and on-topic.\n${wish ? `Additional context to reflect: ${wish}.` : ''}${projectName ? ` This article is part of the project ${projectName}.` : ''}`,
   };
   logLine('Prompts prepared', { titlePromptPreview: prompts.title, authorPromptPreview: prompts.author, contentPromptPreview: prompts.content.slice(0, 160) + '...' });
 
@@ -454,10 +538,26 @@ async function publishToTelegraph(job) {
   await sleep(wait);
 
   logLine('Generating content...');
-  const content = await generateTextWithChat(prompts.content, openaiApiKey);
+  let content = await generateTextWithChat(prompts.content, openaiApiKey);
   logLine('Content generated', { length: content.length });
 
-  const cleanTitle = title.replace(/["']+/g, '').trim() || 'PromoPilot Article';
+  // Ensure content has at least one <h2>
+  content = ensureArticleStructure(content);
+
+  // Generate hero image (best-effort)
+  let heroUrl = '';
+  try {
+    const imagePrompt = `High-quality ${titleLangForPrompt} illustration representing: "${anchorText}". Style: modern editorial, clean composition, no text overlay, high contrast, works well as article hero. Topic source: ${pageUrl}.` + (wish ? ` Context: ${wish}.` : '');
+    const img = await generateImageWithDalle(imagePrompt, openaiApiKey, { size: '1024x1024', quality: 'hd' });
+    await sleep(1500);
+    heroUrl = await uploadImageToTelegraph(img.buffer, img.filename, img.mime);
+    logLine('Hero image uploaded', { heroUrl });
+  } catch (e) {
+    logLine('Hero image skipped', { error: String(e) });
+  }
+
+  const cleanTitle = (title || '').replace(/["']+/g, '').trim() || 'PromoPilot Article';
+
   logLine('Launching browser');
 
   const chromeInfo = await resolveChromeExecutable(puppeteerLib);
@@ -498,11 +598,15 @@ async function publishToTelegraph(job) {
     await page.keyboard.type(author, { delay: 30 });
 
     logLine('Injecting content into editor');
+    // Compose final HTML with optional hero image
+    const finalHtml = heroUrl
+      ? (`<figure><img src="${escapeHtmlAttr(heroUrl)}" alt="${escapeHtmlAttr(cleanTitle)}"></figure>\n` + content)
+      : content;
     await page.evaluate((articleHtml) => {
-      const editable = document.querySelector('p[data-placeholder="Your story..."]');
-      if (!editable) throw new Error('Telegraph editor not ready');
-      editable.innerHTML = articleHtml;
-    }, content);
+      const root = document.querySelector('p[data-placeholder="Your story..."]');
+      if (!root) throw new Error('Telegraph editor not ready');
+      root.innerHTML = articleHtml;
+    }, finalHtml);
 
     logLine('Publishing...');
     await Promise.all([
@@ -522,6 +626,7 @@ async function publishToTelegraph(job) {
       publishedUrl,
       title: cleanTitle,
       author,
+      heroUrl,
       logFile: LOG_FILE,
     };
     logLine('Success result', result);
