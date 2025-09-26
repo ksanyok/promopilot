@@ -1,0 +1,43 @@
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon files on macOS
+Icon?
+
+# Thumbnails / resource forks
+._*
+
+# Spotlight and Trash (sometimes appear on external drives)
+.Spotlight-V100
+.Trashes
+
+# Additional macOS system folders/files
+.fseventsd/
+.DocumentRevisions-V100/
+.TemporaryItems/
+.apdisk
+
+# Windows OS junk (cross-platform repos)
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Dependencies
+node_modules/
+
+# Runtime/browser downloads and caches
+node_runtime/
+.browsers/
+.cache/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.vscode/
+.idea/
