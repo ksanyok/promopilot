@@ -197,6 +197,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
             }
         };
+        $indexExists = function(string $table, string $index) use ($conn): bool {
+            try {
+                $stmt = $conn->prepare("SHOW INDEX FROM `{$table}` WHERE Key_name = ?");
+                if (!$stmt) return false;
+                $stmt->bind_param('s', $index);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $ok = ($res && $res->num_rows > 0);
+                if ($res) $res->free();
+                $stmt->close();
+                return $ok;
+            } catch (Throwable $e) { return false; }
+        };
 
         // Ensure projects table and columns
         if (!$tableExists('projects')) {
@@ -217,6 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (!$columnExists('projects','links'))    { $apply("ALTER TABLE `projects` ADD COLUMN `links` TEXT NULL"); }
             if (!$columnExists('projects','language')) { $apply("ALTER TABLE `projects` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); }
             if (!$columnExists('projects','wishes'))   { $apply("ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL"); }
+            if (!$columnExists('projects','domain_host')) { $apply("ALTER TABLE `projects` ADD COLUMN `domain_host` VARCHAR(190) NULL AFTER `wishes`"); }
             // tighten language column null/default if needed
             try { $apply("ALTER TABLE `projects` MODIFY COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); } catch (Throwable $e) { /* ignore */ }
         }
@@ -248,6 +262,138 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (!$columnExists('publications','post_url'))     { $apply("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL"); }
             if (!$columnExists('publications','created_at'))   { $apply("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); }
         }
+
+        // New in-place: ensure project_links table
+        if (!$tableExists('project_links')) {
+            $apply("CREATE TABLE IF NOT EXISTS `project_links` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `project_id` INT NOT NULL,
+                `url` TEXT NOT NULL,
+                `anchor` VARCHAR(255) NULL,
+                `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
+                `wish` TEXT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX (`project_id`),
+                CONSTRAINT `fk_project_links_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>project_links: ' . __('Создана/обновлена таблица.');
+        } else {
+            // minimal columns checks
+            if (!$columnExists('project_links','language'))   { $apply("ALTER TABLE `project_links` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); }
+            if (!$columnExists('project_links','wish'))       { $apply("ALTER TABLE `project_links` ADD COLUMN `wish` TEXT NULL"); }
+            if (!$columnExists('project_links','updated_at')) { $apply("ALTER TABLE `project_links` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"); }
+        }
+
+        // Ensure page_meta table (for analyzed page metadata)
+        if (!$tableExists('page_meta')) {
+            $apply("CREATE TABLE IF NOT EXISTS `page_meta` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `project_id` INT NOT NULL,
+                `url_hash` CHAR(64) NOT NULL,
+                `page_url` TEXT NOT NULL,
+                `final_url` TEXT NULL,
+                `lang` VARCHAR(16) NULL,
+                `region` VARCHAR(16) NULL,
+                `title` VARCHAR(512) NULL,
+                `description` TEXT NULL,
+                `canonical` TEXT NULL,
+                `published_time` VARCHAR(64) NULL,
+                `modified_time` VARCHAR(64) NULL,
+                `hreflang_json` TEXT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY `uniq_page_meta_proj_hash` (`project_id`, `url_hash`),
+                INDEX (`project_id`),
+                CONSTRAINT `fk_page_meta_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>page_meta: ' . __('Создана/обновлена таблица.');
+        } else {
+            // critical columns
+            foreach ([
+                'url_hash' => "ADD COLUMN `url_hash` CHAR(64) NOT NULL AFTER `project_id`",
+                'page_url' => "ADD COLUMN `page_url` TEXT NOT NULL AFTER `url_hash`",
+                'final_url' => "ADD COLUMN `final_url` TEXT NULL AFTER `page_url`",
+                'lang' => "ADD COLUMN `lang` VARCHAR(16) NULL AFTER `final_url`",
+                'region' => "ADD COLUMN `region` VARCHAR(16) NULL AFTER `lang`",
+                'title' => "ADD COLUMN `title` VARCHAR(512) NULL AFTER `region`",
+                'description' => "ADD COLUMN `description` TEXT NULL AFTER `title`",
+                'canonical' => "ADD COLUMN `canonical` TEXT NULL AFTER `description`",
+                'published_time' => "ADD COLUMN `published_time` VARCHAR(64) NULL AFTER `canonical`",
+                'modified_time' => "ADD COLUMN `modified_time` VARCHAR(64) NULL AFTER `published_time`",
+                'hreflang_json' => "ADD COLUMN `hreflang_json` TEXT NULL AFTER `modified_time`",
+                'created_at' => "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                'updated_at' => "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+            ] as $field => $ddl) {
+                if (!$columnExists('page_meta', $field)) { $apply("ALTER TABLE `page_meta` {$ddl}"); }
+            }
+            // ensure unique index
+            if (!$indexExists('page_meta', 'uniq_page_meta_proj_hash')) {
+                $apply("CREATE UNIQUE INDEX `uniq_page_meta_proj_hash` ON `page_meta`(`project_id`,`url_hash`)");
+            }
+        }
+
+        // Ensure networks table (registry of publishers)
+        if (!$tableExists('networks')) {
+            $apply("CREATE TABLE IF NOT EXISTS `networks` (
+                `slug` VARCHAR(120) NOT NULL,
+                `title` VARCHAR(255) NOT NULL,
+                `description` TEXT NULL,
+                `handler` VARCHAR(255) NOT NULL,
+                `handler_type` VARCHAR(50) NOT NULL DEFAULT 'node',
+                `meta` TEXT NULL,
+                `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+                `is_missing` TINYINT(1) NOT NULL DEFAULT 0,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`slug`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>networks: ' . __('Создана/обновлена таблица.');
+        } else {
+            // add missing columns (best-effort)
+            $netCols = ['description','handler','handler_type','meta','enabled','is_missing','created_at','updated_at'];
+            foreach ($netCols as $c) { if (!$columnExists('networks', $c)) { $apply("ALTER TABLE `networks` ADD COLUMN `{$c}` TEXT NULL"); } }
+            // adjust types where relevant (handler/handler_type)
+            try { if ($columnExists('networks','handler')) { $apply("ALTER TABLE `networks` MODIFY COLUMN `handler` VARCHAR(255) NOT NULL"); } } catch (Throwable $e) {}
+            try { if ($columnExists('networks','handler_type')) { $apply("ALTER TABLE `networks` MODIFY COLUMN `handler_type` VARCHAR(50) NOT NULL DEFAULT 'node'"); } } catch (Throwable $e) {}
+        }
+
+        // One-time migration: projects.links JSON -> project_links rows
+        try {
+            $res = $conn->query("SELECT id, language, links FROM projects WHERE links IS NOT NULL AND TRIM(links) <> ''");
+            if ($res instanceof mysqli_result) {
+                while ($row = $res->fetch_assoc()) {
+                    $pid = (int)$row['id'];
+                    $cnt = 0;
+                    $rc = $conn->query("SELECT COUNT(*) AS c FROM project_links WHERE project_id = " . $pid);
+                    if ($rc && ($rrow = $rc->fetch_assoc())) { $cnt = (int)$rrow['c']; }
+                    if ($rc) { $rc->close(); }
+                    if ($cnt > 0) { continue; }
+                    $arr = json_decode((string)$row['links'], true);
+                    $defaultLang = trim((string)($row['language'] ?? 'ru')) ?: 'ru';
+                    if (!is_array($arr) || empty($arr)) { continue; }
+                    $stmt = $conn->prepare("INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)");
+                    if ($stmt) {
+                        foreach ($arr as $it) {
+                            $url = '';$anchor='';$lang=$defaultLang;$wish='';
+                            if (is_string($it)) { $url = trim($it); }
+                            elseif (is_array($it)) {
+                                $url = trim((string)($it['url'] ?? ''));
+                                $anchor = trim((string)($it['anchor'] ?? ''));
+                                $lang = trim((string)($it['language'] ?? $lang)) ?: $defaultLang;
+                                $wish = trim((string)($it['wish'] ?? ''));
+                            }
+                            if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
+                                $stmt->bind_param('issss', $pid, $url, $anchor, $lang, $wish);
+                                @$stmt->execute();
+                            }
+                        }
+                        $stmt->close();
+                    }
+                }
+                $res->close();
+            }
+        } catch (Throwable $e) { /* ignore */ }
 
         $conn->close();
         $message .= '<br>Все миграции применены до версии ' . htmlspecialchars($new_version);

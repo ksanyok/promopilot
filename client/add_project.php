@@ -28,22 +28,33 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if ($stmt->execute()) {
                 $project_id = $stmt->insert_id;
                 $message = __('Проект добавлен!') . ' <a href="' . pp_url('client/client.php') . '">' . __('Вернуться к дашборду') . '</a>';
-                // Добавим первую ссылку и глобальные пожелания
-                $links = [];
+                // Добавим первую ссылку и глобальные пожелания в отдельную таблицу project_links
+                $host = '';
                 if ($first_url) {
-                    $links[] = [
-                        'url' => $first_url,
-                        'anchor' => $first_anchor,
-                        'language' => $first_language,
-                        'wish' => ''
-                    ];
+                    // Нормализуем и сохраним домен проекта (только хост, без www.)
+                    $host = strtolower((string)parse_url($first_url, PHP_URL_HOST));
+                    if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
+
+                    // Вставка ссылки
+                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
+                    if ($ins) {
+                        $emptyWish = '';
+                        $ins->bind_param('issss', $project_id, $first_url, $first_anchor, $first_language, $emptyWish);
+                        $ins->execute();
+                        $ins->close();
+                    }
+
+                    // Анализ микроразметки и сохранение в page_meta (best-effort)
+                    try {
+                        if (function_exists('pp_analyze_url_data') && function_exists('pp_save_page_meta')) {
+                            $meta = pp_analyze_url_data($first_url);
+                            if (is_array($meta)) { @pp_save_page_meta($project_id, $first_url, $meta); }
+                        }
+                    } catch (Throwable $e) { /* ignore */ }
                 }
-                $links_json = json_encode($links, JSON_UNESCAPED_UNICODE);
-                // Нормализуем и сохраним домен проекта (только хост, без www.)
-                $host = strtolower((string)parse_url($first_url, PHP_URL_HOST));
-                if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
-                $upd = $conn->prepare("UPDATE projects SET links = ?, wishes = ?, domain_host = ? WHERE id = ?");
-                if ($upd) { $upd->bind_param('sssi', $links_json, $global_wishes, $host, $project_id); $upd->execute(); $upd->close(); }
+                // Сохраним пожелания и домен
+                $upd = $conn->prepare('UPDATE projects SET wishes = ?, domain_host = ? WHERE id = ?');
+                if ($upd) { $upd->bind_param('ssi', $global_wishes, $host, $project_id); $upd->execute(); $upd->close(); }
             } else {
                 $message = __('Ошибка добавления проекта.');
             }

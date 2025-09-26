@@ -23,6 +23,30 @@ if ($result->num_rows == 0) {
 }
 
 $project = $result->fetch_assoc();
+$stmt->close();
+
+// Define extended language codes for link operations/UI
+$pp_lang_codes = [
+    'ru','en','uk','de','fr','es','it','pt','pt-br','pl','tr','nl','cs','sk','bg','ro','el','hu','sv','da','no','fi','et','lv','lt','ka','az','kk','uz','sr','sl','hr','he','ar','fa','hi','id','ms','vi','th','zh','zh-cn','zh-tw','ja','ko'
+];
+
+// Load links from normalized table
+$links = [];
+if ($pl = $conn->prepare('SELECT id, url, anchor, language, wish FROM project_links WHERE project_id = ? ORDER BY id ASC')) {
+    $pl->bind_param('i', $id);
+    $pl->execute();
+    $res = $pl->get_result();
+    while ($row = $res->fetch_assoc()) {
+        $links[] = [
+            'id' => (int)$row['id'],
+            'url' => (string)$row['url'],
+            'anchor' => (string)$row['anchor'],
+            'language' => (string)($row['language'] ?? ($project['language'] ?? 'ru')),
+            'wish' => (string)($row['wish'] ?? ''),
+        ];
+    }
+    $pl->close();
+}
 $conn->close();
 
 // Helper: normalize host (strip www)
@@ -86,79 +110,132 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
     } else {
-        $links = json_decode($project['links'] ?? '[]', true) ?: [];
-        if (!is_array($links)) { $links = []; }
-        // Нормализация ссылок теперь учитывает language и wish
-        $links = array_map(function($it) use ($project){
-            if (is_string($it)) return ['url'=>$it,'anchor'=>'','language'=>$project['language'] ?? 'ru','wish'=>''];
-            return [
-                'url'=>trim((string)($it['url'] ?? '')),
-                'anchor'=>trim((string)($it['anchor'] ?? '')),
-                'language'=>trim((string)($it['language'] ?? ($project['language'] ?? 'ru'))),
-                'wish'=>trim((string)($it['wish'] ?? ''))
-            ];
-        }, $links);
-
-        // Allowed languages
-        $allowedLangs = ['ru','en','es','fr','de'];
+        // Language validator and defaults
+        $pp_is_valid_lang = function($code): bool {
+            $code = trim((string)$code);
+            if ($code === '') return false;
+            if (strlen($code) > 10) return false;
+            return (bool)preg_match('/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i', $code);
+        };
+        $defaultLang = strtolower((string)($project['language'] ?? 'ru')) ?: 'ru';
 
         // Enforce single-domain policy
         $projectHost = $pp_normalize_host($project['domain_host'] ?? '');
         $domainToSet = '';
         $domainErrors = 0;
 
-        // Удаление
-        $removeIdx = array_map('intval', ($_POST['remove_links'] ?? []));
-        rsort($removeIdx);
-        foreach ($removeIdx as $ri) { if (isset($links[$ri])) array_splice($links, $ri, 1); }
+        $conn = connect_db();
 
-        // Редактирование существующих ссылок
+        // Удаление ссылок по ID
+        $removeIds = array_map('intval', (array)($_POST['remove_links'] ?? []));
+        $removeIds = array_values(array_filter($removeIds, fn($v) => $v > 0));
+        if (!empty($removeIds)) {
+            $ph = implode(',', array_fill(0, count($removeIds), '?'));
+            $types = str_repeat('i', count($removeIds) + 1);
+            $sql = "DELETE FROM project_links WHERE project_id = ? AND id IN ($ph)";
+            $stmt = $conn->prepare($sql);
+            if ($stmt) {
+                $params = array_merge([$id], $removeIds);
+                $stmt->bind_param($types, ...$params);
+                @$stmt->execute();
+                $stmt->close();
+            }
+        }
+
+        // Редактирование существующих ссылок по ID
         if (!empty($_POST['edited_links']) && is_array($_POST['edited_links'])) {
-            foreach ($_POST['edited_links'] as $idx => $row) {
-                $i = (int)$idx;
-                if (!isset($links[$i])) continue;
-                $url = trim($row['url'] ?? '');
-                $anchor = trim($row['anchor'] ?? '');
-                $lang = trim($row['language'] ?? $links[$i]['language']);
-                $wish = trim($row['wish'] ?? $links[$i]['wish']);
-                // sanitize language
-                if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
+            foreach ($_POST['edited_links'] as $lid => $row) {
+                $linkId = (int)$lid;
+                if ($linkId <= 0) continue;
+                $url = trim((string)($row['url'] ?? ''));
+                $anchor = trim((string)($row['anchor'] ?? ''));
+                $lang = strtolower(trim((string)($row['language'] ?? $defaultLang)));
+                $wish = trim((string)($row['wish'] ?? ''));
+                if ($lang === 'auto' || !$pp_is_valid_lang($lang)) { $lang = $defaultLang; }
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
-                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: ''); // fix undefined var
+                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
                     if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
                         $domainErrors++;
-                    } else {
-                        $links[$i] = ['url'=>$url,'anchor'=>$anchor,'language'=>$lang,'wish'=>$wish];
-                        if ($projectHost === '' && $uHost !== '') { $domainToSet = $uHost; $projectHost = $uHost; }
+                        continue;
                     }
+                    // Update row
+                    $st = $conn->prepare('UPDATE project_links SET url = ?, anchor = ?, language = ?, wish = ? WHERE id = ? AND project_id = ?');
+                    if ($st) {
+                        $st->bind_param('ssssii', $url, $anchor, $lang, $wish, $linkId, $id);
+                        @$st->execute();
+                        $st->close();
+                    }
+                    if ($projectHost === '' && $uHost !== '') { $domainToSet = $uHost; $projectHost = $uHost; }
                 }
             }
         }
 
-        // Добавление новых
+        // Добавление новых ссылок
+        $newLinkPayload = null; // to return to client
         if (!empty($_POST['added_links']) && is_array($_POST['added_links'])) {
             foreach ($_POST['added_links'] as $row) {
                 if (!is_array($row)) continue;
-                $url = trim($row['url'] ?? '');
-                $anchor = trim($row['anchor'] ?? '');
-                $lang = trim($row['language'] ?? ($project['language'] ?? 'ru'));
-                $wish = trim($row['wish'] ?? '');
-                if (!in_array($lang, $allowedLangs, true)) { $lang = $project['language'] ?? 'ru'; }
+                $url = trim((string)($row['url'] ?? ''));
+                $anchor = trim((string)($row['anchor'] ?? ''));
+                $lang = strtolower(trim((string)($row['language'] ?? $defaultLang)));
+                $wish = trim((string)($row['wish'] ?? ''));
                 if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
                     $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
                     if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
                     if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
                         $domainErrors++;
-                    } else {
-                        $links[] = ['url' => $url, 'anchor' => $anchor, 'language'=>$lang ?: 'ru', 'wish'=>$wish];
+                        continue;
+                    }
+                    // Auto-detect language from page meta/hreflang if requested or invalid
+                    $meta = null;
+                    if ($lang === 'auto' || !$pp_is_valid_lang($lang)) {
+                        if (function_exists('pp_analyze_url_data')) {
+                            try { $meta = pp_analyze_url_data($url); } catch (Throwable $e) { $meta = null; }
+                            $detected = '';
+                            if (is_array($meta)) {
+                                $detected = strtolower(trim((string)($meta['lang'] ?? '')));
+                                if ($detected === '' && !empty($meta['hreflang']) && is_array($meta['hreflang'])) {
+                                    // Prefer hreflang matching project language, otherwise first
+                                    foreach ($meta['hreflang'] as $hl) {
+                                        $h = strtolower(trim((string)($hl['hreflang'] ?? '')));
+                                        if ($h === $defaultLang || strpos($h, $defaultLang . '-') === 0) { $detected = $h; break; }
+                                    }
+                                    if ($detected === '' && isset($meta['hreflang'][0]['hreflang'])) {
+                                        $detected = strtolower(trim((string)$meta['hreflang'][0]['hreflang']));
+                                    }
+                                }
+                            }
+                            if ($detected !== '' && $pp_is_valid_lang($detected)) { $lang = $detected; }
+                            else { $lang = $defaultLang; }
+                        } else {
+                            $lang = $defaultLang;
+                        }
+                    }
+                    $lang = substr($lang, 0, 10);
+
+                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
+                    if ($ins) {
+                        $ins->bind_param('issss', $id, $url, $anchor, $lang, $wish);
+                        if (@$ins->execute()) {
+                            $newId = (int)$conn->insert_id;
+                            $newLinkPayload = ['id'=>$newId,'url'=>$url,'anchor'=>$anchor,'language'=>$lang,'wish'=>$wish];
+                            // Analyze and save microdata best-effort (reuse meta if available)
+                            try {
+                                if (function_exists('pp_save_page_meta')) {
+                                    if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($url); }
+                                    if (is_array($meta)) { @pp_save_page_meta($id, $url, $meta); }
+                                }
+                            } catch (Throwable $e) { /* ignore */ }
+                        }
+                        $ins->close();
                     }
                 }
             }
         } else {
+            // legacy single add fields
             $new_link = trim($_POST['new_link'] ?? '');
             $new_anchor = trim($_POST['new_anchor'] ?? '');
-            $new_language = trim($_POST['new_language'] ?? ($project['language'] ?? 'ru'));
-            if (!in_array($new_language, $allowedLangs, true)) { $new_language = $project['language'] ?? 'ru'; }
+            $new_language = strtolower(trim($_POST['new_language'] ?? $defaultLang));
             $new_wish = trim($_POST['new_wish'] ?? '');
             if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
                 $uHost = $pp_normalize_host(parse_url($new_link, PHP_URL_HOST) ?: '');
@@ -166,43 +243,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
                     $domainErrors++;
                 } else {
-                    $links[] = ['url' => $new_link, 'anchor' => $new_anchor, 'language'=>$new_language ?: 'ru', 'wish'=>$new_wish];
+                    // Auto-detect if needed
+                    $meta = null;
+                    if ($new_language === 'auto' || !$pp_is_valid_lang($new_language)) {
+                        if (function_exists('pp_analyze_url_data')) {
+                            try { $meta = pp_analyze_url_data($new_link); } catch (Throwable $e) { $meta = null; }
+                            $detected = '';
+                            if (is_array($meta)) {
+                                $detected = strtolower(trim((string)($meta['lang'] ?? '')));
+                                if ($detected === '' && !empty($meta['hreflang']) && is_array($meta['hreflang'])) {
+                                    foreach ($meta['hreflang'] as $hl) {
+                                        $h = strtolower(trim((string)($hl['hreflang'] ?? '')));
+                                        if ($h === $defaultLang || strpos($h, $defaultLang . '-') === 0) { $detected = $h; break; }
+                                    }
+                                    if ($detected === '' && isset($meta['hreflang'][0]['hreflang'])) {
+                                        $detected = strtolower(trim((string)$meta['hreflang'][0]['hreflang']));
+                                    }
+                                }
+                            }
+                            if ($detected !== '' && $pp_is_valid_lang($detected)) { $new_language = $detected; }
+                            else { $new_language = $defaultLang; }
+                        } else {
+                            $new_language = $defaultLang;
+                        }
+                    }
+                    $new_language = substr($new_language, 0, 10);
+
+                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
+                    if ($ins) {
+                        $ins->bind_param('issss', $id, $new_link, $new_anchor, $new_language, $new_wish);
+                        if (@$ins->execute()) {
+                            $newId = (int)$conn->insert_id;
+                            $newLinkPayload = ['id'=>$newId,'url'=>$new_link,'anchor'=>$new_anchor,'language'=>$new_language,'wish'=>$new_wish];
+                            try {
+                                if (function_exists('pp_save_page_meta')) {
+                                    if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($new_link); }
+                                    if (is_array($meta)) { @pp_save_page_meta($id, $new_link, $meta); }
+                                }
+                            } catch (Throwable $e) { /* ignore */ }
+                        }
+                        $ins->close();
+                    }
                 }
             }
         }
 
         // Глобальное пожелание проекта
         if (isset($_POST['wishes'])) {
-            $wishes = trim($_POST['wishes']);
+            $wishes = trim((string)$_POST['wishes']);
         } else {
-            $wishes = $project['wishes'] ?? '';
+            $wishes = (string)($project['wishes'] ?? '');
         }
-        $language = $project['language'] ?? 'ru'; // язык проекта не редактируется здесь
+        // язык проекта не редактируется здесь
+        $language = $project['language'] ?? 'ru';
 
-        $conn = connect_db();
-        $links_json = json_encode(array_values($links), JSON_UNESCAPED_UNICODE);
+        // Apply project updates
         if ($domainToSet !== '') {
-            $stmt = $conn->prepare("UPDATE projects SET links = ?, language = ?, wishes = ?, domain_host = ? WHERE id = ?");
-            $stmt->bind_param('ssssi', $links_json, $language, $wishes, $domainToSet, $id);
+            $stmt = $conn->prepare("UPDATE projects SET wishes = ?, language = ?, domain_host = ? WHERE id = ?");
+            $stmt->bind_param('sssi', $wishes, $language, $domainToSet, $id);
             $project['domain_host'] = $domainToSet;
         } else {
-            $stmt = $conn->prepare("UPDATE projects SET links = ?, language = ?, wishes = ? WHERE id = ?");
-            $stmt->bind_param('sssi', $links_json, $language, $wishes, $id);
+            $stmt = $conn->prepare("UPDATE projects SET wishes = ?, language = ? WHERE id = ?");
+            $stmt->bind_param('ssi', $wishes, $language, $id);
         }
-        if ($stmt->execute()) {
-            $pp_update_ok = true;
-            $message = __('Проект обновлен.');
-            if ($domainErrors > 0) { $message .= ' ' . sprintf(__('Отклонено ссылок с другим доменом: %d.'), $domainErrors); }
-            $project['links'] = $links_json;
-            $project['language'] = $language;
-            $project['wishes'] = $wishes;
-        } else {
-            $message = __('Ошибка обновления проекта.');
+        if ($stmt) {
+            if ($stmt->execute()) {
+                $pp_update_ok = true;
+                $message = __('Проект обновлен.');
+                if ($domainErrors > 0) { $message .= ' ' . sprintf(__('Отклонено ссылок с другим доменом: %d.'), $domainErrors); }
+                $project['language'] = $language;
+                $project['wishes'] = $wishes;
+            } else {
+                $message = __('Ошибка обновления проекта.');
+            }
+            $stmt->close();
         }
-        $stmt->close();
+
+        // Count links after operations
+        $linksCount = 0;
+        if ($cst = $conn->prepare('SELECT COUNT(*) FROM project_links WHERE project_id = ?')) {
+            $cst->bind_param('i', $id);
+            $cst->execute();
+            $cst->bind_result($linksCount);
+            $cst->fetch();
+            $cst->close();
+        }
+
         $conn->close();
 
-        // Для ответа AJAX вернем JSON и завершим выполнение
+        // Ответ для AJAX
         if ($pp_is_ajax) {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -210,24 +339,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info']
                 'message' => (string)$message,
                 'domain_errors' => (int)$domainErrors,
                 'domain_host' => (string)($project['domain_host'] ?? ''),
-                'links_count' => is_array($links) ? count($links) : 0
+                'links_count' => (int)$linksCount,
+                'new_link' => $newLinkPayload,
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
     }
 }
-
-$links = json_decode($project['links'] ?? '[]', true) ?: [];
-if (!is_array($links)) { $links = []; }
-$links = array_map(function($it) use ($project){
-    if (is_string($it)) return ['url'=>$it,'anchor'=>'','language'=>$project['language'] ?? 'ru','wish'=>''];
-    return [
-        'url'=>trim((string)($it['url'] ?? '')),
-        'anchor'=>trim((string)($it['anchor'] ?? '')),
-        'language'=>trim((string)($it['language'] ?? ($project['language'] ?? 'ru'))),
-        'wish'=>trim((string)($it['wish'] ?? ''))
-    ];
-}, $links);
 
 // Получить статусы публикаций по URL
 $pubStatusByUrl = [];
@@ -384,8 +502,8 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                             <div class="col-lg-3"><input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>"></div>
                             <div class="col-lg-2">
                                 <select name="new_language" class="form-select">
-                                    <?php $__langs = ['ru','en','es','fr','de']; $__plang = ($project['language'] ?? 'ru'); foreach ($__langs as $l): ?>
-                                        <option value="<?php echo htmlspecialchars($l); ?>" <?php echo $l === $__plang ? 'selected' : ''; ?>><?php echo strtoupper($l); ?></option>
+                                    <?php $opts = array_merge(['auto'], $pp_lang_codes); $def = 'auto'; foreach ($opts as $l): ?>
+                                        <option value="<?php echo htmlspecialchars($l); ?>" <?php echo ($def===$l?'selected':''); ?>><?php echo strtoupper($l); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
@@ -436,6 +554,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 </thead>
                                 <tbody>
                                     <?php foreach ($links as $index => $item):
+                                        $linkId = (int)$item['id'];
                                         $url = $item['url'];
                                         $anchor = $item['anchor'];
                                         $lang = $item['language'];
@@ -457,22 +576,22 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         if (!empty($pu['fragment'])) { $pathDisp .= '#' . $pu['fragment']; }
                                         if ($pathDisp === '') { $pathDisp = '/'; }
                                     ?>
-                                    <tr data-index="<?php echo (int)$index; ?>" data-post-url="<?php echo htmlspecialchars($postUrl); ?>" data-network="<?php echo htmlspecialchars($networkSlug); ?>">
+                                    <tr data-id="<?php echo (int)$linkId; ?>" data-index="<?php echo (int)$index; ?>" data-post-url="<?php echo htmlspecialchars($postUrl); ?>" data-network="<?php echo htmlspecialchars($networkSlug); ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
                                             <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url text-truncate-path" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
-                                            <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$index; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
+                                            <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$linkId; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
                                             <span class="view-anchor text-truncate-anchor" title="<?php echo htmlspecialchars($anchor); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($anchor); ?></span>
-                                            <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$index; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
+                                            <input type="text" class="form-control d-none edit-anchor" name="edited_links[<?php echo (int)$linkId; ?>][anchor]" value="<?php echo htmlspecialchars($anchor); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                                         </td>
                                         <td class="language-cell" data-label="<?php echo __('Язык'); ?>">
                                             <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase"><?php echo htmlspecialchars($lang); ?></span>
-                                            <select class="form-select form-select-sm d-none edit-language" name="edited_links[<?php echo (int)$index; ?>][language]" <?php echo $canEdit ? '' : 'disabled'; ?>>
-                                                <?php foreach (['ru'=>'RU','en'=>'EN','es'=>'ES','fr'=>'FR','de'=>'DE'] as $lv=>$lt): ?>
-                                                    <option value="<?php echo $lv; ?>" <?php echo $lv===$lang?'selected':''; ?>><?php echo $lt; ?></option>
+                                            <select class="form-select form-select-sm d-none edit-language" name="edited_links[<?php echo (int)$linkId; ?>][language]" <?php echo $canEdit ? '' : 'disabled'; ?>>
+                                                <?php foreach (array_merge(['auto'], $pp_lang_codes) as $lv): ?>
+                                                    <option value="<?php echo htmlspecialchars($lv); ?>" <?php echo $lv===$lang?'selected':''; ?>><?php echo strtoupper($lv); ?></option>
                                                 <?php endforeach; ?>
                                             </select>
                                         </td>
@@ -480,7 +599,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php $fullWish = (string)($item['wish'] ?? ''); ?>
                                             <button type="button" class="icon-btn action-show-wish" data-wish="<?php echo htmlspecialchars($fullWish); ?>" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
                                             <div class="view-wish d-none"><?php echo htmlspecialchars($fullWish); ?></div>
-                                            <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$index; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($fullWish); ?></textarea>
+                                            <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$linkId; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($fullWish); ?></textarea>
                                         </td>
                                         <td data-label="<?php echo __('Статус'); ?>" class="status-cell">
                                             <?php if ($status === 'published'): ?>
@@ -503,9 +622,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
                                             <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
                                             <?php if ($status === 'pending'): ?>
-                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
+                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
                                             <?php elseif ($status === 'not_published'): ?>
-                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-index="<?php echo (int)$index; ?>">
+                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>">
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
                                                 </button>
                                             <?php else: ?>
@@ -517,7 +636,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php endif; ?>
                                             <?php if ($canEdit): ?>
                                                 <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                                                <button type="button" class="icon-btn action-remove" data-index="<?php echo (int)$index; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                                                <button type="button" class="icon-btn action-remove" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                                             <?php elseif ($status === 'pending'): ?>
                                                 <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>
                                             <?php endif; ?>
@@ -616,6 +735,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // New: references for links table (may not exist initially)
     let linksTable = document.querySelector('.table-links');
     let linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
+
+    // Expose server language codes list to JS
+    const LANG_CODES = <?php echo json_encode(array_values($pp_lang_codes)); ?>;
 
     // Helper: apply project host coming from server and update UI hints/placeholders
     function applyProjectHost(host) {
@@ -734,8 +856,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     async function saveRowEdit(tr, btn) {
-        const idx = parseInt(tr.getAttribute('data-index'), 10);
-        if (Number.isNaN(idx)) { alert('<?php echo __('Невозможно сохранить: индекс строки не определен. Обновите страницу.'); ?>'); return false; }
+        const id = parseInt(tr.getAttribute('data-id'), 10);
+        if (Number.isNaN(id) || id <= 0) { alert('<?php echo __('Невозможно сохранить: идентификатор ссылки не определен. Обновите страницу.'); ?>'); return false; }
         const url = tr.querySelector('.url-cell .edit-url')?.value?.trim() || '';
         const anchor = tr.querySelector('.anchor-cell .edit-anchor')?.value?.trim() || '';
         const lang = tr.querySelector('.language-cell .edit-language')?.value?.trim() || '';
@@ -750,10 +872,10 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('update_project', '1');
             fd.append('ajax', '1');
             fd.append('wishes', globalWish.value || '');
-            fd.append(`edited_links[${idx}][url]`, url);
-            fd.append(`edited_links[${idx}][anchor]`, anchor);
-            fd.append(`edited_links[${idx}][language]`, lang);
-            fd.append(`edited_links[${idx}][wish]`, wish);
+            fd.append(`edited_links[${id}][url]`, url);
+            fd.append(`edited_links[${id}][anchor]`, anchor);
+            fd.append(`edited_links[${id}][language]`, lang);
+            fd.append(`edited_links[${id}][wish]`, wish);
             const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
             const data = await res.json();
             if (!data || !data.ok) { alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR')); return false; }
@@ -826,8 +948,8 @@ document.addEventListener('DOMContentLoaded', function() {
     async function handleRemoveButton(btn) {
         const tr = btn.closest('tr');
         if (!tr) return;
-        const idx = parseInt(btn.getAttribute('data-index') || tr.getAttribute('data-index') || '', 10);
-        if (Number.isNaN(idx)) { alert('<?php echo __('Невозможно удалить: индекс строки не определен. Обновите страницу.'); ?>'); return; }
+        const id = parseInt(btn.getAttribute('data-id') || tr.getAttribute('data-id') || '', 10);
+        if (Number.isNaN(id) || id <= 0) { alert('<?php echo __('Невозможно удалить: идентификатор ссылки не определен. Обновите страницу.'); ?>'); return; }
         if (!confirm('<?php echo __('Удалить ссылку?'); ?>')) return;
         setButtonLoading(btn, true);
         try {
@@ -836,23 +958,12 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('update_project', '1');
             fd.append('ajax', '1');
             fd.append('wishes', globalWish.value || '');
-            fd.append('remove_links[]', String(idx));
+            fd.append('remove_links[]', String(id));
             const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
             const data = await res.json();
             if (!data || !data.ok) { alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR')); return; }
-            // Remove row and renumber dataset indexes following
-            const tbody = tr.parentElement;
+            // Remove row and renumber
             tr.remove();
-            // Decrement data-index for rows with index > removed idx
-            tbody.querySelectorAll('tr').forEach(r => {
-                const di = parseInt(r.getAttribute('data-index') || '', 10);
-                if (!Number.isNaN(di) && di > idx) {
-                    const newIdx = di - 1;
-                    r.setAttribute('data-index', String(newIdx));
-                    const delBtn = r.querySelector('.action-remove');
-                    if (delBtn) delBtn.setAttribute('data-index', String(newIdx));
-                }
-            });
             refreshRowNumbers();
         } catch (e) {
             alert('<?php echo __('Сетевая ошибка'); ?>');
@@ -1074,7 +1185,7 @@ document.addEventListener('DOMContentLoaded', function() {
     addLinkBtn.addEventListener('click', async function() {
         const url = newLinkInput.value.trim();
         const anchor = newAnchorInput.value.trim();
-        const lang = (newLangSelect ? newLangSelect.value.trim() : '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
+        const lang = (newLangSelect ? newLangSelect.value.trim() : 'auto');
         const wish = newWish.value.trim();
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
         // Domain restriction (client-side)
@@ -1096,7 +1207,7 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('wishes', globalWish.value || '');
             fd.append('added_links[0][url]', url);
             fd.append('added_links[0][anchor]', anchor);
-            fd.append('added_links[0][language]', lang || '<?php echo htmlspecialchars($project['language'] ?? 'ru'); ?>');
+            fd.append('added_links[0][language]', lang || 'auto');
             fd.append('added_links[0][wish]', wish);
 
             const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
@@ -1112,11 +1223,14 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.domain_errors && Number(data.domain_errors) > 0) {
                 alert('<?php echo __('Отклонено ссылок с другим доменом'); ?>: ' + data.domain_errors);
             }
+            const payload = data.new_link || { id: 0, url, anchor, language: lang, wish: wish };
             // Добавляем строку в таблицу (сразу обычное состояние, т.к. уже сохранено)
             const tbody = ensureLinksTable();
             if (tbody) {
                 const tr = document.createElement('tr');
+                const newId = parseInt(payload.id || '0', 10) || 0;
                 const newIndex = (data.links_count && data.links_count > 0) ? (data.links_count - 1) : 0;
+                tr.setAttribute('data-id', String(newId));
                 tr.setAttribute('data-index', String(newIndex));
                 tr.dataset.postUrl = '';
                 tr.dataset.network = '';
@@ -1134,15 +1248,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
                     </td>
                     <td class="language-cell">
-                        <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${lang}</span>
+                        <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${(payload.language || lang).toUpperCase()}</span>
                         <select class="form-select form-select-sm d-none edit-language">
-                            ${['ru','en','es','fr','de'].map(l=>`<option value="${l}" ${l===lang?'selected':''}>${l.toUpperCase()}</option>`).join('')}
+                            ${LANG_CODES.map(l=>`<option value="${l}" ${l===(payload.language||lang)?'selected':''}>${l.toUpperCase()}</option>`).join('')}
                         </select>
                     </td>
                     <td class="wish-cell">
-                        <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
-                        <div class="view-wish d-none">${escapeHtml(wish)}</div>
-                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(wish)}</textarea>
+                        <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                        <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
+                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
                     </td>
                     <td class="status-cell">
                         <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
@@ -1151,7 +1265,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
                         <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="${escapeHtml(url)}"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
                         <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                        <button type="button" class="icon-btn action-remove" data-index="${String(newIndex)}" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                        <button type="button" class="icon-btn action-remove" data-id="${String(newId)}" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
                     </td>`;
                 tbody.appendChild(tr);
                 refreshRowNumbers();

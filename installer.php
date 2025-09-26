@@ -272,9 +272,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         setup_database($host, $user, $pass, $db, $admin_user, $admin_pass, $errors);
     }
 
+    // 4) Применяем актуальную структуру БД и миграции (idempotent)
     if (!$errors) {
-        $successOutput .= '<div style="padding:12px;border:1px solid #28a745;color:#155724;background:#d4edda;margin-bottom:12px;">Установка завершена!</div>';
-        $successOutput .= '<p><a href="auth/login.php">Перейти на страницу входа</a></p>';
+        // ensure functions available without full init bootstrap
+        require_once __DIR__ . '/includes/functions.php';
+        if (function_exists('ensure_schema')) {
+            try { ensure_schema(); } catch (Throwable $e) { /* ignore during install */ }
+        }
+    }
+
+    if (!$errors) {
+        $successOutput = '<div class="alert alert-success">Установка успешно завершена. Теперь вы можете <a href="auth/login.php">войти</a>.</div>';
     }
 }
 ?>

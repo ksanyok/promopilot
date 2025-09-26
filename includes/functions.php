@@ -276,6 +276,66 @@ function ensure_schema(): void {
         }
     }
 
+    // New: normalized links storage (separate rows instead of JSON in projects.links)
+    $plCols = $getCols('project_links');
+    if (empty($plCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `project_links` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `project_id` INT NOT NULL,
+            `url` TEXT NOT NULL,
+            `anchor` VARCHAR(255) NULL,
+            `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
+            `wish` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX (`project_id`),
+            CONSTRAINT `fk_project_links_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    }
+
+    // Best-effort one-time migration from projects.links JSON to project_links
+    try {
+        if (!empty($plCols)) {
+            if ($res = @$conn->query("SELECT id, language, links FROM projects WHERE links IS NOT NULL AND TRIM(links) <> ''")) {
+                while ($row = $res->fetch_assoc()) {
+                    $pid = (int)$row['id'];
+                    // Skip if already migrated (rows exist)
+                    $cntRes = @$conn->query("SELECT COUNT(*) AS c FROM project_links WHERE project_id = " . (int)$pid);
+                    $doMigrate = true;
+                    if ($cntRes && ($cntRow = $cntRes->fetch_assoc())) { $doMigrate = ((int)$cntRow['c'] === 0); }
+                    if ($cntRes) { $cntRes->free(); }
+                    if (!$doMigrate) { continue; }
+                    $linksJson = (string)$row['links'];
+                    $defaultLang = trim((string)$row['language'] ?? 'ru');
+                    $arr = json_decode($linksJson, true);
+                    if (!is_array($arr)) { continue; }
+                    $stmt = $conn->prepare("INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)");
+                    if ($stmt) {
+                        foreach ($arr as $it) {
+                            $url = '';
+                            $anchor = '';
+                            $lang = $defaultLang ?: 'ru';
+                            $wish = '';
+                            if (is_string($it)) { $url = trim($it); }
+                            elseif (is_array($it)) {
+                                $url = trim((string)($it['url'] ?? ''));
+                                $anchor = trim((string)($it['anchor'] ?? ''));
+                                $lang = trim((string)($it['language'] ?? $lang)) ?: ($defaultLang ?: 'ru');
+                                $wish = trim((string)($it['wish'] ?? ''));
+                            }
+                            if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
+                                $stmt->bind_param('issss', $pid, $url, $anchor, $lang, $wish);
+                                @$stmt->execute();
+                            }
+                        }
+                        $stmt->close();
+                    }
+                }
+                $res->free();
+            }
+        }
+    } catch (Throwable $e) { /* ignore migration errors */ }
+
     // Settings table optional—skip if missing
 
     @$conn->close();
