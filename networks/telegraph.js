@@ -241,7 +241,7 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
 
 function validateStructure(html, pageUrl, anchorText) {
   const reasons = [];
-  const linkRe = new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'i');
+  const linkRe = new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'gi');
   const linkMatches = Array.from(html.matchAll(linkRe));
   if (linkMatches.length !== 1) reasons.push('link_count');
   const text = linkMatches[0] ? stripTags(linkMatches[0][1]) : '';
@@ -256,8 +256,7 @@ function validateStructure(html, pageUrl, anchorText) {
     const pPlain = stripTags(paras[linkParaIndex]);
     // Disallow trailing placement after the final period/question/exclamation
     if (/([.!?])\s*$/.test(pPlain)) reasons.push('link_at_end_of_paragraph');
-    // Disallow adjacency to filler words
-    if (/(подробнее|детальнее|здесь|по\s+ссылке)\s*[.!?]?$/.i.test(pPlain)) reasons.push('link_with_filler_words');
+    // Removed filler-word adjacency check per request
   }
 
   const h2Count = (html.match(/<h2[\s>]/gi) || []).length;
