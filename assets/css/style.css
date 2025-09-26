@@ -664,7 +664,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   font-size: .85rem; 
   transition: background .15s ease, border-color .15s ease, color .15s ease; 
 }
-.icon-btn:hover { background: var(--surface); color: var(--primary); }
+.icon-btn:hover { background: var(--surface); color: var (--primary); }
 .icon-btn.disabled, .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 /* Space between mixed buttons */
@@ -843,3 +843,22 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .link-adder-card .card-body .row .form-control,
 .link-adder-card .card-body .row .form-select { height: 42px; padding-top: 8px; padding-bottom: 8px; }
 .link-adder-card .card-body .row .btn { height: 42px; display: inline-flex; align-items: center; justify-content: center; width: 100%; }
+
+/* ===== Fix: table row fill and vertical alignment in links table ===== */
+/* Vertically center content in all cells */
+.table-links tbody td, .table-links thead th { vertical-align: middle; }
+
+/* Actions cell should remain a table-cell (not flex) to let row background fill fully */
+.table-links td.text-end {
+  display: table-cell !important;
+  text-align: right !important;
+  vertical-align: middle !important;
+  white-space: nowrap;
+}
+.table-links td.text-end > * { vertical-align: middle; margin-left: 6px; }
+.table-links td.text-end > *:first-child { margin-left: 0; }
+
+/* Normalize heights for buttons to align visually with one-line cells */
+.table-links .btn.btn-sm, .table-links .icon-btn { height: 36px !important; }
+.table-links .icon-btn { width: 36px !important; }
+.table-links .btn-publish.btn-sm { height: 36px !important; min-height: 36px !important; }
