@@ -33,7 +33,6 @@ function logLine(msg, data){
 }
 
 async function generateTextWithChat(prompt, openaiApiKey) {
-  logLine('OpenAI request', { promptPreview: String(prompt || '').slice(0, 160) });
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -48,12 +47,11 @@ async function generateTextWithChat(prompt, openaiApiKey) {
   });
   if (!res.ok) {
     const body = await res.text().catch(()=> '');
-    logLine('OpenAI HTTP error', { status: res.status, statusText: res.statusText, body: body.slice(0, 400) });
+    logLine('OpenAI HTTP error', { status: res.status, statusText: res.statusText, body: body.slice(0, 200) });
     return '';
   }
   const data = await res.json().catch(()=> null);
   const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-  logLine('OpenAI response ok', { length: String(content).length });
   return String(content).trim();
 }
 
@@ -64,7 +62,6 @@ function extractAttr(tagHtml, attr) {
 }
 
 async function extractPageMeta(url) {
-  logLine('Fetch page for meta', { url });
   try {
     const r = await fetch(url, {
       method: 'GET',
@@ -121,7 +118,7 @@ async function extractPageMeta(url) {
     out.title = out.title.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     out.description = out.description.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-    logLine('Meta extracted', { title: out.title, descriptionPreview: out.description.slice(0, 160) });
+    logLine('Meta extracted', { title: out.title.slice(0, 100), desc: out.description.slice(0, 140) });
     return out;
   } catch (e) {
     logLine('Meta extract failed', { error: String(e && e.message || e) });
@@ -139,10 +136,18 @@ function cleanTitle(t) {
 function normalizeArticleHtml(raw, pageUrl, anchorText) {
   let s = String(raw || '').replace(/\r\n/g, '\n');
 
-  // Trim and collapse excessive blank lines in plain text
+  // First, break existing paragraphs by <br> into atomic blocks
+  s = s.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, (m, inner) => {
+    const txt = String(inner).replace(/<br[^>]*>/gi, '\n');
+    const chunks = txt.split(/\n{2,}|\n/g).map(t => t.trim()).filter(Boolean);
+    if (!chunks.length) return '';
+    return chunks.map(chunk => (/^[^.!?\n]{3,80}$/.test(chunk) ? `<h2>${chunk}</h2>` : `<p>${chunk}</p>`)).join('\n');
+  });
+
+  // Trim and collapse excessive blank lines
   s = s.replace(/\n{3,}/g, '\n\n').trim();
 
-  // Remove all <br> artifacts that Telegraph later renders as gaps
+  // Remove all remaining <br>
   s = s.replace(/<br[^>]*>/gi, '');
 
   // If content is mostly plain text, split into paragraphs by blank lines
@@ -157,7 +162,6 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
   // Convert bold-only or colon-ending paragraphs to <h2>
   s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*:<\/p>/gi, '<h2>$1</h2>');
   s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*<\/p>\s*(?=<p>)/gi, (m, text) => {
-    // Heuristic: short line without punctuation becomes a subheading
     const t = String(text || '').trim();
     if (/^[^.!?\n]{3,80}$/.test(t)) return `<h2>${t}</h2>`; 
     return m;
@@ -169,22 +173,17 @@ function normalizeArticleHtml(raw, pageUrl, anchorText) {
     return `<ul>${items.join('')}</ul>`;
   });
 
-  // Remove any <br> inside list items and paragraphs again (safety)
-  s = s.replace(/(<li[^>]*>)\s*(?:<br[^>]*>\s*)+/gi, '$1');
-  s = s.replace(/(<p[^>]*>)\s*(?:<br[^>]*>\s*)+/gi, '$1');
-
   // Remove empty paragraphs
   s = s.replace(/<p>\s*<\/p>/gi, '');
 
   // Strip all anchors completely; will inject exactly one later
   s = s.replace(/<a\s+[^>]*>([\s\S]*?)<\/a>/gi, '$1');
 
-  // Deduplicate excessive newlines introduced by replacements
+  // Deduplicate excessive newlines
   s = s.replace(/\n{3,}/g, '\n\n').trim();
 
   // Ensure at least one <h2>
   if (!/<h2[\s>]/i.test(s)) {
-    // Try to promote the first short paragraph into a heading
     const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
     if (firstP) {
       const text = stripTags(firstP[0]);
@@ -230,7 +229,7 @@ function integrateSingleAnchor(html, pageUrl, anchorText) {
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
-  logLine('Publish start', { pageUrl, anchorText, language });
+  logLine('Publish start', { pageUrl, language });
   const meta = await extractPageMeta(pageUrl);
 
   const prompts = {
@@ -253,25 +252,20 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
       `- Stay strictly on-topic and do not add unrelated content.`
     )
   };
-  logLine('Prompts prepared');
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Generate title, author, content with small pauses
   const rawTitle = await generateTextWithChat(prompts.title, openaiApiKey);
-  await sleep(1500);
+  await sleep(1200);
   const rawAuthor = await generateTextWithChat(prompts.author, openaiApiKey);
-  await sleep(1500);
-  let rawContent = await generateTextWithChat(prompts.content, openaiApiKey);
+  await sleep(1200);
+  const rawContent = await generateTextWithChat(prompts.content, openaiApiKey);
 
   const title = cleanTitle(rawTitle);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
-  logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
 
-  // Normalize and structure content to avoid stray breaks and gaps
   let content = normalizeArticleHtml(rawContent, pageUrl, anchorText);
 
-  // Launch Puppeteer with optional explicit executable path
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
     launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
@@ -279,26 +273,22 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
   if (execPath) launchOpts.executablePath = execPath;
-  logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
+  logLine('Launching browser', { executablePath: execPath || 'default' });
 
   const browser = await puppeteer.launch(launchOpts);
   let page;
   try {
     page = await browser.newPage();
-    logLine('Goto Telegraph');
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
-    logLine('Fill title');
     await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 60000 });
     await page.click('h1[data-placeholder="Title"]');
     await page.keyboard.type(title);
 
-    logLine('Fill author');
     await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 60000 });
     await page.click('address[data-placeholder="Your name"]');
     await page.keyboard.type(author);
 
-    logLine('Fill content');
     await page.evaluate((html) => {
       const el = document.querySelector('p[data-placeholder="Your story..."]');
       if (el) {
@@ -310,7 +300,6 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
       }
     }, content);
 
-    logLine('Publish click');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 120000 }),
       page.click('button.publish_button')
@@ -319,15 +308,13 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     const publishedUrl = page.url();
     logLine('Published', { publishedUrl });
 
-    const result = { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
-    logLine('Success result', result);
-    return result;
+    return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
   } catch (e) {
-    logLine('Publish failed', { error: String(e && e.message || e), stack: e && e.stack });
+    logLine('Publish failed', { error: String(e && e.message || e) });
     throw e;
   } finally {
-    try { if (page) await page.close(); } catch(_) { logLine('Page close failed'); }
-    try { await browser.close(); logLine('Browser closed'); } catch(_) { logLine('Browser close failed'); }
+    try { if (page) await page.close(); } catch(_) {}
+    try { await browser.close(); } catch(_) {}
   }
 }
 
@@ -338,16 +325,13 @@ if (require.main === module) {
   (async () => {
     try {
       const raw = process.env.PP_JOB || '{}';
-      logLine('PP_JOB raw', { length: raw.length });
       const job = JSON.parse(raw);
-      logLine('PP_JOB parsed');
       const pageUrl = job.url || job.pageUrl || '';
       const anchor = job.anchor || pageUrl;
       const language = job.language || 'ru';
       const apiKey = job.openaiApiKey || process.env.OPENAI_API_KEY || '';
       if (!pageUrl || !apiKey) {
         const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url or openaiApiKey missing', network: 'telegraph', logFile: LOG_FILE };
-        logLine('Run failed (missing params)', payload);
         console.log(JSON.stringify(payload));
         process.exit(1);
       }
@@ -355,7 +339,6 @@ if (require.main === module) {
       console.log(JSON.stringify(res));
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
-      logLine('Run failed', { error: payload.error, stack: e && e.stack });
       console.log(JSON.stringify(payload));
       process.exit(1);
     }
