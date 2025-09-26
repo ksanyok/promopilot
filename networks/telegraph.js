@@ -1,10 +1,10 @@
 'use strict';
 
 // Minimal, clean implementation for Telegraph publishing
-// - Generates title, author, and article via OpenAI (gpt-3.5-turbo)
+// - Generates title, author, and article via OpenAI
 // - Collects microdata/SEO from the target page to guide content
 // - Uses one organic inline link to the target URL
-// - Uses <h2> subheadings as requested
+// - Uses <h3> subheadings (Telegraph-compatible)
 
 const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
@@ -32,7 +32,7 @@ function logLine(msg, data){
   try { console.log(line); } catch(_) {}
 }
 
-// Unified AI call: try Responses API (gpt-5-mini), fallback to Chat Completions
+// Unified AI call: try Responses API first, fallback-friendly parsing
 async function generateTextWithAI(prompt, openaiApiKey) {
   try {
     const r = await fetch('https://api.openai.com/v1/responses', {
@@ -110,7 +110,7 @@ async function extractPageMeta(url) {
     let ldTitle = '', ldDesc = '';
     const ldBlocks = html.match(/<script[^>]+type=[\"\']application\/ld\+json[\"\'][^>]*>[\s\S]*?<\/script>/gi) || [];
     for (const block of ldBlocks) {
-      const jsonText = (block.match(/>([\s\S]*?)<\/script>/i) || [,''])[1];
+      const jsonText = (block.match(/>([\s\S]*?)<\/script>/i) || [, ''])[1];
       try {
         const data = JSON.parse(jsonText);
         const arr = Array.isArray(data) ? data : [data];
@@ -146,190 +146,76 @@ function cleanTitle(t) {
   return t;
 }
 
-function isHeadingCandidate(text) {
-  const t = String(text || '').trim();
-  if (t.length < 3 || t.length > 100) return false;
-  const hasPeriod = /\./.test(t);
-  const endsQorEx = /[!?]$/.test(t);
-  const hasColon = /:/.test(t);
-  const tooManySentences = /[.!?].+?[.!?]/.test(t);
-  if (tooManySentences) return false;
-  if (hasColon || endsQorEx) return true;
-  // Short and no period looks like a section label
-  if (!hasPeriod && /^[^\n]{3,80}$/.test(t)) return true;
-  return false;
-}
-
-function normalizeArticleHtml(raw, pageUrl, anchorText) {
-  let s = String(raw || '').replace(/\r\n/g, '\n');
-
-  // First, break existing paragraphs by <br> into atomic blocks
-  s = s.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, (m, inner) => {
-    const txt = String(inner).replace(/<br[^>]*>/gi, '\n');
-    const chunks = txt.split(/\n{2,}|\n/g).map(t => t.trim()).filter(Boolean);
-    if (!chunks.length) return '';
-    return chunks.map(chunk => (isHeadingCandidate(chunk) ? `<h2>${chunk}</h2>` : `<p>${chunk}</p>`)).join('\n');
-  });
-
-  // Trim and collapse excessive blank lines
-  s = s.replace(/\n{3,}/g, '\n\n').trim();
-
-  // Remove all remaining <br>
-  s = s.replace(/<br[^>]*>/gi, '');
-
-  // If content is mostly plain text, split into paragraphs by blank lines
-  if (!/<\s*(p|h2|ul|ol|li|blockquote|a)\b/i.test(s)) {
-    const blocks = s.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
-    s = blocks.map(p => (isHeadingCandidate(p) ? `<h2>${p}</h2>` : `<p>${p}</p>`)).join('\n');
-  }
-
-  // Convert markdown-like headings to <h2>
-  s = s.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
-
-  // Convert bold-only or colon-ending paragraphs to <h2>
-  s = s.replace(/<p>\s*(?:<strong>|<b>)?([^<]{3,120}?)(?:<\/strong>|<\/b>)?\s*:<\/p>/gi, '<h2>$1</h2>');
-  // Convert short title-like paragraphs into <h2>
-  s = s.replace(/<p>([\s\S]*?)<\/p>/gi, (full, inner) => {
-    const t = stripTags(inner);
-    return isHeadingCandidate(t) ? `<h2>${t}</h2>` : full;
-  });
-
-  // Convert bullet-like paragraphs to <ul><li>
-  s = s.replace(/(?:\s*<p>\s*(?:[-*•·–—]|\d+[.)])\s+([^<]+?)\s*<\/p>\s*){2,}/gi, (full) => {
-    const items = Array.from(full.matchAll(/<p>\s*(?:[-*•·–—]|\d+[.)])\s+([^<]+?)\s*<\/p>/gi)).map(m => `<li>${m[1].trim()}</li>`);
-    return `<ul>${items.join('')}</ul>`;
-  });
-
-  // Remove empty bullet-only paragraphs and empty paragraphs
-  s = s.replace(/<p>\s*[•·–—-]\s*<\/p>/gi, '');
-  s = s.replace(/<p>\s*<\/p>/gi, '');
-
-  // NOTE: do NOT strip anchors anymore; we keep the model-produced link intact
-
-  // Deduplicate excessive newlines
-  s = s.replace(/\n{3,}/g, '\n\n').trim();
-
-  // Ensure at least one <h2>
-  if (!/<h2[\s>]/i.test(s)) {
-    const firstP = s.match(/<p[\s>][\s\S]*?<\/p>/i);
-    if (firstP) {
-      const text = stripTags(firstP[0]);
-      if (isHeadingCandidate(text)) {
-        s = s.replace(firstP[0], `<h2>${text}</h2>`);
-      } else {
-        s = `<h2>Основные моменты</h2>\n` + s;
-      }
-    } else {
-      s = `<h2>Основные моменты</h2>`;
-    }
-  }
-
-  // Simple validator (log only): ensure one anchor present and not only last paragraph
-  try {
-    const links = Array.from(s.matchAll(new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'gi')));
-    const hasExactText = links.some(m => stripTags(m[1]) === anchorText);
-    const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
-    const idx = links.length ? (paras.findIndex(p => p.includes(links[0][0])) ) : -1;
-    const okHalf = idx >= 0 ? idx < Math.ceil(paras.length * 0.5) : false;
-    if (!links.length || !hasExactText || !okHalf) {
-      logLine('Anchor validation', { links: links.length, hasExactText, okHalf, note: 'Content not auto-fixed by design' });
-    }
-  } catch(_) {}
-
+function toTelegraphHtml(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  // Normalize headings to <h3> (Telegraph uses h3)
+  s = s.replace(/<h1\b[^>]*>/gi, '<h3>');
+  s = s.replace(/<\/h1>/gi, '</h3>');
+  s = s.replace(/<h2\b[^>]*>/gi, '<h3>');
+  s = s.replace(/<\/h2>/gi, '</h3>');
+  // Basic cleanup
+  s = s.replace(/<br\s*\/?\s*>/gi, '');
+  // Allow only a basic set of tags; leave text otherwise
+  // Note: Keep <p>, <h3>, <ul>, <ol>, <li>, <a>, <strong>, <em>, <blockquote>
   return s;
-}
-
-function validateStructure(html, pageUrl, anchorText) {
-  const reasons = [];
-  const linkRe = new RegExp(`<a\\s+[^>]*href=\\"${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\"[^>]*>([\\s\\S]*?)<\\/a>`, 'gi');
-  const linkMatches = Array.from(html.matchAll(linkRe));
-  if (linkMatches.length !== 1) reasons.push('link_count');
-  const text = linkMatches[0] ? stripTags(linkMatches[0][1]) : '';
-  if (text !== anchorText) reasons.push('link_text');
-
-  const paras = html.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
-  const linkParaIndex = linkMatches.length ? paras.findIndex(p => linkMatches[0][0] && p.includes(linkMatches[0][0])) : -1;
-  if (linkParaIndex < 0) reasons.push('link_not_in_paragraph');
-  const firstHalfLimit = Math.max(1, Math.ceil(paras.length * 0.5));
-  if (linkParaIndex >= firstHalfLimit) reasons.push('link_not_in_first_half');
-  if (linkParaIndex >= 0) {
-    const pPlain = stripTags(paras[linkParaIndex]);
-    // Disallow trailing placement after the final period/question/exclamation
-    if (/([.!?])\s*$/.test(pPlain)) reasons.push('link_at_end_of_paragraph');
-    // Removed filler-word adjacency check per request
-  }
-
-  const h2Count = (html.match(/<h2[\s>]/gi) || []).length;
-  if (h2Count < 3) reasons.push('h2_missing');
-
-  // List checks: ensure <ul> exists when there are 2+ bullet-like items, and no blank gaps
-  const hasUl = /<ul[\s>][\s\S]*?<\/ul>/i.test(html);
-  const bulletParas = (html.match(/<p>\s*(?:[-*•·–—]|\d+[.)])\s+[^<]+?<\/p>/gi) || []).length;
-  if (bulletParas >= 2 && !hasUl) reasons.push('list_not_wrapped');
-  if (/<ul[\s>][\s\S]*?<\/ul>/i.test(html)) {
-    const ul = html.match(/<ul[\s>][\s\S]*?<\/ul>/i)[0];
-    if (/(<li[\s>][\s\S]*?<\/li>)\s*<p>/i.test(ul) || /<br\b/i.test(ul)) reasons.push('list_has_gaps');
-  }
-
-  return { ok: reasons.length === 0, reasons };
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   logLine('Publish start', { pageUrl, language });
   const meta = await extractPageMeta(pageUrl);
 
-  const strictAnchorRule = `Use exactly ONE hyperlink with anchor text exactly: ${anchorText} and href exactly: ${pageUrl}. It must appear INSIDE a running sentence in the FIRST HALF of the article (not the second half), not as a standalone sentence, not at the very end of a paragraph, and not near filler words like «подробнее», «детальнее», «здесь». Do not use any other links.`;
-
-  const formatRules = `Format rules:\n- Use <h2> subheadings (at least 3). Do not simulate headings with <p> or <br>.\n- Use <p> for paragraphs only. No empty <p>, no <br> for spacing.\n- If a list is needed, use one <ul> with adjacent <li> items (no blank lines or <p> between <li>).`;
-
-  const exampleRU = `Example (fragment):\n<h2>Ключевые обновления платформы</h2>\n<p>Компания представила новое решение, в котором <a href="${pageUrl}">${anchorText}</a> раскрывает практическую пользу технологии для реальных сценариев.</p>`;
+  const simpleRules = `Правила форматирования:\n- Используй подзаголовки только тегом <h3> (не <h2>). Минимум 3 подзаголовка.\n- Обычный текст — в <p>. Без пустых <p> и без <br> для отступов.\n- Списки — <ul>/<ol> с <li>.\n- Одна органичная ссылка внутри предложения: <a href="${pageUrl}">${anchorText}</a>. Не добавляй другие ссылки.`;
 
   const prompts = {
     title: (
-      `Write a concise, specific ${language} title that reflects the topic. ` +
-      `No quotes, no trailing dots. Avoid generic placeholders like Introduction/Введение.\n` +
-      `Base it on:\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
+      `Напиши лаконичный и конкретный заголовок (${language}). Без кавычек и точки в конце.\n` +
+      `Ориентируйся на:\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
     ),
     author: (
-      `Suggest a neutral author's name in ${language}. ` +
-      `Use ${language} alphabet. One or two words. Reply with the name only.`
+      `Предложи нейтральное имя автора на языке ${language}.` +
+      ` Используй алфавит ${language}. 1–2 слова. Ответь только именем.`
     ),
     content: (
-      `Write an article in ${language} of at least 3000 characters based on the page ${pageUrl}. ` +
-      `Use this context: title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
-      `${formatRules}\n${strictAnchorRule}\n` +
-      `Allowed HTML only: <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No images, scripts or inline styles.\n` +
-      `${exampleRU}`
+      `Подготовь статью на языке ${language} объёмом не менее 3000 знаков по странице: ${pageUrl}.\n` +
+      `Контекст: title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
+      `${simpleRules}\n` +
+      `Разметка HTML только: <p>, <h3>, <ul>, <ol>, <li>, <a>, <strong>, <em>, <blockquote>. Без картинок и стилей.`
     )
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const rawTitle = await generateTextWithAI(prompts.title, openaiApiKey);
-  await sleep(800);
+  await sleep(400);
   const rawAuthor = await generateTextWithAI(prompts.author, openaiApiKey);
-  await sleep(800);
-
-  let attempts = 0;
-  let content;
-  while (attempts < 3) {
-    const rawContent = await generateTextWithAI(prompts.content + (attempts ? `\n\nFix issues noted previously and regenerate.` : ''), openaiApiKey);
-    const title = cleanTitle(rawTitle);
-    const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
-
-    // Keep normalization light to avoid moving anchor; only cleaning layout
-    content = normalizeArticleHtml(rawContent, pageUrl, anchorText);
-    const v = validateStructure(content, pageUrl, anchorText);
-    if (v.ok) break;
-
-    // Strengthen prompt with feedback
-    const feedback = `Fix the following problems: ${v.reasons.join(', ')}. Preserve the required anchor <a href="${pageUrl}">${anchorText}</a> inside a sentence in the first half. Use at least three <h2>. Keep list compact.`;
-    prompts.content += `\n\nCRITICAL FIX: ${feedback}`;
-    attempts++;
-  }
+  await sleep(400);
+  const rawContent = await generateTextWithAI(prompts.content, openaiApiKey);
 
   const title = cleanTitle(rawTitle);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
+
+  let content = toTelegraphHtml(rawContent);
+  if (!content) {
+    // Simple fallback to avoid empty articles
+    const safeTitle = title !== 'Untitled' ? title : (meta.title || 'Обзор и ключевые моменты');
+    content = [
+      `<h3>${safeTitle}</h3>`,
+      `<p>Этот материал основан на открытых данных страницы и кратко описывает ключевые моменты и преимущества решения.</p>`,
+      `<p>Подробнее см. в материале <a href="${pageUrl}">${anchorText}</a>, где приводятся практические детали и контекст.</p>`,
+      `<h3>Основные особенности</h3>`,
+      `<ul><li>Краткое описание ценности</li><li>Сценарии применения</li><li>Полезные выводы</li></ul>`,
+      `<h3>Итоги</h3>`,
+      `<p>Сводя воедино, подход демонстрирует практическую эффективность и зрелость технологии для повседневных задач.</p>`
+    ].join('\n');
+  }
+
+  // Ensure we have at least one inline anchor to pageUrl
+  const escapeRegExp = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hrefRe = new RegExp(`<a\\s+[^>]*href=[\"\']${escapeRegExp(pageUrl)}[\"\']`, 'i');
+  if (!hrefRe.test(content)) {
+    content += `\n<p>Подробнее: <a href="${pageUrl}">${anchorText}</a></p>`;
+  }
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
@@ -346,28 +232,39 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
     page = await browser.newPage();
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
+    // Title
     await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 60000 });
     await page.click('h1[data-placeholder="Title"]');
     await page.keyboard.type(title);
 
+    // Author
     await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 60000 });
     await page.click('address[data-placeholder="Your name"]');
     await page.keyboard.type(author);
 
+    // Content: always write into the Quill editor root, not the placeholder <p>
+    await page.waitForSelector('.tl_article .ql-editor, div.ql-editor', { timeout: 60000 });
     await page.evaluate((html) => {
-      const el = document.querySelector('p[data-placeholder="Your story..."]');
-      if (el) {
-        el.innerHTML = html;
-      } else {
-        const root = document.querySelector('.tl_article .ql-editor') || document.querySelector('div.ql-editor');
-        if (!root) throw new Error('Telegraph editor not found');
-        root.innerHTML = html;
-      }
+      const root = document.querySelector('.tl_article .ql-editor') || document.querySelector('div.ql-editor');
+      if (!root) throw new Error('Telegraph editor not found');
+      root.innerHTML = html;
+      // Trigger change so Telegraph registers content
+      const evt = new InputEvent('input', { bubbles: true, cancelable: true });
+      root.dispatchEvent(evt);
     }, content);
 
+    // Publish
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 120000 }),
-      page.click('button.publish_button')
+      page.evaluate(() => {
+        let btn = document.querySelector('button.publish_button, button.button.primary, button.button');
+        if (!btn) {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          btn = buttons.find(b => /publish/i.test(b.textContent || '')) || null;
+        }
+        if (!btn) throw new Error('Publish button not found');
+        btn.click();
+      })
     ]);
 
     const publishedUrl = page.url();
