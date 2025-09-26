@@ -270,8 +270,10 @@ function ensure_schema(): void {
         ] as $field => $ddl) {
             if (!isset($pmCols[$field])) { @($conn->query("ALTER TABLE `page_meta` {$ddl}")); }
         }
-        // Ensure unique index (ignore if exists)
-        @($conn->query("CREATE UNIQUE INDEX `uniq_page_meta_proj_hash` ON `page_meta`(`project_id`,`url_hash`)"));
+        // Ensure unique index if missing
+        if (pp_mysql_index_exists($conn, 'page_meta', 'uniq_page_meta_proj_hash') === false) {
+            @($conn->query("CREATE UNIQUE INDEX `uniq_page_meta_proj_hash` ON `page_meta`(`project_id`,`url_hash`)"));
+        }
     }
 
     // Settings table optional—skip if missing
