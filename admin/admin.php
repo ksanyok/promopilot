@@ -13,7 +13,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KE
 $settingsMsg = '';
 $networksMsg = '';
 $diagnosticsMsg = '';
-$allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
+$allowedCurrencies = ['USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
 // Extend settings keys: AI provider and Google OAuth
 $settingsKeys = array_merge($settingsKeys, [
@@ -28,8 +28,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!verify_csrf()) {
             $settingsMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
-            if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
+            $currency = strtoupper(trim((string)($_POST['currency'] ?? 'USD')));
+            if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'USD'; }
             $openai = trim((string)($_POST['openai_api_key'] ?? ''));
             $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
             $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
@@ -131,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Load settings
-$settings = ['currency' => 'RUB', 'openai_api_key' => '', 'telegram_token' => '', 'telegram_channel' => ''];
+$settings = ['currency' => 'USD', 'openai_api_key' => '', 'telegram_token' => '', 'telegram_channel' => ''];
 // Defaults for new settings
 $settings += [
     'ai_provider' => $settings['ai_provider'] ?? 'openai',
@@ -146,6 +146,8 @@ if ($res) {
         $settings[$row['k']] = (string)$row['v'];
     }
 }
+// Coerce currency to allowed list to avoid rendering an invalid option
+if (!in_array($settings['currency'], $allowedCurrencies, true)) { $settings['currency'] = 'USD'; }
 
 // Получить пользователей
 $users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.created_at, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");

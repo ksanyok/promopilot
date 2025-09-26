@@ -570,9 +570,9 @@ function set_settings(array $pairs): bool {
 }
 
 function get_currency_code(): string {
-    $cur = strtoupper((string)get_setting('currency', 'RUB'));
-    $allowed = ['RUB','USD','EUR','GBP','UAH'];
-    if (!in_array($cur, $allowed, true)) { $cur = 'RUB'; }
+    $cur = strtoupper((string)get_setting('currency', 'USD'));
+    $allowed = ['USD','EUR','GBP','UAH'];
+    if (!in_array($cur, $allowed, true)) { $cur = 'USD'; }
     return $cur;
 }
 
