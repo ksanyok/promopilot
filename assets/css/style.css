@@ -814,3 +814,32 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 /* Icon button sizing adjustments inside table actions */
 .table-links td.text-end .icon-btn { margin-left: .25rem; }
 .table-links td.text-end .icon-btn:first-child { margin-left: 0; }
+
+/* ===== UI tweaks for links table and adder ===== */
+/* Anchor: truncate hard to 15 characters */
+.table-links .text-truncate-anchor {
+  /* override previous clamp width */
+  max-width: 15ch !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Full-row fill: apply background color to every cell on hover and striped rows */
+.table-links.table-hover tbody tr:hover > * { background-color: rgba(255,255,255,.05) !important; }
+:root[data-theme="light"] .table-links.table-hover tbody tr:hover > * { background-color: rgba(0,0,0,.04) !important; }
+.table-links.table-striped > tbody > tr:nth-of-type(odd) > * { background-color: rgba(255,255,255,.03) !important; }
+:root[data-theme="light"] .table-links.table-striped > tbody > tr:nth-of-type(odd) > * { background-color: rgba(0,0,0,.025) !important; }
+
+/* Equal heights inside rows (edit mode inputs and actions) */
+.table-links .form-control,
+.table-links .form-select { height: 42px; padding-top: 8px; padding-bottom: 8px; }
+.table-links .btn,
+.table-links .icon-btn { height: 42px; display: inline-flex; align-items: center; justify-content: center; }
+
+/* Link-adder row controls: same height */
+.link-adder-card .card-body .row .form-control,
+.link-adder-card .card-body .row .form-select { height: 42px; padding-top: 8px; padding-bottom: 8px; }
+.link-adder-card .card-body .row .btn { height: 42px; display: inline-flex; align-items: center; justify-content: center; width: 100%; }
