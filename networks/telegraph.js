@@ -8,8 +8,32 @@
 
 const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
+
+// Simple file logger similar to previous implementation
+const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
+const LOG_FILE = process.env.PP_LOG_FILE || path.join(
+  LOG_DIR,
+  `network-telegraph-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.log`
+);
+function ensureDirSync(dir){
+  try { fs.mkdirSync(dir, { recursive: true }); } catch(_) {}
+}
+ensureDirSync(LOG_DIR);
+function safeStringify(obj){
+  try { return JSON.stringify(obj); } catch(_) { return String(obj); }
+}
+function logLine(msg, data){
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${msg}` + (data !== undefined ? ` | ${safeStringify(data)}` : '');
+  try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch(_) {}
+  // Also mirror to stdout for quick debugging
+  try { console.log(line); } catch(_) {}
+}
 
 async function generateTextWithChat(prompt, openaiApiKey) {
+  logLine('OpenAI request', { promptPreview: String(prompt || '').slice(0, 160) });
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -24,11 +48,12 @@ async function generateTextWithChat(prompt, openaiApiKey) {
   });
   if (!res.ok) {
     const body = await res.text().catch(()=> '');
-    console.error(`OpenAI error: ${res.status} ${res.statusText} -> ${body.slice(0, 400)}`);
+    logLine('OpenAI HTTP error', { status: res.status, statusText: res.statusText, body: body.slice(0, 400) });
     return '';
   }
   const data = await res.json().catch(()=> null);
   const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
+  logLine('OpenAI response ok', { length: String(content).length });
   return String(content).trim();
 }
 
@@ -39,6 +64,7 @@ function extractAttr(tagHtml, attr) {
 }
 
 async function extractPageMeta(url) {
+  logLine('Fetch page for meta', { url });
   try {
     const r = await fetch(url, {
       method: 'GET',
@@ -95,8 +121,10 @@ async function extractPageMeta(url) {
     out.title = out.title.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     out.description = out.description.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
+    logLine('Meta extracted', { title: out.title, descriptionPreview: out.description.slice(0, 160) });
     return out;
   } catch (e) {
+    logLine('Meta extract failed', { error: String(e && e.message || e) });
     return { title: '', description: '' };
   }
 }
@@ -137,6 +165,7 @@ function integrateSingleAnchor(html, pageUrl, anchorText) {
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
+  logLine('Publish start', { pageUrl, anchorText, language });
   const meta = await extractPageMeta(pageUrl);
 
   const prompts = {
@@ -159,18 +188,20 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
       `- Stay strictly on-topic and do not add unrelated content.`
     )
   };
+  logLine('Prompts prepared');
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // Generate title, author, content with small pauses
   const rawTitle = await generateTextWithChat(prompts.title, openaiApiKey);
-  await sleep(5000);
+  await sleep(1500);
   const rawAuthor = await generateTextWithChat(prompts.author, openaiApiKey);
-  await sleep(5000);
+  await sleep(1500);
   let rawContent = await generateTextWithChat(prompts.content, openaiApiKey);
 
   const title = cleanTitle(rawTitle);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
+  logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
 
   // Basic content cleanup and link normalization
   let content = String(rawContent || '').trim();
@@ -188,39 +219,64 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
   }
   content = integrateSingleAnchor(content, pageUrl, anchorText);
 
-  // Publish to Telegraph via Puppeteer
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
-  await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2' });
+  // Launch Puppeteer with optional explicit executable path
+  const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
+  if (process.env.PUPPETEER_ARGS) {
+    launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
+  }
+  const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
+  if (execPath) launchOpts.executablePath = execPath;
+  logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
 
-  await page.waitForSelector('h1[data-placeholder="Title"]');
-  await page.click('h1[data-placeholder="Title"]');
-  await page.keyboard.type(title);
+  const browser = await puppeteer.launch(launchOpts);
+  let page;
+  try {
+    page = await browser.newPage();
+    logLine('Goto Telegraph');
+    await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
-  await page.waitForSelector('address[data-placeholder="Your name"]');
-  await page.click('address[data-placeholder="Your name"]');
-  await page.keyboard.type(author);
+    logLine('Fill title');
+    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 60000 });
+    await page.click('h1[data-placeholder="Title"]');
+    await page.keyboard.type(title);
 
-  await page.evaluate((html) => {
-    const el = document.querySelector('p[data-placeholder="Your story..."]');
-    if (el) {
-      el.innerHTML = html;
-    } else {
-      // Fallback: try to find the editor root
-      const root = document.querySelector('.tl_article .ql-editor') || document.querySelector('div.ql-editor');
-      if (root) root.innerHTML = html;
-    }
-  }, content);
+    logLine('Fill author');
+    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 60000 });
+    await page.click('address[data-placeholder="Your name"]');
+    await page.keyboard.type(author);
 
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle2' }),
-    page.click('button.publish_button')
-  ]);
+    logLine('Fill content');
+    await page.evaluate((html) => {
+      const el = document.querySelector('p[data-placeholder="Your story..."]');
+      if (el) {
+        el.innerHTML = html;
+      } else {
+        const root = document.querySelector('.tl_article .ql-editor') || document.querySelector('div.ql-editor');
+        if (!root) throw new Error('Telegraph editor not found');
+        root.innerHTML = html;
+      }
+    }, content);
 
-  const publishedUrl = page.url();
-  await browser.close();
+    logLine('Publish click');
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 120000 }),
+      page.click('button.publish_button')
+    ]);
 
-  return { ok: true, network: 'telegraph', publishedUrl, title, author };
+    const publishedUrl = page.url();
+    logLine('Published', { publishedUrl });
+
+    const result = { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
+    logLine('Success result', result);
+    return result;
+  } catch (e) {
+    logLine('Publish failed', { error: String(e && e.message || e), stack: e && e.stack });
+    throw e;
+  } finally {
+    try { if (page) await page.close(); } catch(_) { logLine('Page close failed'); }
+    try { await browser.close(); logLine('Browser closed'); } catch(_) { logLine('Browser close failed'); }
+  }
 }
 
 module.exports = { publish: publishToTelegraph };
@@ -230,19 +286,25 @@ if (require.main === module) {
   (async () => {
     try {
       const raw = process.env.PP_JOB || '{}';
+      logLine('PP_JOB raw', { length: raw.length });
       const job = JSON.parse(raw);
+      logLine('PP_JOB parsed');
       const pageUrl = job.url || job.pageUrl || '';
       const anchor = job.anchor || pageUrl;
       const language = job.language || 'ru';
       const apiKey = job.openaiApiKey || process.env.OPENAI_API_KEY || '';
       if (!pageUrl || !apiKey) {
-        console.log(JSON.stringify({ ok: false, error: 'MISSING_PARAMS', details: 'url or openaiApiKey missing', network: 'telegraph' }));
+        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url or openaiApiKey missing', network: 'telegraph', logFile: LOG_FILE };
+        logLine('Run failed (missing params)', payload);
+        console.log(JSON.stringify(payload));
         process.exit(1);
       }
       const res = await publishToTelegraph(pageUrl, anchor, language, apiKey);
       console.log(JSON.stringify(res));
     } catch (e) {
-      console.log(JSON.stringify({ ok: false, error: String(e && e.message || e), network: 'telegraph' }));
+      const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
+      logLine('Run failed', { error: payload.error, stack: e && e.stack });
+      console.log(JSON.stringify(payload));
       process.exit(1);
     }
   })();
