@@ -5,6 +5,14 @@ if (is_logged_in()) {
     redirect(is_admin() ? 'admin/admin.php' : 'client/client.php');
 }
 
+// Google OAuth availability on register page
+$googleEnabled = get_setting('google_oauth_enabled', '0') === '1';
+$googleClientId = trim((string)get_setting('google_client_id', ''));
+$googleAvailable = $googleEnabled && $googleClientId !== '';
+$nextParam = isset($_GET['next']) ? (string)$_GET['next'] : '';
+if ($nextParam !== '' && strpos($nextParam, '://') !== false) { $nextParam = ''; }
+$googleStartUrl = pp_url('public/google_oauth_start.php' . ($nextParam !== '' ? ('?next=' . urlencode($nextParam)) : ''));
+
 $message = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -69,6 +77,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     </div>
                     <button type="submit" class="btn btn-success w-100"><i class="bi bi-person-plus me-1"></i><?php echo __('Зарегистрироваться'); ?></button>
                 </form>
+                <?php if ($googleAvailable): ?>
+                    <div class="text-center text-muted my-3">— <?php echo __('или'); ?> —</div>
+                    <a class="btn btn-outline-danger w-100" href="<?php echo htmlspecialchars($googleStartUrl); ?>">
+                        <i class="bi bi-google me-1"></i><?php echo __('Войти через Google'); ?>
+                    </a>
+                <?php endif; ?>
                 <p class="mt-3 text-center"><?php echo __('Уже есть аккаунт?'); ?> <a href="<?php echo pp_url('auth/login.php'); ?>"><?php echo __('Войти'); ?></a></p>
             </div>
         </div>

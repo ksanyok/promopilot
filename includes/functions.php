@@ -46,6 +46,22 @@ function connect_db() {
     return $conn;
 }
 
+// Add a small helper to check index existence for older MySQL versions (no IF NOT EXISTS support)
+if (!function_exists('pp_mysql_index_exists')) {
+    function pp_mysql_index_exists(mysqli $conn, string $table, string $index): bool {
+        $table = preg_replace('~[^a-zA-Z0-9_]+~', '', $table);
+        $index = preg_replace('~[^a-zA-Z0-9_]+~', '', $index);
+        $sql = "SHOW INDEX FROM `{$table}` WHERE Key_name = '{$index}'";
+        $res = @$conn->query($sql);
+        if ($res instanceof mysqli_result) {
+            $exists = $res->num_rows > 0;
+            $res->close();
+            return $exists;
+        }
+        return false;
+    }
+}
+
 // Ensure DB schema has required columns/tables
 function ensure_schema(): void {
     try {
@@ -81,6 +97,7 @@ function ensure_schema(): void {
             `links` TEXT NULL,
             `language` VARCHAR(10) NOT NULL DEFAULT 'ru',
             `wishes` TEXT NULL,
+            `domain_host` VARCHAR(190) NULL,
             `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
@@ -100,6 +117,10 @@ function ensure_schema(): void {
         }
         if (!isset($projectsCols['wishes'])) {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `wishes` TEXT NULL");
+        }
+        // New: domain restriction host
+        if (!isset($projectsCols['domain_host'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `domain_host` VARCHAR(190) NULL AFTER `wishes`");
         }
     }
 
@@ -124,6 +145,21 @@ function ensure_schema(): void {
         }
         if (!isset($usersCols['newsletter_opt_in'])) {
             @$conn->query("ALTER TABLE `users` ADD COLUMN `newsletter_opt_in` TINYINT(1) NOT NULL DEFAULT 1 AFTER `avatar`");
+        }
+        // Google OAuth fields
+        if (!isset($usersCols['google_id'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `google_id` VARCHAR(64) NULL AFTER `avatar`");
+        }
+        if (!isset($usersCols['google_picture'])) {
+            @$conn->query("ALTER TABLE `users` ADD COLUMN `google_picture` VARCHAR(255) NULL AFTER `google_id`");
+        }
+        // Ensure unique index on google_id (compat with MySQL 5.7: no IF NOT EXISTS)
+        if (pp_mysql_index_exists($conn, 'users', 'uniq_users_google_id') === false) {
+            // Only create index when column exists
+            $usersCols2 = $getCols('users');
+            if (isset($usersCols2['google_id'])) {
+                @$conn->query("CREATE UNIQUE INDEX `uniq_users_google_id` ON `users`(`google_id`)");
+            }
         }
     }
 
@@ -192,6 +228,54 @@ function ensure_schema(): void {
         $maybeAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
     }
 
+    // New: page metadata storage (microdata extracted for links)
+    $pmCols = $getCols('page_meta');
+    if (empty($pmCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `page_meta` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `project_id` INT NOT NULL,
+            `url_hash` CHAR(64) NOT NULL,
+            `page_url` TEXT NOT NULL,
+            `final_url` TEXT NULL,
+            `lang` VARCHAR(16) NULL,
+            `region` VARCHAR(16) NULL,
+            `title` VARCHAR(512) NULL,
+            `description` TEXT NULL,
+            `canonical` TEXT NULL,
+            `published_time` VARCHAR(64) NULL,
+            `modified_time` VARCHAR(64) NULL,
+            `hreflang_json` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_page_meta_proj_hash` (`project_id`, `url_hash`),
+            INDEX (`project_id`),
+            CONSTRAINT `fk_page_meta_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        // Ensure critical columns exist (best-effort; ignore errors)
+        foreach ([
+            'url_hash' => "ADD COLUMN `url_hash` CHAR(64) NOT NULL AFTER `project_id`",
+            'page_url' => "ADD COLUMN `page_url` TEXT NOT NULL AFTER `url_hash`",
+            'final_url' => "ADD COLUMN `final_url` TEXT NULL AFTER `page_url`",
+            'lang' => "ADD COLUMN `lang` VARCHAR(16) NULL AFTER `final_url`",
+            'region' => "ADD COLUMN `region` VARCHAR(16) NULL AFTER `lang`",
+            'title' => "ADD COLUMN `title` VARCHAR(512) NULL AFTER `region`",
+            'description' => "ADD COLUMN `description` TEXT NULL AFTER `title`",
+            'canonical' => "ADD COLUMN `canonical` TEXT NULL AFTER `description`",
+            'published_time' => "ADD COLUMN `published_time` VARCHAR(64) NULL AFTER `canonical`",
+            'modified_time' => "ADD COLUMN `modified_time` VARCHAR(64) NULL AFTER `published_time`",
+            'hreflang_json' => "ADD COLUMN `hreflang_json` TEXT NULL AFTER `modified_time`",
+            'created_at' => "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            'updated_at' => "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        ] as $field => $ddl) {
+            if (!isset($pmCols[$field])) { @($conn->query("ALTER TABLE `page_meta` {$ddl}")); }
+        }
+        // Ensure unique index if missing
+        if (pp_mysql_index_exists($conn, 'page_meta', 'uniq_page_meta_proj_hash') === false) {
+            @($conn->query("CREATE UNIQUE INDEX `uniq_page_meta_proj_hash` ON `page_meta`(`project_id`,`url_hash`)"));
+        }
+    }
+
     // Settings table optional—skip if missing
 
     @$conn->close();
@@ -203,90 +287,131 @@ function ensure_schema(): void {
     }
 }
 
-function is_logged_in() {
-    return isset($_SESSION['user_id']);
-}
-
-function is_admin() {
-    return isset($_SESSION['role']) && $_SESSION['role'] == 'admin';
-}
-
-function redirect($url) {
-    // Build absolute URL if relative provided
-    if (!preg_match('~^https?://~i', $url)) {
-        if (defined('PP_BASE_URL')) {
-            $url = rtrim(PP_BASE_URL, '/') . '/' . ltrim($url, '/');
+// ---- Version and update helpers ----
+if (!function_exists('get_version')) {
+    function get_version(): string {
+        static $v = null;
+        if ($v !== null) return $v;
+        $v = '0.0.0';
+        $file = PP_ROOT_PATH . '/config/version.php';
+        if (is_file($file) && is_readable($file)) {
+            try {
+                $version = null; // defined in included file
+                /** @noinspection PhpIncludeInspection */
+                include $file;
+                if (isset($version) && is_string($version) && $version !== '') {
+                    $v = trim($version);
+                }
+            } catch (Throwable $e) { /* ignore */ }
         }
+        return $v;
     }
-    header("Location: $url");
-    exit;
 }
 
-function get_version() {
-    $version = '0.0.0';
-    $verFile = PP_ROOT_PATH . '/config/version.php';
-    if (file_exists($verFile)) {
-        include $verFile; // sets $version
-    }
-    return $version;
-}
+if (!function_exists('get_update_status')) {
+    function get_update_status(): array {
+        $current = get_version();
+        $cacheDir = PP_ROOT_PATH . '/.cache';
+        if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0775, true); }
+        $cacheFile = $cacheDir . '/update_status.json';
+        $now = time();
+        $cacheTtl = 6 * 3600; // 6 hours
 
-// Fetch latest version info from GitHub main branch
-function fetch_latest_version_info(): ?array {
-    // Get version from config/version.php in main branch
-    $url = 'https://raw.githubusercontent.com/ksanyok/promopilot/main/config/version.php';
-    $response = @file_get_contents($url, false, stream_context_create([
-        'http' => ['timeout' => 5],
-        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-    ]));
-    if (!$response) return null;
-    if (preg_match("/\\\$version\s*=\s*['\"]([^'\"]*)['\"]/", $response, $matches)) {
-        $latest = $matches[1];
-    } else {
-        return null;
-    }
-    // Get date of last commit
-    $commitUrl = 'https://api.github.com/repos/ksanyok/promopilot/commits/main';
-    $commitResponse = @file_get_contents($commitUrl, false, stream_context_create([
-        'http' => [
-            'header' => "User-Agent: PromoPilot\r\nAccept: application/vnd.github+json",
-            'timeout' => 5,
-        ],
-        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-    ]));
-    $published = '';
-    if ($commitResponse) {
-        $commitData = json_decode($commitResponse, true);
-        if ($commitData && isset($commitData['commit']['committer']['date'])) {
-            $ts = strtotime($commitData['commit']['committer']['date']);
-            if ($ts) { $published = date('Y-m-d', $ts); }
+        // Read cache
+        $cached = null;
+        if (is_file($cacheFile) && is_readable($cacheFile)) {
+            $raw = @file_get_contents($cacheFile);
+            $data = $raw ? json_decode($raw, true) : null;
+            if (is_array($data) && isset($data['fetched_at']) && ($now - (int)$data['fetched_at'] < $cacheTtl)) {
+                $cached = $data;
+            }
         }
+        if ($cached) {
+            $latest = (string)($cached['latest'] ?? $current);
+            $publishedAt = (string)($cached['published_at'] ?? '');
+            $isNew = version_compare($latest, $current, '>');
+            return [
+                'current' => $current,
+                'latest' => $latest,
+                'published_at' => $publishedAt,
+                'is_new' => $isNew,
+                'source' => 'cache',
+            ];
+        }
+
+        // Fetch from GitHub releases API (latest)
+        $latest = $current;
+        $publishedAt = '';
+        $ok = false; $err = '';
+        $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
+        $ua = 'PromoPilot/UpdateChecker (+https://github.com/ksanyok/promopilot)';
+        $resp = '';
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+                CURLOPT_TIMEOUT => 8,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_USERAGENT => $ua,
+                CURLOPT_HTTPHEADER => [
+                    'Accept: application/vnd.github+json',
+                ],
+            ]);
+            $resp = (string)curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            if ($resp !== '' && $code >= 200 && $code < 300) { $ok = true; }
+            else { $err = 'HTTP ' . $code; }
+            curl_close($ch);
+        } else {
+            $ctx = stream_context_create([
+                'http' => [
+                    'method' => 'GET',
+                    'timeout' => 8,
+                    'ignore_errors' => true,
+                    'header' => [
+                        'User-Agent: ' . $ua,
+                        'Accept: application/vnd.github+json',
+                    ],
+                ],
+                'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+            ]);
+            $resp = @file_get_contents($url, false, $ctx);
+            $ok = $resp !== false && $resp !== '';
+        }
+        if ($ok) {
+            $json = json_decode($resp, true);
+            if (is_array($json)) {
+                $tag = (string)($json['tag_name'] ?? '');
+                $name = (string)($json['name'] ?? '');
+                $publishedAt = (string)($json['published_at'] ?? '');
+                $tag = ltrim($tag, 'vV');
+                $name = ltrim($name, 'vV');
+                $candidate = $tag ?: $name;
+                if ($candidate !== '') { $latest = $candidate; }
+            }
+        }
+
+        // Persist cache (best-effort)
+        $payload = [
+            'fetched_at' => $now,
+            'latest' => $latest,
+            'published_at' => $publishedAt,
+            'ok' => $ok,
+            'error' => $ok ? '' : $err,
+        ];
+        @file_put_contents($cacheFile, json_encode($payload, JSON_UNESCAPED_UNICODE), LOCK_EX);
+
+        return [
+            'current' => $current,
+            'latest' => $latest,
+            'published_at' => $publishedAt,
+            'is_new' => version_compare($latest, $current, '>'),
+            'source' => 'remote',
+        ];
     }
-    return [
-        'version' => $latest,
-        'published_at' => $published,
-    ];
-}
-
-// Return update status with latest version and date
-function get_update_status(): array {
-    // Clean up obsolete cache file if it exists
-    $oldCache = PP_ROOT_PATH . '/config/version_cache.json';
-    if (is_file($oldCache)) { @unlink($oldCache); }
-
-    $current = get_version();
-    $info = fetch_latest_version_info();
-    if (!$info) {
-        return ['is_new' => false, 'latest' => null, 'published_at' => null];
-    }
-    $isNew = version_compare($info['version'], $current, '>');
-    return ['is_new' => $isNew, 'latest' => $info['version'], 'published_at' => $info['published_at']];
-}
-
-// Back-compat: simple boolean check
-function check_version(bool $force = false) {
-    $st = get_update_status();
-    return (bool)$st['is_new'];
 }
 
 // Функция перевода
@@ -327,6 +452,27 @@ function verify_csrf(): bool {
 function csrf_field(): string {
     $token = htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     return '<input type="hidden" name="csrf_token" value="' . $token . '">';
+}
+
+// Auth helpers
+if (!function_exists('is_logged_in')) {
+    function is_logged_in(): bool {
+        return !empty($_SESSION['user_id']);
+    }
+}
+if (!function_exists('is_admin')) {
+    function is_admin(): bool {
+        return is_logged_in() && (($_SESSION['role'] ?? '') === 'admin');
+    }
+}
+if (!function_exists('redirect')) {
+    function redirect(string $path): void {
+        $url = preg_match('~^https?://~i', $path) ? $path : pp_url($path);
+        if (!headers_sent()) {
+            header('Location: ' . $url, true, 302);
+        }
+        exit;
+    }
 }
 
 function get_action_secret(): string {
@@ -440,6 +586,73 @@ function format_currency($amount): string {
     $sym = $map[$code] ?? $code;
     return $sym . $num;
     */
+}
+
+// Save a remote avatar image locally and return relative path (uploads/avatars/u{ID}.ext)
+// Returns null on failure
+function pp_save_remote_avatar(string $url, int $userId): ?string {
+    $url = trim($url);
+    if ($url === '') return null;
+    $pu = @parse_url($url);
+    if (!$pu || !in_array(strtolower($pu['scheme'] ?? ''), ['http','https'], true)) return null;
+
+    $dir = PP_ROOT_PATH . '/uploads/avatars';
+    if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
+    if (!is_dir($dir) || !is_writable($dir)) return null;
+
+    $data = null; $ctype = '';
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_USERAGENT => 'PromoPilot/1.0',
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_HEADER => true,
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp !== false) {
+            $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+            $headers = substr($resp, 0, $headerSize);
+            $data = substr($resp, $headerSize);
+            if (preg_match('~^Content-Type:\s*([^\r\n]+)~im', (string)$headers, $m)) {
+                $ctype = trim($m[1]);
+            }
+        }
+        curl_close($ch);
+    }
+    if ($data === null) {
+        $ctx = stream_context_create([
+            'http' => ['timeout' => 10, 'ignore_errors' => true, 'header' => "User-Agent: PromoPilot/1.0\r\n"],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+        ]);
+        $data = @file_get_contents($url, false, $ctx);
+        // Cannot easily get content-type with stream wrapper; leave empty
+    }
+
+    if (!$data || strlen($data) < 128) return null; // too small to be real avatar
+    if (strlen($data) > 5 * 1024 * 1024) return null; // limit 5MB
+
+    // Detect mime
+    if (function_exists('finfo_buffer')) {
+        $f = new finfo(FILEINFO_MIME_TYPE);
+        $det = $f->buffer($data) ?: '';
+        if ($det) { $ctype = $det; }
+    }
+    $ext = 'jpg';
+    if (stripos($ctype, 'png') !== false) $ext = 'png';
+    elseif (stripos($ctype, 'webp') !== false) $ext = 'webp';
+    elseif (stripos($ctype, 'jpeg') !== false) $ext = 'jpg';
+
+    $file = $dir . '/u' . $userId . '.' . $ext;
+    $ok = @file_put_contents($file, $data) !== false;
+    if (!$ok) return null;
+    @chmod($file, 0664);
+    $rel = 'uploads/avatars/' . basename($file);
+    return $rel;
 }
 
 function rmdir_recursive($dir) {
@@ -629,7 +842,7 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
                 'handler' => $rel,
                 'handler_abs' => $abs,
                 'handler_type' => (string)$row['handler_type'],
-                'meta' => $row['meta'] ? json_decode($row['meta'], true) ?: [] : [],
+                'meta' => json_decode((string)($row['meta'] ?? ''), true) ?: [],
                 'enabled' => (bool)$row['enabled'],
                 'is_missing' => (bool)$row['is_missing'],
                 'created_at' => $row['created_at'],
@@ -866,6 +1079,10 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
 
     // Optional puppeteer settings from app settings
     $puppeteerExec = trim((string)get_setting('puppeteer_executable_path', ''));
+    if ($puppeteerExec === '') {
+        $autoChrome = pp_resolve_chrome_path();
+        if ($autoChrome) { $puppeteerExec = $autoChrome; }
+    }
     $puppeteerArgs = trim((string)get_setting('puppeteer_args', ''));
 
     $env = array_merge($_ENV, $_SERVER, [
@@ -1000,8 +1217,26 @@ function pp_collect_chrome_candidates(): array {
         '/opt/google/chrome/chrome',
         '/opt/chrome/chrome',
         '/snap/bin/chromium',
+        // macOS common locations
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
     ];
     foreach ($common as $p) { $candidates[] = $p; }
+
+    // macOS per-user Applications folder
+    $home = getenv('HOME') ?: ((isset($_SERVER['HOME']) && $_SERVER['HOME']) ? $_SERVER['HOME'] : '');
+    if ($home) {
+        foreach ([
+            $home . '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            $home . '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+            $home . '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            $home . '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            $home . '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+        ] as $p) { $candidates[] = $p; }
+    }
 
     // 3) Project-local portable Chrome
     $base = rtrim(PP_ROOT_PATH, '/');
@@ -1026,6 +1261,32 @@ function pp_collect_chrome_candidates(): array {
             $out = trim((string)@shell_exec($cmd));
             if ($out !== '' && strpos($out, '/') !== false) { $candidates[] = $out; }
         }
+        // macOS Spotlight bundle searches (best-effort)
+        $mdfinds = [
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.google.Chrome' 2>/dev/null",
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.google.Chrome.canary' 2>/dev/null",
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==org.chromium.Chromium' 2>/dev/null",
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.microsoft.edgemac' 2>/dev/null",
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.microsoft.Edgemac' 2>/dev/null",
+            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.brave.Browser' 2>/dev/null",
+        ];
+        foreach ($mdfinds as $cmd) {
+            $out = trim((string)@shell_exec($cmd));
+            if ($out !== '') {
+                foreach (preg_split('~[\r\n]+~', $out) as $appPath) {
+                    $appPath = trim($appPath);
+                    if ($appPath === '' || strpos($appPath, '.app') === false) continue;
+                    // Derive binary path inside bundle
+                    $bin = $appPath . '/Contents/MacOS/'
+                        . (stripos($appPath, 'Edge') !== false ? 'Microsoft Edge'
+                        : (stripos($appPath, 'Chromium') !== false ? 'Chromium'
+                        : (stripos($appPath, 'Canary') !== false ? 'Google Chrome Canary'
+                        : (stripos($appPath, 'Brave') !== false ? 'Brave Browser'
+                        : 'Google Chrome'))));
+                    $candidates[] = $bin;
+                }
+            }
+        }
     }
 
     // Deduplicate
@@ -1046,6 +1307,336 @@ function pp_resolve_chrome_path(): ?string {
         }
     }
     return null;
+}
+
+function pp_guess_base_url(): string {
+    if (defined('PP_BASE_URL') && PP_BASE_URL) return rtrim(PP_BASE_URL, '/');
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+    $scheme = $https ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    $script = $_SERVER['SCRIPT_NAME'] ?? '/';
+    $dir = rtrim(str_replace(['\\','//'], '/', dirname($script)), '/');
+    // Project root is one level up from current script for admin/public/auth pages
+    $base = $scheme . '://' . $host . ($dir ? $dir : '');
+    // If ends with /admin or /public or /auth, strip it
+    $base = preg_replace('~/(admin|public|auth)$~', '', $base);
+    return rtrim($base, '/');
+}
+
+function pp_google_redirect_url(): string {
+    $base = pp_guess_base_url();
+    return $base . '/public/google_oauth_callback.php';
+}
+
+// Helpers for page metadata
+if (!function_exists('pp_url_hash')) {
+    function pp_url_hash(string $url): string {
+        return hash('sha256', strtolower(trim($url)));
+    }
+}
+if (!function_exists('pp_save_page_meta')) {
+    function pp_save_page_meta(int $projectId, string $pageUrl, array $data): bool {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return false; }
+        if (!$conn) return false;
+
+        $urlHash = pp_url_hash($pageUrl);
+        $finalUrl = (string)($data['final_url'] ?? '');
+        $lang = (string)($data['lang'] ?? '');
+        $region = (string)($data['region'] ?? '');
+        $title = (string)($data['title'] ?? '');
+        $description = (string)($data['description'] ?? '');
+        $canonical = (string)($data['canonical'] ?? '');
+        $published = (string)($data['published_time'] ?? '');
+        $modified = (string)($data['modified_time'] ?? '');
+        $hreflang = $data['hreflang'] ?? null;
+        $hreflangJson = is_string($hreflang) ? $hreflang : json_encode($hreflang, JSON_UNESCAPED_UNICODE);
+
+        $sql = "INSERT INTO page_meta (project_id, url_hash, page_url, final_url, lang, region, title, description, canonical, published_time, modified_time, hreflang_json, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON DUPLICATE KEY UPDATE final_url=VALUES(final_url), lang=VALUES(lang), region=VALUES(region), title=VALUES(title), description=VALUES(description), canonical=VALUES(canonical), published_time=VALUES(published_time), modified_time=VALUES(modified_time), hreflang_json=VALUES(hreflang_json), updated_at=CURRENT_TIMESTAMP";
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { $conn->close(); return false; }
+        $stmt->bind_param(
+            'isssssssssss',
+            $projectId,
+            $urlHash,
+            $pageUrl,
+            $finalUrl,
+            $lang,
+            $region,
+            $title,
+            $description,
+            $canonical,
+            $published,
+            $modified,
+            $hreflangJson
+        );
+        $ok = $stmt->execute();
+        $stmt->close();
+        $conn->close();
+        return (bool)$ok;
+    }
+}
+if (!function_exists('pp_get_page_meta')) {
+    function pp_get_page_meta(int $projectId, string $pageUrl): ?array {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
+        if (!$conn) return null;
+        $hash = pp_url_hash($pageUrl);
+        $stmt = $conn->prepare("SELECT page_url, final_url, lang, region, title, description, canonical, published_time, modified_time, hreflang_json FROM page_meta WHERE project_id = ? AND url_hash = ? LIMIT 1");
+        if (!$stmt) { $conn->close(); return null; }
+        $stmt->bind_param('is', $projectId, $hash);
+        $stmt->execute();
+        $stmt->bind_result($page_url, $final_url, $lang, $region, $title, $description, $canonical, $published, $modified, $hreflang_json);
+        $data = null;
+        if ($stmt->fetch()) {
+            $data = [
+                'page_url' => (string)$page_url,
+                'final_url' => (string)$final_url,
+                'lang' => (string)$lang,
+                'region' => (string)$region,
+                'title' => (string)$title,
+                'description' => (string)$description,
+                'canonical' => (string)$canonical,
+                'published_time' => (string)$published,
+                'modified_time' => (string)$modified,
+                'hreflang' => json_decode((string)$hreflang_json, true) ?: [],
+            ];
+        }
+        $stmt->close();
+        $conn->close();
+        return $data;
+    }
+}
+
+// -------- URL analysis utilities (microdata/meta extraction) --------
+function pp_http_fetch(string $url, int $timeout = 12): array {
+    $headers = [];
+    $status = 0; $body = ''; $finalUrl = $url;
+    $ua = 'PromoPilotBot/1.0 (+https://github.com/ksanyok/promopilot)';
+    if (function_exists('curl_init')) {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 6,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => true,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(6, $timeout),
+            CURLOPT_USERAGENT => $ua,
+            CURLOPT_ACCEPT_ENCODING => '',
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_HTTPHEADER => [
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: ru,en;q=0.8'
+            ],
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp !== false) {
+            $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+            $rawHeaders = substr($resp, 0, $headerSize);
+            $body = substr($resp, $headerSize);
+            $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
+            // Parse headers (multiple response headers possible on redirects; take the last block)
+            $blocks = preg_split("/\r?\n\r?\n/", trim($rawHeaders));
+            $last = end($blocks);
+            foreach (preg_split("/\r?\n/", (string)$last) as $line) {
+                if (strpos($line, ':') !== false) {
+                    [$k, $v] = array_map('trim', explode(':', $line, 2));
+                    $headers[strtolower($k)] = $v;
+                }
+            }
+        }
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => $timeout,
+                'follow_location' => 1,
+                'max_redirects' => 6,
+                'ignore_errors' => true,
+                'header' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language: ru,en;q=0.8',
+                ],
+            ],
+            'ssl' => [ 'verify_peer' => true, 'verify_peer_name' => true ],
+        ]);
+        $resp = @file_get_contents($url, false, $ctx);
+        $body = $resp !== false ? (string)$resp : '';
+        $status = 0;
+        $finalUrl = $url;
+        global $http_response_header;
+        if (is_array($http_response_header)) {
+            foreach ($http_response_header as $line) {
+                if (preg_match('~^HTTP/\d\.\d\s+(\d{3})~', $line, $m)) { $status = (int)$m[1]; }
+                elseif (strpos($line, ':') !== false) {
+                    [$k, $v] = array_map('trim', explode(':', $line, 2));
+                    $headers[strtolower($k)] = $v;
+                }
+            }
+        }
+    }
+    return ['status' => $status, 'headers' => $headers, 'body' => $body, 'final_url' => $finalUrl];
+}
+
+function pp_html_dom(string $html): ?DOMDocument {
+    if ($html === '') return null;
+    $doc = new DOMDocument();
+    libxml_use_internal_errors(true);
+    if (stripos($html, '<meta') === false) {
+        $html = '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">' . $html;
+    }
+    $loaded = @$doc->loadHTML($html, LIBXML_NOWARNING | LIBXML_NOERROR);
+    libxml_clear_errors();
+    if (!$loaded) return null;
+    return $doc;
+}
+
+function pp_xpath(DOMDocument $doc): DOMXPath { return new DOMXPath($doc); }
+function pp_text(?DOMNode $n): string { return trim($n ? $n->textContent : ''); }
+function pp_attr(?DOMElement $n, string $name): string { return trim($n ? (string)$n->getAttribute($name) : ''); }
+
+function pp_abs_url(string $href, string $base): string {
+    if ($href === '') return '';
+    if (preg_match('~^https?://~i', $href)) return $href;
+    $bp = parse_url($base);
+    if (!$bp || empty($bp['scheme']) || empty($bp['host'])) return $href;
+    $scheme = $bp['scheme'];
+    $host = $bp['host'];
+    $port = isset($bp['port']) ? (':' . $bp['port']) : '';
+    $path = $bp['path'] ?? '/';
+    if (substr($href, 0, 1) === '/') {
+        return $scheme . '://' . $host . $port . $href;
+    }
+    $dir = rtrim(str_replace('\\', '/', dirname($path)), '/');
+    $segments = array_filter(explode('/', $dir));
+    foreach (explode('/', $href) as $seg) {
+        if ($seg === '.' || $seg === '') continue;
+        if ($seg === '..') { array_pop($segments); continue; }
+        $segments[] = $seg;
+    }
+    return $scheme . '://' . $host . $port . '/' . implode('/', $segments);
+}
+
+function pp_analyze_url_data(string $url): ?array {
+    $fetch = pp_http_fetch($url, 12);
+    if (($fetch['status'] ?? 0) >= 400 || ($fetch['body'] ?? '') === '') {
+        return null;
+    }
+    $finalUrl = $fetch['final_url'] ?: $url;
+    $headers = $fetch['headers'] ?? [];
+    $body = (string)$fetch['body'];
+    $doc = pp_html_dom($body);
+    if (!$doc) { return null; }
+    $xp = pp_xpath($doc);
+
+    $baseHref = '';
+    $baseEl = $xp->query('//base[@href]')->item(0);
+    if ($baseEl instanceof DOMElement) { $baseHref = pp_attr($baseEl, 'href'); }
+    $base = $baseHref !== '' ? $baseHref : $finalUrl;
+
+    $title = '';
+    $titleEl = $xp->query('//title')->item(0);
+    if ($titleEl) { $title = pp_text($titleEl); }
+    $ogTitle = $xp->query('//meta[translate(@property, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:title"]/@content | //meta[translate(@name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:title"]/@content')->item(0);
+    if ($ogTitle && !$title) { $title = trim($ogTitle->nodeValue ?? ''); }
+
+    $desc = '';
+    $metaDesc = $xp->query('//meta[translate(@name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="description"]/@content')->item(0);
+    if ($metaDesc) { $desc = trim($metaDesc->nodeValue ?? ''); }
+    if ($desc === '') {
+        $ogDesc = $xp->query('//meta[translate(@property, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:description"]/@content')->item(0);
+        if ($ogDesc) { $desc = trim($ogDesc->nodeValue ?? ''); }
+    }
+
+    $canonical = '';
+    $canonEl = $xp->query('//link[translate(@rel, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="canonical"]/@href')->item(0);
+    if ($canonEl) { $canonical = pp_abs_url(trim($canonEl->nodeValue ?? ''), $base); }
+
+    $lang = '';
+    $region = '';
+    $htmlEl = $xp->query('//html')->item(0);
+    if ($htmlEl instanceof DOMElement) {
+        $langAttr = trim($htmlEl->getAttribute('lang'));
+        if ($langAttr) {
+            $parts = preg_split('~[-_]~', $langAttr);
+            $lang = strtolower($parts[0] ?? '');
+            if (isset($parts[1])) { $region = strtoupper($parts[1]); }
+        }
+    }
+
+    $hreflangs = [];
+    foreach ($xp->query('//link[translate(@rel, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="alternate" and @hreflang and @href]') as $lnk) {
+        if (!($lnk instanceof DOMElement)) continue;
+        $hl = trim($lnk->getAttribute('hreflang'));
+        $href = pp_abs_url(trim($lnk->getAttribute('href')), $base);
+        if ($hl && $href) { $hreflangs[] = ['hreflang' => $hl, 'href' => $href]; }
+    }
+    if (!$lang && !empty($hreflangs)) {
+        $hl0 = $hreflangs[0]['hreflang'];
+        $parts = preg_split('~[-_]~', $hl0);
+        $lang = strtolower($parts[0] ?? '');
+        if (isset($parts[1])) { $region = strtoupper($parts[1]); }
+    }
+
+    if (!$lang) {
+        $contentLang = $xp->query('//meta[translate(@http-equiv, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="content-language"]/@content')->item(0);
+        if ($contentLang) {
+            $v = trim($contentLang->nodeValue ?? '');
+            if ($v) {
+                $parts = preg_split('~[,;\s]+~', $v);
+                $p0 = $parts[0] ?? '';
+                $pp = preg_split('~[-_]~', $p0);
+                $lang = strtolower($pp[0] ?? '');
+                if (isset($pp[1])) { $region = strtoupper($pp[1]); }
+            }
+        }
+    }
+
+    $published = '';
+    $modified = '';
+    $q = function(string $xpath) use ($xp): ?string { $n = $xp->query($xpath)->item(0); return $n ? trim($n->nodeValue ?? '') : null; };
+    $published = $q('//meta[translate(@property, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="article:published_time"]/@content') ?: $q('//meta[translate(@itemprop, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="datePublished"]/@content') ?: $q('//meta[translate(@name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="pubdate"]/@content');
+    $modified = $q('//meta[translate(@property, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="article:modified_time"]/@content') ?: $q('//meta[translate(@property, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:updated_time"]/@content') ?: $q('//meta[translate(@itemprop, "ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="dateModified"]/@content');
+
+    foreach ($xp->query('//script[@type="application/ld+json"]') as $script) {
+        $json = trim($script->textContent ?? '');
+        if ($json === '') continue;
+        $data = json_decode($json, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $json2 = preg_replace('/,\s*([}\]])/', '$1', $json);
+            $data = json_decode($json2, true);
+        }
+        if (is_array($data)) {
+            $stack = [$data];
+            while ($stack) {
+                $cur = array_pop($stack);
+                if (isset($cur['datePublished']) && !$published) { $published = (string)$cur['datePublished']; }
+                if (isset($cur['dateModified']) && !$modified) { $modified = (string)$cur['dateModified']; }
+                foreach ($cur as $v) { if (is_array($v)) $stack[] = $v; }
+            }
+        }
+        if ($published && $modified) break;
+    }
+
+    if (!$modified && !empty($headers['last-modified'])) { $modified = $headers['last-modified']; }
+
+    return [
+        'final_url' => $finalUrl,
+        'lang' => $lang,
+        'region' => $region,
+        'title' => $title,
+        'description' => $desc,
+        'canonical' => $canonical,
+        'published_time' => $published,
+        'modified_time' => $modified,
+        'hreflang' => $hreflangs,
+    ];
 }
 
 ?>

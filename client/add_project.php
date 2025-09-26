@@ -39,8 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     ];
                 }
                 $links_json = json_encode($links, JSON_UNESCAPED_UNICODE);
-                $upd = $conn->prepare("UPDATE projects SET links = ?, wishes = ? WHERE id = ?");
-                if ($upd) { $upd->bind_param('ssi', $links_json, $global_wishes, $project_id); $upd->execute(); $upd->close(); }
+                // Нормализуем и сохраним домен проекта (только хост, без www.)
+                $host = strtolower((string)parse_url($first_url, PHP_URL_HOST));
+                if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
+                $upd = $conn->prepare("UPDATE projects SET links = ?, wishes = ?, domain_host = ? WHERE id = ?");
+                if ($upd) { $upd->bind_param('sssi', $links_json, $global_wishes, $host, $project_id); $upd->execute(); $upd->close(); }
             } else {
                 $message = __('Ошибка добавления проекта.');
             }
