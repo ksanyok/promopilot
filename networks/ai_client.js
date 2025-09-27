@@ -19,27 +19,55 @@ async function generateWithOpenAI(prompt, opts = {}) {
     throw new Error('OpenAI API key is missing');
   }
   const model = String(opts.model || process.env.OPENAI_MODEL || 'gpt-3.5-turbo');
-  const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.8;
   const messages = [];
   const sys = (opts.systemPrompt || '').trim();
   if (sys) messages.push({ role: 'system', content: sys });
   messages.push({ role: 'user', content: String(prompt || '') });
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model, messages, temperature })
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`OpenAI error ${res.status}: ${res.statusText} ${body.slice(0, 400)}`);
+  const basePayload = { model, messages };
+  // Only include sampling params if explicitly provided
+  if (typeof opts.temperature === 'number') basePayload.temperature = opts.temperature;
+  if (typeof opts.topP === 'number') basePayload.top_p = opts.topP;
+  if (typeof opts.maxTokens === 'number') basePayload.max_tokens = opts.maxTokens;
+
+  async function call(payload) {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+    const bodyText = await res.text().catch(() => '');
+    if (!res.ok) {
+      throw new Error(`OpenAI error ${res.status}: ${res.statusText} ${bodyText.slice(0, 400)}`);
+    }
+    try { return JSON.parse(bodyText); } catch { return null; }
   }
-  const data = await res.json().catch(() => null);
-  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-  return String(content || '').trim();
+
+  try {
+    const data = await call(basePayload);
+    const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
+    return String(content || '').trim();
+  } catch (err) {
+    const msg = String(err && err.message || '');
+    // Retry once without temperature/top_p if server complains about params
+    const complainsSampling = /temperature|top_p|Unknown parameter|invalid .*parameter|not allowed/i.test(msg);
+    if ((basePayload.temperature !== undefined || basePayload.top_p !== undefined) && complainsSampling) {
+      const retryPayload = { ...basePayload };
+      delete retryPayload.temperature;
+      delete retryPayload.top_p;
+      try {
+        const data = await call(retryPayload);
+        const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
+        return String(content || '').trim();
+      } catch (_) {
+        throw err; // original error
+      }
+    }
+    throw err;
+  }
 }
 
 // --- BYOA (Gradio Space) via plain HTTP, no extra libs ---
