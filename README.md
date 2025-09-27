@@ -63,7 +63,7 @@ find "$PWD/node_runtime" -type f -name chrome -perm -u+x 2>/dev/null | head -n1
 ## Обновление до новой версии
 ```
 git fetch --tags
-git checkout v1.2.7   # либо main
+git checkout v1.2.31   # либо main
 npm install
 ```
 Если после обновления Puppeteer не запускается — повторите шаг установки Chrome (см. выше).
@@ -73,6 +73,12 @@ npm install
 - В логах видны версии Puppeteer/Node и путь к Chrome.
 
 ## Частые проблемы
+– BYOA (собственное API) не отвечает/зависает:
+  - На сервере в корне проекта выполните установку клиента Gradio:
+    
+    npm i @gradio/client
+    
+  - Затем перезапустите публикацию. В логах `logs/network-telegraph-*.log` должна появиться строка `BYOA:pkg_ok`.
 - Chrome executable not found:
   - Не найден бинарь Chrome. Установите Chrome for Testing в `node_runtime` и/или укажите путь в админке.
 - npx: command not found:
