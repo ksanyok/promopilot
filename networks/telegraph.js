@@ -1,568 +1,76 @@
 'use strict';
 
-// Minimal, clean async function for Telegraph publishing
-// - Generates title, author, and article via AI provider (OpenAI or BYOA)
-// - Collects microdata/SEO from the target page to guide content
-// - Uses one organic inline link to the target URL
-// - Uses <h2> subheadings as requested
+// Ultra-minimal Telegraph publisher: generate title, author, and content via ai_client.js and publish.
+// No language mapping, no microdata fetching, no HTML post-processing.
 
 const puppeteer = require('puppeteer');
-const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
 const { generateText } = require('./ai_client');
 
-// Simple file logger similar to previous implementation
-const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
-const LOG_FILE = process.env.PP_LOG_FILE || path.join(
-  LOG_DIR,
-  `network-telegraph-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.log`
-);
-function ensureDirSync(dir){
-  try { if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); } } catch(_) {}
-}
-ensureDirSync(LOG_DIR);
-function safeStringify(obj){
-  try { return JSON.stringify(obj); } catch(_) { return String(obj); }
-}
-function logLine(msg, data){
-  const line = `[${new Date().toISOString()}] ${msg}${data ? ' ' + safeStringify(data) : ''}\n`;
-  try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
+async function generateTextWithChat(prompt, opts) {
+  // Thin wrapper over our unified AI client
+  return generateText(String(prompt || ''), opts || {});
 }
 
-async function generateTextWithChat(prompt, aiOptions) {
-  // Backward-compatible wrapper to call unified AI client
-  // aiOptions: { provider, openaiApiKey, model, temperature, systemPrompt, byoaModel, byoaEndpoint }
-  logLine('AI request', { provider: (aiOptions && aiOptions.provider) || process.env.PP_AI_PROVIDER || 'openai', promptPreview: String(prompt || '').slice(0, 160) });
-  try {
-    const out = await generateText(prompt, aiOptions || {});
-    logLine('AI response ok', { length: String(out || '').length });
-    return out;
-  } catch (e) {
-    logLine('AI error', { error: String(e && e.message || e) });
-    return '';
-  }
-}
-
-function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
-function extractAttr(tagHtml, attr) {
-  const m = String(tagHtml || '').match(new RegExp(attr + '\\s*=\\s*([\"\'])(.*?)\\1', 'i'));
-  return m ? m[2] : '';
-}
-
-// Выделяет финальный ответ из типового вывода Space с блоками Analysis/Response
-function extractFinalAnswer(raw){
-  let t = String(raw || '').trim();
-  if (!t) return '';
-  // Попробуем взять часть после последнего "Response:" (с учётом эмодзи/markdown, без глобальных RegExp)
-  const lc = t.toLowerCase();
-  const rKey = 'response:';
-  let pos = lc.lastIndexOf(rKey);
-  if (pos !== -1) {
-    t = t.slice(pos + rKey.length).trim();
-  } else {
-    // Если нет "Response:", взять весь текст, убрав возможные заголовки аналитики
-    t = t.replace(/^\s{0,3}[*_]{0,3}\s*[*_]{0,3}\s*[^\n\r]{0,40}analysis\s*:\s*.*$/gim, '').trim();
-  }
-  // Сносим частые разделители
-  t = t.replace(/^(?:[-*_]{3,}\s*)+/gmi, '').trim();
-  return t;
-}
-
-function normalizeTitle(raw){
-  let t = extractFinalAnswer(raw);
-  t = stripTags(t);
-  // Берём весь текст, очищаем
-  t = t.replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  // Убираем markdown-маркировки и кавычки
-  t = t.replace(/^#+\s*/,'').replace(/[*_`~]+/g,'').replace(/["'«»“”„]+/g,'');
-  // Убираем точку в конце и обрезаем длину
-  t = t.replace(/[.。]+$/,'').trim();
-  if (!t) t = 'Untitled';
-  if (t.length > 140) t = t.slice(0, 140);
-  return t;
-}
-
-function normalizeAuthor(raw){
-  let a = extractFinalAnswer(raw);
-  a = stripTags(a).replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  a = a.replace(/["'«»“”„]+/g,'').trim();
-  // Оставляем буквы/пробел/дефис
-  a = a.replace(/[^A-Za-zА-Яа-яЁё\s\-]/g, '').replace(/\s{2,}/g,' ').trim();
-  if (!a) a = 'PromoPilot';
-  if (a.length > 40) a = a.slice(0, 40);
-  return a;
-}
-
-function normalizeContent(raw){
-  let c = extractFinalAnswer(raw);
-  c = String(c || '').trim();
-  // Убираем возможные markdown артефакты в начале
-  c = c.replace(/^\s*[*_`~]+\s*/g, '').trim();
-  return c;
-}
-
-async function extractPageMeta(url) {
-  logLine('Fetch page for meta', { url });
-  try {
-    const r = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; PromoPilot/1.0; +https://example.com/bot)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ru,en;q=0.8'
-      }
-    });
-    const html = await r.text();
-    const out = { title: '', description: '' };
-
-    const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const titleTag = t ? stripTags(t[1]) : '';
-
-    const metaDesc = html.match(/<meta[^>]+name=[\"\']description[\"\'][^>]*>/i);
-    const metaDescVal = metaDesc ? extractAttr(metaDesc[0], 'content') : '';
-
-    const ogTitleTag = html.match(/<meta[^>]+property=[\"\']og:title[\"\'][^>]*>/i);
-    const ogTitle = ogTitleTag ? extractAttr(ogTitleTag[0], 'content') : '';
-    const ogDescTag = html.match(/<meta[^>]+property=[\"\']og:description[\"\'][^>]*>/i);
-    const ogDesc = ogDescTag ? extractAttr(ogDescTag[0], 'content') : '';
-
-    const twTitleTag = html.match(/<meta[^>]+name=[\"\']twitter:title[\"\'][^>]*>/i);
-    const twTitle = twTitleTag ? extractAttr(twTitleTag[0], 'content') : '';
-    const twDescTag = html.match(/<meta[^>]+name=[\"\']twitter:description[\"\'][^>]*>/i);
-    const twDesc = twDescTag ? extractAttr(twDescTag[0], 'content') : '';
-
-    const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const h1Text = h1 ? stripTags(h1[1]) : '';
-
-    // JSON-LD
-    let ldTitle = '', ldDesc = '';
-    const ldBlocks = html.match(/<script[^>]+type=[\"\']application\/ld\+json[\"\'][^>]*>[\s\S]*?<\/script>/gi) || [];
-    for (const block of ldBlocks) {
-      const jsonText = (block.match(/>([\s\S]*?)<\/script>/i) || [,''])[1];
-      try {
-        const data = JSON.parse(jsonText);
-        const arr = Array.isArray(data) ? data : [data];
-        for (const item of arr) {
-          const candTitle = item.headline || item.name || (item.article && item.article.headline) || '';
-          const candDesc = item.description || (item.article && item.article.description) || '';
-          if (!ldTitle && candTitle) ldTitle = String(candTitle);
-          if (!ldDesc && candDesc) ldDesc = String(candDesc);
-        }
-      } catch (_) {}
-      if (ldTitle && ldDesc) break;
-    }
-
-    out.title = (ldTitle || ogTitle || twTitle || h1Text || titleTag || '').trim();
-    out.description = (ldDesc || ogDesc || twDesc || metaDescVal || '').trim();
-
-    // Clean noisy suffixes like categories separated by dashes
-    out.title = out.title.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-    out.description = out.description.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-
-    logLine('Meta extracted', { title: out.title, descriptionPreview: out.description.slice(0, 160) });
-    return out;
-  } catch (e) {
-    logLine('Meta extract failed', { error: String(e && e.message || e) });
-    return { title: '', description: '' };
-  }
-}
-
-function cleanTitle(t) {
-  t = String(t || '').trim();
-  t = t.replace(/["'«»“”„]+/g, '').replace(/[.]+$/g, '').trim();
-  if (!t) t = 'Untitled';
-  return t;
-}
-
-function escapeRegExp(s){
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function integrateSingleAnchor(html, pageUrl, anchorText) {
-  let s = String(html || '');
-  const at = String(anchorText || '').trim();
-  if (!pageUrl) return s;
-  // Remove all anchors except those that point to pageUrl
-  s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
-    const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
-    const href = m && m[1] ? m[1] : '';
-    if (href && href.replace(/\/$/, '') === String(pageUrl).replace(/\/$/, '')) return full; // keep only our link
-    return text; // unwrap others
-  });
-
-  // If link already present (simple case-insensitive check for href with or without trailing slash)
-  const pageUrlNorm = String(pageUrl).replace(/\/$/, '').toLowerCase();
-  const sLower = s.toLowerCase();
-  if (sLower.includes(`href="${pageUrlNorm}"`) || sLower.includes(`href='${pageUrlNorm}'`) ||
-      sLower.includes(`href="${pageUrlNorm}/"`) || sLower.includes(`href='${pageUrlNorm}/'`)) {
-    return s;
-  }
-
-  // Prepare keyword hints from anchor text
-  const lowerAT = at.toLowerCase();
-  const words = lowerAT.split(/[^a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9]+/).filter(w => w.length >= 4);
-  const uniq = Array.from(new Set(words)).slice(0, 6);
-
-  const paras = s.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
-  if (paras.length) {
-    // 1) If any paragraph already contains anchorText (case-insensitive), wrap it in-place
-    for (let i = 0; i < paras.length; i++) {
-      const p = paras[i];
-      const inner = (p.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [,''])[1];
-      const idx = inner.toLowerCase().indexOf(lowerAT);
-      if (at && idx !== -1) {
-        const before = inner.slice(0, idx);
-        const mid = inner.slice(idx, idx + at.length);
-        const after = inner.slice(idx + at.length);
-        const replaced = `<p>${before}<a href="${pageUrl}">${mid}</a>${after}</p>`;
-        return s.replace(p, replaced);
-      }
-    }
-    // 2) Otherwise, try to link a keyword inside the first sufficiently long paragraph
-    for (let i = 0; i < paras.length; i++) {
-      const p = paras[i];
-      const textLen = stripTags(p).length;
-      if (textLen < 120) continue;
-      if (uniq.length) {
-        const rx = new RegExp(`\\b(${uniq.map(escapeRegExp).join('|')})\\b`, 'i');
-        if (rx.test(p)) {
-          const injected = p.replace(rx, (m) => `<a href="${pageUrl}">${at || m}</a>`);
-          return s.replace(p, injected);
-        }
-      }
-      // Fallback for long paragraph: append the link at the end
-      const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${at || pageUrl}</a></p>`);
-      return s.replace(p, injected);
-    }
-  }
-  // Fallback: append under the first heading
-  return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${at || pageUrl}</a></p>`);
-}
-
-function promoteHeadings(html) {
-  // Promote likely headings from plain paragraphs into <h2>
-  let s = String(html || '');
-  const paras = s.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
-  if (paras.length === 0) return s;
-  let promoted = 0;
-  for (let i = 0; i < paras.length; i++) {
-    if (i === 0) continue; // keep first paragraph as intro
-    const p = paras[i];
-    const inner = (p.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [,''])[1];
-    // Skip paragraphs containing punctuation that indicates sentences
-    const raw = stripTags(inner);
-    const len = raw.length;
-    const looksHeading = (len >= 15 && len <= 80) && /[A-Za-zА-Яа-яЁёІіЇїЄє]/.test(raw) && !/[.!?…]$/.test(raw) && (raw.split(/\s+/).length <= 10);
-    if (looksHeading) {
-      const h = `<h2>${raw}</h2>`;
-      s = s.replace(p, h);
-      promoted++;
-      if (promoted >= 4) break; // limit number of headings
-    }
-  }
-  // Ensure at least one h2 exists
-  if (!/<h2[\s>]/i.test(s)) {
-    // Try converting markdown-like headings if present
-    s = s.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
-  }
-  return s;
-}
-
-function boldSomeKeywords(html, anchorText, meta) {
-  // Add light bolding for a few important phrases (outside of links)
-  let s = String(html || '');
-  const src = `${anchorText || ''} ${meta && meta.title ? meta.title : ''}`.toLowerCase();
-  let words = src.split(/[^a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9]+/).filter(w => w.length >= 5);
-  // Unique and remove stopwords
-  const stop = new Set(['this','that','with','from','about','для','при','про','как','что','или','также','чтобы','можно','без','между','через','если','є','для','або','та','але','який','яка']);
-  words = words.filter((w, i) => words.indexOf(w) === i && !stop.has(w));
-  const keywords = words.slice(0, 8);
-  if (!keywords.length) return s;
-  const maxBolds = 6;
-  let used = 0;
-  // Bold within paragraphs and list items only; skip ones that already contain links
-  s = s.replace(/<(p|li)>([\s\S]*?)<\/(p|li)>/gi, (full, tag1, inner) => {
-    if (used >= maxBolds) return full;
-    if (/<a\s/i.test(inner)) return full; // skip to avoid nesting
-    let changed = inner;
-    for (const kw of keywords) {
-      if (used >= maxBolds) break;
-      const rx = new RegExp(`(?![^<]*>)\\b(${escapeRegExp(kw)})\\b`, 'i');
-      if (rx.test(changed)) {
-        changed = changed.replace(rx, '<strong>$1</strong>');
-        used++;
-      }
-    }
-    return `<${tag1}>${changed}</${tag1}>`;
-  });
-  return s;
-}
-
-function resolveLanguageForPrompt(language) {
-  const l = String(language || '').trim().toLowerCase();
-  // Map common codes/names to a clear instruction for the model
-  const map = {
-    ru: 'Russian (русском языке)',
-    'русский': 'Russian (русском языке)',
-    'русский язык': 'Russian (русском языке)',
-    russian: 'Russian (русском языке)',
-    en: 'English',
-    eng: 'English',
-    english: 'English',
-    uk: 'Ukrainian (українською мовою)',
-    ua: 'Ukrainian (українською мовою)',
-    ukrainian: 'Ukrainian (українською мовою)'
-  };
-  return map[l] || (l ? l.charAt(0).toUpperCase() + l.slice(1) : 'Russian (русском языке)');
-}
-
-function toSimpleHtmlBlocks(text) {
-  // Convert plain text with possible markdown-like lists into simple HTML blocks:
-  // - Paragraphs => <p>
-  // - Bulleted or numbered lists => <ul><li>
-  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
-  const blocks = [];
-  let current = [];
-  let currentType = 'p'; // 'p' or 'ul'
-
-  const isBullet = (s) => /^\s*([\-*•–—]|\d+[\.)])\s+/.test(s);
-
-  const flush = () => {
-    if (!current.length) return;
-    if (currentType === 'ul') {
-      const items = current.map(l => l.replace(/^\s*([\-*•–—]|\d+[\.)])\s+/, '').trim()).filter(Boolean);
-      if (items.length) blocks.push('<ul>' + items.map(it => `<li>${it}</li>`).join('') + '</ul>');
-    } else {
-      const para = current.join(' ').trim();
-      if (para) blocks.push(`<p>${para}</p>`);
-    }
-    current = [];
-    currentType = 'p';
+async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish) {
+  const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+  const aiOpts = {
+    provider,
+    openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
+    model: process.env.OPENAI_MODEL || undefined
   };
 
-  for (const raw of lines) {
-    const s = raw.trimEnd();
-    if (!s.trim()) { flush(); continue; }
-    const bullet = isBullet(s);
-    if (bullet) {
-      if (currentType !== 'ul') { flush(); currentType = 'ul'; }
-      current.push(s);
-    } else {
-      if (currentType !== 'p') { flush(); currentType = 'p'; }
-      current.push(s);
-    }
-  }
-  flush();
-  return blocks.join('\n');
-}
-
-async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider) {
-  logLine('Publish start', { pageUrl, anchorText, language, aiProvider: aiProvider || process.env.PP_AI_PROVIDER || 'openai' });
-  const meta = await extractPageMeta(pageUrl);
-
-  const langForPrompt = resolveLanguageForPrompt(language);
+  const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
   const prompts = {
-    title: (
-      `Write a concise, specific title in ${langForPrompt} that reflects the topic. ` +
-      `No quotes, no trailing dots. Avoid generic placeholders like Introduction/Введение. ` +
-      `Do not copy context phrases verbatim — paraphrase.\n` +
-      `Context (for understanding only):\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
-    ),
-    author: (
-      `Suggest a neutral author's name in ${langForPrompt}. ` +
-      `Use the ${langForPrompt} alphabet/script. One or two words. Reply with the name only.`
-    ),
-    content: (
-      `Write an article in ${langForPrompt} of at least 3000 characters based on the page ${pageUrl}. ` +
-      `Use this context for understanding only (do not quote it): title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
+    title: `Write a clear, specific article title in ${language} about: ${pageUrl}. No quotes.`,
+    author: `Suggest a neutral author's name in ${language}. One or two words. Reply with the name only.`,
+    content:
+      `Write an article in ${language} (>=3000 characters) based on ${pageUrl}.${extraNote}\n` +
       `Requirements:\n` +
-      `- Clear structure: short intro, 3–5 sections with subheadings, and a brief conclusion.\n` +
-      `- Bold a few important phrases where it improves readability.\n` +
-      `- Do not include any code, HTML tags, or markdown in your output. Plain text only.\n` +
-      `- Do not copy phrases from the context; paraphrase. Keep the output exclusively in ${langForPrompt}; if foreign words appear (e.g., Chinese), translate or replace them with ${langForPrompt}.`
-    )
-  };
-  logLine('Prompts prepared');
-
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  // AI options based on provider/key
-  const aiOptionsBase = {
-    provider: (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase(),
-    openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || undefined,
-    systemPrompt: `You are a professional copywriter. Always reply exclusively in ${langForPrompt}. ` +
-      `Do not include quoted labels like "Title:", "Description:", or the source URL in the article. ` +
-      `Use given context only to understand the topic; never copy it verbatim. Avoid any non-${langForPrompt} words.`,
+      `- Integrate exactly one active link with the anchor text "${anchorText}" as <a href="${pageUrl}">${anchorText}</a> naturally in the first half of the article.\n` +
+      `- Use simple HTML only: <p> for paragraphs and <h2> for subheadings. No markdown, no code blocks.\n` +
+      `- Keep it informative and readable with 3–5 sections and a short conclusion.\n` +
+      `- Do not include any other links.`
   };
 
-  // Generate title, author, content with small pauses
-  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOptionsBase, temperature: 0.7 });
-  await sleep(1500);
-  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOptionsBase, temperature: 0.6 });
-  await sleep(1500);
-  let rawContent = await generateTextWithChat(prompts.content, { ...aiOptionsBase, temperature: 0.8 });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  // Новая нормализация от «болтовни» модели
-  const title = normalizeTitle(rawTitle);
-  const author = normalizeAuthor(rawAuthor);
-  logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
+  const rawTitle = await generateTextWithChat(prompts.title, aiOpts);
+  await sleep(1000);
+  const rawAuthor = await generateTextWithChat(prompts.author, aiOpts);
+  await sleep(1000);
+  const content = await generateTextWithChat(prompts.content, aiOpts);
 
-  // Если ИИ не сгенерировал контент — не тратим время на браузер
-  if (!rawContent || String(rawContent).trim().length < 200) {
-    const err = `AI_CONTENT_EMPTY`; logLine('Publish failed', { error: err });
-    throw new Error(err);
-  }
+  const title = String(rawTitle || '').replace(/["']/g, '').trim() || 'Untitled';
+  const author = String(rawAuthor || '').trim() || 'PromoPilot';
 
-  // Очистка контента
-  let content = normalizeContent(rawContent);
-  // Remove obvious analysis headers and context labels that models sometimes echo
-  content = content
-    .replace(/^\s*(Title|Заголовок|Description|Описание|URL|Ссылка)\s*:\s*.*$/gim, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  // Always convert plain text (no tags requested from model) to simple HTML blocks
-  content = toSimpleHtmlBlocks(content);
-  // Remove any tags that could accidentally appear (safety)
-  content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
-  // Remove exact copies of context snippets (title/description/URL) if model echoed them
-  try {
-    if (meta && meta.title && meta.title.trim().length >= 8) {
-      const rx = new RegExp(escapeRegExp(meta.title.trim()), 'gi');
-      content = content.replace(rx, '');
-    }
-    if (meta && meta.description && meta.description.trim().length >= 12) {
-      const rx2 = new RegExp(escapeRegExp(meta.description.trim()), 'gi');
-      content = content.replace(rx2, '');
-    }
-    if (pageUrl) {
-      const rx3 = new RegExp(escapeRegExp(String(pageUrl).trim()), 'gi');
-      content = content.replace(rx3, '');
-    }
-  } catch (_) { /* ignore */ }
-  // Promote headings from plain paragraphs where appropriate
-  content = promoteHeadings(content);
-  // Ensure at least one <h2>
-  if (!/<h2[\s>]/i.test(content)) {
-    // Convert markdown-like headings to <h2>
-    content = content.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
-  }
-  // If target language is Russian or Ukrainian or English (non-CJK), strip accidental CJK characters that models sometimes leak
-  const nonCjkLang = /^(ru|рус|russian|uk|ua|ukrainian|en|eng|english)$/i.test(String(language||''));
-  if (nonCjkLang) {
-    content = content.replace(/[\u3400-\u9FFF\uF900-\uFAFF]/g, '');
-  }
-  content = integrateSingleAnchor(content, pageUrl, anchorText);
-  // Lightly bold a few important keywords to improve readability
-  content = boldSomeKeywords(content, anchorText, meta);
-
-  // Launch Puppeteer with optional explicit executable path
-  const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
-  if (process.env.PUPPETEER_ARGS) {
-    launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
-  }
-  const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
-  const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
-  if (execPath) launchOpts.executablePath = execPath;
-  logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
-
+  // Launch browser and publish
+  const launchOpts = { headless: true };
   const browser = await puppeteer.launch(launchOpts);
-  let page;
-  try {
-    page = await browser.newPage();
-    page.setDefaultTimeout(300000); // 5 minutes
-    page.setDefaultNavigationTimeout(300000);
-    logLine('Goto Telegraph');
-    await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
+  const page = await browser.newPage();
+  await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2' });
 
-    logLine('Fill title');
-    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 300000 });
-    await page.click('h1[data-placeholder="Title"]');
-    await page.keyboard.type(title);
+  await page.waitForSelector('h1[data-placeholder="Title"]');
+  await page.click('h1[data-placeholder="Title"]');
+  await page.keyboard.type(title);
 
-    logLine('Fill author');
-    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 300000 });
-    await page.click('address[data-placeholder="Your name"]');
-    await page.keyboard.type(author);
+  await page.waitForSelector('address[data-placeholder="Your name"]');
+  await page.click('address[data-placeholder="Your name"]');
+  await page.keyboard.type(author);
 
-    logLine('Fill content');
-    await page.evaluate((html) => {
-      const el = document.querySelector('p[data-placeholder="Your story..."]');
-      if (el) {
-        el.innerHTML = html;
-      } else {
-        const root = document.querySelector('.tl_article .ql-editor') || document.querySelector('div.ql-editor');
-        if (!root) throw new Error('Telegraph editor not found');
-        root.innerHTML = html;
-      }
-    }, content);
+  await page.evaluate((html) => {
+    const el = document.querySelector('p[data-placeholder="Your story..."]');
+    if (el) el.innerHTML = html;
+  }, content);
 
-    logLine('Publish click');
-    // Ищем кнопку публикации
-    let publishBtn = await page.$('button.publish_button');
-    if (!publishBtn) {
-      publishBtn = await page.$x("//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'),'publish')]").then(arr=>arr[0]).catch(()=>null);
-    }
-    if (!publishBtn) throw new Error('Publish button not found');
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle2' }),
+    page.click('button.publish_button')
+  ]);
 
-    await publishBtn.click();
-
-    // Ждём появления финального URL статьи (а не главной страницы)
-    const articleUrlRegex = /^(https?:\/\/(?:telegra\.ph|graph\.org)\/[^\s#/?]+(?:\.html)?)$/i;
-    try {
-      await page.waitForFunction((rxStr) => {
-        try { return new RegExp(rxStr).test(location.href); } catch { return false; }
-      }, { timeout: 300000 }, articleUrlRegex.source);
-    } catch (_) {}
-
-    // Доп. попытка: иногда dom уже на статье, но навигация не сработала явно
-    const publishedUrl = page.url();
-    if (!articleUrlRegex.test(publishedUrl)) {
-      // Пытаемся достать canonical
-      const can = await page.$eval('link[rel="canonical"]', el => el && el.href || '').catch(()=> '');
-      if (articleUrlRegex.test(can)) {
-        logLine('Published', { publishedUrl: can });
-        const result = { ok: true, network: 'telegraph', publishedUrl: can, title, author, logFile: LOG_FILE };
-        logLine('Success result', result);
-        return result;
-      }
-      throw new Error('Publish result page not detected');
-    }
-
-    logLine('Published', { publishedUrl });
-    const result = { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
-    logLine('Success result', result);
-    return result;
-  } catch (e) {
-    try {
-      if (page && !page.isClosed()) {
-        const ts = Date.now();
-        const shot = path.join(LOG_DIR, `telegraph-fail-${ts}.png`);
-        const htmlPath = path.join(LOG_DIR, `telegraph-fail-${ts}.html`);
-        await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
-        const html = await page.content().catch(() => '');
-        if (html) { try { fs.writeFileSync(htmlPath, html); } catch {} }
-        logLine('Debug saved', { screenshot: shot, html: htmlPath });
-      }
-    } catch (_) {}
-    logLine('Publish failed', { error: String(e && e.message || e), stack: e && e.stack });
-    throw e;
-  } finally {
-    try { if (page) await page.close(); } catch(_) { logLine('Page close failed'); }
-    try { 
-      await Promise.race([
-        browser.close(), 
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 10000))
-      ]);
-      logLine('Browser closed');
-    } catch (e) {
-      logLine('Browser close failed', { error: String(e && e.message || e) });
-      try { browser.process().kill('SIGKILL'); } catch(_) {}
-    }
-  }
+  const publishedUrl = page.url();
+  await browser.close();
+  return { ok: true, network: 'telegraph', publishedUrl, title, author };
 }
 
 module.exports = { publish: publishToTelegraph };
@@ -571,40 +79,30 @@ module.exports = { publish: publishToTelegraph };
 if (require.main === module) {
   (async () => {
     try {
-      const raw = process.env.PP_JOB || '{}';
-      logLine('PP_JOB raw', { length: raw.length });
-      const job = JSON.parse(raw);
-      logLine('PP_JOB parsed');
+      const job = JSON.parse(process.env.PP_JOB || '{}');
       const pageUrl = job.url || job.pageUrl || '';
       const anchor = job.anchor || pageUrl;
       const language = job.language || 'ru';
       const apiKey = job.openaiApiKey || process.env.OPENAI_API_KEY || '';
       const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
-      const jobModel = job.openaiModel || process.env.OPENAI_MODEL || '';
-      if (jobModel) process.env.OPENAI_MODEL = String(jobModel);
+      const wish = job.wish || '';
+      const model = job.openaiModel || process.env.OPENAI_MODEL || '';
+      if (model) process.env.OPENAI_MODEL = String(model);
 
       if (!pageUrl) {
-        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url missing', network: 'telegraph', logFile: LOG_FILE };
-        logLine('Run failed (missing params)', payload);
-        console.log(JSON.stringify(payload));
+        console.log(JSON.stringify({ ok: false, error: 'MISSING_PARAMS', details: 'url missing', network: 'telegraph' }));
         process.exit(1);
       }
-      // If provider is openai, ensure key present; for BYOA allow empty
       if (provider === 'openai' && !apiKey) {
-        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'openaiApiKey missing', network: 'telegraph', logFile: LOG_FILE };
-        logLine('Run failed (missing openai key)', payload);
-        console.log(JSON.stringify(payload));
+        console.log(JSON.stringify({ ok: false, error: 'MISSING_PARAMS', details: 'openaiApiKey missing', network: 'telegraph' }));
         process.exit(1);
       }
 
-      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider);
+      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish);
       console.log(JSON.stringify(res));
-      // Ensure clean exit even if some libraries keep event loops open
       process.exit(0);
     } catch (e) {
-      const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
-      logLine('Run failed', { error: payload.error, stack: e && e.stack });
-      console.log(JSON.stringify(payload));
+      console.log(JSON.stringify({ ok: false, error: String(e && e.message || e), network: 'telegraph' }));
       process.exit(1);
     }
   })();
