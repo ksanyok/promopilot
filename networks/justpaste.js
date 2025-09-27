@@ -1,8 +1,10 @@
+
 'use strict';
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const fetch = require('node-fetch');
 const { generateText, cleanLLMOutput } = require('./ai_client');
 
 // Logger
@@ -45,7 +47,7 @@ function analyzeLinks(html, url, anchor) {
   } catch { return { totalLinks:0, ourLinkCount:0, externalCount:0, hasOurAnchorText:false }; }
 }
 
-async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, captchaCfg) {
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = { provider, openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '', model: process.env.OPENAI_MODEL || undefined, temperature: 0.2 };
   const meta = pageMeta || {};
@@ -55,7 +57,12 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   const region = (meta.region || '').toString().trim();
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
-  logLine('Publish start', { pageUrl, anchorText, language: pageLang, provider });
+  // Captcha config
+  const captcha = captchaCfg || (() => { try { const j = JSON.parse(process.env.PP_JOB || '{}'); return j.captcha || {}; } catch(_) { return {}; } })();
+  const captchaProvider = String((captcha && captcha.provider) || process.env.PP_CAPTCHA_PROVIDER || 'none').toLowerCase();
+  const captchaApiKey = String((captcha && captcha.apiKey) || process.env.PP_CAPTCHA_API_KEY || '').trim();
+
+  logLine('Publish start', { pageUrl, anchorText, language: pageLang, provider, captchaProvider: captchaProvider || 'none' });
 
   const prompts = {
     title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
@@ -425,6 +432,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   // If captcha is present, capture a screenshot for diagnostics
   let captchaScreenshot = '';
+  let captchaSolved = false;
   if (requiresCaptcha) {
     try {
       const fname = `justpaste-captcha-${Date.now()}.png`;
@@ -433,12 +441,137 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       captchaScreenshot = fpath;
       logLine('Captcha detected', { captchaType, screenshot: fpath, url: page.url() });
     } catch(_) {}
+
+    // Attempt auto-solve if configured
+    if (captchaProvider !== 'none' && captchaApiKey) {
+      try {
+        const siteKey = await (async () => {
+          try {
+            return await page.evaluate(() => {
+              const out = { recaptcha: '', hcaptcha: '' };
+              const findParam = (src, key) => {
+                try {
+                  const u = new URL(src, location.href);
+                  return u.searchParams.get(key) || '';
+                } catch { return ''; }
+              };
+              // reCAPTCHA: data-sitekey or iframe k/sitekey param
+              const r1 = document.querySelector('div.g-recaptcha[data-sitekey]');
+              if (r1) out.recaptcha = r1.getAttribute('data-sitekey') || '';
+              if (!out.recaptcha) {
+                const r2 = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]')).map(f => findParam(f.getAttribute('src')||'', 'k') || findParam(f.getAttribute('src')||'', 'sitekey')).find(Boolean);
+                if (r2) out.recaptcha = r2;
+              }
+              // hCaptcha: data-sitekey or iframe sitekey param
+              const h1 = document.querySelector('div.h-captcha[data-sitekey], .h-captcha[data-sitekey]');
+              if (h1) out.hcaptcha = h1.getAttribute('data-sitekey') || '';
+              if (!out.hcaptcha) {
+                const h2 = Array.from(document.querySelectorAll('iframe[src*="hcaptcha.com"]')).map(f => findParam(f.getAttribute('src')||'', 'sitekey')).find(Boolean);
+                if (h2) out.hcaptcha = h2;
+              }
+              return out;
+            });
+          } catch { return { recaptcha:'', hcaptcha:'' }; }
+        })();
+
+        const sitekey = captchaType === 'hcaptcha' ? (siteKey && siteKey.hcaptcha) : (siteKey && siteKey.recaptcha);
+        logLine('Captcha sitekey', { type: captchaType, sitekey: sitekey ? (sitekey.slice(0,6)+'...') : '' });
+        if (sitekey) {
+          const solve2Captcha = async () => {
+            const isH = captchaType === 'hcaptcha';
+            const inUrl = 'http://2captcha.com/in.php';
+            const resUrl = 'http://2captcha.com/res.php';
+            const params = new URLSearchParams();
+            params.set('key', captchaApiKey);
+            params.set('json', '1');
+            params.set('method', isH ? 'hcaptcha' : 'userrecaptcha');
+            if (isH) params.set('sitekey', sitekey); else params.set('googlekey', sitekey);
+            params.set('pageurl', publishedUrl);
+            let resp = await fetch(`${inUrl}?${params.toString()}`);
+            let data = await resp.json().catch(()=>({status:0,request:'JSON_ERR'}));
+            if (!data || data.status !== 1) throw new Error('2captcha in.php error: ' + (data && data.request));
+            const id = data.request;
+            const poll = async () => {
+              const ps = new URLSearchParams(); ps.set('key', captchaApiKey); ps.set('action','get'); ps.set('id', id); ps.set('json','1');
+              let r; let d;
+              const deadline = Date.now() + 180000; // 3min
+              while (Date.now() < deadline) {
+                await sleep(5000);
+                r = await fetch(`${resUrl}?${ps.toString()}`);
+                d = await r.json().catch(()=>({status:0,request:'JSON_ERR'}));
+                if (d && d.status === 1) return d.request;
+                if (d && typeof d.request === 'string' && d.request !== 'CAPCHA_NOT_READY') break;
+              }
+              throw new Error('2captcha res.php timeout or error: ' + (d && d.request));
+            };
+            return await poll();
+          };
+
+          const solveAntiCaptcha = async () => {
+            const isH = captchaType === 'hcaptcha';
+            const createUrl = 'https://api.anti-captcha.com/createTask';
+            const resultUrl = 'https://api.anti-captcha.com/getTaskResult';
+            const type = isH ? 'HCaptchaTaskProxyless' : 'NoCaptchaTaskProxyless';
+            const createPayload = { clientKey: captchaApiKey, task: { type, websiteURL: publishedUrl, websiteKey: sitekey } };
+            let resp = await fetch(createUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(createPayload) });
+            let data = await resp.json().catch(()=>({errorId:1,errorCode:'JSON_ERR'}));
+            if (!data || data.errorId) throw new Error('anti-captcha createTask error: ' + (data && (data.errorCode||data.errorDescription)));
+            const taskId = data.taskId;
+            const pollPayload = { clientKey: captchaApiKey, taskId };
+            const deadline = Date.now() + 180000;
+            while (Date.now() < deadline) {
+              await sleep(5000);
+              const r = await fetch(resultUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pollPayload) });
+              const d = await r.json().catch(()=>({errorId:1,errorCode:'JSON_ERR'}));
+              if (d && !d.errorId && d.status === 'ready') {
+                const sol = d.solution || {};
+                return sol.gRecaptchaResponse || sol.token || '';
+              }
+              if (d && d.errorId) throw new Error('anti-captcha getTaskResult error: ' + (d.errorCode||d.errorDescription));
+            }
+            throw new Error('anti-captcha timeout');
+          };
+
+          const token = captchaProvider === '2captcha' ? await solve2Captcha() : await solveAntiCaptcha();
+          logLine('Captcha token obtained', { len: (token||'').length, provider: captchaProvider });
+          // Inject token and try to proceed
+          const injected = await page.evaluate((type, tok) => {
+            const inject = (name) => {
+              let el = document.querySelector(`textarea[name="${name}"]`) || document.querySelector(`#${name}`);
+              if (!el) { el = document.createElement('textarea'); el.name = name; el.id = name; el.style.display = 'none'; document.body.appendChild(el); }
+              el.value = tok;
+              try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch {}
+              return !!el;
+            };
+            let ok = false;
+            if (type === 'hcaptcha') { ok = inject('h-captcha-response'); }
+            else { ok = inject('g-recaptcha-response'); }
+            // Try to submit a containing form or click a visible continue/verify button
+            const form = document.querySelector('form');
+            if (form) { try { form.submit(); } catch {} }
+            const btn = Array.from(document.querySelectorAll('button, input[type="submit"], a'))
+              .find(el => /continue|verify|submit|продолжить|подтвердить/i.test(el.textContent||el.value||''));
+            if (btn) { try { btn.click(); } catch {} }
+            return ok;
+          }, captchaType, token);
+          await sleep(3000);
+          try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(()=>{}); } catch {}
+          // Re-check
+          const after = await detectCaptcha();
+          if (!after || !after.found) { captchaSolved = true; requiresCaptcha = false; captchaType = ''; logLine('Captcha solved'); }
+        } else {
+          logLine('Captcha sitekey not found, auto-solve skipped');
+        }
+      } catch (e) {
+        logLine('Captcha solve error', { error: String(e && e.message || e) });
+      }
+    }
   }
 
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, requiresCaptcha, captchaType, captchaScreenshot };
+  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, requiresCaptcha, captchaType, captchaScreenshot, captchaSolved };
 }
 
 module.exports = { publish: publishToJustPaste };
@@ -467,7 +600,7 @@ if (require.main === module) {
         logLine('Run failed (missing openai key)', payload); console.log(JSON.stringify(payload)); process.exit(1);
       }
 
-      const res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
+  const res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job.captcha || null);
       logLine('Success result', res); console.log(JSON.stringify(res)); process.exit(0);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'justpaste', logFile: LOG_FILE };

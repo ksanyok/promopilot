@@ -22,6 +22,9 @@ $settingsKeys = array_merge($settingsKeys, [
     'google_oauth_enabled',     // 0/1
     'google_client_id',
     'google_client_secret',
+    // Anti-captcha settings
+    'captcha_provider',         // none | 2captcha | anti-captcha
+    'captcha_api_key',
 ]);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -54,6 +57,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['google_oauth_enabled', $googleEnabled],
                 ['google_client_id', $googleClientId],
                 ['google_client_secret', $googleClientSecret],
+                // Anti-captcha
+                ['captcha_provider', in_array(($_POST['captcha_provider'] ?? 'none'), ['none','2captcha','anti-captcha'], true) ? $_POST['captcha_provider'] : 'none'],
+                ['captcha_api_key', trim((string)($_POST['captcha_api_key'] ?? ''))],
             ];
             $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
             if ($stmt) {
@@ -142,6 +148,9 @@ $settings += [
     'google_oauth_enabled' => $settings['google_oauth_enabled'] ?? '0',
     'google_client_id' => $settings['google_client_id'] ?? '',
     'google_client_secret' => $settings['google_client_secret'] ?? '',
+    // Anti-captcha defaults
+    'captcha_provider' => $settings['captcha_provider'] ?? 'none',
+    'captcha_api_key' => $settings['captcha_api_key'] ?? '',
 ];
 $in = "'" . implode("','", array_map([$conn, 'real_escape_string'], $settingsKeys)) . "'";
 $res = $conn->query("SELECT k, v FROM settings WHERE k IN ($in)");
@@ -515,7 +524,23 @@ $diagnostics = [
                     <button type="button" class="btn btn-link btn-sm p-0 ms-2" id="openGoogleHelp"><?php echo __('Как настроить?'); ?></button>
                 </div>
             </div>
-            <div class="col-md-6"></div>
+            <div class="col-md-6">
+                <label class="form-label"><?php echo __('Антикапча'); ?></label>
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <select name="captcha_provider" class="form-select form-control">
+                            <?php $cp = $settings['captcha_provider'] ?? 'none'; ?>
+                            <option value="none" <?php echo ($cp==='none'?'selected':''); ?>><?php echo __('Выключено'); ?></option>
+                            <option value="2captcha" <?php echo ($cp==='2captcha'?'selected':''); ?>>2Captcha</option>
+                            <option value="anti-captcha" <?php echo ($cp==='anti-captcha'?'selected':''); ?>>Anti-Captcha</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <input type="text" name="captcha_api_key" class="form-control" value="<?php echo htmlspecialchars($settings['captcha_api_key']); ?>" placeholder="API key">
+                    </div>
+                </div>
+                <div class="form-text"><?php echo __('Будет использоваться для автоматического решения reCAPTCHA/hCaptcha при публикации (например, JustPaste.it).'); ?></div>
+            </div>
 
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Telegram токен'); ?></label>

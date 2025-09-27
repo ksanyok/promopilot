@@ -2086,6 +2086,11 @@ if (!function_exists('pp_process_publication_job')) {
             'waitBetweenCallsMs' => 5000,
             'pubId' => $pubId,
             'page_meta' => $pageMeta,
+            // Anti-captcha settings
+            'captcha' => [
+                'provider' => (string)get_setting('captcha_provider', 'none'),
+                'apiKey' => (string)get_setting('captcha_api_key', ''),
+            ],
         ];
 
         // Run network handler
