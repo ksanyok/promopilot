@@ -234,20 +234,53 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   async function doPublish() {
     const startUrl = page.url();
     const tryClick = async () => {
-      const clicked = await page.evaluate(() => {
-        const candidates = [
-          '.editArticleBottomButtons .publishButton',
-          '#editArticleWidget .publishButton',
-          '.publishButton',
-          'button.publishButton',
-          'a.publishButton'
-        ];
-        let btn = null;
-        for (const sel of candidates) { btn = document.querySelector(sel); if (btn) break; }
-        if (btn) { try { btn.scrollIntoView({block:'center'}); } catch(_) {} btn.click(); return true; }
-        return false;
+      // Check terms/agree checkbox if present
+      await page.evaluate(() => {
+        const sel = 'input[type="checkbox"][name*="agree" i], input[type="checkbox"][id*="agree" i], input[type="checkbox"][name*="terms" i], input[type="checkbox"][id*="terms" i]';
+        const cb = document.querySelector(sel);
+        if (cb && !cb.checked && !cb.disabled) { try { cb.click(); } catch(_) {} }
+      }).catch(()=>{});
+      await sleep(100);
+
+      const info = await page.evaluate(() => {
+        const visible = (el) => {
+          if (!el) return false;
+          const cs = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          if (rect.width <= 0 || rect.height <= 0) return false;
+          return true;
+        };
+        const all = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
+        const label = (el) => (el.innerText || el.textContent || '').trim();
+        const isPublish = (t, el) => /(^|\b)publish(\b|$)/i.test(t) || (el && el.classList && el.classList.contains('publishButton')) || /опубликовать/i.test(t);
+        const cands = [];
+        all.forEach((el, idx) => {
+          const text = label(el);
+          const cand = {
+            idx,
+            tag: el.tagName,
+            id: el.id || '',
+            classes: el.className || '',
+            text,
+            inBottom: !!el.closest('.editArticleBottomButtons'),
+            disabled: !!el.disabled,
+            visible: visible(el),
+            isPublish: isPublish(text, el)
+          };
+          if (cand.visible && cand.isPublish && !cand.disabled) cands.push(cand);
+        });
+        cands.sort((a,b) => Number(b.inBottom) - Number(a.inBottom));
+        const chosen = cands[0] || null;
+        if (chosen) {
+          const el = all[chosen.idx];
+          try { el.scrollIntoView({block:'center'}); } catch(_) {}
+          try { el.click(); } catch(_) {}
+        }
+        return { candidates: cands, chosen };
       });
-      if (!clicked) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
+      try { logLine('Publish click info', info); } catch(_) {}
+      if (!info || !info.chosen) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
     };
 
     // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
