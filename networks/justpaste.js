@@ -19,6 +19,8 @@ function logLine(msg, data){
   try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
 }
 
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
 async function generateTextWithChat(prompt, opts) {
   const provider = (opts && opts.provider) || process.env.PP_AI_PROVIDER || 'openai';
   logLine('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
@@ -129,14 +131,27 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   try {
     const htmlTabSelector = '.editArticleMiddle .tabsBar a';
     await page.waitForSelector(htmlTabSelector, { timeout: 15000 });
-    const tabs = await page.$$(htmlTabSelector);
-    let switched = false;
-    for (const t of tabs) {
-      const text = (await page.evaluate(el => (el.textContent || '').trim(), t)).toLowerCase();
-      if (text === 'html') { await t.click(); switched = true; break; }
+    // Click Html tab
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+      const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
+      if (html) { html.click(); }
+    });
+    await sleep(400);
+    // Verify Html tab active; retry once if not
+    const isHtmlActive = await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+      const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
+      return !!(html && html.classList.contains('addArticleTabOn'));
+    });
+    if (!isHtmlActive) {
+      await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+        const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
+        if (html) { html.click(); }
+      });
+      await sleep(400);
     }
-    if (!switched && tabs.length > 1) { await tabs[tabs.length-1].click(); }
-    await page.waitForTimeout(400); // tiny delay for TinyMCE to init
   } catch (e) { logLine('Switch tab error', { error: String(e && e.message || e) }); }
 
   // Helper: wait for any of selectors
@@ -152,29 +167,40 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     throw new Error('none of selectors appeared: ' + selectors.join(', '));
   }
 
-  // Fill TinyMCE via iframe or fallback to textarea
+  // Fill TinyMCE via API if possible, else via iframe/textarea
   try {
-    const editorSelector = await waitForAny(page, [
-      'iframe#tinyMCEEditor_ifr',
-      'iframe.tox-edit-area__iframe',
-      '#htmlAreaDIV iframe',
-      'textarea#tinyMCEEditor',
-      'textarea.mainTextarea'
-    ], 25000, 300);
-
-    if (editorSelector.includes('iframe')) {
-      const frameHandle = await page.$(editorSelector);
-      const frame = await frameHandle.contentFrame();
-      await frame.waitForSelector('body#tinymce, body', { timeout: 10000 });
-      await frame.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
-      logLine('Filled via iframe', { selector: editorSelector });
-    } else {
-      await page.$eval(editorSelector, (el, val) => {
-        el.value = val;
-        const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
-        ev('input'); ev('change');
-      }, cleanedContent);
-      logLine('Filled via textarea', { selector: editorSelector });
+    const used = await page.evaluate((html) => {
+      try {
+        if (window.tinymce && typeof window.tinymce.get === 'function') {
+          const ed = window.tinymce.get('tinyMCEEditor');
+          if (ed) { ed.setContent(html); ed.fire('change'); return 'tinymce'; }
+        }
+      } catch(_) {}
+      return 'none';
+    }, cleanedContent);
+    if (used === 'tinymce') { logLine('Filled via TinyMCE API'); }
+    else {
+      const editorSelector = await waitForAny(page, [
+        'iframe#tinyMCEEditor_ifr',
+        'iframe.tox-edit-area__iframe',
+        '#htmlAreaDIV iframe',
+        'textarea#tinyMCEEditor',
+        'textarea.mainTextarea'
+      ], 25000, 300);
+      if (editorSelector.includes('iframe')) {
+        const frameHandle = await page.$(editorSelector);
+        const frame = await frameHandle.contentFrame();
+        await frame.waitForSelector('body#tinymce, body', { timeout: 10000 });
+        await frame.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
+        logLine('Filled via iframe', { selector: editorSelector });
+      } else {
+        await page.$eval(editorSelector, (el, val) => {
+          el.value = val;
+          const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
+          ev('input'); ev('change');
+        }, cleanedContent);
+        logLine('Filled via textarea', { selector: editorSelector });
+      }
     }
   } catch (e) {
     logLine('Fill editor failed', { error: String(e && e.message || e) });
@@ -184,7 +210,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   try {
     await page.focus('.editArticleMiddle input.titleInput');
     await page.keyboard.press('Tab').catch(()=>{});
-    await page.waitForTimeout(200);
+    await sleep(200);
   } catch(_) {}
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
@@ -203,10 +229,10 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const tabs = await page.$$(htmlTabSelector);
       for (const t of tabs) {
         const text = (await page.evaluate(el => (el.textContent || '').trim(), t)).toLowerCase();
-        if (text === 'editor' || text === 'html') { await t.click(); await page.waitForTimeout(150); }
+        if (text === 'editor' || text === 'html') { await t.click(); await sleep(150); }
       }
     } catch(_) {}
-    await page.waitForTimeout(300);
+    await sleep(300);
     await doPublish();
   }
 
