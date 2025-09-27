@@ -114,12 +114,13 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await page.keyboard.type(author);
 
   logLine('Fill content');
-  // Click into the content area to ensure editor is initialized
-  await page.waitForSelector('p[data-placeholder="Your story..."]');
-  await page.click('p[data-placeholder="Your story..."]');
+  // Ensure editor is present (Telegraph uses Quill: .ql-editor)
+  const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
+  await page.waitForSelector(editorSelector);
+  await page.click('h1[data-placeholder="Title"]'); // small nudge to ensure editor initialized
   const cleanedContent = String(content || '').trim();
   await page.evaluate((html) => {
-    const root = document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('.tl_article_content .ql-editor') || document.querySelector('.ql-editor');
+    const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
       root.innerHTML = html || '<p></p>';
       try {
