@@ -84,6 +84,11 @@ function parseGenericAIResponse(payload) {
 
 // BYOA: прямой POST на {BASE}{ENDPOINT} с JSON как в примере (/chat)
 async function generateWithBYOA(prompt, opts = {}) {
+  const DEBUG = process.env.PP_AI_DEBUG === '1';
+  const stamp = () => new Date().toISOString();
+  const mask = (s) => { if (!s) return ''; const t = String(s); return t.length <= 8 ? '****' : `${t.slice(0,4)}…${t.slice(-4)}`; };
+  const dlog = (scope, data) => { if (!DEBUG) return; try { console.log(`[${stamp()}] BYOA:${scope}`, typeof data==='string'?data:JSON.stringify(data)); } catch { console.log(`[${stamp()}] BYOA:${scope}`, data); } };
+
   let base = String(opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || '').trim();
   if (!base) base = 'https://amd-gpt-oss-120b-chatbot.hf.space';
   if (!/^https?:\/\//i.test(base)) {
@@ -102,28 +107,103 @@ async function generateWithBYOA(prompt, opts = {}) {
 
   const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   const baseBody = { message: String(prompt||''), system_prompt: systemPrompt, ...(model ? { model } : {}) };
+  dlog('cfg', { base, endpoint, url, hasToken: !!token, tokenPreview: mask(token), model: model || null });
 
   async function callDirect(withTemp) {
-    const body = JSON.stringify({ ...baseBody, ...(withTemp && typeof temperature === 'number' ? { temperature } : {}) });
+    const bodyObj = { ...baseBody, ...(withTemp && typeof temperature === 'number' ? { temperature } : {}) };
+    const body = JSON.stringify(bodyObj);
+    dlog('request', { withTemp, headers: { ...headers, Authorization: headers.Authorization ? `Bearer ${mask(token)}` : undefined }, bodyLens: { message: bodyObj.message.length, system_prompt: bodyObj.system_prompt.length } });
     const r = await fetch(url, { method: 'POST', headers, body });
     const ct = String(r.headers.get('content-type') || '').toLowerCase();
     const raw = await (ct.includes('application/json') ? r.json().catch(()=> ({})) : r.text().catch(()=> ''));
     if (!r.ok) {
       const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      const err = new Error(`BYOA ${r.status}: ${text.slice(0,400)}`);
+      dlog('resp_err', { status: r.status, ct, textSample: String(text).slice(0, 400) });
+      const err = new Error(`BYOA ${r.status}: ${String(text).slice(0,400)}`);
       err._status = r.status; err._text = text; throw err;
     }
+    dlog('resp_ok', { status: r.status, ct, kind: typeof raw, sample: (typeof raw==='string'?raw:String(raw)).slice(0,120) });
     return parseGenericAIResponse(raw);
   }
 
-  try { return String((await callDirect(true)) || '').trim(); }
+  try { const out = await callDirect(true); dlog('done', { outLen: String(out||'').length }); return String(out||'').trim(); }
   catch (e) {
     if (e._status === 400 && /temperat/i.test(String(e._text||'')) && /unsupported|invalid/i.test(String(e._text||''))) {
-      return String((await callDirect(false)) || '').trim();
+      dlog('retry_no_temp', {});
+      const out = await callDirect(false); dlog('done_no_temp', { outLen: String(out||'').length }); return String(out||'').trim();
     }
     throw e;
   }
 }
+
+// Patch generateWithBYOA to add hf.space fallback on 404
+// NOTE: Keep the function body minimal; reuse computed vars and add small fallback logic.
+(function patchBYOA(){
+  const orig = generateWithBYOA;
+  generateWithBYOA = async function(prompt, opts = {}){
+    const DEBUG = process.env.PP_AI_DEBUG === '1';
+    const stamp = () => new Date().toISOString();
+    const dlog = (scope, data) => { if (!DEBUG) return; try { console.log(`[${stamp()}] BYOA:${scope}`, typeof data==='string'?data:JSON.stringify(data)); } catch { console.log(`[${stamp()}] BYOA:${scope}`, data); } };
+
+    // Recompute small subset we need to decide fallbacks
+    let base = String(opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || '').trim();
+    if (!base) base = 'https://amd-gpt-oss-120b-chatbot.hf.space';
+    if (!/^https?:\/\//i.test(base)) {
+      base = base.includes('/') ? `https://${base.replace(/\//g,'-')}.hf.space` : `https://${base}.hf.space`;
+    }
+    base = base.replace(/\/$/, '');
+
+    try {
+      return await orig(prompt, opts);
+    } catch (e) {
+      const is404 = e && e._status === 404;
+      const isHF = /\.hf\.space$/i.test(base);
+      if (!(is404 && isHF)) throw e;
+
+      // Try Gradio predict endpoints
+      const systemPrompt = String(opts.systemPrompt || process.env.PP_BYOA_SYSTEM_PROMPT || 'You are a helpful assistant.');
+      const temperature = typeof opts.temperature === 'number' ? opts.temperature : undefined;
+      const dataArrWithTemp = [ String(prompt||''), systemPrompt, temperature ];
+      const dataArrNoTemp   = [ String(prompt||''), systemPrompt ];
+
+      const tryPredict = async (suffix, withTemp) => {
+        const url = `${base}/api/predict${suffix}`;
+        const payload = { data: withTemp ? dataArrWithTemp : dataArrNoTemp };
+        dlog('fallback_req', { url, withTemp, payloadLen: { m: payload.data[0].length, s: payload.data[1].length } });
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const ct = String(r.headers.get('content-type') || '').toLowerCase();
+        const raw = await (ct.includes('application/json') ? r.json().catch(()=> ({})) : r.text().catch(()=> ''));
+        if (!r.ok) {
+          const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+          dlog('fallback_err', { status: r.status, url, text: String(text).slice(0,200) });
+          const err = new Error(`BYOA(Gradio) ${r.status}: ${String(text).slice(0,200)}`);
+          err._status = r.status; err._text = text; throw err;
+        }
+        dlog('fallback_ok', { url, status: r.status });
+        const d = raw && raw.data;
+        const out = Array.isArray(d) ? d[0] : (raw && (raw.response ?? raw) || '');
+        return String(out || '').trim();
+      };
+
+      // Try /chat first, then root
+      try {
+        return await tryPredict('/chat', true);
+      } catch (e1) {
+        if (e1._status === 400 && /temperat/i.test(String(e1._text||'')) && /unsupported|invalid/i.test(String(e1._text||''))) {
+          try { return await tryPredict('/chat', false); } catch (_) {}
+        }
+        try {
+          return await tryPredict('', true);
+        } catch (e2) {
+          if (e2._status === 400 && /temperat/i.test(String(e2._text||'')) && /unsupported|invalid/i.test(String(e2._text||''))) {
+            return await tryPredict('', false);
+          }
+          throw e; // fall back to original error
+        }
+      }
+    }
+  };
+})();
 
 async function generateText(prompt, opts = {}) {
   const provider = (opts.provider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
