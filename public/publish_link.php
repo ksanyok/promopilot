@@ -17,6 +17,8 @@ header('Content-Type: application/json; charset=utf-8');
 
 @set_time_limit(600);
 
+ob_start();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED']);
@@ -203,6 +205,8 @@ if ($action === 'publish') {
             $payload['details'] = $details;
         }
         echo json_encode($payload);
+        ob_end_flush();
+        flush();
         exit;
     }
 
@@ -237,6 +241,8 @@ if ($action === 'publish') {
         'title' => $result['title'] ?? '',
         'author' => $result['author'] ?? '',
     ]);
+    ob_end_flush();
+    flush();
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url)
