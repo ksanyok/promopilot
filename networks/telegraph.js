@@ -85,6 +85,16 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   let title = String(rawTitle || '').replace(/^\s*[\"'«»]+|[\"'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
   let author = String(rawAuthor || '').replace(/[\"'«»]/g, '').trim();
   if (author) author = author.split(/\s+/).slice(0,2).join(' ');
+  // Minimal fallbacks (no hardcoded names):
+  if (!title || title.replace(/[*_\-\s]+/g,'') === '') {
+    title = topicTitle || anchorText;
+  }
+  if (!author) {
+    try {
+      const retryAuthor = await generateTextWithChat(`Имя автора на ${pageLang} нейтральное (1–2 слова). Ответь только именем, без кавычек и эмодзи.`, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.' });
+      author = String(retryAuthor || '').replace(/[\"'«»]/g, '').trim().split(/\s+/).slice(0,2).join(' ');
+    } catch (_) { /* leave empty if still none */ }
+  }
 
   // Launch browser and publish
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
