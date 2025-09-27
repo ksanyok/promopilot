@@ -83,7 +83,9 @@ async function generateWithBYOA(prompt, opts = {}) {
   const run = async (withTemp) => {
     const payload = { message: String(prompt||''), system_prompt, ...(withTemp ? { temperature } : {}) };
     log('BYOA:req', { withTemp, len: { m: payload.message.length, s: payload.system_prompt.length } });
-    const resp = await app.predict('/chat', payload);
+    const predictPromise = app.predict('/chat', payload);
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('BYOA_TIMEOUT')), 120000)); // 2 minutes timeout
+    const resp = await Promise.race([predictPromise, timeoutPromise]);
     const out = parseGenericAIResponse(resp);
     log('BYOA:ok', { outLen: String(out||'').length });
     return String(out||'').trim();

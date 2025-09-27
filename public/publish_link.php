@@ -14,9 +14,8 @@ register_shutdown_function(function() {
 require_once __DIR__ . '/../includes/init.php';
 
 header('Content-Type: application/json; charset=utf-8');
-header('Connection: close');
 
-@set_time_limit(1200); // Increase to 20 minutes
+@set_time_limit(600);
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -204,7 +203,6 @@ if ($action === 'publish') {
             $payload['details'] = $details;
         }
         echo json_encode($payload);
-        flush();
         exit;
     }
 
@@ -239,7 +237,6 @@ if ($action === 'publish') {
         'title' => $result['title'] ?? '',
         'author' => $result['author'] ?? '',
     ]);
-    flush();
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url)
