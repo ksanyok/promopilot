@@ -175,6 +175,10 @@ function cleanTitle(t) {
   return t;
 }
 
+function escapeRegExp(s){
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function integrateSingleAnchor(html, pageUrl, anchorText) {
   let s = String(html || '');
   // Remove all anchors except those that point to pageUrl
@@ -203,28 +207,89 @@ function integrateSingleAnchor(html, pageUrl, anchorText) {
   return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${anchorText}</a></p>`);
 }
 
+function resolveLanguageForPrompt(language) {
+  const l = String(language || '').trim().toLowerCase();
+  // Map common codes/names to a clear instruction for the model
+  const map = {
+    ru: 'Russian (русском языке)',
+    'русский': 'Russian (русском языке)',
+    'русский язык': 'Russian (русском языке)',
+    russian: 'Russian (русском языке)',
+    en: 'English',
+    eng: 'English',
+    english: 'English',
+    uk: 'Ukrainian (українською мовою)',
+    ua: 'Ukrainian (українською мовою)',
+    ukrainian: 'Ukrainian (українською мовою)'
+  };
+  return map[l] || (l ? l.charAt(0).toUpperCase() + l.slice(1) : 'Russian (русском языке)');
+}
+
+function toSimpleHtmlBlocks(text) {
+  // Convert plain text with possible markdown-like lists into simple HTML blocks:
+  // - Paragraphs => <p>
+  // - Bulleted or numbered lists => <ul><li>
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let current = [];
+  let currentType = 'p'; // 'p' or 'ul'
+
+  const isBullet = (s) => /^\s*([\-*•–—]|\d+[\.)])\s+/.test(s);
+
+  const flush = () => {
+    if (!current.length) return;
+    if (currentType === 'ul') {
+      const items = current.map(l => l.replace(/^\s*([\-*•–—]|\d+[\.)])\s+/, '').trim()).filter(Boolean);
+      if (items.length) blocks.push('<ul>' + items.map(it => `<li>${it}</li>`).join('') + '</ul>');
+    } else {
+      const para = current.join(' ').trim();
+      if (para) blocks.push(`<p>${para}</p>`);
+    }
+    current = [];
+    currentType = 'p';
+  };
+
+  for (const raw of lines) {
+    const s = raw.trimEnd();
+    if (!s.trim()) { flush(); continue; }
+    const bullet = isBullet(s);
+    if (bullet) {
+      if (currentType !== 'ul') { flush(); currentType = 'ul'; }
+      current.push(s);
+    } else {
+      if (currentType !== 'p') { flush(); currentType = 'p'; }
+      current.push(s);
+    }
+  }
+  flush();
+  return blocks.join('\n');
+}
+
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider) {
   logLine('Publish start', { pageUrl, anchorText, language, aiProvider: aiProvider || process.env.PP_AI_PROVIDER || 'openai' });
   const meta = await extractPageMeta(pageUrl);
 
+  const langForPrompt = resolveLanguageForPrompt(language);
+
   const prompts = {
     title: (
-      `Write a concise, specific ${language} title that reflects the topic. ` +
-      `No quotes, no trailing dots. Avoid generic placeholders like Introduction/Введение.\n` +
-      `Base it on:\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
+      `Write a concise, specific title in ${langForPrompt} that reflects the topic. ` +
+      `No quotes, no trailing dots. Avoid generic placeholders like Introduction/Введение. ` +
+      `Do not copy context phrases verbatim — paraphrase.\n` +
+      `Context (for understanding only):\nTitle: "${meta.title || ''}"\nDescription: "${meta.description || ''}"\nURL: ${pageUrl}`
     ),
     author: (
-      `Suggest a neutral author's name in ${language}. ` +
-      `Use ${language} alphabet. One or two words. Reply with the name only.`
+      `Suggest a neutral author's name in ${langForPrompt}. ` +
+      `Use the ${langForPrompt} alphabet/script. One or two words. Reply with the name only.`
     ),
     content: (
-      `Write an article in ${language} of at least 3000 characters based on the page ${pageUrl}. ` +
-      `Use this context: title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
+      `Write an article in ${langForPrompt} of at least 3000 characters based on the page ${pageUrl}. ` +
+      `Use this context for understanding only (do not quote it): title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
       `Requirements:\n` +
-      `- Use clear structure: short intro, 3–5 sections with <h2> subheadings, one bulleted list where relevant, and a brief conclusion.\n` +
+      `- Clear structure: short intro, 3–5 sections with <h2> subheadings, and a brief conclusion.\n` +
       `- Include exactly one active link to <a href="${pageUrl}">${anchorText}</a> inside a paragraph in the first half of the article (organically).\n` +
       `- Use only simple HTML tags: <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No images, scripts or inline styles.\n` +
-      `- Stay strictly on-topic and do not add unrelated content.`
+      `- Do not copy phrases from the context; paraphrase. Keep the output exclusively in ${langForPrompt}; if foreign words appear (e.g., Chinese), translate or replace them with ${langForPrompt}.`
     )
   };
   logLine('Prompts prepared');
@@ -236,7 +301,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     provider: (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase(),
     openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || undefined,
-    systemPrompt: '',
+    systemPrompt: `You are a professional copywriter. Always reply exclusively in ${langForPrompt}. ` +
+      `Do not include quoted labels like "Title:", "Description:", or the source URL in the article. ` +
+      `Use given context only to understand the topic; never copy it verbatim. Avoid any non-${langForPrompt} words.`,
   };
 
   // Generate title, author, content with small pauses
@@ -259,17 +326,43 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
 
   // Очистка контента
   let content = normalizeContent(rawContent);
-  // Remove disallowed tags
-  content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
-  // Wrap free text lines into <p> if no tags present
-  if (!/<\s*(p|h2|ul|li|blockquote|a)\b/i.test(content)) {
-    const parts = content.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p>${p}</p>`);
-    content = parts.join('\n');
+  // Remove obvious analysis headers and context labels that models sometimes echo
+  content = content
+    .replace(/^\s*(Title|Заголовок|Description|Описание|URL|Ссылка)\s*:\s*.*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  // If content has no allowed HTML tags, convert simple text blocks (with possible markdown lists) to simple HTML
+  const hasAllowedHtml = /<\s*(p|h2|ul|li|blockquote|a)\b/i.test(content);
+  if (!hasAllowedHtml) {
+    content = toSimpleHtmlBlocks(content);
   }
+  // Remove disallowed tags but keep simple structure and lists
+  content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
+  // Remove exact copies of context snippets (title/description/URL) if model echoed them
+  try {
+    if (meta && meta.title && meta.title.trim().length >= 8) {
+      const rx = new RegExp(escapeRegExp(meta.title.trim()), 'gi');
+      content = content.replace(rx, '');
+    }
+    if (meta && meta.description && meta.description.trim().length >= 12) {
+      const rx2 = new RegExp(escapeRegExp(meta.description.trim()), 'gi');
+      content = content.replace(rx2, '');
+    }
+    if (pageUrl) {
+      const rx3 = new RegExp(escapeRegExp(String(pageUrl).trim()), 'gi');
+      content = content.replace(rx3, '');
+    }
+  } catch (_) { /* ignore */ }
   // Ensure at least one <h2>
   if (!/<h2[\s>]/i.test(content)) {
     // Convert markdown-like headings to <h2>
     content = content.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
+  }
+  // If target language is Russian or Ukrainian or English (non-CJK), strip accidental CJK characters that models sometimes leak
+  const nonCjkLang = /^(ru|рус|russian|uk|ua|ukrainian|en|eng|english)$/i.test(String(language||''));
+  if (nonCjkLang) {
+    content = content.replace(/[\u3400-\u9FFF\uF900-\uFAFF]/g, '');
   }
   content = integrateSingleAnchor(content, pageUrl, anchorText);
 

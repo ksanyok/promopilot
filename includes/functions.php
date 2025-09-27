@@ -224,6 +224,13 @@ function ensure_schema(): void {
         if (!isset($pubCols['error'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `error` TEXT NULL AFTER `attempts`");
         }
+        // New: cancellation flag and process pid
+        if (!isset($pubCols['cancel_requested'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `error`");
+        }
+        if (!isset($pubCols['pid'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `pid` INT NULL DEFAULT NULL AFTER `cancel_requested`");
+        }
         if (!isset($pubCols['created_at'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
         }
@@ -1359,6 +1366,13 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     $stderr = '';
     $start = time();
 
+    // Persist child PID for potential cancellation (best-effort)
+    $stInfo = @proc_get_status($process);
+    $childPid = is_array($stInfo) && !empty($stInfo['pid']) ? (int)$stInfo['pid'] : 0;
+    if ($childPid > 0 && isset($job['pubId'])) {
+        try { $c = @connect_db(); if ($c) { $st = $c->prepare('UPDATE publications SET pid = ? WHERE id = ? LIMIT 1'); if ($st) { $st->bind_param('ii', $childPid, $job['pubId']); @$st->execute(); $st->close(); } $c->close(); } } catch (Throwable $e) { }
+    }
+
     while (true) {
         $status = @proc_get_status($process);
         if (!$status || !$status['running']) {
@@ -1370,18 +1384,11 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
         if (isset($pipes[1]) && is_resource($pipes[1]) && !@feof($pipes[1])) { $read[] = $pipes[1]; }
         if (isset($pipes[2]) && is_resource($pipes[2]) && !@feof($pipes[2])) { $read[] = $pipes[2]; }
         if (!$read) { break; }
-        $remaining = max(1, $timeoutSeconds - (time() - $start));
+        // Poll IO with short wait to allow cancellation checks
         $write = null; $except = null;
-        $ready = @stream_select($read, $write, $except, $remaining, 0);
+        $ready = @stream_select($read, $write, $except, 0, 200000); // 200ms
         if ($ready === false) { break; }
-        if ($ready === 0) {
-            @proc_terminate($process, 9);
-            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
-            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
-            if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
-            @proc_close($process);
-            return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
-        }
+        // ready === 0 just means no IO in this tick — continue loop
         foreach ($read as $stream) {
             if (is_resource($stream)) {
                 $chunk = @stream_get_contents($stream);
@@ -1389,6 +1396,7 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
                 else { $stderr .= (string)$chunk; }
             }
         }
+        // timeout check
         if ((time() - $start) >= $timeoutSeconds) {
             @proc_terminate($process, 9);
             if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
@@ -1396,6 +1404,10 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
             if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
             @proc_close($process);
             return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
+        }
+        // cancellation check
+        if (isset($job['pubId'])) {
+            try { $c = @connect_db(); if ($c) { $q = $c->prepare('SELECT cancel_requested FROM publications WHERE id = ?'); if ($q) { $q->bind_param('i', $job['pubId']); $q->execute(); $q->bind_result($cr); if ($q->fetch() && (int)$cr === 1) { @proc_terminate($process, 9); $q->close(); $c->close(); break; } $q->close(); } $c->close(); } } catch (Throwable $e) { }
         }
     }
 
@@ -2017,6 +2029,7 @@ if (!function_exists('pp_process_publication_job')) {
             'openaiModel' => $openaiModel,
             'aiProvider' => $aiProvider,
             'waitBetweenCallsMs' => 5000,
+            'pubId' => $pubId,
         ];
 
         // Run network handler
@@ -2028,8 +2041,8 @@ if (!function_exists('pp_process_publication_job')) {
                 $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? '')));
             }
             $msg = trim($errText . ($details !== '' ? (': ' . $details) : ''));
-            // mark failed (no auto-retry for now)
-            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
+            // mark failed or cancelled
+            $up = $conn->prepare("UPDATE publications SET status=IF(cancel_requested=1,'cancelled','failed'), finished_at=CURRENT_TIMESTAMP, error=?, pid=NULL WHERE id = ? LIMIT 1");
             if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
             $conn->close();
             return;
@@ -2050,7 +2063,7 @@ if (!function_exists('pp_process_publication_job')) {
             }
         }
 
-        $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status='success', finished_at=CURRENT_TIMESTAMP WHERE id = ? LIMIT 1");
+    $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status='success', finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL WHERE id = ? LIMIT 1");
         if ($up) {
             $netSlug = (string)($network['slug'] ?? $networkSlug);
             $up->bind_param('sssi', $publishedUrl, $netSlug, $publishedBy, $pubId);

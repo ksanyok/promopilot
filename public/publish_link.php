@@ -270,10 +270,13 @@ if ($action === 'publish') {
         $conn->close(); exit;
     }
     if ((string)($row['status'] ?? '') === 'running') {
-        echo json_encode(['ok'=>false,'error'=>'RUNNING']);
+        // request cancellation for a running job
+        $stmt = $conn->prepare("UPDATE publications SET cancel_requested = 1 WHERE id = ? LIMIT 1");
+        if ($stmt) { $stmt->bind_param('i', $row['id']); $stmt->execute(); $stmt->close(); }
+        echo json_encode(['ok'=>true,'status'=>'pending']);
         $conn->close(); exit;
     }
-    // Mark as cancelled (or delete)
+    // Not running: mark as cancelled immediately
     $stmt = $conn->prepare("UPDATE publications SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id = ? LIMIT 1");
     if ($stmt) {
         $stmt->bind_param('i', $row['id']);
