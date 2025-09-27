@@ -181,6 +181,7 @@ function ensure_schema(): void {
             `anchor` VARCHAR(255) NULL,
             `network` VARCHAR(100) NULL,
             `published_by` VARCHAR(100) NULL,
+            `enqueued_by_user_id` INT NULL,
             `post_url` TEXT NULL,
             `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
             `scheduled_at` TIMESTAMP NULL DEFAULT NULL,
@@ -202,6 +203,9 @@ function ensure_schema(): void {
         }
         if (!isset($pubCols['published_by'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL");
+        }
+        if (!isset($pubCols['enqueued_by_user_id'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `enqueued_by_user_id` INT NULL AFTER `published_by`");
         }
         if (!isset($pubCols['post_url'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL");
@@ -237,6 +241,37 @@ function ensure_schema(): void {
         // Ensure helpful index on status for queue scans
         if (pp_mysql_index_exists($conn, 'publications', 'idx_publications_status') === false && isset($pubCols['status'])) {
             @$conn->query("CREATE INDEX `idx_publications_status` ON `publications`(`status`)");
+        }
+    }
+
+    // New: lightweight publication queue tracker (optional; mirrors publications queue for visibility and ordering per user)
+    $pqCols = $getCols('publication_queue');
+    if (empty($pqCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `publication_queue` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `publication_id` INT NOT NULL,
+            `project_id` INT NOT NULL,
+            `user_id` INT NOT NULL,
+            `page_url` TEXT NOT NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `scheduled_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX (`project_id`),
+            INDEX (`user_id`),
+            INDEX `idx_pubqueue_status` (`status`),
+            CONSTRAINT `fk_pubqueue_publication` FOREIGN KEY (`publication_id`) REFERENCES `publications`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_pubqueue_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        if (!isset($pqCols['publication_id'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `publication_id` INT NOT NULL"); }
+        if (!isset($pqCols['project_id'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `project_id` INT NOT NULL"); }
+        if (!isset($pqCols['user_id'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `user_id` INT NOT NULL"); }
+        if (!isset($pqCols['page_url'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `page_url` TEXT NOT NULL"); }
+        if (!isset($pqCols['status'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'queued'"); }
+        if (!isset($pqCols['scheduled_at'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `scheduled_at` TIMESTAMP NULL DEFAULT NULL"); }
+        if (!isset($pqCols['created_at'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); }
+        if (pp_mysql_index_exists($conn, 'publication_queue', 'idx_pubqueue_status') === false && isset($pqCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_pubqueue_status` ON `publication_queue`(`status`)");
         }
     }
 
@@ -1946,6 +1981,10 @@ if (!function_exists('pp_claim_next_publication_job')) {
                 if ($stmt->affected_rows === 1) { $jobId = $id; }
                 $stmt->close();
             }
+            if ($jobId) {
+                // Reflect running state in mirror queue
+                @$conn->query("UPDATE publication_queue SET status='running' WHERE publication_id = " . (int)$jobId);
+            }
         }
         $conn->close();
         return $jobId;
@@ -2044,6 +2083,10 @@ if (!function_exists('pp_process_publication_job')) {
             // mark failed or cancelled
             $up = $conn->prepare("UPDATE publications SET status=IF(cancel_requested=1,'cancelled','failed'), finished_at=CURRENT_TIMESTAMP, error=?, pid=NULL WHERE id = ? LIMIT 1");
             if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
+            // Reflect in mirror queue and remove finished/cancelled/failed if desired
+            @$conn->query("UPDATE publication_queue SET status=IF((SELECT cancel_requested FROM publications WHERE id=".(int)$pubId.")=1,'cancelled','failed') WHERE publication_id = " . (int)$pubId);
+            // Remove entry to free queue position (optional behavior)
+            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
             $conn->close();
             return;
         }
@@ -2070,6 +2113,9 @@ if (!function_exists('pp_process_publication_job')) {
             $up->execute();
             $up->close();
         }
+        // Reflect success in mirror queue and delete row (dequeue)
+        @$conn->query("UPDATE publication_queue SET status='success' WHERE publication_id = " . (int)$pubId);
+        @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
         $conn->close();
     }
 }

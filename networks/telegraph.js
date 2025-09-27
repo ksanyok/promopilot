@@ -181,6 +181,8 @@ function escapeRegExp(s){
 
 function integrateSingleAnchor(html, pageUrl, anchorText) {
   let s = String(html || '');
+  const at = String(anchorText || '').trim();
+  if (!pageUrl) return s;
   // Remove all anchors except those that point to pageUrl
   s = s.replace(/<a\s+([^>]*?)>([\s\S]*?)<\/a>/gi, (full, attrs, text) => {
     const m = String(attrs || '').match(/href=[\"\']([^\"\']+)[\"\']/i);
@@ -189,22 +191,112 @@ function integrateSingleAnchor(html, pageUrl, anchorText) {
     return text; // unwrap others
   });
 
-  const linkRe = new RegExp('<a\\s+[^>]*href=[\\"\']' + pageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\"\']', 'i');
-  if (linkRe.test(s)) return s; // already present
+  // If link already present (simple case-insensitive check for href with or without trailing slash)
+  const pageUrlNorm = String(pageUrl).replace(/\/$/, '').toLowerCase();
+  const sLower = s.toLowerCase();
+  if (sLower.includes(`href="${pageUrlNorm}"`) || sLower.includes(`href='${pageUrlNorm}'`) ||
+      sLower.includes(`href="${pageUrlNorm}/"`) || sLower.includes(`href='${pageUrlNorm}/'`)) {
+    return s;
+  }
 
-  // Otherwise, inject into the first sufficiently long paragraph
-  const paras = s.match(/<p[\s>][\s\S]*?<\/p>/gi) || [];
+  // Prepare keyword hints from anchor text
+  const lowerAT = at.toLowerCase();
+  const words = lowerAT.split(/[^a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9]+/).filter(w => w.length >= 4);
+  const uniq = Array.from(new Set(words)).slice(0, 6);
+
+  const paras = s.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
   if (paras.length) {
+    // 1) If any paragraph already contains anchorText (case-insensitive), wrap it in-place
     for (let i = 0; i < paras.length; i++) {
       const p = paras[i];
-      const text = stripTags(p);
-      if (text.length < 120) continue;
-      const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${anchorText}</a></p>`);
+      const inner = (p.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [,''])[1];
+      const idx = inner.toLowerCase().indexOf(lowerAT);
+      if (at && idx !== -1) {
+        const before = inner.slice(0, idx);
+        const mid = inner.slice(idx, idx + at.length);
+        const after = inner.slice(idx + at.length);
+        const replaced = `<p>${before}<a href="${pageUrl}">${mid}</a>${after}</p>`;
+        return s.replace(p, replaced);
+      }
+    }
+    // 2) Otherwise, try to link a keyword inside the first sufficiently long paragraph
+    for (let i = 0; i < paras.length; i++) {
+      const p = paras[i];
+      const textLen = stripTags(p).length;
+      if (textLen < 120) continue;
+      if (uniq.length) {
+        const rx = new RegExp(`\\b(${uniq.map(escapeRegExp).join('|')})\\b`, 'i');
+        if (rx.test(p)) {
+          const injected = p.replace(rx, (m) => `<a href="${pageUrl}">${at || m}</a>`);
+          return s.replace(p, injected);
+        }
+      }
+      // Fallback for long paragraph: append the link at the end
+      const injected = p.replace(/<\/p>\s*$/i, ` <a href="${pageUrl}">${at || pageUrl}</a></p>`);
       return s.replace(p, injected);
     }
   }
-  // Fallback: prepend link as a separate paragraph under the first heading
-  return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${anchorText}</a></p>`);
+  // Fallback: append under the first heading
+  return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${at || pageUrl}</a></p>`);
+}
+
+function promoteHeadings(html) {
+  // Promote likely headings from plain paragraphs into <h2>
+  let s = String(html || '');
+  const paras = s.match(/<p[^>]*>[\s\S]*?<\/p>/gi) || [];
+  if (paras.length === 0) return s;
+  let promoted = 0;
+  for (let i = 0; i < paras.length; i++) {
+    if (i === 0) continue; // keep first paragraph as intro
+    const p = paras[i];
+    const inner = (p.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [,''])[1];
+    // Skip paragraphs containing punctuation that indicates sentences
+    const raw = stripTags(inner);
+    const len = raw.length;
+    const looksHeading = (len >= 15 && len <= 80) && /[A-Za-zА-Яа-яЁёІіЇїЄє]/.test(raw) && !/[.!?…]$/.test(raw) && (raw.split(/\s+/).length <= 10);
+    if (looksHeading) {
+      const h = `<h2>${raw}</h2>`;
+      s = s.replace(p, h);
+      promoted++;
+      if (promoted >= 4) break; // limit number of headings
+    }
+  }
+  // Ensure at least one h2 exists
+  if (!/<h2[\s>]/i.test(s)) {
+    // Try converting markdown-like headings if present
+    s = s.replace(/^[\t ]*##[\t ]+(.+)$/gmi, '<h2>$1</h2>');
+  }
+  return s;
+}
+
+function boldSomeKeywords(html, anchorText, meta) {
+  // Add light bolding for a few important phrases (outside of links)
+  let s = String(html || '');
+  const src = `${anchorText || ''} ${meta && meta.title ? meta.title : ''}`.toLowerCase();
+  let words = src.split(/[^a-zA-Zа-яА-ЯёЁіІїЇєЄ0-9]+/).filter(w => w.length >= 5);
+  // Unique and remove stopwords
+  const stop = new Set(['this','that','with','from','about','для','при','про','как','что','или','также','чтобы','можно','без','между','через','если','є','для','або','та','але','який','яка']);
+  words = words.filter((w, i) => words.indexOf(w) === i && !stop.has(w));
+  const keywords = words.slice(0, 8);
+  if (!keywords.length) return s;
+  const maxBolds = 6;
+  let used = 0;
+  // Bold within paragraphs and list items only; skip ones that already contain links
+  s = s.replace(/<(p|li)>([\s\S]*?)<\/(p|li)>/gi, (full, tag1, inner) => {
+    if (used >= maxBolds) return full;
+    if (/<a\s/i.test(inner)) return full; // skip to avoid nesting
+    let changed = inner;
+    for (const kw of keywords) {
+      if (used >= maxBolds) break;
+      const rx = new RegExp(`(?![^<]*>)\\b(${escapeRegExp(kw)})\\b`, 'i');
+      if (rx.test(changed)) {
+        changed = changed.replace(rx, '<strong>$1</strong>');
+        used++;
+      }
+    }
+    return `<${tag1}>${changed}</${tag1}>`;
+  });
+  return s;
 }
 
 function resolveLanguageForPrompt(language) {
@@ -286,9 +378,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
       `Write an article in ${langForPrompt} of at least 3000 characters based on the page ${pageUrl}. ` +
       `Use this context for understanding only (do not quote it): title: "${meta.title || ''}", description: "${meta.description || ''}".\n` +
       `Requirements:\n` +
-      `- Clear structure: short intro, 3–5 sections with <h2> subheadings, and a brief conclusion.\n` +
-      `- Include exactly one active link to <a href="${pageUrl}">${anchorText}</a> inside a paragraph in the first half of the article (organically).\n` +
-      `- Use only simple HTML tags: <p>, <h2>, <ul>, <li>, <a>, <strong>, <em>, <blockquote>. No images, scripts or inline styles.\n` +
+      `- Clear structure: short intro, 3–5 sections with subheadings, and a brief conclusion.\n` +
+      `- Bold a few important phrases where it improves readability.\n` +
+      `- Do not include any code, HTML tags, or markdown in your output. Plain text only.\n` +
       `- Do not copy phrases from the context; paraphrase. Keep the output exclusively in ${langForPrompt}; if foreign words appear (e.g., Chinese), translate or replace them with ${langForPrompt}.`
     )
   };
@@ -332,12 +424,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  // If content has no allowed HTML tags, convert simple text blocks (with possible markdown lists) to simple HTML
-  const hasAllowedHtml = /<\s*(p|h2|ul|li|blockquote|a)\b/i.test(content);
-  if (!hasAllowedHtml) {
-    content = toSimpleHtmlBlocks(content);
-  }
-  // Remove disallowed tags but keep simple structure and lists
+  // Always convert plain text (no tags requested from model) to simple HTML blocks
+  content = toSimpleHtmlBlocks(content);
+  // Remove any tags that could accidentally appear (safety)
   content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
   // Remove exact copies of context snippets (title/description/URL) if model echoed them
   try {
@@ -354,6 +443,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
       content = content.replace(rx3, '');
     }
   } catch (_) { /* ignore */ }
+  // Promote headings from plain paragraphs where appropriate
+  content = promoteHeadings(content);
   // Ensure at least one <h2>
   if (!/<h2[\s>]/i.test(content)) {
     // Convert markdown-like headings to <h2>
@@ -365,6 +456,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     content = content.replace(/[\u3400-\u9FFF\uF900-\uFAFF]/g, '');
   }
   content = integrateSingleAnchor(content, pageUrl, anchorText);
+  // Lightly bold a few important keywords to improve readability
+  content = boldSomeKeywords(content, anchorText, meta);
 
   // Launch Puppeteer with optional explicit executable path
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];

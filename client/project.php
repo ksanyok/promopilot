@@ -1064,6 +1064,10 @@ document.addEventListener('DOMContentLoaded', function() {
         return '';
     }
 
+    // Avoid alerts if user navigates away while request is in-flight
+    let PP_PAGE_UNLOADING = false;
+    window.addEventListener('beforeunload', () => { PP_PAGE_UNLOADING = true; });
+
     async function sendPublishAction(btn, url, action) {
         const csrf = getCsrfToken();
         if (!csrf) { alert('CSRF missing'); return; }
@@ -1103,11 +1107,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             updateRowUI(url, data.status, data);
         } catch (e) {
-            if (e.name === 'AbortError') {
-                alert('<?php echo __('Таймаут запроса'); ?>');
-            } else {
-                alert('<?php echo __('Сетевая ошибка'); ?>');
-            }
+            if (PP_PAGE_UNLOADING) { /* suppress alerts on navigation */ }
+            else if (e.name === 'AbortError') { alert('<?php echo __('Таймаут запроса'); ?>'); }
+            else { alert('<?php echo __('Сетевая ошибка'); ?>'); }
         } finally {
             clearTimeout(timeoutId);
             setButtonLoading(btn, false);

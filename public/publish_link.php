@@ -157,7 +157,8 @@ if ($action === 'publish') {
             if ($scheduleTs > 0 && $scheduleTs > time()) {
                 try { $conn2 = @connect_db(); if ($conn2) { $up = $conn2->prepare('UPDATE publications SET scheduled_at = FROM_UNIXTIME(?) WHERE id = ? LIMIT 1'); if ($up) { $up->bind_param('ii', $scheduleTs, $pubId); @$up->execute(); $up->close(); } $conn2->close(); } } catch (Throwable $e) { }
             } else {
-                if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }
+                // Drain multiple jobs to ensure queued links continue after the first finishes
+                if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(25); }
             }
             // hard-exit to ensure no more output
             exit;
@@ -169,23 +170,56 @@ if ($action === 'publish') {
             $conn->close(); echo json_encode(['ok'=>false,'error'=>'NO_ENABLED_NETWORKS']); exit;
         }
         $networkSlug = (string)$network['slug'];
-        $upSql = "UPDATE publications SET status='queued', network=?, error=NULL, scheduled_at=?, started_at=NULL, finished_at=NULL WHERE id = ? LIMIT 1";
+        $upSql = "UPDATE publications SET status='queued', network=?, error=NULL, scheduled_at=?, started_at=NULL, finished_at=NULL, enqueued_by_user_id=? WHERE id = ? LIMIT 1";
         $up = $conn->prepare($upSql);
         if ($up) {
             if ($scheduleTs > 0 && $scheduleTs > time()) {
                 $dt = date('Y-m-d H:i:s', $scheduleTs);
-                $up->bind_param('ssi', $networkSlug, $dt, $pubId);
+                $up->bind_param('ssii', $networkSlug, $dt, $_SESSION['user_id'], $pubId);
             } else {
                 $null = NULL;
-                $up->bind_param('ssi', $networkSlug, $null, $pubId);
+                $up->bind_param('ssii', $networkSlug, $null, $_SESSION['user_id'], $pubId);
             }
             $up->execute();
             $up->close();
         }
+        // Mirror/update in publication_queue
+        try {
+            $conn2 = @connect_db();
+            if ($conn2) {
+                $upq = $conn2->prepare("UPDATE publication_queue SET status='queued', scheduled_at=? WHERE publication_id = ?");
+                if ($upq) {
+                    if ($scheduleTs > 0 && $scheduleTs > time()) {
+                        $dt = date('Y-m-d H:i:s', $scheduleTs);
+                        $upq->bind_param('si', $dt, $pubId);
+                    } else {
+                        $null = NULL;
+                        $upq->bind_param('si', $null, $pubId);
+                    }
+                    @$upq->execute();
+                    $upq->close();
+                } else {
+                    // If not exists, insert
+                    $insQ = $conn2->prepare("INSERT INTO publication_queue (publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, 'queued', ?)");
+                    if ($insQ) {
+                        if ($scheduleTs > 0 && $scheduleTs > time()) {
+                            $dt = date('Y-m-d H:i:s', $scheduleTs);
+                            $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
+                        } else {
+                            $null = NULL;
+                            $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $null);
+                        }
+                        @$insQ->execute();
+                        $insQ->close();
+                    }
+                }
+                $conn2->close();
+            }
+        } catch (Throwable $e) { /* ignore */ }
         echo json_encode(['ok'=>true,'status'=>'pending', 'network' => $networkSlug]);
         $conn->close();
-        if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
-        if (!($scheduleTs > 0 && $scheduleTs > time())) { if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); } }
+    if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+    if (!($scheduleTs > 0 && $scheduleTs > time())) { if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(25); } }
         exit;
     }
     // New: ensure the URL belongs to the project before creating a publication
@@ -212,14 +246,14 @@ if ($action === 'publish') {
         exit;
     }
 
-    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, scheduled_at) VALUES (?,?,?,?, 'queued', ?)");
+    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, scheduled_at, enqueued_by_user_id) VALUES (?,?,?,?, 'queued', ?, ?)");
     $networkSlug = $network['slug'];
     if ($scheduleTs > 0 && $scheduleTs > time()) {
         $dt = date('Y-m-d H:i:s', $scheduleTs);
-        $stmt->bind_param('issss', $project_id, $url, $anchor, $networkSlug, $dt);
+        $stmt->bind_param('issssi', $project_id, $url, $anchor, $networkSlug, $dt, $_SESSION['user_id']);
     } else {
         $null = NULL;
-        $stmt->bind_param('issss', $project_id, $url, $anchor, $networkSlug, $null);
+        $stmt->bind_param('issssi', $project_id, $url, $anchor, $networkSlug, $null, $_SESSION['user_id']);
     }
     if (!$stmt->execute()) {
         $stmt->close();
@@ -229,6 +263,25 @@ if ($action === 'publish') {
     }
     $pubId = (int)$conn->insert_id;
     $stmt->close();
+    // Mirror into publication_queue for visibility/ordering by user
+    try {
+        $conn2 = @connect_db();
+        if ($conn2) {
+            $insQ = $conn2->prepare("INSERT INTO publication_queue (publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, 'queued', ?)");
+            if ($insQ) {
+                if ($scheduleTs > 0 && $scheduleTs > time()) {
+                    $dt = date('Y-m-d H:i:s', $scheduleTs);
+                    $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
+                } else {
+                    $null = NULL;
+                    $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $null);
+                }
+                @$insQ->execute();
+                $insQ->close();
+            }
+            $conn2->close();
+        }
+    } catch (Throwable $e) { /* ignore queue mirror errors */ }
     // Ответ сразу: queued/pending
     $conn->close();
     $response = [
@@ -251,7 +304,7 @@ if ($action === 'publish') {
     }
     // Неблокирующий запуск одного задания из очереди (только если не отложено)
     if (!($scheduleTs > 0 && $scheduleTs > time())) {
-        if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }
+        if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(25); }
     }
     exit;
 } elseif ($action === 'cancel') {
