@@ -86,6 +86,30 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     content: { rawPrev: String(rawContent||'').slice(0,120), cleanPrev: String(content||'').slice(0,120) }
   });
 
+  // Analyze links in raw vs cleaned to ensure we're not stripping anchors
+  const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function analyzeLinks(html, url, anchor) {
+    try {
+      const str = String(html || '');
+      const totalLinks = (str.match(/<a\b/gi) || []).length;
+      const hrefRe = new RegExp(`<a[^>]+href=["']${escapeForRegex(url)}["']`, 'ig');
+      let ourLinkCount = 0; let m;
+      while ((m = hrefRe.exec(str)) !== null) { ourLinkCount++; }
+      const hasOurUrl = ourLinkCount > 0;
+      const anchorRe = new RegExp(`<a[^>]+href=["']${escapeForRegex(url)}["'][^>]*>([\s\S]*?)<\\/a>`, 'i');
+      const am = anchorRe.exec(str);
+      const inner = am ? am[1].replace(/<[^>]+>/g, '') : '';
+      const hasOurAnchorText = !!anchor && inner ? inner.includes(String(anchor)) : false;
+      const firstIdx = hasOurUrl ? str.search(hrefRe) : -1;
+      const snippet = firstIdx >= 0 ? str.slice(Math.max(0, firstIdx - 40), firstIdx + 160) : '';
+      return { totalLinks, ourLinkCount, hasOurUrl, hasOurAnchorText, snippet: snippet.slice(0,200) };
+    } catch (_) { return { totalLinks: 0, ourLinkCount: 0, hasOurUrl: false, hasOurAnchorText: false, snippet: '' }; }
+  }
+  logLine('AI link analysis', {
+    raw: analyzeLinks(rawContent, pageUrl, anchorText),
+    cleaned: analyzeLinks(content, pageUrl, anchorText)
+  });
+
   // Minimal cleanup only (global cleanup happens in ai_client)
   let title = String(titleClean || '').replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
   let author = String(authorClean || '').replace(/[\"'«»]/g, '').trim();
@@ -131,6 +155,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     return s;
   }
   const cleanedContent = normalizeContent(String(content || ''));
+  // Log analysis after normalization too
+  logLine('Normalized link analysis', analyzeLinks(cleanedContent, pageUrl, anchorText));
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
