@@ -119,8 +119,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
   try { await page.click(editorSelector); } catch (_) {}
-  const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  function normalizeContent(html, url, anchor) {
+  function normalizeContent(html) {
     let s = String(html || '').trim();
     // Convert any H1 to H2
     s = s.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '<h2>$1</h2>');
@@ -129,15 +128,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     s = s.replace(/<\/(?:ul|ol)>/gi, '').replace(/<(?:ul|ol)[^>]*>/gi, '');
     // Normalize paragraph bullets if present
     s = s.replace(/<p([^>]*)>\s*[-–—•∙·]\s+(.*?)<\/p>/gi, '<p$1>— $2</p>');
-    // Ensure exactly one anchor to our URL exists; if none, inject at start of first paragraph
-    const hasOurLink = new RegExp(`<a[^>]+href=["']${escapeForRegex(url)}["']`, 'i').test(s);
-    if (!hasOurLink) {
-      const injected = s.replace(/<p([^>]*)>/i, (m, attrs) => `<p${attrs}><a href="${url}">${anchor}</a> — `);
-      s = injected !== s ? injected : `<p><a href="${url}">${anchor}</a></p>` + s;
-    }
     return s;
   }
-  const cleanedContent = normalizeContent(String(content || ''), pageUrl, anchorText);
+  const cleanedContent = normalizeContent(String(content || ''));
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
