@@ -228,6 +228,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   let page;
   try {
     page = await browser.newPage();
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(120000);
     logLine('Goto Telegraph');
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
@@ -254,18 +256,88 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     }, content);
 
     logLine('Publish click');
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 120000 }),
-      page.click('button.publish_button')
+    // Find publish button robustly
+    let publishBtn = await page.$('button.publish_button');
+    if (!publishBtn) {
+      const candidates = await page.$$('button, .button');
+      for (const el of candidates) {
+        try {
+          const txt = (await page.evaluate(el => (el.textContent || '').trim(), el)) || '';
+          if (/publish/i.test(txt)) { publishBtn = el; break; }
+        } catch {}
+      }
+    }
+    if (!publishBtn) {
+      throw new Error('Publish button not found');
+    }
+
+    // Prepare watchers BEFORE click
+    const urlRx = /https?:\/\/(?:telegra\.ph|graph\.org)\/.+/i;
+    const targetPromise = new Promise(resolve => {
+      const handler = async t => {
+        try {
+          const p = await t.page().catch(() => null);
+          resolve(p || null);
+        } catch { resolve(null); }
+      };
+      page.browser().once('targetcreated', handler);
+      // auto-clean handler in case nothing happens
+      setTimeout(() => { try { page.browser().off('targetcreated', handler); } catch {} }, 15000);
+    });
+
+    const waitArticleOn = async (p) => {
+      try {
+        await p.waitForSelector('article, .tl_article, .tl_article .tl_article_content, .tl_article .tl_article_title', { timeout: 60000 });
+        return p;
+      } catch { return null; }
+    };
+
+    // Do the click
+    await publishBtn.click();
+
+    // Try to detect result in current or new page
+    let winner = await Promise.race([
+      (async () => {
+        const np = await targetPromise;
+        if (np) {
+          logLine('Publish new target', { url: np.url() });
+          return await waitArticleOn(np);
+        }
+        return null;
+      })(),
+      (async () => await waitArticleOn(page))()
     ]);
 
-    const publishedUrl = page.url();
+    // Fallback: wait for URL change on current page if still no article found
+    if (!winner) {
+      try {
+        await page.waitForFunction(rx => rx.test(location.href), { timeout: 60000 }, urlRx);
+        winner = page;
+      } catch (_) {}
+    }
+
+    if (!winner) {
+      throw new Error('Publish result page not detected (no article and no URL change)');
+    }
+
+    const publishedUrl = winner.url();
     logLine('Published', { publishedUrl });
 
     const result = { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
     logLine('Success result', result);
     return result;
   } catch (e) {
+    try {
+      if (page && !page.isClosed()) {
+        const ts = Date.now();
+        const shot = path.join(LOG_DIR, `telegraph-fail-${ts}.png`);
+        const htmlPath = path.join(LOG_DIR, `telegraph-fail-${ts}.html`);
+        await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+        const html = await page.content().catch(() => '');
+        if (html) { try { fs.writeFileSync(htmlPath, html); } catch {} }
+        logLine('Debug saved', { screenshot: shot, html: htmlPath });
+      }
+    } catch (_) {}
     logLine('Publish failed', { error: String(e && e.message || e), stack: e && e.stack });
     throw e;
   } finally {

@@ -37,6 +37,49 @@ function normalizeGradioResponse(raw) {
   }
 }
 
+/**
+ * Try to extract the final answer part from verbose model outputs
+ * (handles patterns like "**💬 Response:**", "Response:", "Final Answer:")
+ */
+function extractFinalAnswer(text) {
+  if (!text) return '';
+  let t = String(text);
+
+  // Unwrap code fences if the whole answer is inside ```
+  t = t.trim().replace(/^```(?:\w+)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  // Common markers to split on (take the content after the last marker)
+  const markers = [
+    /(?:^|\n)\s*(?:\*\*\s*)?(?:💬\s*)?Response\s*:\s*/i,
+    /(?:^|\n)\s*(?:Final\s*Answer)\s*:\s*/i,
+    /(?:^|\n)\s*(?:Ответ)\s*:\s*/i
+  ];
+
+  let cutIndex = -1;
+  for (const rx of markers) {
+    const mAll = [...t.matchAll(rx)];
+    if (mAll.length) {
+      const m = mAll[mAll.length - 1];
+      cutIndex = Math.max(cutIndex, m.index + m[0].length);
+    }
+  }
+  if (cutIndex >= 0) t = t.slice(cutIndex);
+
+  // Drop obvious analysis headers and separators if still present
+  t = t.replace(/(?:^|\n)\s*\*\*\s*:?[\s]*🤔?\s*Analysis\s*\*\*:?[\s\S]*?(?=(?:^|\n)\s*(?:[-*_]{3,}|(?:\*\*\s*)?(?:💬\s*)?Response\s*:|$))/gi, '');
+  t = t.replace(/^(?:[-*_]{3,}\s*)+/gm, '').trim();
+
+  // Strip surrounding quotes if the result is a single quoted line
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith('“') && t.endsWith('”')) || (t.startsWith('«') && t.endsWith('»'))) {
+    t = t.slice(1, -1).trim();
+  }
+
+  // Normalize line breaks: collapse excessive blank lines
+  t = t.replace(/\n{3,}/g, '\n\n').trim();
+
+  return t;
+}
+
 // OpenAI: простой вызов с ретраем без temperature при 400 unsupported_value
 async function generateWithOpenAI(prompt, opts = {}) {
   const apiKey = String(opts.openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
@@ -131,8 +174,9 @@ async function generateWithBYOA(prompt, opts = {}) {
     const res = await app.predict('/chat', body);
     log('BYOA:predict:raw', Array.isArray(res) ? { type: 'array', len: res.length } : { type: typeof res });
     const out = normalizeGradioResponse(res);
-    log('BYOA:predict:ok', { withTemp, outPreview: out.slice(0, 120), outLen: out.length });
-    return out.trim();
+    const cleaned = extractFinalAnswer(out);
+    log('BYOA:clean', { mode: 'predict', rawLen: out.length, cleanLen: cleaned.length, cleanPreview: cleaned.slice(0,120) });
+    return cleaned.trim();
   }
 
   async function runStream(withTemp) {
@@ -172,9 +216,10 @@ async function generateWithBYOA(prompt, opts = {}) {
       if (watchdog) clearTimeout(watchdog);
     }
 
-    const out = normalizeGradioResponse(last).trim();
-    log('BYOA:stream:done', { seenData, outLen: out.length, outPreview: out.slice(0, 120) });
-    return out;
+    const out = normalizeGradioResponse(last);
+    const cleaned = extractFinalAnswer(out).trim();
+    log('BYOA:stream:done', { seenData, rawLen: out.length, cleanLen: cleaned.length, cleanPreview: cleaned.slice(0, 120) });
+    return cleaned;
   }
 
   // Strategy:
