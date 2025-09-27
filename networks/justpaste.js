@@ -200,11 +200,12 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     // Prefer article-like URLs (not homepage), e.g., https://justpaste.it/abc12 or with a slug after domain
     return await page.evaluate(() => {
       const collect = new Set();
-      const add = (u) => { if (u && typeof u === 'string') collect.add(u); };
+      const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
       const isArticleUrl = (s) => {
         if (typeof s !== 'string') return false;
+        if (!/^https?:\/\//i.test(s)) return false; // only absolute URLs
         try {
-          const u = new URL(s, location.href);
+          const u = new URL(s);
           if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
           const path = (u.pathname || '/').replace(/\/+/g,'/');
           if (path === '/' || path === '') return false; // exclude homepage
@@ -215,8 +216,11 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       };
       // Gather anchors
       for (const a of Array.from(document.querySelectorAll('a[href]'))) add(a.href);
-      // Gather values from inputs/textareas
-      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) add(el.value || '');
+      // Gather values from inputs/textareas ONLY if they look like absolute URLs
+      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) {
+        const v = (el.value || '').trim();
+        if (/^https?:\/\//i.test(v)) add(v);
+      }
       // Also parse visible text for URLs
       const text = document.body ? (document.body.innerText || '') : '';
       const rx = /https?:\/\/(?:www\.)?justpaste\.it\/[A-Za-z0-9][A-Za-z0-9_-]{2,}[^\s"']*/g;
@@ -290,6 +294,11 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     // Last-ditch attempt to extract from DOM if we somehow ended on homepage
     const last = await extractPublishedUrl();
     if (last) { publishedUrl = last; try { await page.goto(publishedUrl, { waitUntil: 'domcontentloaded' }); } catch(_) {} }
+  }
+  // Guard: ensure it’s an absolute justpaste URL; otherwise try to re-extract
+  if (!/^https?:\/\//i.test(publishedUrl) || !/^(?:https?:\/\/)(?:www\.)?justpaste\.it\//i.test(publishedUrl)) {
+    const last2 = await extractPublishedUrl();
+    if (last2) publishedUrl = last2;
   }
   logLine('Published', { publishedUrl });
   await browser.close();
