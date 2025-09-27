@@ -1942,6 +1942,8 @@ if (!function_exists('pp_claim_next_publication_job')) {
 
 if (!function_exists('pp_process_publication_job')) {
     function pp_process_publication_job(int $pubId): void {
+        // Release session lock early to avoid blocking concurrent requests
+        if (function_exists('session_write_close')) { @session_write_close(); }
         // Re-read job
         try { $conn = @connect_db(); } catch (Throwable $e) { return; }
         if (!$conn) return;
@@ -2026,6 +2028,7 @@ if (!function_exists('pp_process_publication_job')) {
                 $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? '')));
             }
             $msg = trim($errText . ($details !== '' ? (': ' . $details) : ''));
+            // mark failed (no auto-retry for now)
             $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
             if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
             $conn->close();
@@ -2060,6 +2063,12 @@ if (!function_exists('pp_process_publication_job')) {
 
 if (!function_exists('pp_run_queue_worker')) {
     function pp_run_queue_worker(int $maxJobs = 1): void {
+        // Detach from client if called within HTTP context
+        if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+        else {
+            if (function_exists('session_write_close')) { @session_write_close(); }
+            @ignore_user_abort(true);
+        }
         $maxJobs = max(1, $maxJobs);
         $processed = 0;
         $spacingMs = function_exists('pp_get_min_job_spacing_ms') ? pp_get_min_job_spacing_ms() : 0;

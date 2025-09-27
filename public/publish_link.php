@@ -69,6 +69,9 @@ if (!is_admin() && (int)$proj['user_id'] !== (int)$_SESSION['user_id']) {
     $conn->close(); exit;
 }
 
+// Release session lock so other requests (navigation) don't block while we enqueue/run background work
+if (function_exists('session_write_close')) { @session_write_close(); }
+
 // Ищем анкор, язык, пожелание из структуры links
 $anchor='';
 $links = json_decode($proj['links'] ?? '[]', true) ?: [];
@@ -134,16 +137,29 @@ if ($action === 'publish') {
             $conn->close(); exit;
         }
         if (in_array($status, ['queued','running'], true)) {
-            echo json_encode(['ok'=>true,'status'=>'pending', 'network' => (string)($row['network'] ?? '')]);
+            // respond immediately then close connection before background processing
+            $resp = json_encode(['ok'=>true,'status'=>'pending', 'network' => (string)($row['network'] ?? '')]);
+            // Close DB before returning response
             $conn->close();
-            // Try to kick worker lightly after response
+            // Send response now and close client connection
+            if (!headers_sent()) {
+                header('Content-Type: application/json; charset=utf-8');
+                header('Connection: close');
+                header('Content-Length: ' . strlen($resp));
+            }
+            echo $resp;
+            // Flush all buffers
             if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+            else {
+                @flush(); @ob_flush();
+            }
+            // schedule or run worker after closing connection
             if ($scheduleTs > 0 && $scheduleTs > time()) {
-                // reschedule queued job to future
                 try { $conn2 = @connect_db(); if ($conn2) { $up = $conn2->prepare('UPDATE publications SET scheduled_at = FROM_UNIXTIME(?) WHERE id = ? LIMIT 1'); if ($up) { $up->bind_param('ii', $scheduleTs, $pubId); @$up->execute(); $up->close(); } $conn2->close(); } } catch (Throwable $e) { }
             } else {
                 if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }
             }
+            // hard-exit to ensure no more output
             exit;
         }
         // failed/cancelled → requeue
@@ -222,10 +238,17 @@ if ($action === 'publish') {
         'network_title' => $network['title'] ?? $networkSlug,
     ];
     $json = json_encode($response);
-    header('Content-Length: ' . strlen($json));
+    // Immediately return response, then continue in background
+    if (!headers_sent()) {
+        header('Connection: close');
+        header('Content-Length: ' . strlen($json));
+    }
     echo $json;
-    flush();
     if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+    else {
+        if (function_exists('session_write_close')) { @session_write_close(); }
+        @flush(); @ob_flush();
+    }
     // Неблокирующий запуск одного задания из очереди (только если не отложено)
     if (!($scheduleTs > 0 && $scheduleTs > time())) {
         if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }

@@ -364,22 +364,23 @@ $pubStatusByUrl = [];
 try {
     $conn = connect_db();
     if ($conn) {
-        $stmt = $conn->prepare("SELECT page_url, post_url, network FROM publications WHERE project_id = ?");
+        $stmt = $conn->prepare("SELECT page_url, post_url, network, status FROM publications WHERE project_id = ?");
         if ($stmt) {
             $stmt->bind_param('i', $id);
             $stmt->execute();
             $res = $stmt->get_result();
             while ($row = $res->fetch_assoc()) {
                 $url = (string)$row['page_url'];
-                $hasPost = !empty($row['post_url']);
-                $info = [
-                    'status' => $hasPost ? 'published' : 'pending',
-                    'post_url' => (string)($row['post_url'] ?? ''),
-                    'network' => trim((string)($row['network'] ?? '')),
-                ];
+                $postUrl = (string)($row['post_url'] ?? '');
+                $st = trim((string)($row['status'] ?? ''));
+                $status = 'not_published';
+                if ($postUrl !== '' || $st === 'success') { $status = 'published'; }
+                elseif ($st === 'failed' || $st === 'cancelled') { $status = 'not_published'; }
+                elseif ($st === 'queued' || $st === 'running') { $status = 'pending'; }
+                $info = [ 'status' => $status, 'post_url' => $postUrl, 'network' => trim((string)($row['network'] ?? '')), ];
                 if (!isset($pubStatusByUrl[$url])) {
                     $pubStatusByUrl[$url] = $info;
-                } elseif ($hasPost) {
+                } elseif ($status === 'published') {
                     $pubStatusByUrl[$url] = $info;
                 }
             }
