@@ -45,35 +45,59 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const aiOpts = {
     provider,
     openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || undefined
+    model: process.env.OPENAI_MODEL || undefined,
+    temperature: 0.2
   };
   logLine('Publish start', { pageUrl, anchorText, language, provider });
 
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
   const prompts = {
-    title: `Write a clear, specific article title in ${language} about: ${pageUrl}. No quotes.`,
-    author: `Suggest a neutral author's name in ${language}. One or two words. Reply with the name only.`,
+    title: `Write a clear, specific article title in ${language} about: ${pageUrl}.\n` +
+           `Constraints: no quotes, no emojis, no markdown, no disclaimers about browsing; do not mention the URL; concise (6–12 words). If context is limited, infer a suitable general topic from the URL and the anchor "${anchorText}". Reply with the title only.`,
+    author: `Suggest a neutral human author's name in ${language}. One or two words.\n` +
+            `Constraints: reply with the name only (no extra words), no emojis, no quotes, no punctuation except spaces or hyphen.`,
     content:
       `Write an article in ${language} (>=3000 characters) based on ${pageUrl}.${extraNote}\n` +
-      `Requirements:\n` +
+      `Hard requirements:\n` +
       `- Integrate exactly one active link with the anchor text "${anchorText}" as <a href="${pageUrl}">${anchorText}</a> naturally in the first half of the article.\n` +
-      `- Use simple HTML only: <p> for paragraphs and <h2> for subheadings. No markdown, no code blocks.\n` +
-      `- Keep it informative and readable with 3–5 sections and a short conclusion.\n` +
-      `- Do not include any other links.`
+      `- Output must be simple HTML only using <p> for paragraphs and <h2> for subheadings. No other tags, no markdown, no code blocks.\n` +
+      `- Keep it informative with 3–5 sections and a short conclusion.\n` +
+      `- Do not include any other links or URLs.\n` +
+      `- Do not mention limitations (e.g., browsing), and do not include analysis or commentary about the instructions. Output the article body only.`
   };
   logLine('Prompts prepared');
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  const rawTitle = await generateTextWithChat(prompts.title, aiOpts);
+  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Return only the final article title. No quotes, no emojis, no markdown, no analysis. No explanations.' });
   await sleep(1000);
-  const rawAuthor = await generateTextWithChat(prompts.author, aiOpts);
+  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Return only the author name (1-2 words). No quotes, no emojis, no extra text.' });
   await sleep(1000);
-  const content = await generateTextWithChat(prompts.content, aiOpts);
+  const content = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Return only the article body as simple HTML (<p>, <h2> only). No markdown, no analysis, no explanations.' });
 
-  const title = String(rawTitle || '').replace(/["']/g, '').trim() || 'Untitled';
-  const author = String(rawAuthor || '').trim() || 'PromoPilot';
+  // Light sanitization for title/author to avoid Analysis/Response leakages and emojis
+  const sanitize = (s) => String(s || '')
+    .replace(/^[#>*_\-\s]+/g,'')
+    .replace(/^\s*(analysis|response)\s*[:：-]+\s*/i,'')
+    .replace(/[\r\n]+/g,' ')
+    .trim();
+  const stripEmoji = (s) => String(s||'').replace(/[\u{1F000}-\u{1FFFF}]/gu, '');
+  const looksLikeDisclaimer = (s) => /\b(не могу|cannot|i\s*can\'?t|can\'?t)\b/i.test(String(s||''));
+  let title = stripEmoji(sanitize(rawTitle)).replace(/[\"']/g, '').trim();
+  let author = stripEmoji(sanitize(rawAuthor)).replace(/[^\p{L}\s\-]+/gu, '').trim();
+  if (!title || looksLikeDisclaimer(title) || title.length > 120) {
+    try {
+      const fallbackTitlePrompt = `Кратко и конкретно сформулируй заголовок (${language}) по теме: ${anchorText}. Без кавычек, без эмодзи, 6–12 слов. Ответь только заголовком.`;
+      const t2 = await generateTextWithChat(fallbackTitlePrompt, { ...aiOpts, systemPrompt: 'Только заголовок. Без кавычек, без эмодзи, без пояснений.' });
+      title = stripEmoji(sanitize(t2)).replace(/[\"']/g, '').trim() || title || 'Untitled';
+    } catch(_) {}
+  }
+  if (!author || /\s/.test(author) && author.split(/\s+/).length > 3 || /analysis|response/i.test(author)) {
+    author = language && /^ru/i.test(language) ? 'Саша Тихий' : 'Alex Kim';
+  }
+  if (!title) title = 'Untitled';
+  if (!author) author = 'PromoPilot';
 
   // Launch browser and publish
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
@@ -102,10 +126,28 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await page.keyboard.type(author);
 
   logLine('Fill content');
+  // Click into the content area to ensure editor is initialized
+  await page.waitForSelector('p[data-placeholder="Your story..."]');
+  await page.click('p[data-placeholder="Your story..."]');
+  const cleanedContent = (() => {
+    let s = String(content || '');
+    // Drop obvious analysis/disclaimer paragraphs if present
+    s = s.replace(/<h1[^>]*>.*?(analysis|response).*?<\/h1>/is, '');
+    s = s.replace(/<p[^>]*>[^<]*(Я не могу открывать веб[\u2011\u2013\-]страницы|I cannot open web pages)[^<]*<\/p>/i, '');
+    return s.trim();
+  })();
   await page.evaluate((html) => {
-    const el = document.querySelector('p[data-placeholder="Your story..."]');
-    if (el) el.innerHTML = html;
-  }, content);
+    const root = document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('.tl_article_content .ql-editor') || document.querySelector('.ql-editor');
+    if (root) {
+      root.innerHTML = html || '<p></p>';
+      try {
+        const evt = new InputEvent('input', { bubbles: true });
+        root.dispatchEvent(evt);
+      } catch(_) {
+        try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {}
+      }
+    }
+  }, cleanedContent);
 
   logLine('Publish click');
   await Promise.all([
