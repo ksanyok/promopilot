@@ -7,6 +7,33 @@ const DEBUG = process.env.PP_AI_DEBUG === '1';
 const stamp = () => new Date().toISOString();
 const log = (scope, payload) => { if (!DEBUG) return; try { console.log(`[${stamp()}] ${scope} ${typeof payload==='string'?payload:JSON.stringify(payload)}`); } catch { console.log(`[${stamp()}] ${scope}`, payload); } };
 
+// --- Global minimal cleanup to drop "Analysis/Response" scaffolding ---
+function _cutAfterResponseMarker(s) {
+  const text = String(s || '');
+  const regex = /(\n|^)\s*[\*\s>\-]*?(?:💬\s*)?(Response|Ответ)\s*:\s*/ig;
+  let last = -1; let m;
+  while ((m = regex.exec(text)) !== null) { last = m.index + m[0].length; }
+  return last >= 0 ? text.slice(last) : text;
+}
+function _stripLeadingAnalysis(s) {
+  let t = String(s || '');
+  t = t.replace(/^\s*(?:\*\*|__)?\s*🤔?\s*(Analysis|Анализ)\s*:?(?:\*\*|__)?\s*\n+/i, '');
+  // Drop one leading italic meta-instruction line like *We need to ...*
+  t = t.replace(/^\s*\*[^\n]*\b(We need to|Нужно|Следует|Надо)\b[^\n]*\*\s*\n+/i, '');
+  // Drop a leading horizontal rule
+  t = t.replace(/^\s*[-*_]{3,}\s*\n+/, '');
+  return t;
+}
+function cleanLLMOutput(s) {
+  try {
+    let t = String(s || '').replace(/\r\n/g, '\n');
+    const after = _cutAfterResponseMarker(t);
+    if (after !== t) t = after;
+    t = _stripLeadingAnalysis(t);
+    return t.trim();
+  } catch { return String(s || ''); }
+}
+
 // --- OpenAI (оставляем как есть) ---
 async function generateWithOpenAI(prompt, opts = {}) {
   const apiKey = String(opts.openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
@@ -112,7 +139,11 @@ async function generateWithBYOA(prompt, opts = {}) {
 
 async function generateText(prompt, opts = {}) {
   const provider = (opts.provider || 'openai').toLowerCase();
-  return provider === 'byoa' ? generateWithBYOA(prompt, opts) : generateWithOpenAI(prompt, opts);
+  const raw = provider === 'byoa' ? await generateWithBYOA(prompt, opts) : await generateWithOpenAI(prompt, opts);
+  if (opts && opts.keepRaw) { return raw; }
+  const cleaned = cleanLLMOutput(raw);
+  log('AI cleaned', { inLen: String(raw||'').length, outLen: String(cleaned||'').length });
+  return cleaned;
 }
 
 module.exports = { generateText, generateWithOpenAI, generateWithBYOA };
