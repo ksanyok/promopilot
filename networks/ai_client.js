@@ -45,61 +45,38 @@ async function generateWithOpenAI(prompt, opts = {}) {
   }
 }
 
-// Универсальный парсер ответа для кастомного API
-function parseGenericAIResponse(payload) {
-  if (payload && typeof payload === 'object') {
-    if (typeof payload.response === 'string') return payload.response;
-    if (typeof payload.text === 'string') return payload.text;
-    if (Array.isArray(payload.data) && typeof payload.data[0] === 'string') return payload.data[0];
-    const ch = payload.choices && payload.choices[0];
-    const msg = ch && ch.message && ch.message.content;
-    if (typeof msg === 'string') return msg;
-  }
-  if (typeof payload === 'string') return payload;
-  try { return JSON.stringify(payload); } catch { return String(payload ?? ''); }
-}
-
-// BYOA: прямой POST как в примере — URL: {BASE}/{ENDPOINT}, body: { message, system_prompt, temperature? }
+// BYOA через @gradio/client как в примере (space + '/chat')
 async function generateWithBYOA(prompt, opts = {}) {
-  let base = String(opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || '').trim();
-  if (!base) base = 'https://amd-gpt-oss-120b-chatbot.hf.space';
-  if (!/^https?:\/\//i.test(base)) {
-    // Разрешаем формат owner/space -> https://owner-space.hf.space
-    base = base.includes('/') ? `https://${base.replace(/\//g,'-')}.hf.space` : `https://${base}.hf.space`;
-  }
-  base = base.replace(/\/$/, '');
+  const space = String(
+    opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL ||
+    opts.byoaModel  || process.env.PP_BYOA_MODEL  || 'amd/gpt-oss-120b-chatbot'
+  ).trim();
 
-  let endpoint = String(opts.byoaEndpoint || process.env.PP_BYOA_ENDPOINT || '/chat');
-  if (!endpoint.startsWith('/')) endpoint = '/' + endpoint;
-  const url = base + endpoint;
+  const systemPrompt = String(opts.systemPrompt || process.env.PP_BYOA_SYSTEM_PROMPT || 'You are a helpful assistant.');
+  const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.7;
+  const { Client } = await import('@gradio/client');
+  const app = await Client.connect(space);
 
-  const sys = String(opts.systemPrompt || process.env.PP_BYOA_SYSTEM_PROMPT || 'You are a helpful assistant.');
-  const temperature = typeof opts.temperature === 'number' ? opts.temperature : undefined;
-  const model = opts.byoaModel || process.env.PP_BYOA_MODEL || undefined;
-  const token = String(opts.byoaAuthToken || process.env.PP_BYOA_TOKEN || process.env.PP_BYOA_API_KEY || '').trim();
-
-  const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-  const baseBody = { message: String(prompt||''), system_prompt: sys, ...(model ? { model } : {}) };
-
-  async function callDirect(withTemp) {
-    const body = JSON.stringify({ ...baseBody, ...(withTemp && typeof temperature === 'number' ? { temperature } : {}) });
-    const r = await fetch(url, { method: 'POST', headers, body });
-    const ct = String(r.headers.get('content-type') || '').toLowerCase();
-    const raw = await (ct.includes('application/json') ? r.json().catch(()=> ({})) : r.text().catch(()=> ''));
-    if (!r.ok) {
-      const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      const err = new Error(`BYOA ${r.status}: ${text.slice(0,400)}`);
-      err._status = r.status; err._text = text; throw err;
+  async function run(withTemp) {
+    const payload = {
+      message: String(prompt || ''),
+      system_prompt: systemPrompt,
+      ...(withTemp ? { temperature } : {})
+    };
+    const stream = app.submit('/chat', payload);
+    let last = '';
+    for await (const ev of stream) {
+      if (ev.type === 'data') {
+        const out = Array.isArray(ev.data) ? ev.data[0] : (ev.data?.response ?? ev.data ?? '');
+        last = typeof out === 'string' ? out : JSON.stringify(out);
+      }
     }
-    return parseGenericAIResponse(raw);
+    return String(last || '').trim();
   }
 
-  try { return String((await callDirect(true)) || '').trim(); }
+  try { return await run(true); }
   catch (e) {
-    // Фолбэк без temperature, если модель его не поддерживает
-    if (e._status === 400 && /temperat/i.test(String(e._text||'')) && /unsupported|invalid/i.test(String(e._text||''))) {
-      return String((await callDirect(false)) || '').trim();
-    }
+    if (/temperat/i.test(String(e?.message||''))) return await run(false);
     throw e;
   }
 }

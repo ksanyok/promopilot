@@ -7,6 +7,7 @@
     "test": "echo \"No tests defined\" && exit 0"
   },
   "dependencies": {
+    "@gradio/client": "^1.19.0",
     "@puppeteer/browsers": "^2.2.3",
     "form-data": "^4.0.0",
     "node-fetch": "^2.6.9",
