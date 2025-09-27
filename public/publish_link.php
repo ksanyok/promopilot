@@ -14,6 +14,7 @@ register_shutdown_function(function() {
 require_once __DIR__ . '/../includes/init.php';
 
 header('Content-Type: application/json; charset=utf-8');
+header('Connection: close');
 
 @set_time_limit(600);
 
@@ -204,7 +205,9 @@ if ($action === 'publish') {
         } else {
             $payload['details'] = $details;
         }
-        echo json_encode($payload);
+        $json = json_encode($payload);
+        header('Content-Length: ' . strlen($json));
+        echo $json;
         ob_end_flush();
         flush();
         exit;
@@ -232,7 +235,7 @@ if ($action === 'publish') {
     }
 
     $conn->close();
-    echo json_encode([
+    $response = [
         'ok' => true,
         'status' => 'published',
         'post_url' => $publishedUrl,
@@ -240,7 +243,10 @@ if ($action === 'publish') {
         'network_title' => $network['title'] ?? $networkSlug,
         'title' => $result['title'] ?? '',
         'author' => $result['author'] ?? '',
-    ]);
+    ];
+    $json = json_encode($response);
+    header('Content-Length: ' . strlen($json));
+    echo $json;
     ob_end_flush();
     flush();
     exit;
