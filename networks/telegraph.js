@@ -1,12 +1,9 @@
 'use strict';
 
-// Ultra-minimal Telegraph publisher: generate title, author, and content via ai_client.js and publish.
-// No language mapping, no microdata fetching, no HTML post-processing.
-
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const { generateText } = require('./ai_client');
+const { generateText, cleanLLMOutput } = require('./ai_client');
 
 // Simple file logger (one log file per process run)
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -27,7 +24,6 @@ function logLine(msg, data){
 }
 
 async function generateTextWithChat(prompt, opts) {
-  // Thin wrapper over our unified AI client with logging
   const provider = (opts && opts.provider) || process.env.PP_AI_PROVIDER || 'openai';
   logLine('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
   try {
@@ -76,13 +72,11 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек, эмодзи и пояснений.', keepRaw: true });
-  await sleep(1000);
+  await sleep(800);
   const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.', keepRaw: true });
-  await sleep(1000);
+  await sleep(800);
   const rawContent = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.', keepRaw: true });
 
-  // Clean via global cleaner (mirrors ai_client behavior) for debug visibility
-  const { cleanLLMOutput } = require('./ai_client');
   const titleClean = cleanLLMOutput(rawTitle);
   const authorClean = cleanLLMOutput(rawAuthor);
   const content = cleanLLMOutput(rawContent);
@@ -93,18 +87,15 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   });
 
   // Minimal cleanup only (global cleanup happens in ai_client)
-  let title = String(titleClean || '').replace(/^\s*[\"'«»]+|[\"'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
+  let title = String(titleClean || '').replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
   let author = String(authorClean || '').replace(/[\"'«»]/g, '').trim();
   if (author) author = author.split(/\s+/).slice(0,2).join(' ');
-  // Minimal fallbacks (no hardcoded names):
-  if (!title || title.replace(/[*_\-\s]+/g,'') === '') {
-    title = topicTitle || anchorText;
-  }
+  if (!title || title.replace(/[*_\-\s]+/g,'') === '') title = topicTitle || anchorText;
   if (!author) {
     try {
       const retryAuthor = await generateTextWithChat(`Имя автора на ${pageLang} нейтральное (1–2 слова). Ответь только именем, без кавычек и эмодзи.`, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.' });
       author = String(retryAuthor || '').replace(/[\"'«»]/g, '').trim().split(/\s+/).slice(0,2).join(' ');
-    } catch (_) { /* leave empty if still none */ }
+    } catch (_) {}
   }
 
   // Launch browser and publish
@@ -123,96 +114,42 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   logLine('Goto Telegraph');
   await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2' });
 
-  logLine('Fill title');
-  await page.waitForSelector('h1[data-placeholder="Title"]');
-  await page.click('h1[data-placeholder="Title"]');
-  await page.keyboard.type(title, { delay: 10 });
-  // Also set via DOM to ensure Telegraph registers the title (some runs ignored only-typed input)
-  try {
-    await page.evaluate((val) => {
-      const el = document.querySelector('h1[data-placeholder="Title"]');
-      if (el) {
-        el.focus();
-        el.textContent = '';
-        // Insert text and fire input to make Quill/Telegraph detect changes
-        const insert = () => {
-          try { document.execCommand('insertText', false, val); } catch (_) { el.textContent = val; }
-          try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch (_) { el.dispatchEvent(new Event('input', { bubbles: true })); }
-        };
-        insert();
-      }
-    }, title);
-  } catch (_) {}
-
-  logLine('Fill author');
-  await page.waitForSelector('address[data-placeholder="Your name"]');
-  await page.click('address[data-placeholder="Your name"]');
-  await page.keyboard.type(author, { delay: 10 });
-  try {
-    await page.evaluate((val) => {
-      const el = document.querySelector('address[data-placeholder="Your name"]');
-      if (el) {
-        el.focus();
-        el.textContent = '';
-        try { document.execCommand('insertText', false, val); } catch (_) { el.textContent = val; }
-        try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch (_) { el.dispatchEvent(new Event('input', { bubbles: true })); }
-      }
-    }, author);
-  } catch (_) {}
-
+  // 1) Fill content first to avoid Telegraph auto-overriding title from first <h2>
   logLine('Fill content');
-  // Ensure editor is present (Telegraph uses Quill: .ql-editor)
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
-  // Nudge the editor itself instead of the title, to avoid disturbing the title field
   try { await page.click(editorSelector); } catch (_) {}
   const cleanedContent = String(content || '').trim();
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
       root.innerHTML = html || '<p></p>';
-      try {
-        const evt = new InputEvent('input', { bubbles: true });
-        root.dispatchEvent(evt);
-      } catch(_) {
-        try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {}
-      }
+      try { root.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch(_) { try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {} }
     }
   }, cleanedContent);
+  await new Promise(r => setTimeout(r, 120));
 
-  // Verify fields and re-type if needed (best-effort)
-  const ensureField = async (selector, value) => {
-    try {
-      const current = await page.$eval(selector, el => (el.innerText || '').trim());
-      if (!current) {
-        await page.click(selector);
-        await page.keyboard.type(value, { delay: 10 });
-      }
-    } catch (_) {}
+  // Helper to set text in editable fields (title/author) via keyboard only
+  const setEditableText = async (selector, value) => {
+    await page.waitForSelector(selector);
+    await page.click(selector, { clickCount: 3 }).catch(()=>{});
+    try { await page.keyboard.press('Backspace'); } catch (_) {}
+    await page.keyboard.type(String(value || ''), { delay: 10 });
   };
-  await ensureField('h1[data-placeholder="Title"]', title);
-  await ensureField('address[data-placeholder="Your name"]', author);
-  // Double-check title after content injection; if different from expected, force-set via DOM
+
+  // 2) Set title and 3) author
+  logLine('Fill title');
+  await setEditableText('h1[data-placeholder="Title"]', title);
+  await new Promise(r => setTimeout(r, 80));
+
+  logLine('Fill author');
+  await setEditableText('address[data-placeholder="Your name"]', author);
+  await new Promise(r => setTimeout(r, 80));
+
+  // Diagnostic: check final DOM title
   try {
-    const domTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText || '').trim());
-    if (!domTitle || domTitle !== title) {
-      if (domTitle && domTitle !== title) {
-        logLine('DOM title override', { was: domTitle, expected: title });
-      }
-      await page.evaluate((val) => {
-        const el = document.querySelector('h1[data-placeholder="Title"]');
-        if (el) {
-          el.focus();
-          el.textContent = '';
-          try { document.execCommand('insertText', false, val); } catch (_) { el.textContent = val; }
-          try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch (_) { el.dispatchEvent(new Event('input', { bubbles: true })); }
-        }
-      }, title);
-    }
-    // Log final DOM-observed title for diagnostics
     const finalTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText || '').trim());
     logLine('DOM title check', { finalTitle });
-    await sleep(120);
   } catch (_) {}
 
   logLine('Publish click');
@@ -260,17 +197,13 @@ if (require.main === module) {
         process.exit(1);
       }
 
-  const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
+      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(0);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
       logLine('Run failed', { error: payload.error, stack: e && e.stack });
-      // Try to save debug artifacts if a page was left open
-      try {
-        // In this minimal CLI we don't retain a page reference; leave advanced capture to the publish function
-      } catch (_) {}
       console.log(JSON.stringify(payload));
       process.exit(1);
     }
