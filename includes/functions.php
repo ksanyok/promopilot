@@ -182,8 +182,15 @@ function ensure_schema(): void {
             `network` VARCHAR(100) NULL,
             `published_by` VARCHAR(100) NULL,
             `post_url` TEXT NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `scheduled_at` TIMESTAMP NULL DEFAULT NULL,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `attempts` INT NOT NULL DEFAULT 0,
+            `error` TEXT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (`project_id`),
+            INDEX `idx_publications_status` (`status`),
             CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
@@ -199,8 +206,30 @@ function ensure_schema(): void {
         if (!isset($pubCols['post_url'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL");
         }
+        if (!isset($pubCols['status'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'queued' AFTER `post_url`");
+        }
+        if (!isset($pubCols['scheduled_at'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `scheduled_at` TIMESTAMP NULL DEFAULT NULL AFTER `status`");
+        }
+        if (!isset($pubCols['started_at'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `scheduled_at`");
+        }
+        if (!isset($pubCols['finished_at'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        }
+        if (!isset($pubCols['attempts'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `attempts` INT NOT NULL DEFAULT 0 AFTER `finished_at`");
+        }
+        if (!isset($pubCols['error'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `error` TEXT NULL AFTER `attempts`");
+        }
         if (!isset($pubCols['created_at'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+        }
+        // Ensure helpful index on status for queue scans
+        if (pp_mysql_index_exists($conn, 'publications', 'idx_publications_status') === false && isset($pubCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_publications_status` ON `publications`(`status`)");
         }
     }
 
@@ -1851,6 +1880,200 @@ function pp_analyze_url_data(string $url): ?array {
         'modified_time' => $modified,
         'hreflang' => $hreflangs,
     ];
+}
+
+// -------- Publication queue (background jobs) --------
+// Concurrency: simple DB-driven guard. For real scale, move to cron/CLI worker.
+if (!function_exists('pp_get_max_concurrent_jobs')) {
+    function pp_get_max_concurrent_jobs(): int {
+        $n = (int) get_setting('max_concurrent_jobs', 1);
+        if ($n < 1) $n = 1; if ($n > 5) $n = 5; // safety bounds
+        return $n;
+    }
+}
+
+// Optional: minimal scheduler delay between jobs to reduce contention (ms)
+if (!function_exists('pp_get_min_job_spacing_ms')) {
+    function pp_get_min_job_spacing_ms(): int {
+        $ms = (int) get_setting('min_job_spacing_ms', 0);
+        if ($ms < 0) $ms = 0; if ($ms > 60000) $ms = 60000; // cap 60s
+        return $ms;
+    }
+}
+
+if (!function_exists('pp_count_running_jobs')) {
+    function pp_count_running_jobs(): int {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return 0; }
+        if (!$conn) return 0;
+        $cnt = 0;
+        if ($res = @$conn->query("SELECT COUNT(*) AS c FROM publications WHERE status = 'running'")) {
+            if ($row = $res->fetch_assoc()) { $cnt = (int) $row['c']; }
+            $res->free();
+        }
+        $conn->close();
+        return $cnt;
+    }
+}
+
+if (!function_exists('pp_claim_next_publication_job')) {
+    function pp_claim_next_publication_job(): ?int {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
+        if (!$conn) return null;
+        $jobId = null;
+    // Select a queued job, respect schedule (NULL or due)
+        $id = null;
+    if ($res = @$conn->query("SELECT id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 1")) {
+            if ($row = $res->fetch_assoc()) { $id = (int) $row['id']; }
+            $res->free();
+        }
+        if ($id) {
+            $stmt = $conn->prepare("UPDATE publications SET status = 'running', started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ? AND status = 'queued' LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $id);
+                $stmt->execute();
+                if ($stmt->affected_rows === 1) { $jobId = $id; }
+                $stmt->close();
+            }
+        }
+        $conn->close();
+        return $jobId;
+    }
+}
+
+if (!function_exists('pp_process_publication_job')) {
+    function pp_process_publication_job(int $pubId): void {
+        // Re-read job
+        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
+        if (!$conn) return;
+        $stmt = $conn->prepare("SELECT p.id, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish
+                                 FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1");
+        if (!$stmt) { $conn->close(); return; }
+        $stmt->bind_param('i', $pubId);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if (!$row) { $conn->close(); return; }
+        if (!in_array($row['status'], ['queued','running'], true)) { $conn->close(); return; }
+
+        $projectId = (int)$row['project_id'];
+        $url = (string)$row['page_url'];
+        $anchor = trim((string)$row['anchor'] ?? '');
+        $networkSlug = trim((string)$row['network'] ?? '');
+        $projectLanguage = trim((string)($row['project_language'] ?? 'ru')) ?: 'ru';
+        $projectWish = trim((string)($row['project_wish'] ?? ''));
+        $projectName = trim((string)($row['project_name'] ?? ''));
+
+        // Resolve link-specific language/wish from project_links if available
+        $linkLanguage = $projectLanguage; $linkWish = $projectWish;
+        if ($pl = $conn->prepare('SELECT anchor, language, wish FROM project_links WHERE project_id = ? AND url = ? LIMIT 1')) {
+            $pl->bind_param('is', $projectId, $url);
+            if ($pl->execute()) {
+                $r = $pl->get_result()->fetch_assoc();
+                if ($r) {
+                    $a = trim((string)($r['anchor'] ?? ''));
+                    $l = trim((string)($r['language'] ?? ''));
+                    $w = trim((string)($r['wish'] ?? ''));
+                    if ($a !== '') { $anchor = $anchor !== '' ? $anchor : $a; }
+                    if ($l !== '') { $linkLanguage = $l; }
+                    if ($w !== '') { $linkWish = $w; }
+                }
+            }
+            $pl->close();
+        }
+
+        // Resolve network descriptor
+        $network = $networkSlug !== '' ? pp_get_network($networkSlug) : pp_pick_network();
+        if (!$network) {
+            // Mark failed: no network
+            $err = 'NO_ENABLED_NETWORKS';
+            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
+            if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); }
+            $conn->close();
+            return;
+        }
+
+        // Prepare AI settings
+        $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
+        $openaiKey = trim((string)get_setting('openai_api_key', ''));
+        $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
+        if ($aiProvider === 'openai' && $openaiKey === '') {
+            $err = 'MISSING_OPENAI_KEY';
+            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
+            if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); }
+            $conn->close();
+            return;
+        }
+
+        $job = [
+            'url' => $url,
+            'anchor' => $anchor,
+            'language' => $linkLanguage,
+            'wish' => $linkWish,
+            'projectId' => $projectId,
+            'projectName' => $projectName,
+            'openaiApiKey' => $openaiKey,
+            'openaiModel' => $openaiModel,
+            'aiProvider' => $aiProvider,
+            'waitBetweenCallsMs' => 5000,
+        ];
+
+        // Run network handler
+        $result = pp_publish_via_network($network, $job, 480);
+        if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
+            $errText = 'NETWORK_ERROR';
+            $details = '';
+            if (is_array($result)) {
+                $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? '')));
+            }
+            $msg = trim($errText . ($details !== '' ? (': ' . $details) : ''));
+            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
+            if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
+            $conn->close();
+            return;
+        }
+
+        $publishedUrl = trim((string)$result['publishedUrl']);
+        $publishedBy = 'system';
+        // Try to set to current user if session exists
+        $uid = (int)($_SESSION['user_id'] ?? 0);
+        if ($uid > 0) {
+            $userStmt = $conn->prepare("SELECT username FROM users WHERE id = ? LIMIT 1");
+            if ($userStmt) {
+                $userStmt->bind_param('i', $uid);
+                $userStmt->execute();
+                $userStmt->bind_result($uName);
+                if ($userStmt->fetch()) { $publishedBy = (string)$uName; }
+                $userStmt->close();
+            }
+        }
+
+        $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status='success', finished_at=CURRENT_TIMESTAMP WHERE id = ? LIMIT 1");
+        if ($up) {
+            $netSlug = (string)($network['slug'] ?? $networkSlug);
+            $up->bind_param('sssi', $publishedUrl, $netSlug, $publishedBy, $pubId);
+            $up->execute();
+            $up->close();
+        }
+        $conn->close();
+    }
+}
+
+if (!function_exists('pp_run_queue_worker')) {
+    function pp_run_queue_worker(int $maxJobs = 1): void {
+        $maxJobs = max(1, $maxJobs);
+        $processed = 0;
+        $spacingMs = function_exists('pp_get_min_job_spacing_ms') ? pp_get_min_job_spacing_ms() : 0;
+        while ($processed < $maxJobs) {
+            // Concurrency guard
+            $running = pp_count_running_jobs();
+            if ($running >= pp_get_max_concurrent_jobs()) { break; }
+            $jobId = pp_claim_next_publication_job();
+            if (!$jobId) { break; }
+            pp_process_publication_job($jobId);
+            $processed++;
+            if ($spacingMs > 0) { @usleep($spacingMs * 1000); }
+        }
+    }
 }
 
 ?>

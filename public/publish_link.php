@@ -36,6 +36,16 @@ if (!verify_csrf()) {
 $project_id = (int)($_POST['project_id'] ?? 0);
 $url = trim($_POST['url'] ?? '');
 $action = trim($_POST['action'] ?? '');
+// Optional scheduling (ISO datetime or UNIX timestamp)
+$scheduleAtRaw = isset($_POST['schedule_at']) ? trim((string)$_POST['schedule_at']) : '';
+$scheduleTs = 0;
+if ($scheduleAtRaw !== '') {
+    if (ctype_digit($scheduleAtRaw)) { $scheduleTs = (int)$scheduleAtRaw; }
+    else {
+        $ts = strtotime($scheduleAtRaw);
+        if ($ts !== false) { $scheduleTs = (int)$ts; }
+    }
+}
 
 if (!$project_id || !$url || !filter_var($url, FILTER_VALIDATE_URL)) {
     echo json_encode(['ok'=>false,'error'=>'BAD_INPUT']);
@@ -109,20 +119,58 @@ $linkLanguage = $linkLanguage ?? $projectLanguage;
 $linkWish = $linkWish ?? $projectWish;
 
 if ($action === 'publish') {
-    // Уже есть?
-    $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
+    // Уже есть запись? (учитываем статус)
+    $stmt = $conn->prepare("SELECT id, post_url, status, network FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
     $stmt->bind_param('is', $project_id, $url);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     if ($row) {
-        if (!empty($row['post_url'])) {
+        $pubId = (int)$row['id'];
+        $postUrl = trim((string)($row['post_url'] ?? ''));
+        $status = trim((string)($row['status'] ?? '')) ?: ($postUrl !== '' ? 'success' : 'queued');
+        if ($postUrl !== '' || $status === 'success') {
             echo json_encode(['ok'=>false,'error'=>'ALREADY_PUBLISHED']);
             $conn->close(); exit;
         }
-        // уже pending
-        echo json_encode(['ok'=>true,'status'=>'pending']);
-        $conn->close(); exit;
+        if (in_array($status, ['queued','running'], true)) {
+            echo json_encode(['ok'=>true,'status'=>'pending', 'network' => (string)($row['network'] ?? '')]);
+            $conn->close();
+            // Try to kick worker lightly after response
+            if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+            if ($scheduleTs > 0 && $scheduleTs > time()) {
+                // reschedule queued job to future
+                try { $conn2 = @connect_db(); if ($conn2) { $up = $conn2->prepare('UPDATE publications SET scheduled_at = FROM_UNIXTIME(?) WHERE id = ? LIMIT 1'); if ($up) { $up->bind_param('ii', $scheduleTs, $pubId); @$up->execute(); $up->close(); } $conn2->close(); } } catch (Throwable $e) { }
+            } else {
+                if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }
+            }
+            exit;
+        }
+        // failed/cancelled → requeue
+        $networkSlugExisting = trim((string)($row['network'] ?? ''));
+        $network = $networkSlugExisting !== '' ? pp_get_network($networkSlugExisting) : pp_pick_network();
+        if (!$network) {
+            $conn->close(); echo json_encode(['ok'=>false,'error'=>'NO_ENABLED_NETWORKS']); exit;
+        }
+        $networkSlug = (string)$network['slug'];
+        $upSql = "UPDATE publications SET status='queued', network=?, error=NULL, scheduled_at=?, started_at=NULL, finished_at=NULL WHERE id = ? LIMIT 1";
+        $up = $conn->prepare($upSql);
+        if ($up) {
+            if ($scheduleTs > 0 && $scheduleTs > time()) {
+                $dt = date('Y-m-d H:i:s', $scheduleTs);
+                $up->bind_param('ssi', $networkSlug, $dt, $pubId);
+            } else {
+                $null = NULL;
+                $up->bind_param('ssi', $networkSlug, $null, $pubId);
+            }
+            $up->execute();
+            $up->close();
+        }
+        echo json_encode(['ok'=>true,'status'=>'pending', 'network' => $networkSlug]);
+        $conn->close();
+        if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+        if (!($scheduleTs > 0 && $scheduleTs > time())) { if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); } }
+        exit;
     }
     // New: ensure the URL belongs to the project before creating a publication
     if (!$urlBelongs) {
@@ -148,9 +196,15 @@ if ($action === 'publish') {
         exit;
     }
 
-    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network) VALUES (?,?,?,?)");
+    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, scheduled_at) VALUES (?,?,?,?, 'queued', ?)");
     $networkSlug = $network['slug'];
-    $stmt->bind_param('isss', $project_id, $url, $anchor, $networkSlug);
+    if ($scheduleTs > 0 && $scheduleTs > time()) {
+        $dt = date('Y-m-d H:i:s', $scheduleTs);
+        $stmt->bind_param('issss', $project_id, $url, $anchor, $networkSlug, $dt);
+    } else {
+        $null = NULL;
+        $stmt->bind_param('issss', $project_id, $url, $anchor, $networkSlug, $null);
+    }
     if (!$stmt->execute()) {
         $stmt->close();
         $conn->close();
@@ -159,101 +213,27 @@ if ($action === 'publish') {
     }
     $pubId = (int)$conn->insert_id;
     $stmt->close();
-
-    $job = [
-        'url' => $url,
-        'anchor' => $anchor,
-        'language' => $linkLanguage,
-        'wish' => $linkWish,
-        'projectId' => $project_id,
-        'projectName' => $projectName,
-        'openaiApiKey' => $openaiKey,
-        'openaiModel' => $openaiModel,
-        'aiProvider' => $aiProvider,
-        'waitBetweenCallsMs' => 5000,
-    ];
-
-    $result = pp_publish_via_network($network, $job, 300);
-    if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
-        $del = $conn->prepare("DELETE FROM publications WHERE id = ? LIMIT 1");
-        if ($del) {
-            $del->bind_param('i', $pubId);
-            $del->execute();
-            $del->close();
-        }
-        $conn->close();
-        $errCode = 'NETWORK_ERROR';
-        $details = 'NO_RESPONSE';
-        $payload = ['ok'=>false,'error'=>$errCode];
-        if (is_array($result)) {
-            if (!empty($result['details'])) { $details = (string)$result['details']; }
-            elseif (!empty($result['error'])) { $details = (string)$result['error']; }
-            elseif (!empty($result['stderr'])) { $details = (string)$result['stderr']; }
-            $payload['details'] = $details;
-            if (!empty($result['stderr'])) { $payload['stderr'] = (string)$result['stderr']; }
-            if (!empty($result['raw'])) { $payload['raw'] = $result['raw']; }
-            if (!empty($result['node_version'])) { $payload['node_version'] = $result['node_version']; }
-            if (!empty($result['candidates']) && is_array($result['candidates'])) {
-                $payload['candidates'] = $result['candidates'];
-            }
-            if (!empty($result['logFile'])) { $payload['log_file'] = (string)$result['logFile']; }
-            if (isset($result['exit_code'])) { $payload['exit_code'] = (int)$result['exit_code']; }
-        } else {
-            $payload['details'] = $details;
-        }
-        $json = json_encode($payload);
-        header('Content-Length: ' . strlen($json));
-        echo $json;
-        flush();
-        exit;
-    }
-
-    $publishedUrl = trim((string)$result['publishedUrl']);
-    $publishedBy = 'system';
-    $userStmt = $conn->prepare("SELECT username FROM users WHERE id = ? LIMIT 1");
-    if ($userStmt) {
-        $uid = (int)($_SESSION['user_id'] ?? 0);
-        $userStmt->bind_param('i', $uid);
-        $userStmt->execute();
-        $userStmt->bind_result($uName);
-        if ($userStmt->fetch()) {
-            $publishedBy = (string)$uName;
-        }
-        $userStmt->close();
-    }
-
-    $update = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ? WHERE id = ? LIMIT 1");
-    if ($update) {
-        $update->bind_param('sssi', $publishedUrl, $networkSlug, $publishedBy, $pubId);
-        $update->execute();
-        $update->close();
-    }
-
+    // Ответ сразу: queued/pending
     $conn->close();
     $response = [
         'ok' => true,
-        'status' => 'published',
-        'post_url' => $publishedUrl,
+        'status' => 'pending',
         'network' => $networkSlug,
         'network_title' => $network['title'] ?? $networkSlug,
-        'title' => $result['title'] ?? '',
-        'author' => $result['author'] ?? '',
-        'log_file' => $result['logFile'] ?? '',
     ];
     $json = json_encode($response);
     header('Content-Length: ' . strlen($json));
     echo $json;
     flush();
-
-    // Send response immediately, then update DB if needed
-    if (function_exists('fastcgi_finish_request')) {
-        fastcgi_finish_request();
+    if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+    // Неблокирующий запуск одного задания из очереди (только если не отложено)
+    if (!($scheduleTs > 0 && $scheduleTs > time())) {
+        if (function_exists('pp_run_queue_worker')) { @pp_run_queue_worker(1); }
     }
-
     exit;
 } elseif ($action === 'cancel') {
-    // Можно отменить только если не опубликована (нет post_url)
-    $stmt = $conn->prepare("SELECT id, post_url FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
+    // Можно отменить только если не опубликована (нет post_url) и не выполняется
+    $stmt = $conn->prepare("SELECT id, post_url, status FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
     $stmt->bind_param('is', $project_id, $url);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -262,18 +242,27 @@ if ($action === 'publish') {
         echo json_encode(['ok'=>false,'error'=>'NOT_PENDING']);
         $conn->close(); exit;
     }
-    if (!empty($row['post_url'])) {
+    if (!empty($row['post_url']) || (($row['status'] ?? '') === 'success')) {
         echo json_encode(['ok'=>false,'error'=>'ALREADY_PUBLISHED']);
         $conn->close(); exit;
     }
-    $stmt = $conn->prepare("DELETE FROM publications WHERE id = ? LIMIT 1");
-    $stmt->bind_param('i', $row['id']);
-    if ($stmt->execute()) {
-        echo json_encode(['ok'=>true,'status'=>'not_published']);
+    if ((string)($row['status'] ?? '') === 'running') {
+        echo json_encode(['ok'=>false,'error'=>'RUNNING']);
+        $conn->close(); exit;
+    }
+    // Mark as cancelled (or delete)
+    $stmt = $conn->prepare("UPDATE publications SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id = ? LIMIT 1");
+    if ($stmt) {
+        $stmt->bind_param('i', $row['id']);
+        if ($stmt->execute()) {
+            echo json_encode(['ok'=>true,'status'=>'not_published']);
+        } else {
+            echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
+        }
+        $stmt->close();
     } else {
         echo json_encode(['ok'=>false,'error'=>'DB_ERROR']);
     }
-    $stmt->close();
     $conn->close();
     exit;
 } else {

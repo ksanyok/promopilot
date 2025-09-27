@@ -1383,6 +1383,39 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial bind
     bindDynamicRowActions();
 
+    // Background polling for pending statuses so user can navigate and return
+    async function pollStatusesOnce() {
+        try {
+            const rows = document.querySelectorAll('table.table-links tbody tr');
+            for (const tr of rows) {
+                const statusCell = tr.querySelector('.status-cell');
+                const linkEl = tr.querySelector('.url-cell .view-url');
+                if (!statusCell || !linkEl) continue;
+                if (statusCell.textContent.includes('<?php echo __('В ожидании'); ?>') || statusCell.textContent.includes('queued') || statusCell.textContent.includes('pending')) {
+                    const url = linkEl.getAttribute('href');
+                    const fd = new URLSearchParams();
+                    fd.set('project_id', String(PROJECT_ID));
+                    fd.set('url', url);
+                    const res = await fetch('<?php echo pp_url('public/publication_status.php'); ?>?' + fd.toString(), { credentials:'same-origin' });
+                    const data = await res.json().catch(()=>null);
+                    if (!data || !data.ok) continue;
+                    if (data.status === 'published') {
+                        updateRowUI(url, 'published', data);
+                    } else if (data.status === 'failed') {
+                        // Reset to not_published to allow retry; optionally show error via tooltip
+                        updateRowUI(url, 'not_published', {});
+                    }
+                }
+            }
+        } catch (_e) { /* ignore */ }
+    }
+    // Poll periodically while page is visible
+    let pollTimer = null;
+    function startPolling(){ if (pollTimer) return; pollTimer = setInterval(pollStatusesOnce, 4000); }
+    function stopPolling(){ if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stopPolling(); else startPolling(); });
+    startPolling();
+
     function openAnalyzeModal(url){
         const modalEl = document.getElementById('analyzeModal');
         const resEl = document.getElementById('analyze-result');
