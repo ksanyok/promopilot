@@ -197,16 +197,33 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
   async function extractPublishedUrl() {
+    // Prefer article-like URLs (not homepage), e.g., https://justpaste.it/abc12 or with a slug after domain
     return await page.evaluate(() => {
-      const looksLike = (s) => typeof s === 'string' && /^https?:\/\/(?:www\.)?justpaste\.it\//.test(s);
-      for (const a of Array.from(document.querySelectorAll('a[href]'))) {
-        if (looksLike(a.href)) return a.href;
-      }
-      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) {
-        const v = el.value || '';
-        if (looksLike(v)) return v;
-      }
-      return null;
+      const collect = new Set();
+      const add = (u) => { if (u && typeof u === 'string') collect.add(u); };
+      const isArticleUrl = (s) => {
+        if (typeof s !== 'string') return false;
+        try {
+          const u = new URL(s, location.href);
+          if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
+          const path = (u.pathname || '/').replace(/\/+/g,'/');
+          if (path === '/' || path === '') return false; // exclude homepage
+          // Require at least one non-empty segment of 3+ chars (common pattern)
+          const segs = path.split('/').filter(Boolean);
+          return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
+        } catch { return false; }
+      };
+      // Gather anchors
+      for (const a of Array.from(document.querySelectorAll('a[href]'))) add(a.href);
+      // Gather values from inputs/textareas
+      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) add(el.value || '');
+      // Also parse visible text for URLs
+      const text = document.body ? (document.body.innerText || '') : '';
+      const rx = /https?:\/\/(?:www\.)?justpaste\.it\/[A-Za-z0-9][A-Za-z0-9_-]{2,}[^\s"']*/g;
+      let m; while ((m = rx.exec(text)) !== null) add(m[0]);
+      // Rank by length (prefer deeper/slugged URLs)
+      const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
+      return cands[0] || null;
     });
   }
 
@@ -229,22 +246,20 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       if (!clicked) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
     };
 
-    // Try up to 3 click attempts, each with polling for navigation or a justpaste URL in DOM
+    // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
     for (let attempt = 0; attempt < 3; attempt++) {
       await tryClick();
       const t0 = Date.now();
       let found = null;
       while (Date.now() - t0 < 45000) { // 45s per attempt
-        // Navigation or URL change
-        const changed = await page.evaluate((u) => location.href !== u, startUrl).catch(()=>false);
-        if (changed) return; // page.url() will have the published URL or redirect page
+        // Navigation or URL change to an article-like URL
+        const now = await page.evaluate(() => location.href).catch(()=>null);
+        if (now && now !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(now) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(now)) {
+          return now;
+        }
         // Try extract from DOM
         found = await extractPublishedUrl();
-        if (found) {
-          // Navigate to the found URL to normalize result
-          try { await page.goto(found, { waitUntil: 'domcontentloaded' }); } catch(_) {}
-          return;
-        }
+        if (found) return found;
         await sleep(500);
       }
       // If not found yet, small wait and retry
@@ -252,7 +267,8 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     }
     throw new Error('PUBLISH_NO_NAVIGATION');
   }
-  try { await doPublish(); }
+  let resultUrl = null;
+  try { resultUrl = await doPublish(); }
   catch (e) {
     logLine('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
     try {
@@ -265,10 +281,16 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       });
     } catch(_) {}
     await sleep(400);
-    await doPublish();
+    resultUrl = await doPublish();
   }
 
-  const publishedUrl = page.url();
+  // Resolve final published URL: prefer detected article URL, fallback to current page URL, avoid homepage
+  let publishedUrl = resultUrl || page.url();
+  if (/^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
+    // Last-ditch attempt to extract from DOM if we somehow ended on homepage
+    const last = await extractPublishedUrl();
+    if (last) { publishedUrl = last; try { await page.goto(publishedUrl, { waitUntil: 'domcontentloaded' }); } catch(_) {} }
+  }
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
