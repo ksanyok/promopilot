@@ -61,7 +61,7 @@ function extractFinalAnswer(raw){
   if (pos !== -1) {
     t = t.slice(pos + rKey.length).trim();
   } else {
-    // Уберём очевидные заголовки аналитики
+    // Если нет "Response:", взять весь текст, убрав возможные заголовки аналитики
     t = t.replace(/^\s{0,3}[*_]{0,3}\s*[*_]{0,3}\s*[^\n\r]{0,40}analysis\s*:\s*.*$/gim, '').trim();
   }
   // Сносим частые разделители
@@ -72,8 +72,8 @@ function extractFinalAnswer(raw){
 function normalizeTitle(raw){
   let t = extractFinalAnswer(raw);
   t = stripTags(t);
-  // Берём первую строку
-  t = t.split(/\r?\n/)[0] || '';
+  // Берём весь текст, очищаем
+  t = t.replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
   // Убираем markdown-маркировки и кавычки
   t = t.replace(/^#+\s*/,'').replace(/[*_`~]+/g,'').replace(/["'«»“”„]+/g,'');
   // Убираем точку в конце и обрезаем длину
@@ -85,7 +85,7 @@ function normalizeTitle(raw){
 
 function normalizeAuthor(raw){
   let a = extractFinalAnswer(raw);
-  a = stripTags(a).split(/\r?\n/)[0] || '';
+  a = stripTags(a).replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
   a = a.replace(/["'«»“”„]+/g,'').trim();
   // Оставляем буквы/пробел/дефис
   a = a.replace(/[^A-Za-zА-Яа-яЁё\s\-]/g, '').replace(/\s{2,}/g,' ').trim();
@@ -96,7 +96,10 @@ function normalizeAuthor(raw){
 
 function normalizeContent(raw){
   let c = extractFinalAnswer(raw);
-  return String(c || '').trim();
+  c = String(c || '').trim();
+  // Убираем возможные markdown артефакты в начале
+  c = c.replace(/^\s*[*_`~]+\s*/g, '').trim();
+  return c;
 }
 
 async function extractPageMeta(url) {
@@ -284,18 +287,18 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   let page;
   try {
     page = await browser.newPage();
-    page.setDefaultTimeout(60000);
-    page.setDefaultNavigationTimeout(120000);
+    page.setDefaultTimeout(300000); // 5 minutes
+    page.setDefaultNavigationTimeout(300000);
     logLine('Goto Telegraph');
     await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2', timeout: 120000 });
 
     logLine('Fill title');
-    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 60000 });
+    await page.waitForSelector('h1[data-placeholder="Title"]', { timeout: 300000 });
     await page.click('h1[data-placeholder="Title"]');
     await page.keyboard.type(title);
 
     logLine('Fill author');
-    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 60000 });
+    await page.waitForSelector('address[data-placeholder="Your name"]', { timeout: 300000 });
     await page.click('address[data-placeholder="Your name"]');
     await page.keyboard.type(author);
 
@@ -326,7 +329,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     try {
       await page.waitForFunction((rxStr) => {
         try { return new RegExp(rxStr).test(location.href); } catch { return false; }
-      }, { timeout: 60000 }, articleUrlRegex.source);
+      }, { timeout: 300000 }, articleUrlRegex.source);
     } catch (_) {}
 
     // Доп. попытка: иногда dom уже на статье, но навигация не сработала явно
