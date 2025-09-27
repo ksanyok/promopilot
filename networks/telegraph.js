@@ -81,16 +81,10 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await sleep(1000);
   const content = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.' });
 
-  // Minimal cleanup + fallbacks
+  // Minimal cleanup only (global cleanup happens in ai_client)
   let title = String(rawTitle || '').replace(/^\s*[\"'«»]+|[\"'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
-    let author = String(rawAuthor || '').replace(/[\"'«»]/g, '').trim();
-    if (author) { author = author.split(/\s+/).slice(0,2).join(' '); }
-  // Guard against leaked "Analysis/Response" in title
-  if (!title || /\b(analysis|response|анализ|ответ)\b/i.test(title)) {
-    title = topicTitle || anchorText;
-  }
-  if (!title) title = anchorText;
-  if (!author) author = /^ru/i.test(pageLang) ? 'Саша Тихий' : 'Alex Kim';
+  let author = String(rawAuthor || '').replace(/[\"'«»]/g, '').trim();
+  if (author) author = author.split(/\s+/).slice(0,2).join(' ');
 
   // Launch browser and publish
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
@@ -110,26 +104,20 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
 
   logLine('Fill title');
   await page.waitForSelector('h1[data-placeholder="Title"]');
-  await page.type('h1[data-placeholder="Title"]', title, { delay: 10 });
+  await page.click('h1[data-placeholder="Title"]');
+  await page.keyboard.type(title, { delay: 10 });
 
   logLine('Fill author');
   await page.waitForSelector('address[data-placeholder="Your name"]');
-  await page.type('address[data-placeholder="Your name"]', author, { delay: 10 });
+  await page.click('address[data-placeholder="Your name"]');
+  await page.keyboard.type(author, { delay: 10 });
 
   logLine('Fill content');
   // Ensure editor is present (Telegraph uses Quill: .ql-editor)
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
   await page.click('h1[data-placeholder="Title"]'); // small nudge to ensure editor initialized
-  const initialContent = String(content || '').trim();
-  // Trim analysis preface like "**💬 Response:**" if present
-  const stripPreface = (s) => {
-    const text = String(s||'');
-    const rx = /(\n|^)\s*[\*\s>\-]*?(?:💬\s*)?(Response|Ответ)\s*:\s*/i;
-    const m = rx.exec(text);
-    return m ? text.slice(m.index + m[0].length).trim() : text.trim();
-  };
-  const cleanedContent = stripPreface(initialContent);
+  const cleanedContent = String(content || '').trim();
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
@@ -142,6 +130,19 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
       }
     }
   }, cleanedContent);
+
+  // Verify fields and re-type if needed (best-effort)
+  const ensureField = async (selector, value) => {
+    try {
+      const current = await page.$eval(selector, el => (el.innerText || '').trim());
+      if (!current) {
+        await page.click(selector);
+        await page.keyboard.type(value, { delay: 10 });
+      }
+    } catch (_) {}
+  };
+  await ensureField('h1[data-placeholder="Title"]', title);
+  await ensureField('address[data-placeholder="Your name"]', author);
 
   logLine('Publish click');
   await Promise.all([
