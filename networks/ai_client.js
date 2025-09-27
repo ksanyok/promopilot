@@ -170,6 +170,73 @@ function buildDataArray(paramNames, payload) {
   return [payload.message, payload.system_prompt, payload.temperature];
 }
 
+async function readText(res) {
+  try { return await res.text(); } catch { return ''; }
+}
+
+function parseEventId(text) {
+  // Try JSON first
+  try {
+    const obj = JSON.parse(text);
+    if (obj && (obj.event_id || obj.eventId || obj.hash || obj.id)) {
+      return String(obj.event_id || obj.eventId || obj.hash || obj.id);
+    }
+  } catch {}
+  // Then try to extract quoted token
+  const m = text.match(/"([a-zA-Z0-9_-]{6,})"/);
+  return m ? m[1] : '';
+}
+
+function extractLastJson(text) {
+  // Gradio stream returns lines, last JSON contains result
+  const lines = String(text || '').split(/\r?\n/).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].replace(/^data:\s*/i, '').trim();
+    if (!line) continue;
+    try {
+      return JSON.parse(line);
+    } catch {
+      // try to find last JSON object substring
+      const idx = line.lastIndexOf('{');
+      if (idx !== -1) {
+        const cand = line.slice(idx);
+        try { return JSON.parse(cand); } catch {}
+      }
+    }
+  }
+  // Fallback: try whole body
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+async function predictViaGradioApi(base, endpoint, dataArray) {
+  const ep = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
+  const postUrl = `${base}/gradio_api/call/${ep}`;
+  const res = await fetch(postUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: dataArray })
+  });
+  const postBody = await readText(res);
+  if (!res.ok) {
+    throw new Error(`BYOA POST ${res.status} at ${postUrl}: ${postBody.slice(0,300)}`);
+  }
+  const eventId = parseEventId(postBody);
+  if (!eventId) throw new Error(`BYOA: event_id not found from ${postUrl}: ${postBody.slice(0,200)}`);
+
+  const getUrl = `${base}/gradio_api/call/${ep}/${encodeURIComponent(eventId)}`;
+  const res2 = await fetch(getUrl, { method: 'GET' });
+  const body2 = await readText(res2);
+  if (!res2.ok) {
+    throw new Error(`BYOA GET ${res2.status} at ${getUrl}: ${body2.slice(0,300)}`);
+  }
+  const obj = extractLastJson(body2) || {};
+  const arr = obj.data || obj;
+  const text = Array.isArray(arr) ? arr[0] : (arr && (arr.response ?? arr.__raw ?? arr) || '');
+  const s = String(text || '').trim();
+  if (s) return s;
+  throw new Error(`BYOA: empty result from ${getUrl}`);
+}
+
 async function generateWithBYOA(prompt, opts = {}) {
   const base = resolveSpaceBaseUrl(
     opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || 'amd/gpt-oss-120b-chatbot'
@@ -184,6 +251,13 @@ async function generateWithBYOA(prompt, opts = {}) {
   const spec = await discoverSpec(base, endpoint);
   const dataArray = buildDataArray(spec.paramNames, payload);
 
+  // Prefer modern Gradio API flow first
+  try {
+    return await predictViaGradioApi(base, endpoint, dataArray);
+  } catch (e) {
+    // continue to legacy attempts
+  }
+
   // Ordered attempts without external libs
   const attempts = [];
   if (spec.fn_index !== null) {
@@ -196,6 +270,7 @@ async function generateWithBYOA(prompt, opts = {}) {
   const epNoSlash = ep.replace(/^\//, '');
   attempts.push({ url: `${base}/api/predict${ep}` , body: { data: dataArray } });
   attempts.push({ url: `${base}/api/predict/${epNoSlash}`, body: { data: dataArray } });
+  // Old /run endpoints (some Spaces expose these)
   attempts.push({ url: `${base}/run${ep}`, body: { data: dataArray } });
   attempts.push({ url: `${base}/run/${epNoSlash}`, body: { data: dataArray } });
 
@@ -207,7 +282,6 @@ async function generateWithBYOA(prompt, opts = {}) {
       const text = Array.isArray(d) ? d[0] : (d && (d.response ?? d.__raw ?? d) || '');
       const s = String(text || '').trim();
       if (s) return s;
-      // If empty string, keep trying other paths
       lastErr = new Error(`BYOA empty response at ${att.url}`);
     } catch (e) {
       lastErr = e;
