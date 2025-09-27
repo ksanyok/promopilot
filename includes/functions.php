@@ -2034,7 +2034,7 @@ if (!function_exists('pp_process_publication_job')) {
             $pl->close();
         }
 
-        // Resolve network descriptor
+    // Resolve network descriptor
         $network = $networkSlug !== '' ? pp_get_network($networkSlug) : pp_pick_network();
         if (!$network) {
             // Mark failed: no network
@@ -2057,6 +2057,22 @@ if (!function_exists('pp_process_publication_job')) {
             return;
         }
 
+        // Fetch page_meta for better AI prompts (best-effort)
+        $pageMeta = null;
+        if ($pm = $conn->prepare('SELECT lang, region, title, description FROM page_meta WHERE project_id = ? AND (page_url = ? OR final_url = ?) ORDER BY updated_at DESC, id DESC LIMIT 1')) {
+            $pm->bind_param('iss', $projectId, $url, $url);
+            if ($pm->execute()) {
+                $m = $pm->get_result()->fetch_assoc();
+                if ($m) { $pageMeta = [
+                    'lang' => (string)($m['lang'] ?? ''),
+                    'region' => (string)($m['region'] ?? ''),
+                    'title' => (string)($m['title'] ?? ''),
+                    'description' => (string)($m['description'] ?? ''),
+                ]; }
+            }
+            $pm->close();
+        }
+
         $job = [
             'url' => $url,
             'anchor' => $anchor,
@@ -2069,6 +2085,7 @@ if (!function_exists('pp_process_publication_job')) {
             'aiProvider' => $aiProvider,
             'waitBetweenCallsMs' => 5000,
             'pubId' => $pubId,
+            'page_meta' => $pageMeta,
         ];
 
         // Run network handler
