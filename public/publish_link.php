@@ -14,9 +14,6 @@ register_shutdown_function(function() {
 require_once __DIR__ . '/../includes/init.php';
 
 header('Content-Type: application/json; charset=utf-8');
-header('Connection: close');
-
-ignore_user_abort(true);
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -245,6 +242,12 @@ if ($action === 'publish') {
     header('Content-Length: ' . strlen($json));
     echo $json;
     flush();
+
+    // Send response immediately, then update DB if needed
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    }
+
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url)

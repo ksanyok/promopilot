@@ -1,6 +1,6 @@
 'use strict';
 
-// Minimal, clean implementation for Telegraph publishing
+// Minimal, clean async function for Telegraph publishing
 // - Generates title, author, and article via AI provider (OpenAI or BYOA)
 // - Collects microdata/SEO from the target page to guide content
 // - Uses one organic inline link to the target URL
@@ -366,7 +366,16 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     throw e;
   } finally {
     try { if (page) await page.close(); } catch(_) { logLine('Page close failed'); }
-    try { await browser.close(); logLine('Browser closed'); } catch(_) { logLine('Browser close failed'); }
+    try { 
+      await Promise.race([
+        browser.close(), 
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 10000))
+      ]);
+      logLine('Browser closed');
+    } catch (e) {
+      logLine('Browser close failed', { error: String(e && e.message || e) });
+      try { browser.process().kill('SIGKILL'); } catch(_) {}
+    }
   }
 }
 
