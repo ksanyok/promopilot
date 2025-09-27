@@ -1068,13 +1068,16 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!csrf) { alert('CSRF missing'); return; }
         if (!url) { alert('<?php echo __('Сначала сохраните проект чтобы опубликовать новую ссылку.'); ?>'); return; }
         setButtonLoading(btn, true);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
         try {
             const formData = new FormData();
             formData.append('csrf_token', csrf);
             formData.append('project_id', PROJECT_ID);
             formData.append('url', url);
             formData.append('action', action);
-            const res = await fetch('<?php echo pp_url('public/publish_link.php'); ?>', { method: 'POST', body: formData, credentials: 'same-origin' });
+            const res = await fetch('<?php echo pp_url('public/publish_link.php'); ?>', { method: 'POST', body: formData, credentials: 'same-origin', signal: controller.signal });
+            clearTimeout(timeoutId);
             const data = await res.json().catch(()=>({ok:false,error:'BAD_JSON'}));
             if (!data.ok) {
                 let msg = data.error || 'ERROR';
@@ -1099,8 +1102,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             updateRowUI(url, data.status, data);
         } catch (e) {
-            alert('<?php echo __('Сетевая ошибка'); ?>');
+            if (e.name === 'AbortError') {
+                alert('<?php echo __('Таймаут запроса'); ?>');
+            } else {
+                alert('<?php echo __('Сетевая ошибка'); ?>');
+            }
         } finally {
+            clearTimeout(timeoutId);
             setButtonLoading(btn, false);
         }
     }
