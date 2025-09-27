@@ -192,10 +192,13 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   };
   await ensureField('h1[data-placeholder="Title"]', title);
   await ensureField('address[data-placeholder="Your name"]', author);
-  // Double-check title after content injection; if still empty, force-set via DOM once more
+  // Double-check title after content injection; if different from expected, force-set via DOM
   try {
     const domTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText || '').trim());
-    if (!domTitle) {
+    if (!domTitle || domTitle !== title) {
+      if (domTitle && domTitle !== title) {
+        logLine('DOM title override', { was: domTitle, expected: title });
+      }
       await page.evaluate((val) => {
         const el = document.querySelector('h1[data-placeholder="Title"]');
         if (el) {
@@ -209,6 +212,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     // Log final DOM-observed title for diagnostics
     const finalTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText || '').trim());
     logLine('DOM title check', { finalTitle });
+    await sleep(120);
   } catch (_) {}
 
   logLine('Publish click');
