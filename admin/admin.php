@@ -19,8 +19,6 @@ $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'
 $settingsKeys = array_merge($settingsKeys, [
     'ai_provider',              // openai | byoa
     'openai_model',             // selected OpenAI model
-    'byoa_base_url',            // HF Space URL or owner/space
-    'byoa_endpoint',            // e.g. /chat
     'google_oauth_enabled',     // 0/1
     'google_client_id',
     'google_client_secret',
@@ -35,9 +33,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
             $openai = trim((string)($_POST['openai_api_key'] ?? ''));
             $openaiModel = trim((string)($_POST['openai_model'] ?? 'gpt-3.5-turbo'));
-            $byoaBase = trim((string)($_POST['byoa_base_url'] ?? ''));
-            $byoaEndpoint = trim((string)($_POST['byoa_endpoint'] ?? '/chat'));
-            if ($byoaEndpoint === '' || $byoaEndpoint[0] !== '/') { $byoaEndpoint = '/' . ltrim($byoaEndpoint, '/'); }
             $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
             $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
 
@@ -53,8 +48,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['currency', $currency],
                 ['openai_api_key', $openai],
                 ['openai_model', $openaiModel],
-                ['byoa_base_url', $byoaBase],
-                ['byoa_endpoint', $byoaEndpoint],
                 ['telegram_token', $tgToken],
                 ['telegram_channel', $tgChannel],
                 ['ai_provider', $aiProvider],
@@ -146,8 +139,6 @@ $settings = ['currency' => 'RUB', 'openai_api_key' => '', 'telegram_token' => ''
 $settings += [
     'ai_provider' => $settings['ai_provider'] ?? 'openai',
     'openai_model' => $settings['openai_model'] ?? 'gpt-3.5-turbo',
-    'byoa_base_url' => $settings['byoa_base_url'] ?? '',
-    'byoa_endpoint' => $settings['byoa_endpoint'] ?? '/chat',
     'google_oauth_enabled' => $settings['google_oauth_enabled'] ?? '0',
     'google_client_id' => $settings['google_client_id'] ?? '',
     'google_client_secret' => $settings['google_client_secret'] ?? '',
@@ -504,9 +495,6 @@ $diagnostics = [
                 <div class="form-text"><?php echo __('Выберите недорогую модель. Можно указать произвольную строку модели.'); ?></div>
             </div>
 
-            <!-- Removed BYOA fields: BYOA uses built-in defaults, no inputs required in admin -->
-            <!-- <div class="col-md-6 d-none" id="byoaFields"> ... </div> -->
-
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Google OAuth'); ?></label>
                 <div class="pp-switch mb-2">
@@ -591,15 +579,18 @@ $diagnostics = [
 
 <script>
 (function(){
-  // Toggle provider-specific fields (BYOA: nothing to show)
-  const openai = document.getElementById('openaiFields');
-  const byoa = document.getElementById('byoaFields');
+  // Toggle OpenAI fields by provider selection
+  const fields = document.getElementById('openaiFields');
+  const radios = document.querySelectorAll('input[name="ai_provider"]');
   function apply(){
     const val = document.querySelector('input[name="ai_provider"]:checked')?.value || 'openai';
-    if (val === 'openai') { openai?.classList.remove('d-none'); }
-    else { openai?.classList.add('d-none'); }
+    if (val === 'openai') {
+      fields?.classList.remove('d-none');
+    } else {
+      fields?.classList.add('d-none');
+    }
   }
-  document.querySelectorAll('input[name="ai_provider"]').forEach(r => r.addEventListener('change', apply));
+  radios.forEach(r => r.addEventListener('change', apply));
   apply();
 })();
 </script>

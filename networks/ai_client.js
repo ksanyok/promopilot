@@ -6,9 +6,10 @@
 // - openaiApiKey: string (required for openai)
 // - model: string (OpenAI model, default 'gpt-3.5-turbo')
 // - temperature: number
-// - systemPrompt: string (optional)
-// - byoaBaseUrl: string (Hugging Face Space URL or owner/space)
-// - byoaEndpoint: string (named endpoint, e.g. '/chat')
+// - systemPrompt: string (optional, used if provider supports)
+// - byoaModel: string (Gradio Space name like 'owner/space', default from env PP_BYOA_MODEL or 'amd/gpt-oss-120b-chatbot')
+// - byoaBaseUrl: string (explicit Gradio base URL like 'https://owner-space.hf.space')
+// - byoaEndpoint: string (Gradio endpoint path, default '/chat')
 
 const fetch = require('node-fetch');
 
@@ -18,330 +19,119 @@ async function generateWithOpenAI(prompt, opts = {}) {
     throw new Error('OpenAI API key is missing');
   }
   const model = String(opts.model || process.env.OPENAI_MODEL || 'gpt-3.5-turbo');
+  const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.8;
   const messages = [];
   const sys = (opts.systemPrompt || '').trim();
   if (sys) messages.push({ role: 'system', content: sys });
   messages.push({ role: 'user', content: String(prompt || '') });
 
-  const basePayload = { model, messages };
-  if (typeof opts.temperature === 'number') basePayload.temperature = opts.temperature;
-  if (typeof opts.topP === 'number') basePayload.top_p = opts.topP;
-  if (typeof opts.maxTokens === 'number') basePayload.max_tokens = opts.maxTokens;
-
-  async function call(payload) {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload)
-    });
-    const bodyText = await res.text().catch(() => '');
-    if (!res.ok) {
-      throw new Error(`OpenAI error ${res.status}: ${res.statusText} ${bodyText.slice(0, 400)}`);
-    }
-    try { return JSON.parse(bodyText); } catch { return null; }
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, messages, temperature })
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`OpenAI error ${res.status}: ${res.statusText} ${body.slice(0, 400)}`);
   }
-
-  try {
-    const data = await call(basePayload);
-    const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-    return String(content || '').trim();
-  } catch (err) {
-    const msg = String(err && err.message || '');
-    const complainsSampling = /temperature|top_p|Unknown parameter|invalid .*parameter|not allowed/i.test(msg);
-    if ((basePayload.temperature !== undefined || basePayload.top_p !== undefined) && complainsSampling) {
-      const retryPayload = { ...basePayload };
-      delete retryPayload.temperature;
-      delete retryPayload.top_p;
-      try {
-        const data = await call(retryPayload);
-        const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-        return String(content || '').trim();
-      } catch (_) {
-        throw err;
-      }
-    }
-    throw err;
-  }
+  const data = await res.json().catch(() => null);
+  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
+  return String(content || '').trim();
 }
 
-// ============ BYOA (Hugging Face Spaces via plain HTTP) ============
-function resolveSpaceBaseUrl(spaceOrUrl) {
+// --- BYOA (Gradio Space) via plain HTTP, no extra libs ---
+function resolveGradioBaseUrl(spaceOrUrl) {
   const s = String(spaceOrUrl || '').trim();
   if (!s) return '';
-  if (/^https?:\/\//i.test(s)) return s.replace(/\/$/, '');
-  if (s.includes('/')) return `https://${s.replace(/\//g, '-')}.hf.space`;
+  if (/^https?:\/\//i.test(s)) {
+    // Looks like a full URL already
+    return s.replace(/\/$/, '');
+  }
+  // Expect format owner/space, convert to https://owner-space.hf.space
+  if (s.includes('/')) {
+    const base = `https://${s.replace(/\//g, '-')}.hf.space`;
+    return base;
+  }
+  // Fallback: treat as already hyphenated subdomain
   return `https://${s}.hf.space`;
 }
 
-async function safeJson(res) {
-  const t = await res.text().catch(() => '');
-  try { return JSON.parse(t); } catch { return { __raw: t }; }
-}
-
-async function fetchJson(url) {
-  const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!r.ok) return null;
-  try { return await r.json(); } catch { return null; }
-}
-
-async function discoverSpec(baseUrl, endpoint) {
-  const out = { paramNames: [], fn_index: null, predictUrl: null, tried: [] };
-  const ep = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-  // Try /info (new Gradio)
+async function discoverGradioParams(baseUrl, endpoint) {
+  // Try /info first (Gradio >=4), then /config (legacy)
   try {
-    const info = await fetchJson(`${baseUrl}/info`);
-    if (info && (info.named_endpoints || info.endpoints)) {
-      const named = info.named_endpoints || info.endpoints || {};
-      let entry = named[ep] || named[ep.replace(/\/$/, '')] || null;
-      if (!entry) {
-        const key = Object.keys(named).find(k => (k === ep || k === ep.replace(/\/$/, '')));
-        if (key) entry = named[key];
-      }
-      if (entry) {
-        if (Array.isArray(entry.parameters)) {
-          out.paramNames = entry.parameters.map(p => p.name).filter(Boolean);
-        }
-        if (entry.api_path) {
-          out.predictUrl = `${baseUrl}${entry.api_path}`; // usually /api/predict/<hash or name>
-        } else if (entry.path) {
-          out.predictUrl = `${baseUrl}${entry.path}`; // may already include /api/predict
-        } else {
-          out.predictUrl = `${baseUrl}/api/predict${ep}`;
-        }
-        return out;
+    const r = await fetch(`${baseUrl}/info`, { headers: { 'Accept': 'application/json' } });
+    if (r.ok) {
+      const info = await r.json().catch(() => null);
+      const named = info && (info.named_endpoints || info.endpoints || {});
+      const ep = named && named[endpoint];
+      if (ep && Array.isArray(ep.parameters)) {
+        return ep.parameters.map(p => p.name).filter(Boolean);
       }
     }
   } catch (_) {}
-
-  // Try /config (legacy)
   try {
-    const cfg = await fetchJson(`${baseUrl}/config`);
-    const deps = (cfg && cfg.dependencies) || [];
-    for (const d of deps) {
-      const apiName = (d && (d.api_name || d.route || d.path)) || '';
-      const match = apiName && (apiName === ep || apiName === ep.replace(/\/$/, ''));
-      if (match) {
-        if (Array.isArray(d.inputs)) {
-          out.paramNames = d.inputs.map(i => (i && (i.name || i.label || i.id)) || '').filter(Boolean);
-        }
-        if (Number.isInteger(d.fn_index)) out.fn_index = d.fn_index;
-        // When fn_index exists, use /api/predict without suffix
-        out.predictUrl = `${baseUrl}/api/predict`;
-        return out;
+    const r = await fetch(`${baseUrl}/config`, { headers: { 'Accept': 'application/json' } });
+    if (r.ok) {
+      const cfg = await r.json().catch(() => null);
+      // Best-effort mapping: find dependency with route == endpoint and read inputs names
+      const deps = (cfg && cfg.dependencies) || [];
+      for (const d of deps) {
+        if (!d || !Array.isArray(d.targets)) continue;
+        const hasRoute = (d && (d.route || d.path || d.api_name)) === endpoint;
+        if (!hasRoute) continue;
+        const inputs = Array.isArray(d.inputs) ? d.inputs : [];
+        return inputs.map(i => (i && (i.name || i.label || i.id)) || '').filter(Boolean);
       }
     }
   } catch (_) {}
-
-  // Fallback: try reasonable defaults
-  out.predictUrl = `${baseUrl}/api/predict${ep}`;
-  return out;
-}
-
-async function tryPostJson(url, body) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const data = await safeJson(res);
-  if (!res.ok) {
-    const piece = typeof data === 'string' ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
-    const err = new Error(`BYOA HTTP ${res.status} at ${url}: ${piece}`);
-    err.status = res.status;
-    err.url = url;
-    err.body = body;
-    throw err;
-  }
-  return data;
-}
-
-function buildDataArray(paramNames, payload) {
-  if (Array.isArray(paramNames) && paramNames.length) {
-    const map = {
-      message: payload.message,
-      system_prompt: payload.system_prompt,
-      temperature: payload.temperature
-    };
-    return paramNames.map(n => (n in map ? map[n] : null));
-  }
-  return [payload.message, payload.system_prompt, payload.temperature];
-}
-
-async function readText(res) {
-  try { return await res.text(); } catch { return ''; }
-}
-
-function parseEventId(text) {
-  // Try JSON first
-  try {
-    const obj = JSON.parse(text);
-    if (obj && (obj.event_id || obj.eventId || obj.hash || obj.id)) {
-      return String(obj.event_id || obj.eventId || obj.hash || obj.id);
-    }
-  } catch {}
-  // Then try to extract quoted token
-  const m = text.match(/"([a-zA-Z0-9_-]{6,})"/);
-  return m ? m[1] : '';
-}
-
-function extractLastJson(text) {
-  // Gradio stream returns lines, last JSON contains result
-  const lines = String(text || '').split(/\r?\n/).filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].replace(/^data:\s*/i, '').trim();
-    if (!line) continue;
-    try {
-      return JSON.parse(line);
-    } catch {
-      // try to find last JSON object substring
-      const idx = line.lastIndexOf('{');
-      if (idx !== -1) {
-        const cand = line.slice(idx);
-        try { return JSON.parse(cand); } catch {}
-      }
-    }
-  }
-  // Fallback: try whole body
-  try { return JSON.parse(text); } catch { return null; }
-}
-
-function firstNonEmptyString(arr) {
-  if (!Array.isArray(arr)) return '';
-  for (const v of arr) {
-    if (typeof v === 'string' && v.trim()) return v.trim();
-    if (v && typeof v === 'object') {
-      const s = extractTextFromAny(v);
-      if (s) return s;
-    }
-  }
-  return '';
-}
-
-function extractTextFromAny(obj) {
-  // Accept common shapes from Gradio results
-  if (typeof obj === 'string') return obj.trim();
-  if (!obj || typeof obj !== 'object') return '';
-
-  // Direct fields
-  if (typeof obj.response === 'string' && obj.response.trim()) return obj.response.trim();
-  if (typeof obj.text === 'string' && obj.text.trim()) return obj.text.trim();
-  if (typeof obj.generated_text === 'string' && obj.generated_text.trim()) return obj.generated_text.trim();
-
-  // Arrays in known keys
-  if (Array.isArray(obj.data)) {
-    const s = firstNonEmptyString(obj.data);
-    if (s) return s;
-  }
-  if (obj.output && Array.isArray(obj.output.data)) {
-    const s = firstNonEmptyString(obj.output.data);
-    if (s) return s;
-  }
-  if (obj.result && Array.isArray(obj.result.data)) {
-    const s = firstNonEmptyString(obj.result.data);
-    if (s) return s;
-  }
-
-  // Nested response fields
-  if (obj.data && typeof obj.data === 'object') {
-    const s1 = extractTextFromAny(obj.data);
-    if (s1) return s1;
-  }
-  if (obj.output && typeof obj.output === 'object') {
-    const s2 = extractTextFromAny(obj.output);
-    if (s2) return s2;
-  }
-
-  // If it's an array-like object with 0 index
-  if (obj[0] !== undefined) {
-    const s = extractTextFromAny(obj[0]);
-    if (s) return s;
-  }
-
-  return '';
-}
-
-async function predictViaGradioApi(base, endpoint, dataArray) {
-  const ep = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
-  const postUrl = `${base}/gradio_api/call/${ep}`;
-  const res = await fetch(postUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: dataArray })
-  });
-  const postBody = await readText(res);
-  if (!res.ok) {
-    throw new Error(`BYOA POST ${res.status} at ${postUrl}: ${postBody.slice(0,300)}`);
-  }
-  const eventId = parseEventId(postBody);
-  if (!eventId) throw new Error(`BYOA: event_id not found from ${postUrl}: ${postBody.slice(0,200)}`);
-
-  const getUrl = `${base}/gradio_api/call/${ep}/${encodeURIComponent(eventId)}`;
-  const res2 = await fetch(getUrl, { method: 'GET' });
-  const body2 = await readText(res2);
-  if (!res2.ok) {
-    throw new Error(`BYOA GET ${res2.status} at ${getUrl}: ${body2.slice(0,300)}`);
-  }
-  const obj = extractLastJson(body2) || {};
-  const text = extractTextFromAny(obj);
-  const s = String(text || '').trim();
-  if (s && s !== '[object Object]') return s;
-  throw new Error(`BYOA: empty or invalid result from ${getUrl}`);
+  return [];
 }
 
 async function generateWithBYOA(prompt, opts = {}) {
-  const base = resolveSpaceBaseUrl(
+  const base = resolveGradioBaseUrl(
     opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || 'amd/gpt-oss-120b-chatbot'
   );
   if (!base) throw new Error('BYOA base URL/model is missing');
-  const endpoint = String(opts.byoaEndpoint || process.env.PP_BYOA_ENDPOINT || '/chat');
+  let endpoint = String(opts.byoaEndpoint || process.env.PP_BYOA_ENDPOINT || '/chat');
+  if (!endpoint.startsWith('/')) endpoint = '/' + endpoint;
 
   const systemPrompt = String(opts.systemPrompt || process.env.PP_BYOA_SYSTEM_PROMPT || 'You are a helpful assistant.');
   const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.7;
   const payload = { message: String(prompt || ''), system_prompt: systemPrompt, temperature };
 
-  const spec = await discoverSpec(base, endpoint);
-  const dataArray = buildDataArray(spec.paramNames, payload);
-
-  // Prefer modern Gradio API flow first
-  try {
-    return await predictViaGradioApi(base, endpoint, dataArray);
-  } catch (e) {
-    // continue to legacy attempts
+  // Discover parameter order to build the data array; fallback to [message, system_prompt, temperature]
+  const paramNames = await discoverGradioParams(base, endpoint);
+  let dataArray;
+  if (paramNames.length) {
+    const map = {
+      message: payload.message,
+      system_prompt: payload.system_prompt,
+      temperature: payload.temperature
+    };
+    dataArray = paramNames.map(n => (n in map ? map[n] : null));
+  } else {
+    dataArray = [payload.message, payload.system_prompt, payload.temperature];
   }
 
-  // Ordered attempts without external libs
-  const attempts = [];
-  if (spec.fn_index !== null) {
-    attempts.push({ url: `${base}/api/predict`, body: { data: dataArray, fn_index: spec.fn_index } });
+  // POST to /api/predict{endpoint}
+  const url = `${base}/api/predict${endpoint}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: dataArray })
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`BYOA error ${res.status}: ${res.statusText} ${body.slice(0, 400)}`);
   }
-  if (spec.predictUrl) {
-    attempts.push({ url: spec.predictUrl, body: { data: dataArray } });
-  }
-  const ep = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-  const epNoSlash = ep.replace(/^\//, '');
-  attempts.push({ url: `${base}/api/predict${ep}` , body: { data: dataArray } });
-  attempts.push({ url: `${base}/api/predict/${epNoSlash}`, body: { data: dataArray } });
-  // Old /run endpoints (some Spaces expose these)
-  attempts.push({ url: `${base}/run${ep}`, body: { data: dataArray } });
-  attempts.push({ url: `${base}/run/${epNoSlash}`, body: { data: dataArray } });
-
-  let lastErr = null;
-  for (const att of attempts) {
-    try {
-      const out = await tryPostJson(att.url, att.body);
-      const text = extractTextFromAny(out);
-      const s = String(text || '').trim();
-      if (s && s !== '[object Object]') return s;
-      lastErr = new Error(`BYOA empty response at ${att.url}`);
-    } catch (e) {
-      lastErr = e;
-      continue;
-    }
-  }
-  throw lastErr || new Error('BYOA: all attempts failed');
+  const out = await res.json().catch(() => null);
+  // Gradio returns { data: [...] }
+  const d = out && out.data;
+  const text = Array.isArray(d) ? d[0] : (d && (d.response ?? d) || out || '');
+  return String(text || '').trim();
 }
 
 async function generateText(prompt, opts = {}) {
@@ -349,6 +139,7 @@ async function generateText(prompt, opts = {}) {
   if (provider === 'byoa') {
     return generateWithBYOA(prompt, opts);
   }
+  // default to OpenAI
   return generateWithOpenAI(prompt, opts);
 }
 

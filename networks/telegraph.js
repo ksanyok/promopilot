@@ -36,24 +36,13 @@ async function generateTextWithChat(prompt, aiOptions) {
   logLine('AI request', { provider: (aiOptions && aiOptions.provider) || process.env.PP_AI_PROVIDER || 'openai', promptPreview: String(prompt || '').slice(0, 160) });
   try {
     const out = await generateText(prompt, aiOptions || {});
-    const asString = typeof out === 'string' ? out : JSON.stringify(out);
-    logLine('AI response ok', { length: String(asString || '').length });
-    return typeof out === 'string' ? out : '';
+    logLine('AI response ok', { length: String(out || '').length });
+    return out;
   } catch (e) {
     logLine('AI error', { error: String(e && e.message || e) });
     return '';
   }
 }
-
-function isBadText(s) {
-  const t = String(s || '').trim();
-  if (!t) return true;
-  if (t === '[object Object]') return true;
-  if (/^\{\s*"/.test(t)) return true; // accidental JSON
-  return false;
-}
-
-function plainLength(html) { return stripTags(String(html || '')).length; }
 
 function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
 function extractAttr(tagHtml, attr) {
@@ -196,45 +185,17 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || undefined,
     systemPrompt: '',
-    // BYOA options (read from env if provided)
-    byoaBaseUrl: process.env.PP_BYOA_BASE_URL || undefined,
-    byoaEndpoint: process.env.PP_BYOA_ENDPOINT || undefined,
   };
 
   // Generate title, author, content with small pauses
-  let rawTitle = await generateTextWithChat(prompts.title, { ...aiOptionsBase, temperature: 0.7 });
-  await sleep(1200);
-  let rawAuthor = await generateTextWithChat(prompts.author, { ...aiOptionsBase, temperature: 0.6 });
-  await sleep(1200);
+  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOptionsBase, temperature: 0.7 });
+  await sleep(1500);
+  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOptionsBase, temperature: 0.6 });
+  await sleep(1500);
   let rawContent = await generateTextWithChat(prompts.content, { ...aiOptionsBase, temperature: 0.8 });
 
-  // Optional fallback to OpenAI if BYOA failed or produced garbage
-  if (aiOptionsBase.provider === 'byoa' && aiOptionsBase.openaiApiKey) {
-    const needTitle = isBadText(rawTitle);
-    const needAuthor = isBadText(rawAuthor);
-    const needContent = isBadText(rawContent) || plainLength(rawContent) < 1200; // try to get something substantial
-    if (needTitle || needAuthor || needContent) {
-      logLine('BYOA weak output, trying OpenAI fallback', { needTitle, needAuthor, needContent });
-      const common = { ...aiOptionsBase, provider: 'openai' };
-      if (needTitle) rawTitle = await generateTextWithChat(prompts.title, { ...common, temperature: 0.7 });
-      await sleep(900);
-      if (needAuthor) rawAuthor = await generateTextWithChat(prompts.author, { ...common, temperature: 0.6 });
-      await sleep(900);
-      if (needContent) rawContent = await generateTextWithChat(prompts.content, { ...common, temperature: 0.8 });
-    }
-  }
-
-  const title = cleanTitle(isBadText(rawTitle) ? '' : rawTitle);
-  const author = isBadText(rawAuthor) ? '' : String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim();
-
-  // Abort early if results are unusable
-  const contentPlainLen = plainLength(rawContent);
-  if (!title || !author || isBadText(rawContent) || contentPlainLen < 600) {
-    const payload = { ok: false, error: 'AI_CONTENT_INVALID', details: { titleOk: !!title, authorOk: !!author, contentPlainLen }, network: 'telegraph', logFile: LOG_FILE };
-    logLine('Run failed (invalid AI output)', payload);
-    return payload;
-  }
-
+  const title = cleanTitle(rawTitle);
+  const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
   logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
 
   // Basic content cleanup and link normalization
@@ -330,9 +291,6 @@ if (require.main === module) {
       const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
       const jobModel = job.openaiModel || process.env.OPENAI_MODEL || '';
       if (jobModel) process.env.OPENAI_MODEL = String(jobModel);
-      // BYOA env from job, if provided
-      if (job.byoaBaseUrl) process.env.PP_BYOA_BASE_URL = String(job.byoaBaseUrl);
-      if (job.byoaEndpoint) process.env.PP_BYOA_ENDPOINT = String(job.byoaEndpoint);
 
       if (!pageUrl) {
         const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url missing', network: 'telegraph', logFile: LOG_FILE };

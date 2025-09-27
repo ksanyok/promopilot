@@ -146,9 +146,6 @@ if ($action === 'publish') {
 
     $openaiKey = trim((string)get_setting('openai_api_key', ''));
     $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
-    $byoaBaseUrl = trim((string)get_setting('byoa_base_url', ''));
-    $byoaEndpoint = trim((string)get_setting('byoa_endpoint', '/chat')) ?: '/chat';
-    if ($byoaEndpoint[0] !== '/') { $byoaEndpoint = '/' . ltrim($byoaEndpoint, '/'); }
     if ($aiProvider === 'openai' && $openaiKey === '') {
         $conn->close();
         echo json_encode(['ok'=>false,'error'=>'MISSING_OPENAI_KEY']);
@@ -177,8 +174,6 @@ if ($action === 'publish') {
         'openaiApiKey' => $openaiKey,
         'openaiModel' => $openaiModel,
         'aiProvider' => $aiProvider,
-        'byoaBaseUrl' => $byoaBaseUrl,
-        'byoaEndpoint' => $byoaEndpoint,
         'waitBetweenCallsMs' => 5000,
     ];
 
