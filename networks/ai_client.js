@@ -89,12 +89,24 @@ async function generateWithBYOA(prompt, opts = {}) {
     return String(out||'').trim();
   };
 
-  try { return await run(true); }
-  catch (e) {
+  try {
+    return await run(true);
+  } catch (e) {
     const msg = String(e && e.message || '').toLowerCase();
     if (/temperat/.test(msg)) { log('BYOA:retry_no_temp', {}); return await run(false); }
     log('BYOA:err', { error: String(e && e.message || e) });
     throw e;
+  } finally {
+    // Try to explicitly close any persistent connections to avoid keeping the Node process alive
+    try {
+      if (app && typeof app.close === 'function') {
+        await app.close();
+      } else if (app && typeof app.disconnect === 'function') {
+        await app.disconnect();
+      } else if (app && app.client && typeof app.client.close === 'function') {
+        await app.client.close();
+      }
+    } catch (_) { /* ignore */ }
   }
 }
 

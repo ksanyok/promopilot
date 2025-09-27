@@ -196,6 +196,7 @@ if ($action === 'publish') {
             if (!empty($result['candidates']) && is_array($result['candidates'])) {
                 $payload['candidates'] = $result['candidates'];
             }
+            if (!empty($result['logFile'])) { $payload['log_file'] = (string)$result['logFile']; }
             if (isset($result['exit_code'])) { $payload['exit_code'] = (int)$result['exit_code']; }
         } else {
             $payload['details'] = $details;
@@ -237,6 +238,7 @@ if ($action === 'publish') {
         'network_title' => $network['title'] ?? $networkSlug,
         'title' => $result['title'] ?? '',
         'author' => $result['author'] ?? '',
+        'log_file' => $result['logFile'] ?? '',
     ];
     $json = json_encode($response);
     header('Content-Length: ' . strlen($json));

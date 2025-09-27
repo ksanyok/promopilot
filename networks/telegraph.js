@@ -413,6 +413,8 @@ if (require.main === module) {
 
       const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider);
       console.log(JSON.stringify(res));
+      // Ensure clean exit even if some libraries keep event loops open
+      process.exit(0);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
       logLine('Run failed', { error: payload.error, stack: e && e.stack });
