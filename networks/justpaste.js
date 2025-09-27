@@ -242,11 +242,28 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
   async function doPublish() {
-    await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 20000 });
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2' }),
-      page.click('.editArticleBottomButtons .publishButton')
-    ]);
+    const startUrl = page.url();
+    // Ensure button exists (robust to reflows)
+    for (let i=0; i<40; i++) {
+      const btn = await page.$('.editArticleBottomButtons .publishButton');
+      if (btn) break; await sleep(250);
+    }
+    // Click via DOM to avoid stale element/frame linkage
+    await page.evaluate(() => {
+      const btn = document.querySelector('.editArticleBottomButtons .publishButton');
+      if (btn) btn.click();
+    });
+    // Wait for URL change or navigation event (whichever comes first)
+    try {
+      await Promise.race([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }),
+        page.waitForFunction((u) => location.href !== u, { timeout: 90000 }, startUrl)
+      ]);
+    } catch(_) {}
+    const nowUrl = page.url();
+    if (nowUrl === startUrl) {
+      throw new Error('PUBLISH_NO_NAVIGATION');
+    }
   }
   try { await doPublish(); }
   catch (e) {
