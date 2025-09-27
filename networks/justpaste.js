@@ -229,6 +229,8 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
           if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
           const path = (u.pathname || '/').replace(/\/+/g,'/');
           if (path === '/' || path === '') return false; // exclude homepage
+          // Exclude obvious non-article paths
+          if (/^\/(privacy|privacypolicy|terms|faq|pricing|premium|about)(?:\/|$)/i.test(path)) return false;
           // Require at least one non-empty segment of 3+ chars (common pattern)
           const segs = path.split('/').filter(Boolean);
           return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
@@ -255,6 +257,99 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
       return cands[0] || null;
     });
+  }
+
+  // Detect JustPaste custom grid captcha overlay
+  async function detectJpGridCaptcha() {
+    try {
+      return await page.evaluate(() => {
+        const wrap = document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer');
+        if (!wrap) return { found: false };
+        const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
+        const verifySel = !!document.querySelector('.captchaPanelMaster .CaptchaButtonVerify');
+        const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+        return { found: true, word, tiles: tiles.length, verifySel };
+      });
+    } catch { return { found: false }; }
+  }
+
+  // Solve JustPaste grid captcha using 2Captcha (coordinates)
+  async function solveJpGridWith2Captcha(maxTries = 2) {
+    if (!captchaApiKey) { logLine('Grid captcha: missing 2captcha key'); return false; }
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+      try {
+        // Read instruction word and compute tight clip over union of tiles
+        const info = await page.evaluate(() => {
+          const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
+          const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+          const rects = tiles.map(t => t.getBoundingClientRect());
+          if (rects.length === 0) return null;
+          let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+          rects.forEach(r => { left = Math.min(left, r.left); top = Math.min(top, r.top); right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom); });
+          const centers = rects.map(r => ({ x: r.left + r.width/2, y: r.top + r.height/2 }));
+          return { word, clip: { x: left, y: top, width: right-left, height: bottom-top }, centers };
+        });
+        if (!info) { logLine('Grid captcha: no tiles found'); return false; }
+        const { word, clip, centers } = info;
+        // Screenshot grid area
+        const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
+        const b64 = buf.toString('base64');
+        // Send to 2captcha with coordinates mode
+        const params = new URLSearchParams();
+        params.set('key', captchaApiKey);
+        params.set('method', 'base64');
+        params.set('coordinatescaptcha', '1');
+        params.set('json', '1');
+        params.set('body', b64);
+        params.set('textinstructions', `Select all images with: ${word}`);
+        const inResp = await fetch('http://2captcha.com/in.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
+        const inData = await inResp.json().catch(() => ({}));
+        if (!inData || inData.status !== 1) { logLine('2captcha in.php error', inData); continue; }
+        const id = String(inData.request);
+        const deadline = Date.now() + 180000;
+        let coords = null;
+        while (Date.now() < deadline) {
+          await sleep(5000);
+          const ps = new URLSearchParams(); ps.set('key', captchaApiKey); ps.set('action','get'); ps.set('id', id); ps.set('json','1');
+          const r = await fetch('http://2captcha.com/res.php?' + ps.toString());
+          const d = await r.json().catch(() => ({}));
+          if (d && d.status === 1 && d.request) { coords = String(d.request); break; }
+          if (d && d.request && d.request !== 'CAPCHA_NOT_READY') { logLine('2captcha res.php error', d); break; }
+        }
+        if (!coords) { logLine('2captcha res.php timeout'); continue; }
+        // Parse coordinates like "x1,y1|x2,y2"
+        const points = coords.split('|').map(p => p.split(',').map(n => parseFloat(n))).filter(a => a.length === 2 && a.every(v => isFinite(v)));
+        // Map to nearest tile centers and click them
+        const clickedIdx = new Set();
+        for (const [px, py] of points) {
+          // px,py are relative to the clipped image; translate to page coords by adding clip.x/y
+          const ax = clip.x + px; const ay = clip.y + py;
+          let best = -1; let bestDist = Infinity;
+          centers.forEach((c, i) => { const dx = c.x - ax, dy = c.y - ay; const dist = dx*dx + dy*dy; if (dist < bestDist) { bestDist = dist; best = i; } });
+          if (best >= 0 && !clickedIdx.has(best)) {
+            clickedIdx.add(best);
+            await page.evaluate((index) => {
+              const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+              const el = tiles[index];
+              if (el) { el.scrollIntoView({block:'center'}); el.click(); }
+            }, best);
+            await sleep(200);
+          }
+        }
+        // Click Verify
+        await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) { b.scrollIntoView({block:'center'}); (b).click(); } });
+        await sleep(800);
+        // Check if overlay disappeared
+        const after = await detectJpGridCaptcha();
+        if (!after || !after.found) { logLine('Grid captcha solved (2captcha)'); return true; }
+        // else try refresh button and retry
+        await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
+        await sleep(600);
+      } catch (e) {
+        logLine('Grid captcha solve error', { error: String(e && e.message || e) });
+      }
+    }
+    return false;
   }
 
   async function validateCandidateUrl(candidateUrl) {
@@ -340,17 +435,35 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
     for (let attempt = 0; attempt < 3; attempt++) {
       await takeScreenshot(`attempt${attempt+1}-pre-click`);
-      await tryClick();
+      try { await tryClick(); } catch (e) { logLine('tryClick error', { error: String(e && e.message || e) }); }
       await sleep(350);
       await takeScreenshot(`attempt${attempt+1}-post-click`);
       const t0 = Date.now();
       let found = null;
       while (Date.now() - t0 < 45000) { // 45s per attempt
         // Navigation or URL change to an article-like URL
-        const now = await page.evaluate(() => location.href).catch(()=>null);
+        let now = null;
+        try { now = await page.evaluate(() => location.href); } catch (e) {
+          const closed = page.isClosed && page.isClosed();
+          logLine('Page evaluate href failed', { error: String(e && e.message || e), closed });
+          if (closed) throw new Error('PAGE_CLOSED');
+        }
         if (now && now !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(now) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(now)) {
           return now;
         }
+        // Handle custom grid captcha overlay
+        try {
+          const grid = await detectJpGridCaptcha();
+          if (grid && grid.found) {
+            logLine('Grid captcha detected', { word: grid.word, tiles: grid.tiles });
+            if (captchaProvider === '2captcha') {
+              const ok = await solveJpGridWith2Captcha(2);
+              if (ok) { await sleep(1000); continue; }
+            } else {
+              logLine('Grid captcha: provider not supported for coordinates', { captchaProvider });
+            }
+          }
+        } catch (_) {}
         // Try extract from DOM
         found = await extractPublishedUrl();
         if (found) {
