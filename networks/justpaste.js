@@ -119,12 +119,25 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   // Try to locate the add article editor (supports Html tab)
   try { await page.waitForSelector('#editArticleWidget .tabsBar, .editArticleMiddle .tabsBar', { timeout: 15000 }); } catch(_) {}
 
-  // Set title first (input.titleInput)
+  // Set title first (explicit selector per UI: .titleColumn input.titleInput)
   try {
-    await page.waitForSelector('.editArticleMiddle input.titleInput', { timeout: 15000 });
-    await page.click('.editArticleMiddle input.titleInput', { clickCount: 3 }).catch(()=>{});
+    const titleVal = (titleClean || topicTitle || anchorText || '').toString().trim().slice(0, 100);
+    const titleSelCandidates = [
+      '#editArticleWidget .titleColumn input.titleInput',
+      '.editArticleMiddle .titleColumn input.titleInput',
+      '#editArticleWidget input.titleInput',
+      '.editArticleMiddle input.titleInput',
+      'input.titleInput'
+    ];
+    let titleSel = '';
+    for (const s of titleSelCandidates) { if (await page.$(s)) { titleSel = s; break; } }
+    if (!titleSel) throw new Error('TITLE_INPUT_NOT_FOUND');
+    await page.focus(titleSel).catch(()=>{});
+    await page.click(titleSel, { clickCount: 3 }).catch(()=>{});
     await page.keyboard.press('Backspace').catch(()=>{});
-    await page.keyboard.type(titleClean || (topicTitle || anchorText), { delay: 10 });
+    await page.type(titleSel, titleVal, { delay: 10 });
+    await page.$eval(titleSel, (el) => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+    logLine('Title filled', { selector: titleSel, length: titleVal.length });
   } catch (e) { logLine('Title fill error', { error: String(e && e.message || e) }); }
 
   // Switch to Html tab (use explicit Html tab; robust to different containers)
@@ -183,34 +196,61 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   } catch(_) {}
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
+  async function extractPublishedUrl() {
+    return await page.evaluate(() => {
+      const looksLike = (s) => typeof s === 'string' && /^https?:\/\/(?:www\.)?justpaste\.it\//.test(s);
+      for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+        if (looksLike(a.href)) return a.href;
+      }
+      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) {
+        const v = el.value || '';
+        if (looksLike(v)) return v;
+      }
+      return null;
+    });
+  }
+
   async function doPublish() {
     const startUrl = page.url();
-    // Ensure button exists (robust to reflows) and click it via DOM
-    const clicked = await page.evaluate(() => {
-      const candidates = [
-        '.editArticleBottomButtons .publishButton',
-        '#editArticleWidget .publishButton',
-        '.publishButton',
-        'button.publishButton',
-        'a.publishButton'
-      ];
-      let btn = null;
-      for (const sel of candidates) { btn = document.querySelector(sel); if (btn) break; }
-      if (btn) { try { btn.scrollIntoView({block:'center'}); } catch(_) {} btn.click(); return true; }
-      return false;
-    });
-    if (!clicked) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
-    // Wait for URL change or navigation event (whichever comes first)
-    try {
-      await Promise.race([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }),
-        page.waitForFunction((u) => location.href !== u, { timeout: 90000 }, startUrl)
-      ]);
-    } catch(_) {}
-    const nowUrl = page.url();
-    if (nowUrl === startUrl) {
-      throw new Error('PUBLISH_NO_NAVIGATION');
+    const tryClick = async () => {
+      const clicked = await page.evaluate(() => {
+        const candidates = [
+          '.editArticleBottomButtons .publishButton',
+          '#editArticleWidget .publishButton',
+          '.publishButton',
+          'button.publishButton',
+          'a.publishButton'
+        ];
+        let btn = null;
+        for (const sel of candidates) { btn = document.querySelector(sel); if (btn) break; }
+        if (btn) { try { btn.scrollIntoView({block:'center'}); } catch(_) {} btn.click(); return true; }
+        return false;
+      });
+      if (!clicked) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
+    };
+
+    // Try up to 3 click attempts, each with polling for navigation or a justpaste URL in DOM
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await tryClick();
+      const t0 = Date.now();
+      let found = null;
+      while (Date.now() - t0 < 45000) { // 45s per attempt
+        // Navigation or URL change
+        const changed = await page.evaluate((u) => location.href !== u, startUrl).catch(()=>false);
+        if (changed) return; // page.url() will have the published URL or redirect page
+        // Try extract from DOM
+        found = await extractPublishedUrl();
+        if (found) {
+          // Navigate to the found URL to normalize result
+          try { await page.goto(found, { waitUntil: 'domcontentloaded' }); } catch(_) {}
+          return;
+        }
+        await sleep(500);
+      }
+      // If not found yet, small wait and retry
+      await sleep(1000);
     }
+    throw new Error('PUBLISH_NO_NAVIGATION');
   }
   try { await doPublish(); }
   catch (e) {
