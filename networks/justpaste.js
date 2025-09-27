@@ -227,8 +227,14 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
           return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
         } catch { return false; }
       };
-      // Gather anchors
-      for (const a of Array.from(document.querySelectorAll('a[href]'))) add(a.href);
+      // Gather anchors, excluding obvious ad/premium containers
+      for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+        const withinAd = !!a.closest('.becomePremiumPanel, .ads, .advert, .premium, .ad, .sponsored');
+        const txt = (a.textContent || '').trim().toLowerCase();
+        if (withinAd) continue;
+        if (/premium/.test(txt)) continue;
+        add(a.href);
+      }
       // Gather values from inputs/textareas ONLY if they look like absolute URLs
       for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) {
         const v = (el.value || '').trim();
@@ -242,6 +248,34 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
       return cands[0] || null;
     });
+  }
+
+  async function validateCandidateUrl(candidateUrl) {
+    // Open in a temp page to avoid messing with the main page
+    if (!candidateUrl || !/^https?:\/\//i.test(candidateUrl)) return { ok: false, reason: 'INVALID_URL' };
+    let temp;
+    try {
+      temp = await browser.newPage();
+      await temp.goto(candidateUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(()=>{});
+      const res = await temp.evaluate((expectedUrl, expectedTitle) => {
+        const body = document.body;
+        const html = body ? (body.innerHTML || '') : '';
+        const text = body ? (body.innerText || '') : '';
+        const hasBacklink = expectedUrl ? html.includes(expectedUrl) : false;
+        const t = (document.title || '').trim();
+        const h = (document.querySelector('h1,h2')?.innerText || '').trim();
+        const titleHit = expectedTitle ? (t.includes(expectedTitle) || h.includes(expectedTitle)) : false;
+        const isAd = !!document.querySelector('.becomePremiumPanel, .ads, .advert, .premium, .ad, .sponsored');
+        const premiumText = /premium\b/i.test(text) && /\$\s*\d+(?:\.\d{1,2})?/.test(text);
+        return { hasBacklink, titleHit, isAd, premiumText };
+      }, pageUrl, (titleClean || '').slice(0, 60));
+      const ok = (res.hasBacklink || res.titleHit) && !res.isAd && !res.premiumText;
+      return { ok, details: res };
+    } catch (e) {
+      return { ok: false, reason: 'VALIDATION_ERROR', error: String(e && e.message || e) };
+    } finally {
+      try { if (temp) await temp.close(); } catch(_) {}
+    }
   }
 
   async function doPublish() {
@@ -312,7 +346,14 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         }
         // Try extract from DOM
         found = await extractPublishedUrl();
-        if (found) return found;
+        if (found) {
+          // Validate candidate (avoid premium/ad links)
+          try {
+            const v = await validateCandidateUrl(found);
+            if (v && v.ok) return found;
+            else logLine('Discarded candidate URL', { found, validation: v });
+          } catch(_) {}
+        }
         await sleep(500);
       }
       // If not found yet, small wait and retry
@@ -349,6 +390,13 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     const last2 = await extractPublishedUrl();
     if (last2) publishedUrl = last2;
   }
+  // Final validation; if fails, keep the URL but mark as requiresCaptcha unless user opted otherwise
+  try {
+    const vfinal = await validateCandidateUrl(publishedUrl);
+    if (vfinal && !vfinal.ok) {
+      logLine('Final URL seems not an article, likely ad or blocked', { publishedUrl, validation: vfinal });
+    }
+  } catch(_) {}
   await takeScreenshot('post-publish');
   // Try to load the article URL (to observe redirects/captcha)
   let requiresCaptcha = false; let captchaType = '';
