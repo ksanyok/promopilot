@@ -117,7 +117,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   await page.goto('https://justpaste.it/', { waitUntil: 'networkidle2' });
 
   // Try to locate the add article editor (supports Html tab)
-  try { await page.waitForSelector('.editArticleMiddle .tabsBar', { timeout: 15000 }); } catch(_) {}
+  try { await page.waitForSelector('#editArticleWidget .tabsBar, .editArticleMiddle .tabsBar', { timeout: 15000 }); } catch(_) {}
 
   // Set title first (input.titleInput)
   try {
@@ -127,108 +127,50 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     await page.keyboard.type(titleClean || (topicTitle || anchorText), { delay: 10 });
   } catch (e) { logLine('Title fill error', { error: String(e && e.message || e) }); }
 
-  // Switch to Html tab (button with text 'Html' has class addArticleTabOff when inactive)
+  // Switch to Html tab (use explicit Html tab; robust to different containers)
   try {
-    const htmlTabSelector = '.editArticleMiddle .tabsBar a';
-    await page.waitForSelector(htmlTabSelector, { timeout: 15000 });
-    // Click Html tab
+    await page.waitForSelector('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a', { timeout: 15000 });
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+      const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
       const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
-      if (html) { html.click(); }
+      if (html) { html.scrollIntoView({block:'center'}); html.click(); }
     });
-    await sleep(400);
-    // Verify Html tab active; retry once if not
+    await sleep(500);
+    // If not active yet, click one more time
     const isHtmlActive = await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+      const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
       const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
       return !!(html && html.classList.contains('addArticleTabOn'));
     });
     if (!isHtmlActive) {
       await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('.editArticleMiddle .tabsBar a'));
+        const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
         const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
         if (html) { html.click(); }
       });
-      await sleep(400);
+      await sleep(500);
     }
+    logLine('Html tab toggled');
   } catch (e) { logLine('Switch tab error', { error: String(e && e.message || e) }); }
 
-  // Helper: wait for any of selectors
-  async function waitForAny(page, selectors, totalTimeout = 20000, poll = 300) {
-    const start = Date.now();
-    while ((Date.now() - start) < totalTimeout) {
-      for (const sel of selectors) {
-        const h = await page.$(sel);
-        if (h) return sel;
-      }
-      await page.waitForTimeout(poll);
-    }
-    throw new Error('none of selectors appeared: ' + selectors.join(', '));
-  }
-
-  // Fill TinyMCE via API if possible, else via iframe; fallback to textarea as last resort, then re-sync
+  // Fill via Html textarea only (avoid TinyMCE/iframes to prevent frame detaches)
   try {
-    // 1) Try API (tinymce/tinyMCE)
-    const apiUsed = await page.evaluate((html) => {
-      try {
-        const t1 = (window.tinymce && typeof window.tinymce.get === 'function') ? window.tinymce : null;
-        const t2 = (window.tinyMCE && typeof window.tinyMCE.get === 'function') ? window.tinyMCE : null;
-        const api = t1 || t2;
-        if (api) {
-          const ed = api.get('tinyMCEEditor');
-          if (ed && typeof ed.setContent === 'function') {
-            ed.setContent(html);
-            try { ed.fire && ed.fire('change'); } catch(_) {}
-            return 'api';
-          }
-        }
-      } catch(_) {}
-      return 'none';
+    // Ensure Html area is visible
+    await page.waitForFunction(() => {
+      const ta = document.querySelector('#htmlAreaDIV textarea#tinyMCEEditor') || document.querySelector('#htmlAreaDIV .mainTextarea, textarea#tinyMCEEditor');
+      if (!ta) return false;
+      const rect = ta.getBoundingClientRect();
+      const cs = window.getComputedStyle(ta);
+      return cs.display !== 'none' && cs.visibility !== 'hidden' && rect.height > 0 && rect.width > 0;
+    }, { timeout: 15000 });
+    const taSel = (await page.$('#htmlAreaDIV textarea#tinyMCEEditor')) ? '#htmlAreaDIV textarea#tinyMCEEditor' : (await page.$('#htmlAreaDIV .mainTextarea')) ? '#htmlAreaDIV .mainTextarea' : 'textarea#tinyMCEEditor';
+    await page.$eval(taSel, (el, val) => {
+      el.focus();
+      el.value = val;
+      const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
+      ev('input'); ev('change'); ev('keyup');
     }, cleanedContent);
-    if (apiUsed === 'api') { logLine('Filled via TinyMCE API'); }
-    else {
-      // 2) Prefer iframe (wait up to ~12s), then fallback to textarea
-      let iframeSel = '';
-      const iframeCandidates = ['iframe#tinyMCEEditor_ifr', 'iframe.tox-edit-area__iframe', '#htmlAreaDIV iframe'];
-      const start = Date.now();
-      while ((Date.now() - start) < 12000 && !iframeSel) {
-        for (const s of iframeCandidates) { if (await page.$(s)) { iframeSel = s; break; } }
-        if (!iframeSel) { await sleep(300); }
-      }
-      if (iframeSel) {
-        const fh = await page.$(iframeSel); const fr = await fh.contentFrame();
-        await fr.waitForSelector('body#tinymce, body', { timeout: 10000 });
-        await fr.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
-        logLine('Filled via iframe', { selector: iframeSel });
-      } else {
-        // 3) Fallback: textarea (hidden) + events
-        const taSel = (await page.$('textarea#tinyMCEEditor')) ? 'textarea#tinyMCEEditor' : 'textarea.mainTextarea';
-        await page.$eval(taSel, (el, val) => {
-          el.value = val;
-          const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
-          ev('input'); ev('change');
-        }, cleanedContent);
-        logLine('Filled via textarea', { selector: taSel });
-        // 4) Post-fallback: if iframe appears soon after, push content into it to ensure sync
-        await sleep(800);
-        for (let i=0; i<8; i++) {
-          for (const s of iframeCandidates) {
-            const h = await page.$(s);
-            if (h) {
-              const fr = await h.contentFrame();
-              try {
-                await fr.waitForSelector('body#tinymce, body', { timeout: 2000 });
-                await fr.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
-                logLine('Resynced via iframe after textarea', { selector: s });
-                i = 99; break;
-              } catch(_) {}
-            }
-          }
-          await sleep(250);
-        }
-      }
-    }
+    logLine('Filled via textarea', { selector: taSel });
   } catch (e) {
     logLine('Fill editor failed', { error: String(e && e.message || e) });
   }
@@ -243,16 +185,21 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
   async function doPublish() {
     const startUrl = page.url();
-    // Ensure button exists (robust to reflows)
-    for (let i=0; i<40; i++) {
-      const btn = await page.$('.editArticleBottomButtons .publishButton');
-      if (btn) break; await sleep(250);
-    }
-    // Click via DOM to avoid stale element/frame linkage
-    await page.evaluate(() => {
-      const btn = document.querySelector('.editArticleBottomButtons .publishButton');
-      if (btn) btn.click();
+    // Ensure button exists (robust to reflows) and click it via DOM
+    const clicked = await page.evaluate(() => {
+      const candidates = [
+        '.editArticleBottomButtons .publishButton',
+        '#editArticleWidget .publishButton',
+        '.publishButton',
+        'button.publishButton',
+        'a.publishButton'
+      ];
+      let btn = null;
+      for (const sel of candidates) { btn = document.querySelector(sel); if (btn) break; }
+      if (btn) { try { btn.scrollIntoView({block:'center'}); } catch(_) {} btn.click(); return true; }
+      return false;
     });
+    if (!clicked) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
     // Wait for URL change or navigation event (whichever comes first)
     try {
       await Promise.race([
@@ -269,14 +216,15 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   catch (e) {
     logLine('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
     try {
-      const htmlTabSelector = '.editArticleMiddle .tabsBar a';
-      const tabs = await page.$$(htmlTabSelector);
-      for (const t of tabs) {
-        const text = (await page.evaluate(el => (el.textContent || '').trim(), t)).toLowerCase();
-        if (text === 'editor' || text === 'html') { await t.click(); await sleep(150); }
-      }
+      await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
+        for (const t of tabs) {
+          const txt = (t.textContent||'').trim().toLowerCase();
+          if (txt === 'editor' || txt === 'html') t.click();
+        }
+      });
     } catch(_) {}
-    await sleep(300);
+    await sleep(400);
     await doPublish();
   }
 
