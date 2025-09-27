@@ -115,6 +115,8 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   const page = await browser.newPage();
   page.setDefaultTimeout(300000); page.setDefaultNavigationTimeout(300000);
   await page.goto('https://justpaste.it/', { waitUntil: 'networkidle2' });
+  // Log UA for diagnostics
+  try { const ua = await page.evaluate(() => navigator.userAgent); logLine('UA', { userAgent: ua }); } catch(_) {}
 
   // Try to locate the add article editor (supports Html tab)
   try { await page.waitForSelector('#editArticleWidget .tabsBar, .editArticleMiddle .tabsBar', { timeout: 15000 }); } catch(_) {}
@@ -194,6 +196,17 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     await page.keyboard.press('Tab').catch(()=>{});
     await sleep(200);
   } catch(_) {}
+  // Screenshot just before publish
+  async function takeScreenshot(label){
+    try {
+      const fname = `justpaste-${label}-${Date.now()}.png`;
+      const fpath = path.join(LOG_DIR, fname);
+      await page.screenshot({ path: fpath, fullPage: true });
+      logLine('Screenshot', { label, path: fpath, url: page.url() });
+      return fpath;
+    } catch (e) { logLine('Screenshot error', { label, error: String(e && e.message || e) }); return ''; }
+  }
+  await takeScreenshot('pre-publish');
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
   async function extractPublishedUrl() {
@@ -285,7 +298,10 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
     // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
     for (let attempt = 0; attempt < 3; attempt++) {
+      await takeScreenshot(`attempt${attempt+1}-pre-click`);
       await tryClick();
+      await sleep(350);
+      await takeScreenshot(`attempt${attempt+1}-post-click`);
       const t0 = Date.now();
       let found = null;
       while (Date.now() - t0 < 45000) { // 45s per attempt
@@ -333,6 +349,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     const last2 = await extractPublishedUrl();
     if (last2) publishedUrl = last2;
   }
+  await takeScreenshot('post-publish');
   // Try to load the article URL (to observe redirects/captcha)
   let requiresCaptcha = false; let captchaType = '';
   const detectCaptcha = async () => {
