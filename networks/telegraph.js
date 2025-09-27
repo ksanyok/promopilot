@@ -40,7 +40,7 @@ async function generateTextWithChat(prompt, opts) {
   }
 }
 
-async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish) {
+async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = {
     provider,
@@ -50,54 +50,42 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   };
   logLine('Publish start', { pageUrl, anchorText, language, provider });
 
+  const meta = pageMeta || {};
+  const pageLang = language || meta.lang || 'ru';
+  const topicTitle = (meta.title || '').toString().trim();
+  const topicDesc = (meta.description || '').toString().trim();
+  const region = (meta.region || '').toString().trim();
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
   const prompts = {
-    title: `Write a clear, specific article title in ${language} about: ${pageUrl}.\n` +
-           `Constraints: no quotes, no emojis, no markdown, no disclaimers about browsing; do not mention the URL; concise (6–12 words). If context is limited, infer a suitable general topic from the URL and the anchor "${anchorText}". Reply with the title only.`,
-    author: `Suggest a neutral human author's name in ${language}. One or two words.\n` +
+    title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
+      `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
+    author: `Предложи нейтральное имя автора на ${pageLang} (1–2 слова).\n` +
             `Constraints: reply with the name only (no extra words), no emojis, no quotes, no punctuation except spaces or hyphen.`,
     content:
-      `Write an article in ${language} (>=3000 characters) based on ${pageUrl}.${extraNote}\n` +
-      `Hard requirements:\n` +
-      `- Integrate exactly one active link with the anchor text "${anchorText}" as <a href="${pageUrl}">${anchorText}</a> naturally in the first half of the article.\n` +
-      `- Output must be simple HTML only using <p> for paragraphs and <h2> for subheadings. No other tags, no markdown, no code blocks.\n` +
-      `- Keep it informative with 3–5 sections and a short conclusion.\n` +
-      `- Do not include any other links or URLs.\n` +
-      `- Do not mention limitations (e.g., browsing), and do not include analysis or commentary about the instructions. Output the article body only.`
+      `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
+      `Требования:\n` +
+      `- Ровно одна активная ссылка с анкором "${anchorText}" как <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
+      `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.\n` +
+      `- 3–5 смысловых секций и короткое заключение.\n` +
+      `- Больше никаких ссылок или URL.\n` +
+      `Ответь только телом статьи.`
   };
   logLine('Prompts prepared');
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Return only the final article title. No quotes, no emojis, no markdown, no analysis. No explanations.' });
+  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек, эмодзи и пояснений.' });
   await sleep(1000);
-  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Return only the author name (1-2 words). No quotes, no emojis, no extra text.' });
+  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.' });
   await sleep(1000);
-  const content = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Return only the article body as simple HTML (<p>, <h2> only). No markdown, no analysis, no explanations.' });
+  const content = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.' });
 
-  // Light sanitization for title/author to avoid Analysis/Response leakages and emojis
-  const sanitize = (s) => String(s || '')
-    .replace(/^[#>*_\-\s]+/g,'')
-    .replace(/^\s*(analysis|response)\s*[:：-]+\s*/i,'')
-    .replace(/[\r\n]+/g,' ')
-    .trim();
-  const stripEmoji = (s) => String(s||'').replace(/[\u{1F000}-\u{1FFFF}]/gu, '');
-  const looksLikeDisclaimer = (s) => /\b(не могу|cannot|i\s*can\'?t|can\'?t)\b/i.test(String(s||''));
-  let title = stripEmoji(sanitize(rawTitle)).replace(/[\"']/g, '').trim();
-  let author = stripEmoji(sanitize(rawAuthor)).replace(/[^\p{L}\s\-]+/gu, '').trim();
-  if (!title || looksLikeDisclaimer(title) || title.length > 120) {
-    try {
-      const fallbackTitlePrompt = `Кратко и конкретно сформулируй заголовок (${language}) по теме: ${anchorText}. Без кавычек, без эмодзи, 6–12 слов. Ответь только заголовком.`;
-      const t2 = await generateTextWithChat(fallbackTitlePrompt, { ...aiOpts, systemPrompt: 'Только заголовок. Без кавычек, без эмодзи, без пояснений.' });
-      title = stripEmoji(sanitize(t2)).replace(/[\"']/g, '').trim() || title || 'Untitled';
-    } catch(_) {}
-  }
-  if (!author || /\s/.test(author) && author.split(/\s+/).length > 3 || /analysis|response/i.test(author)) {
-    author = language && /^ru/i.test(language) ? 'Саша Тихий' : 'Alex Kim';
-  }
-  if (!title) title = 'Untitled';
-  if (!author) author = 'PromoPilot';
+  // Minimal cleanup + fallbacks
+  let title = String(rawTitle || '').replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
+  let author = String(rawAuthor || '').replace(/["'«»]/g, '').trim();
+  if (!title) title = anchorText;
+  if (!author) author = /^ru/i.test(pageLang) ? 'Саша Тихий' : 'Alex Kim';
 
   // Launch browser and publish
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
@@ -129,13 +117,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   // Click into the content area to ensure editor is initialized
   await page.waitForSelector('p[data-placeholder="Your story..."]');
   await page.click('p[data-placeholder="Your story..."]');
-  const cleanedContent = (() => {
-    let s = String(content || '');
-    // Drop obvious analysis/disclaimer paragraphs if present
-    s = s.replace(/<h1[^>]*>.*?(analysis|response).*?<\/h1>/is, '');
-    s = s.replace(/<p[^>]*>[^<]*(Я не могу открывать веб[\u2011\u2013\-]страницы|I cannot open web pages)[^<]*<\/p>/i, '');
-    return s.trim();
-  })();
+  const cleanedContent = String(content || '').trim();
   await page.evaluate((html) => {
     const root = document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('.tl_article_content .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
@@ -194,7 +176,7 @@ if (require.main === module) {
         process.exit(1);
       }
 
-      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish);
+  const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(0);
