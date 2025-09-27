@@ -138,7 +138,16 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
   await page.click('h1[data-placeholder="Title"]'); // small nudge to ensure editor initialized
-  const cleanedContent = String(content || '').trim();
+  let cleanedContent = String(content || '').trim();
+  // Content: drop a single leading heading (h1/h2/h3) if present to avoid Telegraph mistaking it as page title
+  try {
+    const before = cleanedContent;
+    const after = before.replace(/^[\s\uFEFF\xA0]*<h[1-3][^>]*>.*?<\/h[1-3]>\s*/is, '');
+    if (after !== before) {
+      cleanedContent = after;
+      logLine('Content normalized', { removedLeadingHeading: true });
+    }
+  } catch(_) {}
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
     if (root) {
@@ -152,18 +161,41 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     }
   }, cleanedContent);
 
-  // Verify fields and re-type if needed (best-effort)
-  const ensureField = async (selector, value) => {
+  // Force-set fields to exact values and verify read-back
+  const forceSetEditable = async (selector, value) => {
     try {
-      const current = await page.$eval(selector, el => (el.innerText || '').trim());
-      if (!current) {
-        await page.click(selector);
-        await page.keyboard.type(value, { delay: 10 });
-      }
-    } catch (_) {}
+      await page.focus(selector);
+      // Try select-all via Ctrl/Cmd+A then replace
+      try { await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control'); } catch(_) {}
+      try { await page.keyboard.down('Meta'); await page.keyboard.press('KeyA'); await page.keyboard.up('Meta'); } catch(_) {}
+      await page.keyboard.press('Backspace');
+      await page.keyboard.type(value, { delay: 10 });
+      // Fallback: set via DOM and dispatch input
+      const ok = await page.$eval(selector, (el, val) => {
+        const txt = (el.innerText||'').trim();
+        if (txt !== val) {
+          try {
+            el.textContent = val;
+            el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+            return true;
+          } catch { return false; }
+        }
+        return true;
+      }, value);
+      return ok;
+    } catch (e) {
+      logLine('forceSetEditable error', { selector, error: String(e && e.message || e) });
+      return false;
+    }
   };
-  await ensureField('h1[data-placeholder="Title"]', title);
-  await ensureField('address[data-placeholder="Your name"]', author);
+  await forceSetEditable('h1[data-placeholder="Title"]', title);
+  await forceSetEditable('address[data-placeholder="Your name"]', author);
+  // Read back for logs
+  try {
+    const rbTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText||'').trim());
+    const rbAuthor = await page.$eval('address[data-placeholder="Your name"]', el => (el.innerText||'').trim());
+    logLine('Readback', { title: rbTitle, author: rbAuthor });
+  } catch(_) {}
 
   logLine('Publish click');
   await Promise.all([
@@ -178,6 +210,15 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
 }
 
+    // Content: drop a single leading heading (h1/h2/h3) if present to avoid confusion like "Введение" becoming perceived title
+    try {
+      const before = cleanedContent;
+      const after = before.replace(/^[\s\uFEFF\xA0]*<h[1-3][^>]*>.*?<\/h[1-3]>\s*/is, '');
+      if (after !== before) {
+        cleanedContent = after;
+        logLine('Content normalized', { removedLeadingHeading: true });
+      }
+    } catch(_) {}
 module.exports = { publish: publishToTelegraph };
 
 // CLI entrypoint for PromoPilot runner (reads PP_JOB from env)
