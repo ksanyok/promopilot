@@ -50,6 +50,55 @@ function extractAttr(tagHtml, attr) {
   return m ? m[2] : '';
 }
 
+// Выделяет финальный ответ из типового вывода Space с блоками Analysis/Response
+function extractFinalAnswer(raw){
+  let t = String(raw || '').trim();
+  if (!t) return '';
+  // Попробуем взять часть после последнего "Response:" (с учётом эмодзи/markdown, без глобальных RegExp)
+  const lc = t.toLowerCase();
+  const rKey = 'response:';
+  let pos = lc.lastIndexOf(rKey);
+  if (pos !== -1) {
+    t = t.slice(pos + rKey.length).trim();
+  } else {
+    // Уберём очевидные заголовки аналитики
+    t = t.replace(/^\s{0,3}[*_]{0,3}\s*[*_]{0,3}\s*[^\n\r]{0,40}analysis\s*:\s*.*$/gim, '').trim();
+  }
+  // Сносим частые разделители
+  t = t.replace(/^(?:[-*_]{3,}\s*)+/gmi, '').trim();
+  return t;
+}
+
+function normalizeTitle(raw){
+  let t = extractFinalAnswer(raw);
+  t = stripTags(t);
+  // Берём первую строку
+  t = t.split(/\r?\n/)[0] || '';
+  // Убираем markdown-маркировки и кавычки
+  t = t.replace(/^#+\s*/,'').replace(/[*_`~]+/g,'').replace(/["'«»“”„]+/g,'');
+  // Убираем точку в конце и обрезаем длину
+  t = t.replace(/[.。]+$/,'').trim();
+  if (!t) t = 'Untitled';
+  if (t.length > 140) t = t.slice(0, 140);
+  return t;
+}
+
+function normalizeAuthor(raw){
+  let a = extractFinalAnswer(raw);
+  a = stripTags(a).split(/\r?\n/)[0] || '';
+  a = a.replace(/["'«»“”„]+/g,'').trim();
+  // Оставляем буквы/пробел/дефис
+  a = a.replace(/[^A-Za-zА-Яа-яЁё\s\-]/g, '').replace(/\s{2,}/g,' ').trim();
+  if (!a) a = 'PromoPilot';
+  if (a.length > 40) a = a.slice(0, 40);
+  return a;
+}
+
+function normalizeContent(raw){
+  let c = extractFinalAnswer(raw);
+  return String(c || '').trim();
+}
+
 async function extractPageMeta(url) {
   logLine('Fetch page for meta', { url });
   try {
@@ -194,8 +243,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await sleep(1500);
   let rawContent = await generateTextWithChat(prompts.content, { ...aiOptionsBase, temperature: 0.8 });
 
-  const title = cleanTitle(rawTitle);
-  const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
+  // Новая нормализация от «болтовни» модели
+  const title = normalizeTitle(rawTitle);
+  const author = normalizeAuthor(rawAuthor);
   logLine('Generated', { title, author, contentLen: String(rawContent || '').length });
 
   // Если ИИ не сгенерировал контент — не тратим время на браузер
@@ -204,8 +254,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     throw new Error(err);
   }
 
-  // Basic content cleanup and link normalization
-  let content = String(rawContent || '').trim();
+  // Очистка контента
+  let content = normalizeContent(rawContent);
   // Remove disallowed tags
   content = content.replace(/<(?!\/?(p|h2|ul|li|a|strong|em|blockquote)\b)[^>]*>/gi, '');
   // Wrap free text lines into <p> if no tags present
