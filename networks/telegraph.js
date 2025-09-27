@@ -61,10 +61,12 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     content:
       `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
       `Требования:\n` +
-      `- Ровно одна активная ссылка с анкором "${anchorText}" как <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
+      `- Ровно две активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
+      `  1) Ссылка на наш URL с анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
+      `  2) Ссылка на авторитетный внешний источник (например, Wikipedia/Encyclopedia/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en, если нет подходящей локали). Естественный анкор.\n` +
       `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.\n` +
       `- 3–5 смысловых секций и короткое заключение.\n` +
-      `- Больше никаких ссылок или URL.\n` +
+      `- Кроме указанных двух ссылок — никаких иных ссылок или URL.\n` +
       `Ответь только телом статьи.`
   };
   logLine('Prompts prepared');
@@ -152,6 +154,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     s = s.replace(/<\/(?:ul|ol)>/gi, '').replace(/<(?:ul|ol)[^>]*>/gi, '');
     // Normalize paragraph bullets if present
     s = s.replace(/<p([^>]*)>\s*[-–—•∙·]\s+(.*?)<\/p>/gi, '<p$1>— $2</p>');
+    // Drop empty paragraphs (only <br> or whitespace)
+    s = s.replace(/<p[^>]*>(?:\s|<br[^>]*>)*<\/p>/gi, '');
     return s;
   }
   const cleanedContent = normalizeContent(String(content || ''));
