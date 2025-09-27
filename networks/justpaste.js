@@ -167,39 +167,66 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     throw new Error('none of selectors appeared: ' + selectors.join(', '));
   }
 
-  // Fill TinyMCE via API if possible, else via iframe/textarea
+  // Fill TinyMCE via API if possible, else via iframe; fallback to textarea as last resort, then re-sync
   try {
-    const used = await page.evaluate((html) => {
+    // 1) Try API (tinymce/tinyMCE)
+    const apiUsed = await page.evaluate((html) => {
       try {
-        if (window.tinymce && typeof window.tinymce.get === 'function') {
-          const ed = window.tinymce.get('tinyMCEEditor');
-          if (ed) { ed.setContent(html); ed.fire('change'); return 'tinymce'; }
+        const t1 = (window.tinymce && typeof window.tinymce.get === 'function') ? window.tinymce : null;
+        const t2 = (window.tinyMCE && typeof window.tinyMCE.get === 'function') ? window.tinyMCE : null;
+        const api = t1 || t2;
+        if (api) {
+          const ed = api.get('tinyMCEEditor');
+          if (ed && typeof ed.setContent === 'function') {
+            ed.setContent(html);
+            try { ed.fire && ed.fire('change'); } catch(_) {}
+            return 'api';
+          }
         }
       } catch(_) {}
       return 'none';
     }, cleanedContent);
-    if (used === 'tinymce') { logLine('Filled via TinyMCE API'); }
+    if (apiUsed === 'api') { logLine('Filled via TinyMCE API'); }
     else {
-      const editorSelector = await waitForAny(page, [
-        'iframe#tinyMCEEditor_ifr',
-        'iframe.tox-edit-area__iframe',
-        '#htmlAreaDIV iframe',
-        'textarea#tinyMCEEditor',
-        'textarea.mainTextarea'
-      ], 25000, 300);
-      if (editorSelector.includes('iframe')) {
-        const frameHandle = await page.$(editorSelector);
-        const frame = await frameHandle.contentFrame();
-        await frame.waitForSelector('body#tinymce, body', { timeout: 10000 });
-        await frame.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
-        logLine('Filled via iframe', { selector: editorSelector });
+      // 2) Prefer iframe (wait up to ~12s), then fallback to textarea
+      let iframeSel = '';
+      const iframeCandidates = ['iframe#tinyMCEEditor_ifr', 'iframe.tox-edit-area__iframe', '#htmlAreaDIV iframe'];
+      const start = Date.now();
+      while ((Date.now() - start) < 12000 && !iframeSel) {
+        for (const s of iframeCandidates) { if (await page.$(s)) { iframeSel = s; break; } }
+        if (!iframeSel) { await sleep(300); }
+      }
+      if (iframeSel) {
+        const fh = await page.$(iframeSel); const fr = await fh.contentFrame();
+        await fr.waitForSelector('body#tinymce, body', { timeout: 10000 });
+        await fr.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
+        logLine('Filled via iframe', { selector: iframeSel });
       } else {
-        await page.$eval(editorSelector, (el, val) => {
+        // 3) Fallback: textarea (hidden) + events
+        const taSel = (await page.$('textarea#tinyMCEEditor')) ? 'textarea#tinyMCEEditor' : 'textarea.mainTextarea';
+        await page.$eval(taSel, (el, val) => {
           el.value = val;
           const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
           ev('input'); ev('change');
         }, cleanedContent);
-        logLine('Filled via textarea', { selector: editorSelector });
+        logLine('Filled via textarea', { selector: taSel });
+        // 4) Post-fallback: if iframe appears soon after, push content into it to ensure sync
+        await sleep(800);
+        for (let i=0; i<8; i++) {
+          for (const s of iframeCandidates) {
+            const h = await page.$(s);
+            if (h) {
+              const fr = await h.contentFrame();
+              try {
+                await fr.waitForSelector('body#tinymce, body', { timeout: 2000 });
+                await fr.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
+                logLine('Resynced via iframe after textarea', { selector: s });
+                i = 99; break;
+              } catch(_) {}
+            }
+          }
+          await sleep(250);
+        }
       }
     }
   } catch (e) {
