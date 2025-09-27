@@ -172,7 +172,7 @@ function buildDataArray(paramNames, payload) {
 
 async function generateWithBYOA(prompt, opts = {}) {
   const base = resolveSpaceBaseUrl(
-    opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || ''
+    opts.byoaBaseUrl || process.env.PP_BYOA_BASE_URL || opts.byoaModel || process.env.PP_BYOA_MODEL || 'amd/gpt-oss-120b-chatbot'
   );
   if (!base) throw new Error('BYOA base URL/model is missing');
   const endpoint = String(opts.byoaEndpoint || process.env.PP_BYOA_ENDPOINT || '/chat');
@@ -211,7 +211,6 @@ async function generateWithBYOA(prompt, opts = {}) {
       lastErr = new Error(`BYOA empty response at ${att.url}`);
     } catch (e) {
       lastErr = e;
-      // For 404/405/422 try next; for 500 also try next; otherwise keep trying
       continue;
     }
   }

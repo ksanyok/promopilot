@@ -504,15 +504,8 @@ $diagnostics = [
                 <div class="form-text"><?php echo __('Выберите недорогую модель. Можно указать произвольную строку модели.'); ?></div>
             </div>
 
-            <div class="col-md-6 d-none" id="byoaFields">
-                <label class="form-label"><?php echo __('Свой ИИ (Hugging Face Space)'); ?></label>
-                <input type="text" name="byoa_base_url" class="form-control mb-2" value="<?php echo htmlspecialchars($settings['byoa_base_url']); ?>" placeholder="owner/space или https://owner-space.hf.space">
-                <div class="input-group">
-                    <span class="input-group-text"><?php echo __('Endpoint'); ?></span>
-                    <input type="text" name="byoa_endpoint" class="form-control" value="<?php echo htmlspecialchars($settings['byoa_endpoint']); ?>" placeholder="/chat">
-                </div>
-                <div class="form-text"><?php echo __('Укажите Space (в формате owner/space или полный URL) и имя эндпоинта (обычно /chat).'); ?></div>
-            </div>
+            <!-- Removed BYOA fields: BYOA uses built-in defaults, no inputs required in admin -->
+            <!-- <div class="col-md-6 d-none" id="byoaFields"> ... </div> -->
 
             <div class="col-md-6">
                 <label class="form-label"><?php echo __('Google OAuth'); ?></label>
@@ -598,13 +591,13 @@ $diagnostics = [
 
 <script>
 (function(){
-  // Toggle provider-specific fields
+  // Toggle provider-specific fields (BYOA: nothing to show)
   const openai = document.getElementById('openaiFields');
   const byoa = document.getElementById('byoaFields');
   function apply(){
     const val = document.querySelector('input[name="ai_provider"]:checked')?.value || 'openai';
-    if (val === 'openai') { openai?.classList.remove('d-none'); byoa?.classList.add('d-none'); }
-    else { byoa?.classList.remove('d-none'); openai?.classList.add('d-none'); }
+    if (val === 'openai') { openai?.classList.remove('d-none'); }
+    else { openai?.classList.add('d-none'); }
   }
   document.querySelectorAll('input[name="ai_provider"]').forEach(r => r.addEventListener('change', apply));
   apply();
