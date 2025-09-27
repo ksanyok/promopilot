@@ -130,33 +130,85 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     const htmlTabSelector = '.editArticleMiddle .tabsBar a';
     await page.waitForSelector(htmlTabSelector, { timeout: 15000 });
     const tabs = await page.$$(htmlTabSelector);
+    let switched = false;
     for (const t of tabs) {
-      const text = (await page.evaluate(el => (el.innerText || '').trim(), t)).toLowerCase();
-      if (text === 'html') { await t.click(); break; }
+      const text = (await page.evaluate(el => (el.textContent || '').trim(), t)).toLowerCase();
+      if (text === 'html') { await t.click(); switched = true; break; }
     }
+    if (!switched && tabs.length > 1) { await tabs[tabs.length-1].click(); }
+    await page.waitForTimeout(400); // tiny delay for TinyMCE to init
   } catch (e) { logLine('Switch tab error', { error: String(e && e.message || e) }); }
 
-  // Fill TinyMCE via iframe body#tinymce
-  try {
-    await page.waitForSelector('iframe#tinyMCEEditor_ifr', { timeout: 20000 });
-    const frameHandle = await page.$('iframe#tinyMCEEditor_ifr');
-    const frame = await frameHandle.contentFrame();
-    await frame.waitForSelector('body#tinymce', { timeout: 10000 });
-    await frame.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
-  } catch (e) {
-    logLine('Fill editor via iframe failed, fallback to textarea', { error: String(e && e.message || e) });
-    try {
-      await page.waitForSelector('textarea#tinyMCEEditor, textarea.mainTextarea', { timeout: 10000 });
-      await page.$eval('textarea#tinyMCEEditor, textarea.mainTextarea', (el, val) => { el.value = val; }, cleanedContent);
-    } catch (e2) { logLine('Fallback textarea failed', { error: String(e2 && e2.message || e2) }); }
+  // Helper: wait for any of selectors
+  async function waitForAny(page, selectors, totalTimeout = 20000, poll = 300) {
+    const start = Date.now();
+    while ((Date.now() - start) < totalTimeout) {
+      for (const sel of selectors) {
+        const h = await page.$(sel);
+        if (h) return sel;
+      }
+      await page.waitForTimeout(poll);
+    }
+    throw new Error('none of selectors appeared: ' + selectors.join(', '));
   }
 
-  // Click Publish button
-  await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 15000 });
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle2' }),
-    page.click('.editArticleBottomButtons .publishButton')
-  ]);
+  // Fill TinyMCE via iframe or fallback to textarea
+  try {
+    const editorSelector = await waitForAny(page, [
+      'iframe#tinyMCEEditor_ifr',
+      'iframe.tox-edit-area__iframe',
+      '#htmlAreaDIV iframe',
+      'textarea#tinyMCEEditor',
+      'textarea.mainTextarea'
+    ], 25000, 300);
+
+    if (editorSelector.includes('iframe')) {
+      const frameHandle = await page.$(editorSelector);
+      const frame = await frameHandle.contentFrame();
+      await frame.waitForSelector('body#tinymce, body', { timeout: 10000 });
+      await frame.evaluate((html) => { document.body.innerHTML = html; }, cleanedContent);
+      logLine('Filled via iframe', { selector: editorSelector });
+    } else {
+      await page.$eval(editorSelector, (el, val) => {
+        el.value = val;
+        const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
+        ev('input'); ev('change');
+      }, cleanedContent);
+      logLine('Filled via textarea', { selector: editorSelector });
+    }
+  } catch (e) {
+    logLine('Fill editor failed', { error: String(e && e.message || e) });
+  }
+
+  // Ensure editor change is registered
+  try {
+    await page.focus('.editArticleMiddle input.titleInput');
+    await page.keyboard.press('Tab').catch(()=>{});
+    await page.waitForTimeout(200);
+  } catch(_) {}
+
+  // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
+  async function doPublish() {
+    await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 20000 });
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      page.click('.editArticleBottomButtons .publishButton')
+    ]);
+  }
+  try { await doPublish(); }
+  catch (e) {
+    logLine('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
+    try {
+      const htmlTabSelector = '.editArticleMiddle .tabsBar a';
+      const tabs = await page.$$(htmlTabSelector);
+      for (const t of tabs) {
+        const text = (await page.evaluate(el => (el.textContent || '').trim(), t)).toLowerCase();
+        if (text === 'editor' || text === 'html') { await t.click(); await page.waitForTimeout(150); }
+      }
+    } catch(_) {}
+    await page.waitForTimeout(300);
+    await doPublish();
+  }
 
   const publishedUrl = page.url();
   logLine('Published', { publishedUrl });
