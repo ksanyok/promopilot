@@ -142,8 +142,13 @@ async function generateText(prompt, opts = {}) {
   const raw = provider === 'byoa' ? await generateWithBYOA(prompt, opts) : await generateWithOpenAI(prompt, opts);
   if (opts && opts.keepRaw) { return raw; }
   const cleaned = cleanLLMOutput(raw);
-  log('AI cleaned', { inLen: String(raw||'').length, outLen: String(cleaned||'').length });
+  log('AI cleaned', {
+    inLen: String(raw||'').length,
+    outLen: String(cleaned||'').length,
+    inPrev: String(raw||'').slice(0,160),
+    outPrev: String(cleaned||'').slice(0,160)
+  });
   return cleaned;
 }
 
-module.exports = { generateText, generateWithOpenAI, generateWithBYOA };
+module.exports = { generateText, generateWithOpenAI, generateWithBYOA, cleanLLMOutput };

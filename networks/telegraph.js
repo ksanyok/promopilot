@@ -75,15 +75,26 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек, эмодзи и пояснений.' });
+  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек, эмодзи и пояснений.', keepRaw: true });
   await sleep(1000);
-  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.' });
+  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.', keepRaw: true });
   await sleep(1000);
-  const content = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.' });
+  const rawContent = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.', keepRaw: true });
+
+  // Clean via global cleaner (mirrors ai_client behavior) for debug visibility
+  const { cleanLLMOutput } = require('./ai_client');
+  const titleClean = cleanLLMOutput(rawTitle);
+  const authorClean = cleanLLMOutput(rawAuthor);
+  const content = cleanLLMOutput(rawContent);
+  logLine('AI raw/clean', {
+    title: { rawPrev: String(rawTitle||'').slice(0,120), cleanPrev: String(titleClean||'').slice(0,120) },
+    author: { rawPrev: String(rawAuthor||'').slice(0,120), cleanPrev: String(authorClean||'').slice(0,120) },
+    content: { rawPrev: String(rawContent||'').slice(0,120), cleanPrev: String(content||'').slice(0,120) }
+  });
 
   // Minimal cleanup only (global cleanup happens in ai_client)
-  let title = String(rawTitle || '').replace(/^\s*[\"'«»]+|[\"'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
-  let author = String(rawAuthor || '').replace(/[\"'«»]/g, '').trim();
+  let title = String(titleClean || '').replace(/^\s*[\"'«»]+|[\"'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
+  let author = String(authorClean || '').replace(/[\"'«»]/g, '').trim();
   if (author) author = author.split(/\s+/).slice(0,2).join(' ');
   // Minimal fallbacks (no hardcoded names):
   if (!title || title.replace(/[*_\-\s]+/g,'') === '') {
