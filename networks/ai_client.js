@@ -208,6 +208,61 @@ function extractLastJson(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
+function firstNonEmptyString(arr) {
+  if (!Array.isArray(arr)) return '';
+  for (const v of arr) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (v && typeof v === 'object') {
+      const s = extractTextFromAny(v);
+      if (s) return s;
+    }
+  }
+  return '';
+}
+
+function extractTextFromAny(obj) {
+  // Accept common shapes from Gradio results
+  if (typeof obj === 'string') return obj.trim();
+  if (!obj || typeof obj !== 'object') return '';
+
+  // Direct fields
+  if (typeof obj.response === 'string' && obj.response.trim()) return obj.response.trim();
+  if (typeof obj.text === 'string' && obj.text.trim()) return obj.text.trim();
+  if (typeof obj.generated_text === 'string' && obj.generated_text.trim()) return obj.generated_text.trim();
+
+  // Arrays in known keys
+  if (Array.isArray(obj.data)) {
+    const s = firstNonEmptyString(obj.data);
+    if (s) return s;
+  }
+  if (obj.output && Array.isArray(obj.output.data)) {
+    const s = firstNonEmptyString(obj.output.data);
+    if (s) return s;
+  }
+  if (obj.result && Array.isArray(obj.result.data)) {
+    const s = firstNonEmptyString(obj.result.data);
+    if (s) return s;
+  }
+
+  // Nested response fields
+  if (obj.data && typeof obj.data === 'object') {
+    const s1 = extractTextFromAny(obj.data);
+    if (s1) return s1;
+  }
+  if (obj.output && typeof obj.output === 'object') {
+    const s2 = extractTextFromAny(obj.output);
+    if (s2) return s2;
+  }
+
+  // If it's an array-like object with 0 index
+  if (obj[0] !== undefined) {
+    const s = extractTextFromAny(obj[0]);
+    if (s) return s;
+  }
+
+  return '';
+}
+
 async function predictViaGradioApi(base, endpoint, dataArray) {
   const ep = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   const postUrl = `${base}/gradio_api/call/${ep}`;
@@ -230,11 +285,10 @@ async function predictViaGradioApi(base, endpoint, dataArray) {
     throw new Error(`BYOA GET ${res2.status} at ${getUrl}: ${body2.slice(0,300)}`);
   }
   const obj = extractLastJson(body2) || {};
-  const arr = obj.data || obj;
-  const text = Array.isArray(arr) ? arr[0] : (arr && (arr.response ?? arr.__raw ?? arr) || '');
+  const text = extractTextFromAny(obj);
   const s = String(text || '').trim();
-  if (s) return s;
-  throw new Error(`BYOA: empty result from ${getUrl}`);
+  if (s && s !== '[object Object]') return s;
+  throw new Error(`BYOA: empty or invalid result from ${getUrl}`);
 }
 
 async function generateWithBYOA(prompt, opts = {}) {
@@ -278,10 +332,9 @@ async function generateWithBYOA(prompt, opts = {}) {
   for (const att of attempts) {
     try {
       const out = await tryPostJson(att.url, att.body);
-      const d = out && (out.data || out);
-      const text = Array.isArray(d) ? d[0] : (d && (d.response ?? d.__raw ?? d) || '');
+      const text = extractTextFromAny(out);
       const s = String(text || '').trim();
-      if (s) return s;
+      if (s && s !== '[object Object]') return s;
       lastErr = new Error(`BYOA empty response at ${att.url}`);
     } catch (e) {
       lastErr = e;
