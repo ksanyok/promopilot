@@ -16,9 +16,7 @@ require_once __DIR__ . '/../includes/init.php';
 header('Content-Type: application/json; charset=utf-8');
 header('Connection: close');
 
-@set_time_limit(600);
-
-ob_start();
+ignore_user_abort(true);
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -178,7 +176,7 @@ if ($action === 'publish') {
         'waitBetweenCallsMs' => 5000,
     ];
 
-    $result = pp_publish_via_network($network, $job, 600);
+    $result = pp_publish_via_network($network, $job, 300);
     if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
         $del = $conn->prepare("DELETE FROM publications WHERE id = ? LIMIT 1");
         if ($del) {
@@ -208,7 +206,6 @@ if ($action === 'publish') {
         $json = json_encode($payload);
         header('Content-Length: ' . strlen($json));
         echo $json;
-        ob_end_flush();
         flush();
         exit;
     }
@@ -247,7 +244,6 @@ if ($action === 'publish') {
     $json = json_encode($response);
     header('Content-Length: ' . strlen($json));
     echo $json;
-    ob_end_flush();
     flush();
     exit;
 } elseif ($action === 'cancel') {
