@@ -18,6 +18,7 @@ $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'
 // Extend settings keys: AI provider and Google OAuth
 $settingsKeys = array_merge($settingsKeys, [
     'ai_provider',              // openai | byoa
+    'openai_model',             // selected OpenAI model
     'google_oauth_enabled',     // 0/1
     'google_client_id',
     'google_client_secret',
@@ -31,6 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
             if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
             $openai = trim((string)($_POST['openai_api_key'] ?? ''));
+            $openaiModel = trim((string)($_POST['openai_model'] ?? 'gpt-3.5-turbo'));
             $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
             $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
 
@@ -45,6 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pairs = [
                 ['currency', $currency],
                 ['openai_api_key', $openai],
+                ['openai_model', $openaiModel],
                 ['telegram_token', $tgToken],
                 ['telegram_channel', $tgChannel],
                 ['ai_provider', $aiProvider],
@@ -135,6 +138,7 @@ $settings = ['currency' => 'RUB', 'openai_api_key' => '', 'telegram_token' => ''
 // Defaults for new settings
 $settings += [
     'ai_provider' => $settings['ai_provider'] ?? 'openai',
+    'openai_model' => $settings['openai_model'] ?? 'gpt-3.5-turbo',
     'google_oauth_enabled' => $settings['google_oauth_enabled'] ?? '0',
     'google_client_id' => $settings['google_client_id'] ?? '',
     'google_client_secret' => $settings['google_client_secret'] ?? '',
@@ -446,9 +450,9 @@ $diagnostics = [
                 </div>
                 <div class="form-text"><?php echo __('Выберите источник генерации. Для OpenAI укажите API ключ ниже.'); ?></div>
             </div>
-            <div class="col-md-6">
+            <div class="col-md-6" id="openaiFields">
                 <label class="form-label">OpenAI API Key</label>
-                <div class="input-group">
+                <div class="input-group mb-2">
                     <input type="text" name="openai_api_key" class="form-control" id="openaiApiKeyInput" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
                     <button type="button" class="btn btn-outline-secondary" id="checkOpenAiKey" data-check-url="<?php echo pp_url('public/check_openai.php'); ?>">
                         <i class="bi bi-shield-check me-1"></i><?php echo __('Проверить'); ?>
@@ -467,6 +471,28 @@ $diagnostics = [
                      data-connection="<?php echo htmlspecialchars(__('Не удалось соединиться с OpenAI.')); ?>"
                      data-checking-short="<?php echo htmlspecialchars(__('Проверка...')); ?>"
                 ></div>
+
+                <label class="form-label mt-3"><?php echo __('Модель OpenAI'); ?></label>
+                <select name="openai_model" class="form-select form-control" id="openaiModelSelect">
+                    <?php
+                    $suggested = [
+                        'gpt-3.5-turbo' => 'gpt-3.5-turbo',
+                        'gpt-4o-mini' => 'gpt-4o-mini',
+                        'gpt-4o-mini-translate' => 'gpt-4o-mini-translate',
+                        'gpt-5-mini' => 'gpt-5-mini',
+                        'gpt-5-nano' => 'gpt-5-nano',
+                    ];
+                    $selModel = $settings['openai_model'] ?? 'gpt-3.5-turbo';
+                    foreach ($suggested as $val => $label) {
+                        $sel = ($selModel === $val) ? 'selected' : '';
+                        echo '<option value="' . htmlspecialchars($val) . '" ' . $sel . '>' . htmlspecialchars($label) . '</option>';
+                    }
+                    if (!isset($suggested[$selModel])) {
+                        echo '<option value="' . htmlspecialchars($selModel) . '" selected>' . htmlspecialchars($selModel) . '</option>';
+                    }
+                    ?>
+                </select>
+                <div class="form-text"><?php echo __('Выберите недорогую модель. Можно указать произвольную строку модели.'); ?></div>
             </div>
 
             <div class="col-md-6">
@@ -548,6 +574,24 @@ $diagnostics = [
   if (openBtn) openBtn.addEventListener('click', open);
   modal?.addEventListener('click', function(e){ if (e.target === modal || e.target.closest('[data-pp-close]')) close(); });
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && modal.classList.contains('show')) close(); });
+})();
+</script>
+
+<script>
+(function(){
+  // Toggle OpenAI fields by provider selection
+  const fields = document.getElementById('openaiFields');
+  const radios = document.querySelectorAll('input[name="ai_provider"]');
+  function apply(){
+    const val = document.querySelector('input[name="ai_provider"]:checked')?.value || 'openai';
+    if (val === 'openai') {
+      fields?.classList.remove('d-none');
+    } else {
+      fields?.classList.add('d-none');
+    }
+  }
+  radios.forEach(r => r.addEventListener('change', apply));
+  apply();
 })();
 </script>
 

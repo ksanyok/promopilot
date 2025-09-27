@@ -140,8 +140,13 @@ if ($action === 'publish') {
         echo json_encode(['ok'=>false,'error'=>'NO_ENABLED_NETWORKS']);
         exit;
     }
+
+    // Determine AI provider from settings
+    $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
+
     $openaiKey = trim((string)get_setting('openai_api_key', ''));
-    if ($openaiKey === '') {
+    $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
+    if ($aiProvider === 'openai' && $openaiKey === '') {
         $conn->close();
         echo json_encode(['ok'=>false,'error'=>'MISSING_OPENAI_KEY']);
         exit;
@@ -167,6 +172,8 @@ if ($action === 'publish') {
         'projectId' => $project_id,
         'projectName' => $projectName,
         'openaiApiKey' => $openaiKey,
+        'openaiModel' => $openaiModel,
+        'aiProvider' => $aiProvider,
         'waitBetweenCallsMs' => 5000,
     ];
 

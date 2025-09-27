@@ -1,7 +1,7 @@
 'use strict';
 
 // Minimal, clean implementation for Telegraph publishing
-// - Generates title, author, and article via OpenAI (gpt-3.5-turbo)
+// - Generates title, author, and article via AI provider (OpenAI or BYOA)
 // - Collects microdata/SEO from the target page to guide content
 // - Uses one organic inline link to the target URL
 // - Uses <h2> subheadings as requested
@@ -10,6 +10,7 @@ const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const { generateText } = require('./ai_client');
 
 // Simple file logger similar to previous implementation
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -18,43 +19,29 @@ const LOG_FILE = process.env.PP_LOG_FILE || path.join(
   `network-telegraph-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.log`
 );
 function ensureDirSync(dir){
-  try { fs.mkdirSync(dir, { recursive: true }); } catch(_) {}
+  try { if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); } } catch(_) {}
 }
 ensureDirSync(LOG_DIR);
 function safeStringify(obj){
   try { return JSON.stringify(obj); } catch(_) { return String(obj); }
 }
 function logLine(msg, data){
-  const ts = new Date().toISOString();
-  const line = `[${ts}] ${msg}` + (data !== undefined ? ` | ${safeStringify(data)}` : '');
-  try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch(_) {}
-  // Also mirror to stdout for quick debugging
-  try { console.log(line); } catch(_) {}
+  const line = `[${new Date().toISOString()}] ${msg}${data ? ' ' + safeStringify(data) : ''}\n`;
+  try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
 }
 
-async function generateTextWithChat(prompt, openaiApiKey) {
-  logLine('OpenAI request', { promptPreview: String(prompt || '').slice(0, 160) });
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${openaiApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: String(prompt || '') }],
-      temperature: 0.8,
-    })
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(()=> '');
-    logLine('OpenAI HTTP error', { status: res.status, statusText: res.statusText, body: body.slice(0, 400) });
+async function generateTextWithChat(prompt, aiOptions) {
+  // Backward-compatible wrapper to call unified AI client
+  // aiOptions: { provider, openaiApiKey, model, temperature, systemPrompt, byoaModel, byoaEndpoint }
+  logLine('AI request', { provider: (aiOptions && aiOptions.provider) || process.env.PP_AI_PROVIDER || 'openai', promptPreview: String(prompt || '').slice(0, 160) });
+  try {
+    const out = await generateText(prompt, aiOptions || {});
+    logLine('AI response ok', { length: String(out || '').length });
+    return out;
+  } catch (e) {
+    logLine('AI error', { error: String(e && e.message || e) });
     return '';
   }
-  const data = await res.json().catch(()=> null);
-  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
-  logLine('OpenAI response ok', { length: String(content).length });
-  return String(content).trim();
 }
 
 function stripTags(html) { return String(html || '').replace(/<[^>]+>/g, '').trim(); }
@@ -164,8 +151,8 @@ function integrateSingleAnchor(html, pageUrl, anchorText) {
   return s.replace(/(<h2[\s>][\s\S]*?<\/h2>)/i, `$1\n<p><a href="${pageUrl}">${anchorText}</a></p>`);
 }
 
-async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
-  logLine('Publish start', { pageUrl, anchorText, language });
+async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider) {
+  logLine('Publish start', { pageUrl, anchorText, language, aiProvider: aiProvider || process.env.PP_AI_PROVIDER || 'openai' });
   const meta = await extractPageMeta(pageUrl);
 
   const prompts = {
@@ -192,12 +179,20 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey) {
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // AI options based on provider/key
+  const aiOptionsBase = {
+    provider: (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase(),
+    openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
+    model: process.env.OPENAI_MODEL || undefined,
+    systemPrompt: '',
+  };
+
   // Generate title, author, content with small pauses
-  const rawTitle = await generateTextWithChat(prompts.title, openaiApiKey);
+  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOptionsBase, temperature: 0.7 });
   await sleep(1500);
-  const rawAuthor = await generateTextWithChat(prompts.author, openaiApiKey);
+  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOptionsBase, temperature: 0.6 });
   await sleep(1500);
-  let rawContent = await generateTextWithChat(prompts.content, openaiApiKey);
+  let rawContent = await generateTextWithChat(prompts.content, { ...aiOptionsBase, temperature: 0.8 });
 
   const title = cleanTitle(rawTitle);
   const author = String(rawAuthor || '').split(/\r?\n/)[0].replace(/["'«»“”„]+/g, '').trim() || 'PromoPilot';
@@ -293,13 +288,25 @@ if (require.main === module) {
       const anchor = job.anchor || pageUrl;
       const language = job.language || 'ru';
       const apiKey = job.openaiApiKey || process.env.OPENAI_API_KEY || '';
-      if (!pageUrl || !apiKey) {
-        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url or openaiApiKey missing', network: 'telegraph', logFile: LOG_FILE };
+      const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+      const jobModel = job.openaiModel || process.env.OPENAI_MODEL || '';
+      if (jobModel) process.env.OPENAI_MODEL = String(jobModel);
+
+      if (!pageUrl) {
+        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url missing', network: 'telegraph', logFile: LOG_FILE };
         logLine('Run failed (missing params)', payload);
         console.log(JSON.stringify(payload));
         process.exit(1);
       }
-      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey);
+      // If provider is openai, ensure key present; for BYOA allow empty
+      if (provider === 'openai' && !apiKey) {
+        const payload = { ok: false, error: 'MISSING_PARAMS', details: 'openaiApiKey missing', network: 'telegraph', logFile: LOG_FILE };
+        logLine('Run failed (missing openai key)', payload);
+        console.log(JSON.stringify(payload));
+        process.exit(1);
+      }
+
+      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider);
       console.log(JSON.stringify(res));
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
