@@ -30,6 +30,12 @@ function cleanLLMOutput(s) {
     const after = _cutAfterResponseMarker(t);
     if (after !== t) t = after;
     t = _stripLeadingAnalysis(t);
+    // Remove any leading lines consisting only of markdown markers like "**", "*", or "__"
+    t = t.replace(/^(?:\s*(?:\*\*?|__)\s*\n)+/g, '');
+    // Remove a leading inline star/underscore sequence before first word
+    t = t.replace(/^\s*(?:\*\*?|__)\s+/g, '');
+    // Remove a leading bullet marker like -, –, —, • followed by space
+    t = t.replace(/^\s*[-–—•∙·]\s+/g, '');
     return t.trim();
   } catch { return String(s || ''); }
 }
