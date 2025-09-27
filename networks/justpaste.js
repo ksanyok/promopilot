@@ -300,10 +300,47 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     const last2 = await extractPublishedUrl();
     if (last2) publishedUrl = last2;
   }
+  // Try to load the article URL (to observe redirects/captcha)
+  let requiresCaptcha = false; let captchaType = '';
+  const detectCaptcha = async () => {
+    return await page.evaluate(() => {
+      const found = (sel) => !!document.querySelector(sel);
+      const hasText = (t) => (document.body?.innerText || '').toLowerCase().includes(t);
+      // reCAPTCHA
+      if (found('iframe[src*="recaptcha"], div.g-recaptcha, div#recaptcha, .grecaptcha-badge')) return { found: true, type: 'recaptcha' };
+      // hCaptcha
+      if (found('iframe[src*="hcaptcha"], .h-captcha')) return { found: true, type: 'hcaptcha' };
+      // Cloudflare challenge
+      if (hasText('just a moment') || found('#cf-challenge-running') || found('div#challenge-form')) return { found: true, type: 'cloudflare' };
+      // Generic
+      if (hasText('captcha') || hasText('verify you are human') || hasText('подтвердите что вы не робот')) return { found: true, type: 'generic' };
+      return { found: false, type: '' };
+    });
+  };
+  try {
+    if (publishedUrl && /^https?:\/\//i.test(publishedUrl)) {
+      await page.goto(publishedUrl, { waitUntil: 'networkidle2', timeout: 120000 }).catch(()=>{});
+      const res = await detectCaptcha();
+      if (res && res.found) { requiresCaptcha = true; captchaType = res.type || 'unknown'; }
+    }
+  } catch(_) {}
+
+  // If captcha is present, capture a screenshot for diagnostics
+  let captchaScreenshot = '';
+  if (requiresCaptcha) {
+    try {
+      const fname = `justpaste-captcha-${Date.now()}.png`;
+      const fpath = path.join(LOG_DIR, fname);
+      await page.screenshot({ path: fpath, fullPage: true }).catch(()=>{});
+      captchaScreenshot = fpath;
+      logLine('Captcha detected', { captchaType, screenshot: fpath, url: page.url() });
+    } catch(_) {}
+  }
+
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE };
+  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, requiresCaptcha, captchaType, captchaScreenshot };
 }
 
 module.exports = { publish: publishToJustPaste };
