@@ -185,6 +185,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || undefined,
     systemPrompt: '',
+    // BYOA options (read from env if provided)
+    byoaBaseUrl: process.env.PP_BYOA_BASE_URL || undefined,
+    byoaEndpoint: process.env.PP_BYOA_ENDPOINT || undefined,
   };
 
   // Generate title, author, content with small pauses
@@ -291,6 +294,9 @@ if (require.main === module) {
       const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
       const jobModel = job.openaiModel || process.env.OPENAI_MODEL || '';
       if (jobModel) process.env.OPENAI_MODEL = String(jobModel);
+      // BYOA env from job, if provided
+      if (job.byoaBaseUrl) process.env.PP_BYOA_BASE_URL = String(job.byoaBaseUrl);
+      if (job.byoaEndpoint) process.env.PP_BYOA_ENDPOINT = String(job.byoaEndpoint);
 
       if (!pageUrl) {
         const payload = { ok: false, error: 'MISSING_PARAMS', details: 'url missing', network: 'telegraph', logFile: LOG_FILE };
