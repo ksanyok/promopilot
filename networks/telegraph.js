@@ -61,12 +61,13 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     content:
       `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
       `Требования:\n` +
-      `- Ровно две активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
-      `  1) Ссылка на наш URL с анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
-      `  2) Ссылка на авторитетный внешний источник (например, Wikipedia/Encyclopedia/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en, если нет подходящей локали). Естественный анкор.\n` +
+      `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
+      `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
+      `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").\n` +
+      `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en, если нет подходящей локали). Естественный анкор.\n` +
       `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.\n` +
       `- 3–5 смысловых секций и короткое заключение.\n` +
-      `- Кроме указанных двух ссылок — никаких иных ссылок или URL.\n` +
+      `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.\n` +
       `Ответь только телом статьи.`
   };
   logLine('Prompts prepared');
@@ -81,7 +82,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
 
   const titleClean = cleanLLMOutput(rawTitle);
   const authorClean = cleanLLMOutput(rawAuthor);
-  const content = cleanLLMOutput(rawContent);
+  let content = cleanLLMOutput(rawContent);
   logLine('AI raw/clean', {
     title: { rawPrev: String(rawTitle||'').slice(0,120), cleanPrev: String(titleClean||'').slice(0,120) },
     author: { rawPrev: String(rawAuthor||'').slice(0,120), cleanPrev: String(authorClean||'').slice(0,120) },
@@ -93,24 +94,58 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   function analyzeLinks(html, url, anchor) {
     try {
       const str = String(html || '');
-      const totalLinks = (str.match(/<a\b/gi) || []).length;
-      const hrefRe = new RegExp(`<a[^>]+href=["']${escapeForRegex(url)}["']`, 'ig');
-      let ourLinkCount = 0; let m;
-      while ((m = hrefRe.exec(str)) !== null) { ourLinkCount++; }
+      const hrefMatches = Array.from(str.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/ig));
+      const totalLinks = hrefMatches.length;
+      let ourLinkCount = 0;
+      let externalCount = 0;
+      const externalDomains = new Set();
+      let hasExactAnchor = false;
+      const normalize = (t) => String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+      const expectedAnchor = normalize(anchor);
+      for (const m of hrefMatches) {
+        const href = m[1];
+        const inner = m[2].replace(/<[^>]+>/g, '');
+        const isOur = href === url;
+        if (isOur) {
+          ourLinkCount++;
+          if (expectedAnchor && normalize(inner) === expectedAnchor) {
+            hasExactAnchor = true;
+          }
+        } else {
+          externalCount++;
+          const dm = /^(?:https?:\/\/)?([^\/]+)/i.exec(href);
+          if (dm && dm[1]) externalDomains.add(dm[1].toLowerCase());
+        }
+      }
       const hasOurUrl = ourLinkCount > 0;
-      const anchorRe = new RegExp(`<a[^>]+href=["']${escapeForRegex(url)}["'][^>]*>([\s\S]*?)<\\/a>`, 'i');
-      const am = anchorRe.exec(str);
-      const inner = am ? am[1].replace(/<[^>]+>/g, '') : '';
-      const hasOurAnchorText = !!anchor && inner ? inner.includes(String(anchor)) : false;
-      const firstIdx = hasOurUrl ? str.search(hrefRe) : -1;
+      const firstIdx = hrefMatches.findIndex(m => m[1] === url);
       const snippet = firstIdx >= 0 ? str.slice(Math.max(0, firstIdx - 40), firstIdx + 160) : '';
-      return { totalLinks, ourLinkCount, hasOurUrl, hasOurAnchorText, snippet: snippet.slice(0,200) };
+      return { totalLinks, ourLinkCount, hasOurUrl, hasOurAnchorText: hasExactAnchor, externalCount, externalDomains: Array.from(externalDomains).slice(0,3), snippet: snippet.slice(0,200) };
     } catch (_) { return { totalLinks: 0, ourLinkCount: 0, hasOurUrl: false, hasOurAnchorText: false, snippet: '' }; }
   }
   logLine('AI link analysis', {
     raw: analyzeLinks(rawContent, pageUrl, anchorText),
     cleaned: analyzeLinks(content, pageUrl, anchorText)
   });
+
+  // If constraints not met, try a single regeneration with a stricter hint
+  const wantOur = 2, wantExternal = 1, wantTotal = wantOur + wantExternal;
+  const check = (html) => analyzeLinks(html, pageUrl, anchorText);
+  let linkStat = check(content);
+  if (!(linkStat.ourLinkCount >= wantOur && linkStat.externalCount >= wantExternal && linkStat.totalLinks === wantTotal)) {
+    logLine('Link constraints unmet, regenerating once', { stat: linkStat, want: { our: wantOur, external: wantExternal, total: wantTotal } });
+    const stricter = prompts.content + `\nСТРОГО: включи ровно ${wantTotal} ссылки: две на ${pageUrl} (одна с анкором "${anchorText}", вторая с другим анкором) и одну на авторитетный внешний источник. Не добавляй других ссылок.`;
+    const retryRaw = await generateTextWithChat(stricter, { ...aiOpts, systemPrompt: 'Соблюдай требования ссылок строго. Только тело статьи в простом HTML.', keepRaw: true });
+    const retryClean = cleanLLMOutput(retryRaw);
+    logLine('AI retry link analysis', { raw: analyzeLinks(retryRaw, pageUrl, anchorText), cleaned: analyzeLinks(retryClean, pageUrl, anchorText) });
+    // Replace content with retry if it improved towards constraints
+    const retryStat = analyzeLinks(retryClean, pageUrl, anchorText);
+    if (retryStat.ourLinkCount >= linkStat.ourLinkCount || retryStat.totalLinks > linkStat.totalLinks) {
+      linkStat = retryStat;
+      // use retry content
+      content = retryClean;
+    }
+  }
 
   // Minimal cleanup only (global cleanup happens in ai_client)
   let title = String(titleClean || '').replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
