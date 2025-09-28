@@ -26,6 +26,110 @@ const logDbg = (msg, data) => { if (VERBOSE) logLine(msg, data); };
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
+async function isElementVisible(handle) {
+  if (!handle) return false;
+  try {
+    return await handle.evaluate((el) => {
+      if (!el || typeof el !== 'object') return false;
+      const style = window.getComputedStyle(el);
+      if (!style) return false;
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 2 && rect.height > 2 && rect.top < (window.innerHeight || 0) + 200;
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
+async function findVisibleHandle(page, selectors) {
+  const list = Array.isArray(selectors) ? selectors : [selectors];
+  for (const sel of list) {
+    try {
+      const handles = await page.$$(sel);
+      for (const handle of handles) {
+        const visible = await isElementVisible(handle);
+        if (visible) {
+          return { handle, selector: sel };
+        }
+        try { await handle.dispose(); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function fillContentInContext(ctx, html) {
+  if (!ctx) return null;
+  try {
+    return await ctx.evaluate((val) => {
+      const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (!style) return false;
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 2 && rect.height > 2 && rect.top < (window.innerHeight || 0) + 200;
+      };
+      const fire = (el) => {
+        try {
+          ['input','change','keyup','blur','paste'].forEach(evt => {
+            try { el.dispatchEvent(new Event(evt, { bubbles: true })); } catch (_) {}
+          });
+        } catch (_) {}
+      };
+      const selectors = [
+        '#htmlAreaDIV textarea#tinyMCEEditor',
+        '#htmlAreaDIV .mainTextarea',
+        'textarea#tinyMCEEditor',
+        'textarea[name="content"]',
+        'textarea[name="text"]',
+        'textarea[name="body"]',
+        'textarea[name="message"]',
+        'textarea[name="description"]',
+        'textarea[name="article"]',
+        'textarea#article_content',
+        'textarea.articleTextarea',
+        'form textarea',
+        'textarea'
+      ];
+      for (const sel of selectors) {
+        const candidate = Array.from(document.querySelectorAll(sel)).find(isVisible);
+        if (candidate && typeof candidate.value !== 'undefined') {
+          candidate.focus();
+          candidate.value = val;
+          fire(candidate);
+          return { via: 'textarea', selector: sel }; 
+        }
+      }
+      const contentEditable = Array.from(document.querySelectorAll('[contenteditable="true"], [contenteditable=""]')).find(isVisible);
+      if (contentEditable) {
+        contentEditable.focus();
+        contentEditable.innerHTML = val;
+        fire(contentEditable);
+        return { via: 'contenteditable', selector: '[contenteditable]'};
+      }
+      const iframes = Array.from(document.querySelectorAll('iframe')).filter(isVisible);
+      for (const iframe of iframes) {
+        try {
+          const doc = iframe.contentDocument || iframe.contentWindow && iframe.contentWindow.document;
+          if (!doc) continue;
+          const bodyTarget = doc.querySelector('body#tinymce, body#tinyMCE, body.mce-content-body, body');
+          if (!bodyTarget) continue;
+          bodyTarget.innerHTML = val;
+          try {
+            ['input','change','keyup','blur','paste'].forEach(evt => {
+              try { bodyTarget.dispatchEvent(new Event(evt, { bubbles: true })); } catch (_) {}
+            });
+          } catch (_) {}
+          return { via: 'iframe', selector: iframe.id || iframe.name || 'iframe' };
+        } catch (_) {}
+      }
+      return null;
+    }, html);
+  } catch (_) {
+    return null;
+  }
+}
+
 async function generateTextWithChat(prompt, opts) {
   const provider = (opts && opts.provider) || process.env.PP_AI_PROVIDER || 'openai';
   logDbg('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
@@ -129,79 +233,125 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   // Set title first (explicit selector per UI: .titleColumn input.titleInput)
   try {
-    const titleVal = (titleClean || topicTitle || anchorText || '').toString().trim().slice(0, 100);
-    const titleSelCandidates = [
+    const titleVal = (titleClean || topicTitle || anchorText || '').toString().trim().slice(0, 140);
+    const titleCandidates = [
       '#editArticleWidget .titleColumn input.titleInput',
       '.editArticleMiddle .titleColumn input.titleInput',
       '#editArticleWidget input.titleInput',
       '.editArticleMiddle input.titleInput',
-      'input.titleInput'
+      'input.titleInput',
+      'input[name="title"]',
+      'input[name="post_title"]',
+      'input[name="article_title"]',
+      'input[name="subject"]',
+      'input#title',
+      'input#article_title',
+      'input[placeholder*="Title" i]',
+      'input[placeholder*="Заголовок" i]',
+      'input[class*="title" i]',
+      'form input[type="text"]'
     ];
-    let titleSel = '';
-    for (const s of titleSelCandidates) { if (await page.$(s)) { titleSel = s; break; } }
-    if (!titleSel) throw new Error('TITLE_INPUT_NOT_FOUND');
-    await page.focus(titleSel).catch(()=>{});
-    await page.click(titleSel, { clickCount: 3 }).catch(()=>{});
+    const titleHandleInfo = await findVisibleHandle(page, titleCandidates);
+    if (!titleHandleInfo || !titleHandleInfo.handle) throw new Error('TITLE_INPUT_NOT_FOUND');
+    const { handle: titleHandle, selector: titleSel } = titleHandleInfo;
+    await titleHandle.focus().catch(()=>{});
+    try { await titleHandle.click({ clickCount: 3 }); } catch (_) {}
     await page.keyboard.press('Backspace').catch(()=>{});
-    await page.type(titleSel, titleVal, { delay: 10 });
-    await page.$eval(titleSel, (el) => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+    let typed = false;
+    try {
+      await titleHandle.type(titleVal, { delay: 12 });
+      typed = true;
+    } catch (_) {}
+    if (!typed) {
+      await titleHandle.evaluate((el, val) => { el.value = val; }, titleVal);
+    }
+    await titleHandle.evaluate((el) => {
+      try {
+        ['input','change','keyup','blur'].forEach(evt => el.dispatchEvent(new Event(evt, { bubbles: true })));
+      } catch (_) {}
+    });
     logDbg('Title filled', { selector: titleSel, length: titleVal.length });
+    try { await titleHandle.dispose(); } catch (_) {}
   } catch (e) { logLine('Title fill error', { error: String(e && e.message || e) }); }
 
   // Switch to Html tab (use explicit Html tab; robust to different containers)
   try {
-    await page.waitForSelector('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a', { timeout: 15000 });
-    await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
-      const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
-      if (html) { html.scrollIntoView({block:'center'}); html.click(); }
-    });
     await sleep(500);
-    // If not active yet, click one more time
-    const isHtmlActive = await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
-      const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
-      return !!(html && html.classList.contains('addArticleTabOn'));
-    });
-    if (!isHtmlActive) {
-      await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
-        const html = tabs.find(a => (a.textContent||'').trim().toLowerCase() === 'html');
-        if (html) { html.click(); }
+    const toggleResult = await page.evaluate(() => {
+      const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (!style) return false;
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 2 && rect.height > 2;
+      };
+      const keywords = ['html', 'код', 'source', 'исходный'];
+      const selectors = [
+        '#editArticleWidget .tabsBar a',
+        '.editArticleMiddle .tabsBar a',
+        '.tabsBar a',
+        '[data-tab="html"]',
+        '[role="tab"]',
+        'button',
+        'a'
+      ];
+      const visited = new Set();
+      const pool = [];
+      selectors.forEach(sel => {
+        try {
+          Array.from(document.querySelectorAll(sel)).forEach(el => {
+            if (!el || visited.has(el) || !isVisible(el)) return;
+            visited.add(el);
+            pool.push({ el, selector: sel });
+          });
+        } catch (_) {}
       });
-      await sleep(500);
-    }
-    logDbg('Html tab toggled');
+      const candidate = pool.find(({ el }) => {
+        const text = (el.textContent || el.getAttribute('title') || '').trim().toLowerCase();
+        return keywords.some(k => text.includes(k));
+      });
+      if (!candidate) return { clicked: false };
+      const { el, selector } = candidate;
+      try { el.scrollIntoView({ block: 'center' }); } catch (_) {}
+      try { el.click(); } catch (_) {}
+      const active = (el.classList && el.classList.contains('addArticleTabOn')) || el.getAttribute('aria-selected') === 'true';
+      return { clicked: true, selector, text: (el.textContent || '').trim(), active };
+    });
+    if (!toggleResult || !toggleResult.clicked) throw new Error('HTML_TAB_NOT_FOUND');
+    await sleep(500);
+    logDbg('Html tab toggled', toggleResult);
   } catch (e) { logLine('Switch tab error', { error: String(e && e.message || e) }); }
 
   // Fill via Html textarea only (avoid TinyMCE/iframes to prevent frame detaches)
   try {
-    // Ensure Html area is visible
-    await page.waitForFunction(() => {
-      const ta = document.querySelector('#htmlAreaDIV textarea#tinyMCEEditor') || document.querySelector('#htmlAreaDIV .mainTextarea, textarea#tinyMCEEditor');
-      if (!ta) return false;
-      const rect = ta.getBoundingClientRect();
-      const cs = window.getComputedStyle(ta);
-      return cs.display !== 'none' && cs.visibility !== 'hidden' && rect.height > 0 && rect.width > 0;
-    }, { timeout: 15000 });
-    const taSel = (await page.$('#htmlAreaDIV textarea#tinyMCEEditor')) ? '#htmlAreaDIV textarea#tinyMCEEditor' : (await page.$('#htmlAreaDIV .mainTextarea')) ? '#htmlAreaDIV .mainTextarea' : 'textarea#tinyMCEEditor';
-    await page.$eval(taSel, (el, val) => {
-      el.focus();
-      el.value = val;
-      const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
-      ev('input'); ev('change'); ev('keyup');
-    }, cleanedContent);
-    logDbg('Filled via textarea', { selector: taSel });
+    let fillResult = await fillContentInContext(page, cleanedContent);
+    if (!fillResult) {
+      try {
+        const frames = page.frames ? page.frames() : [];
+        for (const frame of frames) {
+          fillResult = await fillContentInContext(frame, cleanedContent);
+          if (fillResult) {
+            fillResult.frameUrl = frame.url();
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+    if (!fillResult) throw new Error('CONTENT_INPUT_NOT_FOUND');
+    logDbg('Content filled', fillResult);
   } catch (e) {
-    logLine('Fill editor failed', { error: String(e && e.message || e) });
+    let frameInfo = [];
+    try { frameInfo = (page.frames ? page.frames() : []).map(f => f.url()).filter(Boolean).slice(0,5); } catch (_) {}
+    logLine('Fill editor failed', { error: String(e && e.message || e), frames: frameInfo });
   }
 
   // Screenshots helper (minimal logging)
-  async function takeScreenshot(label){
+  async function takeScreenshot(label, targetPage = page){
     try {
       const fname = `justpaste-${label}-${Date.now()}.png`;
       const fpath = path.join(LOG_DIR, fname);
-      await page.screenshot({ path: fpath, fullPage: true });
+      if (!targetPage || (typeof targetPage.isClosed === 'function' && targetPage.isClosed())) throw new Error('PAGE_CLOSED');
+      await targetPage.screenshot({ path: fpath, fullPage: true });
       logLine('Screenshot', { label, path: fpath });
       return fpath;
     } catch (e) { logLine('Screenshot error', { label, error: String(e && e.message || e) }); return ''; }
@@ -222,46 +372,64 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   } catch (_) {}
   screenshots.after_click = await takeScreenshot('after-click');
   const deadline = Date.now() + 120000; // up to 120s to allow captcha to fully load/solve
+  let lastPageCount = 0;
   while (Date.now() < deadline) {
-    // Try solve captcha if it appears
+    let captchaSolved = false;
     try {
-      const det = await detectCaptcha(page);
-      if (det && det.found && !screenshots.captcha) {
-        // We'll prefer a screenshot right before Verify; take this early one only as fallback
-        screenshots.captcha = await takeScreenshot('captcha-early');
+      const pagesForCaptcha = await browser.pages();
+      if (pagesForCaptcha.length !== lastPageCount) {
+        logDbg('Window count update', { count: pagesForCaptcha.length });
+        lastPageCount = pagesForCaptcha.length;
       }
-      const solvedRes = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label));
-      const solved = !!(solvedRes && (solvedRes === true || solvedRes.solved));
-      if (solved) {
-        if (typeof solvedRes === 'object' && solvedRes.screenshot) {
-          screenshots.captcha = solvedRes.screenshot;
-        }
-        await new Promise(r=>setTimeout(r, 1200));
-        // Make sure we explicitly press Verify if captcha panel still visible
-        try {
-          await page.evaluate(() => {
-            const panel = document.querySelector('.captchaPanelMaster .captchaPanel');
-            if (panel) {
-              const btn = panel.querySelector('button.btn.btn-danger.CaptchaButtonVerify');
-              if (btn) btn.click();
+      for (const candidate of pagesForCaptcha) {
+        if (!candidate || (typeof candidate.isClosed === 'function' && candidate.isClosed())) continue;
+        let candidateUrl = '';
+        try { candidateUrl = candidate.url(); } catch (_) {}
+        if (!screenshots.captcha) {
+          try {
+            const det = await detectCaptcha(candidate);
+            if (det && det.found && !screenshots.captcha) {
+              screenshots.captcha = await takeScreenshot('captcha-early', candidate);
+              logDbg('Captcha presence detected', { candidateUrl, type: det.type, details: det.debug || det.details || null });
             }
-          });
-        } catch (_) {}
-        // If still on editor, click Publish again to finalize
-        try {
-          const href = await page.evaluate(() => location.href);
-          if (/\/edit|justpaste\.it\/?$/.test(href)) {
-            await page.evaluate(() => {
-              // Do not touch premium links
-              const premium = document.querySelector('.becomePremiumPanel a.btn.btn-sm.btn-outline-danger');
-              if (premium) premium.removeAttribute('data-auto-click');
-              const btn = document.querySelector('.editArticleBottomButtons .publishButton');
-              if (btn) (btn).click();
-            });
+          } catch (_) {}
+        }
+        const solvedRes = await solveIfCaptcha(candidate, logLine, async (label) => await takeScreenshot(label, candidate));
+        const solved = !!(solvedRes && (solvedRes === true || solvedRes.solved));
+        if (solved) {
+          captchaSolved = true;
+          if (candidate !== page) {
+            logLine('Captcha solved on secondary page', { candidateUrl });
           }
-        } catch (_) {}
+          if (typeof solvedRes === 'object' && solvedRes.screenshot) {
+            screenshots.captcha = solvedRes.screenshot;
+          }
+          await sleep(1200);
+          try {
+            await page.evaluate(() => {
+              const panel = document.querySelector('.captchaPanelMaster .captchaPanel');
+              if (panel) {
+                const btn = panel.querySelector('button.btn.btn-danger.CaptchaButtonVerify');
+                if (btn) btn.click();
+              }
+            });
+          } catch (_) {}
+          try {
+            const href = await page.evaluate(() => location.href);
+            if (/\/edit|justpaste\.it\/?$/.test(href)) {
+              await page.evaluate(() => {
+                const premium = document.querySelector('.becomePremiumPanel a.btn.btn-sm.btn-outline-danger');
+                if (premium) premium.removeAttribute('data-auto-click');
+                const btn = document.querySelector('.editArticleBottomButtons .publishButton');
+                if (btn) (btn).click();
+              });
+            }
+          } catch (_) {}
+          break;
+        }
       }
     } catch (_) {}
+    if (captchaSolved) break;
     // Check if navigated to an article-like URL
     try {
       const href = await page.evaluate(() => location.href);
