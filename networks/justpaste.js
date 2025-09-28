@@ -221,10 +221,15 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     try {
       const det = await detectCaptcha(page);
       if (det && det.found && !screenshots.captcha) {
-        screenshots.captcha = await takeScreenshot('captcha');
+        // We'll prefer a screenshot right before Verify; take this early one only as fallback
+        screenshots.captcha = await takeScreenshot('captcha-early');
       }
-      const solved = await solveIfCaptcha(page, logLine);
+      const solvedRes = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label));
+      const solved = !!(solvedRes && (solvedRes === true || solvedRes.solved));
       if (solved) {
+        if (typeof solvedRes === 'object' && solvedRes.screenshot) {
+          screenshots.captcha = solvedRes.screenshot;
+        }
         await new Promise(r=>setTimeout(r, 1200));
         // Make sure we explicitly press Verify if captcha panel still visible
         try {

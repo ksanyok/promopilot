@@ -90,7 +90,7 @@ async function getSiteKeys(page) {
   } catch { return { recaptcha: '', hcaptcha: '' }; }
 }
 
-async function solveGridAntiCaptcha(page, apiKey, logger) {
+async function solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot) {
   try {
     // Wait until tiles are actually loaded (avoid spinner state)
     const ready = await waitForGridReady(page, logger);
@@ -132,7 +132,7 @@ async function solveGridAntiCaptcha(page, apiKey, logger) {
       if (d && d.errorId) return false;
     }
     if (!solution || !Array.isArray(solution.coordinates) || solution.coordinates.length === 0) return false;
-    const points = solution.coordinates.map(c => [Number(c.x)||0, Number(c.y)||0]);
+  const points = solution.coordinates.map(c => [Number(c.x)||0, Number(c.y)||0]);
     const clickedIdx = new Set();
     for (const [px, py] of points) {
       const ax = clip.x + px; const ay = clip.y + py;
@@ -148,17 +148,22 @@ async function solveGridAntiCaptcha(page, apiKey, logger) {
         await new Promise(r => setTimeout(r, 150));
       }
     }
-  await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
+    // Take screenshot when captcha is fully loaded and selections are made, just before Verify
+    let shotPath = '';
+    if (typeof takeScreenshot === 'function') {
+      try { shotPath = await takeScreenshot('captcha'); } catch (_) {}
+    }
+    await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
   await new Promise(r => setTimeout(r, 1500));
     const after = await page.evaluate(() => !!document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer'));
-    if (!after) { logger && logger('Captcha solved'); return true; }
+  if (!after) { logger && logger('Captcha solved'); return { solved: true, screenshot: shotPath }; }
     // try refresh button once
     await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
     return false;
   } catch { return false; }
 }
 
-async function solveGrid2Captcha(page, apiKey, logger) {
+async function solveGrid2Captcha(page, apiKey, logger, takeScreenshot) {
   try {
     const ready = await waitForGridReady(page, logger);
     if (!ready) return false;
@@ -201,7 +206,7 @@ async function solveGrid2Captcha(page, apiKey, logger) {
       if (d && d.request && d.request !== 'CAPCHA_NOT_READY') return false;
     }
     if (!coords) return false;
-    const points = coords.split('|').map(p => p.split(',').map(n => parseFloat(n))).filter(a => a.length === 2 && a.every(v => isFinite(v)));
+  const points = coords.split('|').map(p => p.split(',').map(n => parseFloat(n))).filter(a => a.length === 2 && a.every(v => isFinite(v)));
     const clickedIdx = new Set();
     for (const [px, py] of points) {
       const ax = clip.x + px; const ay = clip.y + py;
@@ -217,10 +222,15 @@ async function solveGrid2Captcha(page, apiKey, logger) {
         await new Promise(r => setTimeout(r, 150));
       }
     }
-  await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
+    // Take screenshot when captcha is fully loaded and selections are made, just before Verify
+    let shotPath = '';
+    if (typeof takeScreenshot === 'function') {
+      try { shotPath = await takeScreenshot('captcha'); } catch (_) {}
+    }
+    await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
   await new Promise(r => setTimeout(r, 1500));
     const after = await page.evaluate(() => !!document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer'));
-    if (!after) { logger && logger('Captcha solved'); return true; }
+  if (!after) { logger && logger('Captcha solved'); return { solved: true, screenshot: shotPath }; }
     await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
     return false;
   } catch { return false; }
@@ -263,8 +273,8 @@ async function solveTokenCaptcha(page, type, provider, apiKey, pageUrl, logger) 
         if (btn) { try { btn.click(); } catch {} }
         return ok;
       }, type, token);
-      logger && logger('Captcha solved');
-      return !!injected;
+  logger && logger('Captcha solved');
+  return !!injected;
     } else if (provider === '2captcha') {
       const params = new URLSearchParams();
       params.set('key', apiKey);
@@ -306,14 +316,14 @@ async function solveTokenCaptcha(page, type, provider, apiKey, pageUrl, logger) 
   } catch { return false; }
 }
 
-async function solveIfCaptcha(page, logger) {
+async function solveIfCaptcha(page, logger, takeScreenshot) {
   const { provider, apiKey } = readConfig();
   if (!apiKey || provider === 'none') return false;
   const det = await detectCaptcha(page);
   if (!det || !det.found) return false;
   if (det.type === 'grid') {
-    if (provider === 'anti-captcha') return await solveGridAntiCaptcha(page, apiKey, logger);
-    if (provider === '2captcha') return await solveGrid2Captcha(page, apiKey, logger);
+    if (provider === 'anti-captcha') return await solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot);
+    if (provider === '2captcha') return await solveGrid2Captcha(page, apiKey, logger, takeScreenshot);
     return false;
   }
   if (det.type === 'recaptcha' || det.type === 'hcaptcha') {
