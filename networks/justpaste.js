@@ -20,13 +20,16 @@ function logLine(msg, data){
   const line = `[${new Date().toISOString()}] ${msg}${data ? ' ' + safeStringify(data) : ''}\n`;
   try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
 }
+// Verbose switch to reduce noise
+const VERBOSE = /^(1|true|yes)$/i.test(String(process.env.PP_VERBOSE || '0'));
+const logDbg = (msg, data) => { if (VERBOSE) logLine(msg, data); };
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
 async function generateTextWithChat(prompt, opts) {
   const provider = (opts && opts.provider) || process.env.PP_AI_PROVIDER || 'openai';
-  logLine('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
-  try { const out = await generateText(String(prompt||''), opts||{}); logLine('AI response ok', { length: String(out||'').length }); return out; }
+  logDbg('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
+  try { const out = await generateText(String(prompt||''), opts||{}); logDbg('AI response ok', { length: String(out||'').length }); return out; }
   catch (e) { logLine('AI error', { error: String(e && e.message || e) }); throw e; }
 }
 
@@ -109,7 +112,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     return s;
   }
   const cleanedContent = normalizeContent(content);
-  logLine('Link analysis', { before: stat, after: analyzeLinks(cleanedContent, pageUrl, anchorText) });
+  logDbg('Link analysis', { before: stat, after: analyzeLinks(cleanedContent, pageUrl, anchorText) });
 
   // Puppeteer: open JustPaste.it editor and switch to Html tab
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
@@ -117,13 +120,13 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
   if (execPath) launchOpts.executablePath = execPath;
-  logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
+  logDbg('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
   const browser = await puppeteer.launch(launchOpts);
   const page = await browser.newPage();
   page.setDefaultTimeout(300000); page.setDefaultNavigationTimeout(300000);
   await page.goto('https://justpaste.it/', { waitUntil: 'networkidle2' });
   // Log UA for diagnostics
-  try { const ua = await page.evaluate(() => navigator.userAgent); logLine('UA', { userAgent: ua }); } catch(_) {}
+  try { const ua = await page.evaluate(() => navigator.userAgent); logDbg('UA', { userAgent: ua }); } catch(_) {}
 
   // Try to locate the add article editor (supports Html tab)
   try { await page.waitForSelector('#editArticleWidget .tabsBar, .editArticleMiddle .tabsBar', { timeout: 15000 }); } catch(_) {}
@@ -146,7 +149,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     await page.keyboard.press('Backspace').catch(()=>{});
     await page.type(titleSel, titleVal, { delay: 10 });
     await page.$eval(titleSel, (el) => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
-    logLine('Title filled', { selector: titleSel, length: titleVal.length });
+    logDbg('Title filled', { selector: titleSel, length: titleVal.length });
   } catch (e) { logLine('Title fill error', { error: String(e && e.message || e) }); }
 
   // Switch to Html tab (use explicit Html tab; robust to different containers)
@@ -172,7 +175,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       });
       await sleep(500);
     }
-    logLine('Html tab toggled');
+    logDbg('Html tab toggled');
   } catch (e) { logLine('Switch tab error', { error: String(e && e.message || e) }); }
 
   // Fill via Html textarea only (avoid TinyMCE/iframes to prevent frame detaches)
@@ -192,7 +195,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const ev = (t) => { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch(_) {} };
       ev('input'); ev('change'); ev('keyup');
     }, cleanedContent);
-    logLine('Filled via textarea', { selector: taSel });
+    logDbg('Filled via textarea', { selector: taSel });
   } catch (e) {
     logLine('Fill editor failed', { error: String(e && e.message || e) });
   }
@@ -209,11 +212,11 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const fname = `justpaste-${label}-${Date.now()}.png`;
       const fpath = path.join(LOG_DIR, fname);
       await page.screenshot({ path: fpath, fullPage: true });
-      logLine('Screenshot', { label, path: fpath, url: page.url() });
+      logDbg('Screenshot', { label, path: fpath, url: page.url() });
       return fpath;
     } catch (e) { logLine('Screenshot error', { label, error: String(e && e.message || e) }); return ''; }
   }
-  await takeScreenshot('pre-publish');
+  if (VERBOSE) await takeScreenshot('pre-publish');
 
   // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
   async function extractPublishedUrl() {
@@ -273,6 +276,74 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     } catch { return { found: false }; }
   }
 
+  // Solve JustPaste grid captcha using Anti-Captcha (coordinates)
+  async function solveJpGridWithAntiCaptcha(maxTries = 2) {
+    if (!captchaApiKey) { logLine('Grid captcha: missing anti-captcha key'); return false; }
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+      try {
+        const info = await page.evaluate(() => {
+          const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
+          const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+          const rects = tiles.map(t => t.getBoundingClientRect());
+          if (rects.length === 0) return null;
+          let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+          rects.forEach(r => { left = Math.min(left, r.left); top = Math.min(top, r.top); right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom); });
+          const centers = rects.map(r => ({ x: r.left + r.width/2, y: r.top + r.height/2 }));
+          return { word, clip: { x: left, y: top, width: right-left, height: bottom-top }, centers };
+        });
+        if (!info) { logLine('Grid captcha: no tiles found'); return false; }
+        const { word, clip, centers } = info;
+        const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
+        const b64 = buf.toString('base64');
+        // Anti-captcha createTask
+        const createUrl = 'https://api.anti-captcha.com/createTask';
+        const resultUrl = 'https://api.anti-captcha.com/getTaskResult';
+        const payload = { clientKey: captchaApiKey, task: { type: 'ImageToCoordinatesTask', body: b64, comment: `Select all images with: ${word}` } };
+        logLine('Anti-captcha createTask (grid)');
+        const createResp = await fetch(createUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const createData = await createResp.json().catch(() => ({ errorId: 1, errorCode: 'JSON_ERR' }));
+        if (!createData || createData.errorId) { logLine('Anti-captcha createTask error', createData); continue; }
+        const taskId = createData.taskId;
+        const deadline = Date.now() + 180000;
+        let solution = null;
+        while (Date.now() < deadline) {
+          await sleep(5000);
+          const r = await fetch(resultUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: captchaApiKey, taskId }) });
+          const d = await r.json().catch(() => ({ errorId: 1, errorCode: 'JSON_ERR' }));
+          if (d && !d.errorId && d.status === 'ready') { solution = d.solution; break; }
+          if (d && d.errorId) { logLine('Anti-captcha getTaskResult error', d); break; }
+        }
+        if (!solution || !Array.isArray(solution.coordinates) || solution.coordinates.length === 0) { logLine('Anti-captcha timeout/no coordinates'); continue; }
+        const points = solution.coordinates.map(c => [Number(c.x)||0, Number(c.y)||0]);
+        const clickedIdx = new Set();
+        for (const [px, py] of points) {
+          const ax = clip.x + px; const ay = clip.y + py;
+          let best = -1; let bestDist = Infinity;
+          centers.forEach((c, i) => { const dx = c.x - ax, dy = c.y - ay; const dist = dx*dx + dy*dy; if (dist < bestDist) { bestDist = dist; best = i; } });
+          if (best >= 0 && !clickedIdx.has(best)) {
+            clickedIdx.add(best);
+            await page.evaluate((index) => {
+              const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+              const el = tiles[index];
+              if (el) { el.scrollIntoView({block:'center'}); el.click(); }
+            }, best);
+            await sleep(150);
+          }
+        }
+        await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) { b.scrollIntoView({block:'center'}); (b).click(); } });
+        await sleep(800);
+        const after = await detectJpGridCaptcha();
+        if (!after || !after.found) { logLine('Grid captcha solved (anti-captcha)'); return true; }
+        // refresh and retry
+        await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
+        await sleep(600);
+      } catch (e) {
+        logLine('Grid captcha solve error', { error: String(e && e.message || e) });
+      }
+    }
+    return false;
+  }
+
   // Solve JustPaste grid captcha using 2Captcha (coordinates)
   async function solveJpGridWith2Captcha(maxTries = 2) {
     if (!captchaApiKey) { logLine('Grid captcha: missing 2captcha key'); return false; }
@@ -302,7 +373,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         params.set('json', '1');
         params.set('body', b64);
         params.set('textinstructions', `Select all images with: ${word}`);
-        const inResp = await fetch('http://2captcha.com/in.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
+        const inResp = await fetch('https://2captcha.com/in.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
         const inData = await inResp.json().catch(() => ({}));
         if (!inData || inData.status !== 1) { logLine('2captcha in.php error', inData); continue; }
         const id = String(inData.request);
@@ -311,7 +382,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         while (Date.now() < deadline) {
           await sleep(5000);
           const ps = new URLSearchParams(); ps.set('key', captchaApiKey); ps.set('action','get'); ps.set('id', id); ps.set('json','1');
-          const r = await fetch('http://2captcha.com/res.php?' + ps.toString());
+          const r = await fetch('https://2captcha.com/res.php?' + ps.toString());
           const d = await r.json().catch(() => ({}));
           if (d && d.status === 1 && d.request) { coords = String(d.request); break; }
           if (d && d.request && d.request !== 'CAPCHA_NOT_READY') { logLine('2captcha res.php error', d); break; }
@@ -382,6 +453,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   async function doPublish() {
     const startUrl = page.url();
+    let gridHandled = false;
     const tryClick = async () => {
       // Check terms/agree checkbox if present
       await page.evaluate(() => {
@@ -428,16 +500,16 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         }
         return { candidates: cands, chosen };
       });
-      try { logLine('Publish click info', info); } catch(_) {}
+      try { logDbg('Publish click info', info); } catch(_) {}
       if (!info || !info.chosen) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
     };
 
     // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
     for (let attempt = 0; attempt < 3; attempt++) {
-      await takeScreenshot(`attempt${attempt+1}-pre-click`);
+      if (VERBOSE) await takeScreenshot(`attempt${attempt+1}-pre-click`);
       try { await tryClick(); } catch (e) { logLine('tryClick error', { error: String(e && e.message || e) }); }
       await sleep(350);
-      await takeScreenshot(`attempt${attempt+1}-post-click`);
+      if (VERBOSE) await takeScreenshot(`attempt${attempt+1}-post-click`);
       const t0 = Date.now();
       let found = null;
       while (Date.now() - t0 < 45000) { // 45s per attempt
@@ -445,7 +517,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         let now = null;
         try { now = await page.evaluate(() => location.href); } catch (e) {
           const closed = page.isClosed && page.isClosed();
-          logLine('Page evaluate href failed', { error: String(e && e.message || e), closed });
+          logDbg('Page evaluate href failed', { error: String(e && e.message || e), closed });
           if (closed) throw new Error('PAGE_CLOSED');
         }
         if (now && now !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(now) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(now)) {
@@ -454,14 +526,13 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         // Handle custom grid captcha overlay
         try {
           const grid = await detectJpGridCaptcha();
-          if (grid && grid.found) {
-            logLine('Grid captcha detected', { word: grid.word, tiles: grid.tiles });
-            if (captchaProvider === '2captcha') {
-              const ok = await solveJpGridWith2Captcha(2);
-              if (ok) { await sleep(1000); continue; }
-            } else {
-              logLine('Grid captcha: provider not supported for coordinates', { captchaProvider });
-            }
+          if (grid && grid.found && !gridHandled) {
+            logLine('Captcha detected', { type: 'grid', word: grid.word });
+            let ok = false;
+            if (captchaProvider === 'anti-captcha') ok = await solveJpGridWithAntiCaptcha(2);
+            else if (captchaProvider === '2captcha') ok = await solveJpGridWith2Captcha(2);
+            gridHandled = true;
+            if (ok) { logLine('Captcha solved'); await sleep(1000); continue; }
           }
         } catch (_) {}
         // Try extract from DOM
@@ -471,7 +542,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
           try {
             const v = await validateCandidateUrl(found);
             if (v && v.ok) return found;
-            else logLine('Discarded candidate URL', { found, validation: v });
+            else logDbg('Discarded candidate URL', { found, validation: v });
           } catch(_) {}
         }
         await sleep(500);
@@ -484,7 +555,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   let resultUrl = null;
   try { resultUrl = await doPublish(); }
   catch (e) {
-    logLine('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
+    logDbg('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
     try {
       await page.evaluate(() => {
         const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
@@ -517,7 +588,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       logLine('Final URL seems not an article, likely ad or blocked', { publishedUrl, validation: vfinal });
     }
   } catch(_) {}
-  await takeScreenshot('post-publish');
+  if (VERBOSE) await takeScreenshot('post-publish');
   // Try to load the article URL (to observe redirects/captcha)
   let requiresCaptcha = false; let captchaType = '';
   const detectCaptcha = async () => {
@@ -552,7 +623,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       const fpath = path.join(LOG_DIR, fname);
       await page.screenshot({ path: fpath, fullPage: true }).catch(()=>{});
       captchaScreenshot = fpath;
-      logLine('Captcha detected', { captchaType, screenshot: fpath, url: page.url() });
+      logLine('Captcha detected', { captchaType, url: page.url() });
     } catch(_) {}
 
     // Attempt auto-solve if configured
@@ -588,7 +659,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         })();
 
         const sitekey = captchaType === 'hcaptcha' ? (siteKey && siteKey.hcaptcha) : (siteKey && siteKey.recaptcha);
-        logLine('Captcha sitekey', { type: captchaType, sitekey: sitekey ? (sitekey.slice(0,6)+'...') : '' });
+  logDbg('Captcha sitekey', { type: captchaType, sitekey: sitekey ? (sitekey.slice(0,6)+'...') : '' });
         if (sitekey) {
           const solve2Captcha = async () => {
             const isH = captchaType === 'hcaptcha';
@@ -646,7 +717,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
           };
 
           const token = captchaProvider === '2captcha' ? await solve2Captcha() : await solveAntiCaptcha();
-          logLine('Captcha token obtained', { len: (token||'').length, provider: captchaProvider });
+          logDbg('Captcha token obtained', { len: (token||'').length, provider: captchaProvider });
           // Inject token and try to proceed
           const injected = await page.evaluate((type, tok) => {
             const inject = (name) => {
@@ -673,7 +744,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
           const after = await detectCaptcha();
           if (!after || !after.found) { captchaSolved = true; requiresCaptcha = false; captchaType = ''; logLine('Captcha solved'); }
         } else {
-          logLine('Captcha sitekey not found, auto-solve skipped');
+          logDbg('Captcha sitekey not found, auto-solve skipped');
         }
       } catch (e) {
         logLine('Captcha solve error', { error: String(e && e.message || e) });
