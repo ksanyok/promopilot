@@ -702,7 +702,449 @@ $diagnostics = [
         <?php echo csrf_field(); ?>
         <button type="submit" name="detect_node" value="1" class="btn btn-outline-success"><i class="bi bi-magic me-1"></i><?php echo __('Автоопределение Node.js'); ?></button>
     </form>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+        <button type="button" class="btn btn-warning" id="networkCheckButton" data-label="<?php echo __('Проверить сети'); ?>"><i class="bi bi-activity me-1"></i><?php echo __('Проверить сети'); ?></button>
+        <button type="button" class="btn btn-outline-light" id="networkCheckHistoryButton" style="display:none;" data-label="<?php echo __('Показать последний результат'); ?>"><i class="bi bi-clock-history me-1"></i><?php echo __('Показать последний результат'); ?></button>
+    </div>
+    <div class="alert alert-warning mt-3 d-none" id="networkCheckMessage"></div>
+
+    <div class="card network-check-summary-card mt-3" id="networkCheckLastRun" style="display:none;">
+        <div class="card-body">
+            <div class="d-flex flex-column flex-lg-row justify-content-between gap-3">
+                <div>
+                    <div class="text-muted small mb-1"><?php echo __('Последняя проверка сетей'); ?></div>
+                    <div class="fw-semibold" data-summary-status>—</div>
+                    <div class="text-muted small" data-summary-time>—</div>
+                </div>
+                <div class="text-lg-end">
+                    <div class="small mb-1">
+                        <?php echo __('Успешно'); ?>: <span class="fw-semibold" data-summary-success>0</span> / <span data-summary-total>0</span>
+                    </div>
+                    <div class="small">
+                        <?php echo __('С ошибками'); ?>: <span class="fw-semibold" data-summary-failed>0</span>
+                    </div>
+                    <div class="small text-muted" data-summary-note></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="networkCheckModal" class="pp-modal" aria-hidden="true" role="dialog" aria-labelledby="networkCheckModalTitle">
+        <div class="pp-modal-dialog">
+            <div class="pp-modal-header">
+                <div class="pp-modal-title" id="networkCheckModalTitle"><?php echo __('Результаты проверки сетей'); ?></div>
+                <button type="button" class="pp-close" data-pp-close>&times;</button>
+            </div>
+            <div class="pp-modal-body">
+                <div id="networkCheckModalMeta" class="network-check-meta mb-3 text-muted small">&nbsp;</div>
+                <div class="progress network-check-progress mb-3" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar" id="networkCheckProgressBar" style="width:0%;">0%</div>
+                </div>
+                <div id="networkCheckModalNote" class="network-check-note mb-2"></div>
+                <div id="networkCheckCurrent" class="network-check-current mb-3"></div>
+                <div id="networkCheckResults" class="network-check-results"></div>
+            </div>
+            <div class="pp-modal-footer">
+                <button type="button" class="btn btn-outline-primary" data-pp-close><?php echo __('Закрыть'); ?></button>
+            </div>
+        </div>
+    </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+    const startBtn = document.getElementById('networkCheckButton');
+    if (!startBtn) return;
+    const historyBtn = document.getElementById('networkCheckHistoryButton');
+    const messageBox = document.getElementById('networkCheckMessage');
+    const summaryCard = document.getElementById('networkCheckLastRun');
+    const summaryStatus = summaryCard ? summaryCard.querySelector('[data-summary-status]') : null;
+    const summaryTime = summaryCard ? summaryCard.querySelector('[data-summary-time]') : null;
+    const summarySuccess = summaryCard ? summaryCard.querySelector('[data-summary-success]') : null;
+    const summaryTotal = summaryCard ? summaryCard.querySelector('[data-summary-total]') : null;
+    const summaryFailed = summaryCard ? summaryCard.querySelector('[data-summary-failed]') : null;
+    const summaryNote = summaryCard ? summaryCard.querySelector('[data-summary-note]') : null;
+
+    const modal = document.getElementById('networkCheckModal');
+    const progressBar = document.getElementById('networkCheckProgressBar');
+    const resultsContainer = document.getElementById('networkCheckResults');
+    const currentBox = document.getElementById('networkCheckCurrent');
+    const metaBox = document.getElementById('networkCheckModalMeta');
+    const noteBox = document.getElementById('networkCheckModalNote');
+
+    const labels = {
+        success: <?php echo json_encode(__('Успешно'), JSON_UNESCAPED_UNICODE); ?>,
+        failed: <?php echo json_encode(__('С ошибками'), JSON_UNESCAPED_UNICODE); ?>,
+        running: <?php echo json_encode(__('Выполняется'), JSON_UNESCAPED_UNICODE); ?>,
+        queued: <?php echo json_encode(__('В ожидании'), JSON_UNESCAPED_UNICODE); ?>,
+        allGood: <?php echo json_encode(__('Все сети опубликованы успешно'), JSON_UNESCAPED_UNICODE); ?>,
+        partial: <?php echo json_encode(__('Часть сетей завершилась с ошибками'), JSON_UNESCAPED_UNICODE); ?>,
+        failedSummary: <?php echo json_encode(__('Проверка не выполнена'), JSON_UNESCAPED_UNICODE); ?>,
+        noData: <?php echo json_encode(__('Проверка ещё не запускалась'), JSON_UNESCAPED_UNICODE); ?>,
+        current: <?php echo json_encode(__('Сейчас выполняется'), JSON_UNESCAPED_UNICODE); ?>,
+        startedAt: <?php echo json_encode(__('Запущено'), JSON_UNESCAPED_UNICODE); ?>,
+        finishedAt: <?php echo json_encode(__('Завершено'), JSON_UNESCAPED_UNICODE); ?>,
+        total: <?php echo json_encode(__('Всего сетей'), JSON_UNESCAPED_UNICODE); ?>,
+        open: <?php echo json_encode(__('Открыть'), JSON_UNESCAPED_UNICODE); ?>,
+        notAvailable: <?php echo json_encode(__('Недоступно'), JSON_UNESCAPED_UNICODE); ?>,
+        modalEmpty: <?php echo json_encode(__('Результаты отсутствуют.'), JSON_UNESCAPED_UNICODE); ?>,
+        alreadyRunning: <?php echo json_encode(__('Проверка уже выполняется.'), JSON_UNESCAPED_UNICODE); ?>
+    };
+
+    const errorMessages = {
+        'NO_ENABLED_NETWORKS': <?php echo json_encode(__('Нет активных сетей для проверки.'), JSON_UNESCAPED_UNICODE); ?>,
+        'WORKER_LAUNCH_FAILED': <?php echo json_encode(__('Не удалось запустить фоновый процесс.'), JSON_UNESCAPED_UNICODE); ?>,
+        'DB_CONNECTION': <?php echo json_encode(__('Ошибка подключения к базе данных.'), JSON_UNESCAPED_UNICODE); ?>,
+        'DB_WRITE': <?php echo json_encode(__('Не удалось сохранить данные.'), JSON_UNESCAPED_UNICODE); ?>,
+        'RUN_NOT_FOUND': <?php echo json_encode(__('Проверка не найдена.'), JSON_UNESCAPED_UNICODE); ?>,
+        'CSRF': <?php echo json_encode(__('Ошибка безопасности.'), JSON_UNESCAPED_UNICODE); ?>,
+        'DEFAULT': <?php echo json_encode(__('Произошла ошибка. Попробуйте снова.'), JSON_UNESCAPED_UNICODE); ?>
+    };
+
+    const apiStart = <?php echo json_encode(pp_url('admin/network_check.php?action=start'), JSON_UNESCAPED_UNICODE); ?>;
+    const apiStatus = <?php echo json_encode(pp_url('admin/network_check.php?action=status'), JSON_UNESCAPED_UNICODE); ?>;
+
+    let pollTimer = 0;
+    let currentRunId = null;
+    let modalOpen = false;
+    let latestData = null;
+
+    function clearMessage() {
+        if (!messageBox) return;
+        messageBox.classList.add('d-none');
+        messageBox.classList.remove('alert-warning', 'alert-danger', 'alert-success', 'alert-info');
+        messageBox.textContent = '';
+    }
+
+    function setMessage(type, text) {
+        if (!messageBox) return;
+        if (!text) { clearMessage(); return; }
+        messageBox.classList.remove('alert-warning', 'alert-danger', 'alert-success', 'alert-info');
+        let cls = 'alert-warning';
+        if (type === 'danger') cls = 'alert-danger';
+        else if (type === 'success') cls = 'alert-success';
+        else if (type === 'info') cls = 'alert-info';
+        messageBox.classList.remove('d-none');
+        messageBox.classList.add(cls);
+        messageBox.textContent = text;
+    }
+
+    function escapeHtml(str) {
+        return (str ?? '').toString().replace(/[&<>"']/g, function(ch) {
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+            return map[ch] || ch;
+        });
+    }
+
+    function formatDate(iso) {
+        if (!iso) return '—';
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return iso;
+        try { return date.toLocaleString(); } catch (e) { return iso; }
+    }
+
+    function buildBadge(status) {
+        switch (status) {
+            case 'success': return { cls: 'success', label: labels.success };
+            case 'failed': return { cls: 'failed', label: labels.failed };
+            case 'running': return { cls: 'running', label: labels.running };
+            default: return { cls: 'queued', label: labels.queued };
+        }
+    }
+
+    function updateProgress(run) {
+        if (!progressBar) return;
+        const total = run ? Math.max(0, run.total_networks) : 0;
+        const completed = run ? Math.max(0, run.completed_count) : 0;
+        const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+        progressBar.style.width = percent + '%';
+        progressBar.setAttribute('aria-valuenow', String(percent));
+        progressBar.textContent = percent + '%';
+        progressBar.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+        if (!run) return;
+        if (run.status === 'success') progressBar.classList.add('bg-success');
+        else if (run.status === 'completed') progressBar.classList.add('bg-warning');
+        else if (run.status === 'failed') progressBar.classList.add('bg-danger');
+    }
+
+    function summaryStatusText(run) {
+        if (!run) return labels.noData;
+        switch (run.status) {
+            case 'running':
+            case 'queued':
+                return labels.running;
+            case 'success':
+                return labels.allGood;
+            case 'completed':
+                return labels.partial;
+            default:
+                return labels.failedSummary;
+        }
+    }
+
+    function updateSummary(run) {
+        if (!summaryCard) return;
+        if (!run) {
+            summaryCard.style.display = 'none';
+            if (historyBtn) historyBtn.style.display = 'none';
+            return;
+        }
+        summaryCard.style.display = '';
+        if (historyBtn) {
+            historyBtn.style.display = '';
+            historyBtn.disabled = false;
+        }
+        if (summaryStatus) summaryStatus.textContent = summaryStatusText(run);
+        if (summaryTime) {
+            const ts = run.finished_at_iso || run.started_at_iso || run.created_at_iso;
+            summaryTime.textContent = ts ? formatDate(ts) : labels.notAvailable;
+        }
+        if (summarySuccess) summarySuccess.textContent = run.success_count;
+        if (summaryTotal) summaryTotal.textContent = run.total_networks;
+        if (summaryFailed) summaryFailed.textContent = run.failure_count;
+        if (summaryNote) {
+            if (run.notes) {
+                summaryNote.textContent = run.notes;
+                summaryNote.style.display = '';
+            } else {
+                summaryNote.textContent = '';
+                summaryNote.style.display = 'none';
+            }
+        }
+    }
+
+    function renderResults(results, run) {
+        if (!resultsContainer) return;
+        if (!Array.isArray(results) || results.length === 0) {
+            resultsContainer.innerHTML = '<div class="text-muted small">' + escapeHtml(labels.modalEmpty) + '</div>';
+            return;
+        }
+        const items = results.map(function(item){
+            const badge = buildBadge(item.status);
+            const classes = ['network-check-item'];
+            if (item.status === 'running') classes.push('running');
+            const parts = [];
+            if (item.published_url && item.status === 'success') {
+                parts.push('<a class="network-check-link" href="' + escapeHtml(item.published_url) + '" target="_blank" rel="noopener">' + escapeHtml(labels.open) + '</a>');
+            }
+            const times = [];
+            if (item.started_at_iso) { times.push(labels.startedAt + ': ' + escapeHtml(formatDate(item.started_at_iso))); }
+            if (item.finished_at_iso) { times.push(labels.finishedAt + ': ' + escapeHtml(formatDate(item.finished_at_iso))); }
+            if (times.length) {
+                parts.push('<div class="network-check-times">' + times.join(' · ') + '</div>');
+            }
+            if (item.status === 'failed' && item.error) {
+                parts.push('<div class="network-check-error">' + escapeHtml(item.error) + '</div>');
+            }
+            return '<div class="' + classes.join(' ') + '">' +
+                '<div class="network-check-item-header">' +
+                    '<div class="network-check-item-title">' + escapeHtml(item.network_title || item.network_slug) + '</div>' +
+                    '<span class="network-check-badge ' + badge.cls + '">' + escapeHtml(badge.label) + '</span>' +
+                '</div>' +
+                (parts.length ? '<div class="network-check-item-body">' + parts.join('') + '</div>' : '') +
+            '</div>';
+        }).join('');
+        resultsContainer.innerHTML = items;
+    }
+
+    function updateModal(data) {
+        if (!modalOpen) return;
+        const run = data ? data.run : null;
+        updateProgress(run);
+        if (!run) {
+            if (metaBox) metaBox.textContent = labels.noData;
+            if (currentBox) currentBox.textContent = '';
+            renderResults([], run);
+            if (noteBox) noteBox.textContent = '';
+            return;
+        }
+        if (metaBox) {
+            const metaParts = [];
+            metaParts.push(labels.total + ': ' + run.total_networks);
+            metaParts.push(labels.success + ': ' + run.success_count);
+            metaParts.push(labels.failed + ': ' + run.failure_count);
+            metaParts.push(labels.startedAt + ': ' + formatDate(run.started_at_iso));
+            if (run.finished_at_iso) {
+                metaParts.push(labels.finishedAt + ': ' + formatDate(run.finished_at_iso));
+            }
+            metaBox.textContent = metaParts.join(' · ');
+        }
+        if (noteBox) {
+            if (run.notes) {
+                noteBox.textContent = run.notes;
+                noteBox.style.display = '';
+            } else {
+                noteBox.textContent = '';
+                noteBox.style.display = 'none';
+            }
+        }
+        if (currentBox) {
+            const runningItem = Array.isArray(data.results) ? data.results.find(r => r.status === 'running') : null;
+            if (runningItem) {
+                currentBox.textContent = labels.current + ': ' + (runningItem.network_title || runningItem.network_slug);
+                currentBox.style.display = '';
+            } else {
+                currentBox.textContent = '';
+                currentBox.style.display = 'none';
+            }
+        }
+        renderResults(Array.isArray(data.results) ? data.results : [], run);
+    }
+
+    function updateUI(data) {
+        latestData = data;
+        updateSummary(data ? data.run : null);
+        updateModal(data || null);
+    }
+
+    function scheduleNext(intervalMs) {
+        clearTimeout(pollTimer);
+        if (!currentRunId) return;
+        pollTimer = window.setTimeout(function(){ fetchRunStatus(currentRunId); }, intervalMs);
+    }
+
+    async function requestStatus(runId) {
+        let url = apiStatus;
+        if (runId) {
+            url += '&run_id=' + encodeURIComponent(runId);
+        }
+        const response = await fetch(url, { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(errorMessages.DEFAULT);
+        }
+        const data = await response.json().catch(() => null);
+        if (!data || !data.ok) {
+            const errCode = data && data.error ? data.error : 'DEFAULT';
+            const msg = errorMessages[errCode] || errorMessages.DEFAULT;
+            throw new Error(msg);
+        }
+        return data;
+    }
+
+    async function fetchRunStatus(runId) {
+        if (!runId) {
+            await fetchLatestStatus();
+            return;
+        }
+        try {
+            const data = await requestStatus(runId);
+            updateUI(data);
+            if (data.run && data.run.in_progress) {
+                const delay = data.run.completed_count === 0 ? 1500 : 3000;
+                scheduleNext(delay);
+            } else {
+                clearTimeout(pollTimer);
+            }
+        } catch (err) {
+            setMessage('danger', err.message || errorMessages.DEFAULT);
+            clearTimeout(pollTimer);
+        }
+    }
+
+    async function fetchLatestStatus() {
+        try {
+            const data = await requestStatus(null);
+            updateUI(data);
+            if (data.run) {
+                if (!currentRunId) {
+                    currentRunId = data.run.id;
+                }
+                if (data.run.in_progress) {
+                    currentRunId = data.run.id;
+                    const delay = data.run.completed_count === 0 ? 1500 : 3000;
+                    scheduleNext(delay);
+                }
+            }
+        } catch (err) {
+            // ignore background errors for latest summary
+        }
+    }
+
+    function openModal() {
+        if (!modal) return;
+        modal.classList.add('show');
+        modal.removeAttribute('aria-hidden');
+        modalOpen = true;
+        if (latestData) {
+            updateModal(latestData);
+        }
+    }
+
+    function closeModal() {
+        if (!modal) return;
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        modalOpen = false;
+    }
+
+    if (modal) {
+        modal.addEventListener('click', function(e){
+            if (e.target === modal || (e.target && e.target.closest('[data-pp-close]'))) {
+                closeModal();
+            }
+        });
+        document.addEventListener('keydown', function(e){
+            if (e.key === 'Escape' && modal.classList.contains('show')) {
+                closeModal();
+            }
+        });
+    }
+
+    async function startCheck() {
+        clearMessage();
+        const prevHtml = startBtn.innerHTML;
+        startBtn.disabled = true;
+        startBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + escapeHtml(startBtn.dataset.label || '');
+        try {
+            const body = new URLSearchParams();
+            body.set('csrf_token', window.CSRF_TOKEN || '');
+            const response = await fetch(apiStart, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body.toString(),
+                credentials: 'same-origin'
+            });
+            const data = await response.json().catch(() => ({ ok: false, error: 'DEFAULT' }));
+            if (!data.ok) {
+                const msg = errorMessages[data.error || 'DEFAULT'] || errorMessages.DEFAULT;
+                throw new Error(msg);
+            }
+            currentRunId = data.runId || null;
+            if (data.alreadyRunning) {
+                setMessage('info', labels.alreadyRunning);
+            }
+            openModal();
+            await fetchRunStatus(currentRunId);
+        } catch (err) {
+            setMessage('danger', err.message || errorMessages.DEFAULT);
+        } finally {
+            startBtn.disabled = false;
+            startBtn.innerHTML = prevHtml;
+        }
+    }
+
+    function showHistory() {
+        if (!latestData || !latestData.run) {
+            setMessage('warning', labels.noData);
+            return;
+        }
+        clearMessage();
+        currentRunId = latestData.run.id;
+        openModal();
+        fetchRunStatus(currentRunId);
+    }
+
+    if (startBtn) {
+        startBtn.addEventListener('click', startCheck);
+    }
+    if (historyBtn) {
+        historyBtn.addEventListener('click', showHistory);
+    }
+
+    fetchLatestStatus();
+});
+</script>
 
 <div id="diagnostics-section" style="display:none;">
     <h3><?php echo __('Диагностика системы'); ?></h3>

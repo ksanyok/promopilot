@@ -307,6 +307,92 @@ function ensure_schema(): void {
         $maybeAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
     }
 
+    // Network diagnostics (batch check runs + per-network results)
+    $ncRunCols = $getCols('network_check_runs');
+    if (empty($ncRunCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `network_check_runs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `total_networks` INT NOT NULL DEFAULT 0,
+            `success_count` INT NOT NULL DEFAULT 0,
+            `failure_count` INT NOT NULL DEFAULT 0,
+            `notes` TEXT NULL,
+            `initiated_by` INT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            INDEX (`status`),
+            INDEX `idx_nc_runs_started_at` (`started_at`),
+            INDEX `idx_nc_runs_finished_at` (`finished_at`),
+            CONSTRAINT `fk_nc_runs_user` FOREIGN KEY (`initiated_by`) REFERENCES `users`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ncRunCheck = function(string $field, string $definition) use ($ncRunCols, $conn) {
+            if (!isset($ncRunCols[$field])) {
+                @$conn->query("ALTER TABLE `network_check_runs` ADD COLUMN {$definition}");
+            }
+        };
+        $ncRunCheck('status', "`status` VARCHAR(20) NOT NULL DEFAULT 'queued'");
+        $ncRunCheck('total_networks', "`total_networks` INT NOT NULL DEFAULT 0");
+        $ncRunCheck('success_count', "`success_count` INT NOT NULL DEFAULT 0");
+        $ncRunCheck('failure_count', "`failure_count` INT NOT NULL DEFAULT 0");
+        $ncRunCheck('notes', "`notes` TEXT NULL");
+        $ncRunCheck('initiated_by', "`initiated_by` INT NULL");
+        $ncRunCheck('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+        $ncRunCheck('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL");
+        $ncRunCheck('finished_at', "`finished_at` TIMESTAMP NULL DEFAULT NULL");
+        if (pp_mysql_index_exists($conn, 'network_check_runs', 'idx_nc_runs_started_at') === false) {
+            @$conn->query("CREATE INDEX `idx_nc_runs_started_at` ON `network_check_runs`(`started_at`)");
+        }
+        if (pp_mysql_index_exists($conn, 'network_check_runs', 'idx_nc_runs_finished_at') === false) {
+            @$conn->query("CREATE INDEX `idx_nc_runs_finished_at` ON `network_check_runs`(`finished_at`)");
+        }
+        if (pp_mysql_index_exists($conn, 'network_check_runs', 'network_check_runs_status') === false) {
+            @$conn->query("CREATE INDEX `network_check_runs_status` ON `network_check_runs`(`status`)");
+        }
+    }
+
+    $ncResCols = $getCols('network_check_results');
+    if (empty($ncResCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `network_check_results` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `run_id` INT NOT NULL,
+            `network_slug` VARCHAR(120) NOT NULL,
+            `network_title` VARCHAR(255) NOT NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `published_url` TEXT NULL,
+            `error` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX (`run_id`),
+            INDEX `idx_nc_results_status` (`status`),
+            INDEX `idx_nc_results_network` (`network_slug`),
+            CONSTRAINT `fk_nc_results_run` FOREIGN KEY (`run_id`) REFERENCES `network_check_runs`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ncResCheck = function(string $field, string $definition) use ($ncResCols, $conn) {
+            if (!isset($ncResCols[$field])) {
+                @$conn->query("ALTER TABLE `network_check_results` ADD COLUMN {$definition}");
+            }
+        };
+        $ncResCheck('run_id', "`run_id` INT NOT NULL");
+        $ncResCheck('network_slug', "`network_slug` VARCHAR(120) NOT NULL");
+        $ncResCheck('network_title', "`network_title` VARCHAR(255) NOT NULL");
+        $ncResCheck('status', "`status` VARCHAR(20) NOT NULL DEFAULT 'queued'");
+        $ncResCheck('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL");
+        $ncResCheck('finished_at', "`finished_at` TIMESTAMP NULL DEFAULT NULL");
+        $ncResCheck('published_url', "`published_url` TEXT NULL");
+        $ncResCheck('error', "`error` TEXT NULL");
+        $ncResCheck('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+        if (pp_mysql_index_exists($conn, 'network_check_results', 'idx_nc_results_status') === false) {
+            @$conn->query("CREATE INDEX `idx_nc_results_status` ON `network_check_results`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'network_check_results', 'idx_nc_results_network') === false) {
+            @$conn->query("CREATE INDEX `idx_nc_results_network` ON `network_check_results`(`network_slug`)");
+        }
+    }
+
     // New: page metadata storage (microdata extracted for links)
     $pmCols = $getCols('page_meta');
     if (empty($pmCols)) {
@@ -2163,6 +2249,362 @@ if (!function_exists('pp_run_queue_worker')) {
             $processed++;
             if ($spacingMs > 0) { @usleep($spacingMs * 1000); }
         }
+    }
+}
+
+// -------- Network diagnostics (batch publishing check) --------
+if (!function_exists('pp_network_check_launch_worker')) {
+    function pp_network_check_launch_worker(int $runId): bool {
+        $script = PP_ROOT_PATH . '/scripts/network_check_worker.php';
+        if (!is_file($script)) { return false; }
+        $phpBinary = PHP_BINARY ?: 'php';
+        $runId = max(1, $runId);
+        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        if ($isWindows) {
+            $cmd = 'start /B "" ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId;
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) { @pclose($handle); return true; }
+            return false;
+        }
+        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        if (function_exists('popen')) {
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) { @pclose($handle); return true; }
+        }
+        @exec($cmd);
+        return true;
+    }
+}
+
+if (!function_exists('pp_network_check_start')) {
+    function pp_network_check_start(?int $userId = null): array {
+        $enabledNetworks = array_values(array_filter(pp_get_networks(true, false), function(array $network): bool {
+            return empty($network['is_missing']) && !empty($network['enabled']);
+        }));
+        if (empty($enabledNetworks)) {
+            return ['ok' => false, 'error' => 'NO_ENABLED_NETWORKS'];
+        }
+
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return ['ok' => false, 'error' => 'DB_CONNECTION'];
+        }
+        if (!$conn) { return ['ok' => false, 'error' => 'DB_CONNECTION']; }
+
+        $activeId = null;
+        if ($res = @$conn->query("SELECT id FROM network_check_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
+            if ($row = $res->fetch_assoc()) { $activeId = (int)$row['id']; }
+            $res->free();
+        }
+        if ($activeId) {
+            $conn->close();
+            return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true];
+        }
+
+        $total = count($enabledNetworks);
+        if ($userId !== null) {
+            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks, initiated_by) VALUES ('queued', ?, ?)");
+            if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_WRITE']; }
+            $stmt->bind_param('ii', $total, $userId);
+        } else {
+            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks) VALUES ('queued', ?)");
+            if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_WRITE']; }
+            $stmt->bind_param('i', $total);
+        }
+        if (!$stmt->execute()) {
+            $stmt->close();
+            $conn->close();
+            return ['ok' => false, 'error' => 'DB_WRITE'];
+        }
+        $stmt->close();
+        $runId = (int)$conn->insert_id;
+
+        $resStmt = $conn->prepare("INSERT INTO network_check_results (run_id, network_slug, network_title) VALUES (?, ?, ?)");
+        if ($resStmt) {
+            foreach ($enabledNetworks as $net) {
+                $slug = (string)$net['slug'];
+                $title = (string)($net['title'] ?? $slug);
+                $resStmt->bind_param('iss', $runId, $slug, $title);
+                $resStmt->execute();
+            }
+            $resStmt->close();
+        }
+        $conn->close();
+
+        if (!pp_network_check_launch_worker($runId)) {
+            try {
+                $conn2 = @connect_db();
+                if ($conn2) {
+                    $msg = __('Не удалось запустить фоновый процесс.');
+                    $upd = $conn2->prepare("UPDATE network_check_runs SET status='failed', notes=? WHERE id=? LIMIT 1");
+                    if ($upd) {
+                        $upd->bind_param('si', $msg, $runId);
+                        $upd->execute();
+                        $upd->close();
+                    }
+                    $conn2->close();
+                }
+            } catch (Throwable $e) { /* ignore */ }
+            return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
+        }
+
+        return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
+    }
+}
+
+if (!function_exists('pp_network_check_format_ts')) {
+    function pp_network_check_format_ts(?string $ts): ?string {
+        if (!$ts) { return null; }
+        $ts = trim($ts);
+        if ($ts === '' || $ts === '0000-00-00 00:00:00') { return null; }
+        $time = strtotime($ts);
+        if ($time === false) { return $ts; }
+        return date(DATE_ATOM, $time);
+    }
+}
+
+if (!function_exists('pp_network_check_get_status')) {
+    function pp_network_check_get_status(?int $runId = null): array {
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return ['ok' => false, 'error' => 'DB_CONNECTION'];
+        }
+        if (!$conn) { return ['ok' => false, 'error' => 'DB_CONNECTION']; }
+
+        if ($runId === null || $runId <= 0) {
+            if ($res = @$conn->query("SELECT id FROM network_check_runs ORDER BY id DESC LIMIT 1")) {
+                if ($row = $res->fetch_assoc()) { $runId = (int)$row['id']; }
+                $res->free();
+            }
+        }
+        if (!$runId) {
+            $conn->close();
+            return ['ok' => true, 'run' => null, 'results' => []];
+        }
+
+        $stmt = $conn->prepare("SELECT id, status, total_networks, success_count, failure_count, notes, initiated_by, created_at, started_at, finished_at FROM network_check_runs WHERE id = ? LIMIT 1");
+        if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_READ']; }
+        $stmt->bind_param('i', $runId);
+        $stmt->execute();
+        $runRow = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if (!$runRow) {
+            $conn->close();
+            return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
+        }
+
+        $results = [];
+        $stmtRes = $conn->prepare("SELECT id, network_slug, network_title, status, started_at, finished_at, published_url, error, created_at FROM network_check_results WHERE run_id = ? ORDER BY id ASC");
+        if ($stmtRes) {
+            $stmtRes->bind_param('i', $runId);
+            $stmtRes->execute();
+            $res = $stmtRes->get_result();
+            while ($row = $res->fetch_assoc()) {
+                $results[] = [
+                    'id' => (int)$row['id'],
+                    'network_slug' => (string)$row['network_slug'],
+                    'network_title' => (string)$row['network_title'],
+                    'status' => (string)$row['status'],
+                    'started_at' => $row['started_at'],
+                    'started_at_iso' => pp_network_check_format_ts($row['started_at'] ?? null),
+                    'finished_at' => $row['finished_at'],
+                    'finished_at_iso' => pp_network_check_format_ts($row['finished_at'] ?? null),
+                    'created_at' => $row['created_at'],
+                    'created_at_iso' => pp_network_check_format_ts($row['created_at'] ?? null),
+                    'published_url' => (string)($row['published_url'] ?? ''),
+                    'error' => (string)($row['error'] ?? ''),
+                ];
+            }
+            $stmtRes->close();
+        }
+        $conn->close();
+
+        $run = [
+            'id' => (int)$runRow['id'],
+            'status' => (string)$runRow['status'],
+            'total_networks' => (int)$runRow['total_networks'],
+            'success_count' => (int)$runRow['success_count'],
+            'failure_count' => (int)$runRow['failure_count'],
+            'notes' => (string)($runRow['notes'] ?? ''),
+            'initiated_by' => $runRow['initiated_by'] !== null ? (int)$runRow['initiated_by'] : null,
+            'created_at' => $runRow['created_at'],
+            'created_at_iso' => pp_network_check_format_ts($runRow['created_at'] ?? null),
+            'started_at' => $runRow['started_at'],
+            'started_at_iso' => pp_network_check_format_ts($runRow['started_at'] ?? null),
+            'finished_at' => $runRow['finished_at'],
+            'finished_at_iso' => pp_network_check_format_ts($runRow['finished_at'] ?? null),
+        ];
+        $run['completed_count'] = $run['success_count'] + $run['failure_count'];
+        $run['in_progress'] = ($run['status'] === 'running');
+        $run['has_failures'] = ($run['failure_count'] > 0);
+
+        return ['ok' => true, 'run' => $run, 'results' => $results];
+    }
+}
+
+if (!function_exists('pp_process_network_check_run')) {
+    function pp_process_network_check_run(int $runId): void {
+        if ($runId <= 0) { return; }
+        if (function_exists('session_write_close')) { @session_write_close(); }
+        @ignore_user_abort(true);
+
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return;
+        }
+        if (!$conn) { return; }
+
+        $stmt = $conn->prepare("SELECT id, status, total_networks FROM network_check_runs WHERE id = ? LIMIT 1");
+        if (!$stmt) { $conn->close(); return; }
+        $stmt->bind_param('i', $runId);
+        $stmt->execute();
+        $runRow = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if (!$runRow) { $conn->close(); return; }
+        $status = (string)$runRow['status'];
+        if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
+
+        $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
+
+        $results = [];
+        $resStmt = $conn->prepare("SELECT id, network_slug, network_title FROM network_check_results WHERE run_id = ? ORDER BY id ASC");
+        if ($resStmt) {
+            $resStmt->bind_param('i', $runId);
+            $resStmt->execute();
+            $res = $resStmt->get_result();
+            while ($row = $res->fetch_assoc()) {
+                $results[] = $row;
+            }
+            $resStmt->close();
+        }
+
+        $total = count($results);
+        if ($total === 0) {
+            $msg = __('Нет активных сетей для проверки.');
+            $upd = $conn->prepare("UPDATE network_check_runs SET status='failed', notes=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+            if ($upd) {
+                $upd->bind_param('si', $msg, $runId);
+                $upd->execute();
+                $upd->close();
+            }
+            $conn->close();
+            return;
+        }
+        if ((int)$runRow['total_networks'] !== $total) {
+            $conn->query("UPDATE network_check_runs SET total_networks=" . $total . " WHERE id=" . (int)$runId . " LIMIT 1");
+        }
+
+        $success = 0;
+        $failed = 0;
+
+        $updateResultRunning = $conn->prepare("UPDATE network_check_results SET status='running', started_at=CURRENT_TIMESTAMP, error=NULL WHERE id=? LIMIT 1");
+        $updateResultSuccess = $conn->prepare("UPDATE network_check_results SET status='success', finished_at=CURRENT_TIMESTAMP, published_url=?, error=NULL WHERE id=? LIMIT 1");
+        $updateResultFail = $conn->prepare("UPDATE network_check_results SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id=? LIMIT 1");
+        $updateRunCounts = $conn->prepare("UPDATE network_check_runs SET success_count=?, failure_count=?, status='running' WHERE id=? LIMIT 1");
+
+        foreach ($results as $row) {
+            $resId = (int)$row['id'];
+            $slug = (string)$row['network_slug'];
+            if ($updateResultRunning) {
+                $updateResultRunning->bind_param('i', $resId);
+                $updateResultRunning->execute();
+            }
+
+            $network = pp_get_network($slug);
+            if (!$network || !empty($network['is_missing']) || empty($network['enabled'])) {
+                $errMsg = __('Обработчик сети недоступен.');
+                if ($updateResultFail) {
+                    $updateResultFail->bind_param('si', $errMsg, $resId);
+                    $updateResultFail->execute();
+                }
+                $failed++;
+                if ($updateRunCounts) {
+                    $updateRunCounts->bind_param('iii', $success, $failed, $runId);
+                    $updateRunCounts->execute();
+                }
+                continue;
+            }
+
+            $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
+            $openaiKey = trim((string)get_setting('openai_api_key', ''));
+            $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
+            $job = [
+                'url' => 'https://example.com/promo-diagnostics',
+                'anchor' => 'PromoPilot diagnostics link',
+                'language' => 'ru',
+                'wish' => 'Пожалуйста, создай короткую тестовую заметку (диагностика сетей PromoPilot) с положительным нейтральным тоном.',
+                'projectId' => 0,
+                'projectName' => 'PromoPilot Diagnostics',
+                'aiProvider' => $aiProvider,
+                'openaiApiKey' => $openaiKey,
+                'openaiModel' => $openaiModel,
+                'waitBetweenCallsMs' => 2000,
+                'diagnosticRunId' => $runId,
+                'networkSlug' => $slug,
+                'page_meta' => null,
+                'captcha' => [
+                    'provider' => (string)get_setting('captcha_provider', 'none'),
+                    'apiKey' => (string)get_setting('captcha_api_key', ''),
+                ],
+            ];
+
+            $result = null;
+            try {
+                $result = pp_publish_via_network($network, $job, 480);
+            } catch (Throwable $e) {
+                $result = ['ok' => false, 'error' => 'PHP_EXCEPTION', 'details' => $e->getMessage()];
+            }
+
+            $publishedUrl = '';
+            $ok = is_array($result) && !empty($result['ok']) && !empty($result['publishedUrl']);
+            if ($ok) {
+                $publishedUrl = trim((string)$result['publishedUrl']);
+                if ($updateResultSuccess) {
+                    $updateResultSuccess->bind_param('si', $publishedUrl, $resId);
+                    $updateResultSuccess->execute();
+                }
+                $success++;
+            } else {
+                $err = '';
+                if (is_array($result)) {
+                    $err = (string)($result['details'] ?? $result['error'] ?? $result['stderr'] ?? 'UNKNOWN_ERROR');
+                } else {
+                    $err = 'UNKNOWN_ERROR';
+                }
+                $errLen = function_exists('mb_strlen') ? mb_strlen($err) : strlen($err);
+                if ($errLen > 2000) {
+                    $err = function_exists('mb_substr') ? mb_substr($err, 0, 2000) : substr($err, 0, 2000);
+                }
+                if ($updateResultFail) {
+                    $updateResultFail->bind_param('si', $err, $resId);
+                    $updateResultFail->execute();
+                }
+                $failed++;
+            }
+
+            if ($updateRunCounts) {
+                $updateRunCounts->bind_param('iii', $success, $failed, $runId);
+                $updateRunCounts->execute();
+            }
+        }
+
+        if ($updateResultRunning) { $updateResultRunning->close(); }
+        if ($updateResultSuccess) { $updateResultSuccess->close(); }
+        if ($updateResultFail) { $updateResultFail->close(); }
+        if ($updateRunCounts) { $updateRunCounts->close(); }
+
+        $finalStatus = ($failed === 0) ? 'success' : 'completed';
+        $updFinish = $conn->prepare("UPDATE network_check_runs SET status=?, success_count=?, failure_count=?, total_networks=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+        if ($updFinish) {
+            $updFinish->bind_param('siiii', $finalStatus, $success, $failed, $total, $runId);
+            $updFinish->execute();
+            $updFinish->close();
+        }
+
+        $conn->close();
     }
 }
 

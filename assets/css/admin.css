@@ -159,3 +159,121 @@
 .table-striped>tbody>tr:nth-of-type(odd)>* { background: #121521; }
 .table-striped>tbody>tr:nth-of-type(even)>* { background: #0f1117; }
 .table > :not(caption) > * > * { border-bottom-color: var(--pp-border); }
+
+/* Network diagnostics */
+.network-check-summary-card {
+  background: #10131d;
+  border: 1px solid var(--pp-border);
+  color: var(--pp-text);
+}
+
+.network-check-summary-card .card-body {
+  padding: 14px 18px;
+}
+
+.network-check-progress {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  height: 16px;
+  overflow: hidden;
+}
+
+.network-check-progress .progress-bar {
+  background: var(--pp-primary);
+  font-size: 0.75rem;
+  line-height: 16px;
+  font-weight: 600;
+  color: #05070b;
+  transition: width .3s ease;
+}
+
+.network-check-progress .progress-bar.bg-success { background: var(--pp-success); color: #04170d; }
+.network-check-progress .progress-bar.bg-warning { background: var(--pp-warning); color: #241d08; }
+.network-check-progress .progress-bar.bg-danger { background: var(--pp-danger); color: #fff5f5; }
+
+.network-check-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.network-check-item {
+  border: 1px solid var(--pp-border);
+  background: #0f1117;
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.network-check-item.running {
+  border-color: var(--pp-primary);
+  box-shadow: 0 0 0 1px rgba(77, 163, 255, 0.25);
+}
+
+.network-check-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.network-check-item-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.network-check-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 0.75rem;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.network-check-badge.success { background: rgba(61, 220, 151, 0.14); color: var(--pp-success); }
+.network-check-badge.failed { background: rgba(255, 107, 107, 0.18); color: var(--pp-danger); }
+.network-check-badge.running { background: rgba(77, 163, 255, 0.18); color: var(--pp-primary); }
+.network-check-badge.queued { background: rgba(122, 128, 140, 0.18); color: var(--pp-muted); }
+
+.network-check-item-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--pp-muted);
+}
+
+.network-check-link {
+  color: var(--pp-primary);
+  font-weight: 600;
+}
+
+.network-check-link:hover {
+  text-decoration: underline;
+}
+
+.network-check-error {
+  color: var(--pp-danger);
+  word-break: break-word;
+}
+
+.network-check-times {
+  font-size: 0.78rem;
+  color: var(--pp-muted);
+}
+
+.network-check-current {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--pp-primary);
+}
+
+.network-check-note {
+  font-size: 0.85rem;
+  color: var(--pp-muted);
+}
