@@ -20,10 +20,32 @@ async function detectCaptcha(page) {
     return await page.evaluate(() => {
       const found = (sel) => !!document.querySelector(sel);
       const hasText = (t) => (document.body?.innerText || '').toLowerCase().includes(t);
-      // JustPaste grid overlay
-      if (document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer')) {
-        const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
-        return { found: true, type: 'grid', word };
+      const visible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 2 && rect.height > 2;
+      };
+      const master = document.querySelector('.captchaPanelMaster');
+      const panel = document.querySelector('.captchaPanelMaster .captchaPanel');
+      const grid = document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer');
+      const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+      const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
+      const gridVisible = visible(panel) && (visible(grid) || tiles.some(visible));
+      if (gridVisible || (master && visible(master) && (grid || tiles.length))) {
+        return {
+          found: true,
+          type: 'grid',
+          word,
+          debug: {
+            hasMaster: !!master,
+            hasPanel: !!panel,
+            hasGrid: !!grid,
+            tileCount: tiles.length,
+            panelVisible: visible(panel),
+            masterVisible: visible(master)
+          }
+        };
       }
       // reCAPTCHA
       if (found('iframe[src*="recaptcha"], div.g-recaptcha, div#recaptcha, .grecaptcha-badge')) return { found: true, type: 'recaptcha' };
@@ -31,7 +53,17 @@ async function detectCaptcha(page) {
       if (found('iframe[src*="hcaptcha"], .h-captcha')) return { found: true, type: 'hcaptcha' };
       // Cloudflare/generic
       if (hasText('captcha') || hasText('verify you are human') || found('#cf-challenge-running')) return { found: true, type: 'generic' };
-      return { found: false };
+      return {
+        found: false,
+        debug: {
+          hasMaster: !!master,
+          hasPanel: !!panel,
+          hasGrid: !!grid,
+          tileCount: tiles.length,
+          masterVisible: master ? visible(master) : false,
+          panelVisible: panel ? visible(panel) : false
+        }
+      };
     });
   } catch { return { found: false }; }
 }
@@ -326,7 +358,7 @@ async function solveIfCaptcha(page, logger, takeScreenshot) {
   }
   const det = await detectCaptcha(page);
   if (!det || !det.found) {
-    log && log('Captcha detection', { provider, found: false, type: det && det.type ? det.type : 'unknown' });
+    log && log('Captcha detection', { provider, found: false, type: det && det.type ? det.type : 'unknown', debug: det && det.debug ? det.debug : undefined });
     return false;
   }
   log && log('Captcha detection', { provider, found: true, type: det.type, details: det });

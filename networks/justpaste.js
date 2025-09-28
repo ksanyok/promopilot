@@ -278,6 +278,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       new Promise(r => setTimeout(r, 500))
     ]);
     if (navDone) { navigationResolved = true; break; }
+    await sleep(500);
   }
 
   const currentUrl = page.url();
