@@ -1,0 +1,17 @@
+<?php
+return [
+    'slug' => 'pasteofcode',
+    'title' => 'paste.ofcode.org',
+    'description' => 'Paste.ofcode.org — сервис для публикации кода с подсветкой.',
+    'handler' => __DIR__ . '/pasteofcode.js',
+    'handler_type' => 'node',
+    'meta' => [
+        'url' => 'https://paste.ofcode.org',
+        'regions' => [
+            'Global', 'US', 'EU', 'CIS', 'APAC'
+        ],
+        'topics' => [
+            'Developers', 'IT/Technology', 'Education', 'Cybersecurity'
+        ],
+    ],
+];
