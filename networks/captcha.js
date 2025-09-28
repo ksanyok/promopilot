@@ -36,7 +36,7 @@ async function detectCaptcha(page) {
   } catch { return { found: false }; }
 }
 
-async function waitForGridReady(page, logger, timeoutMs = 30000) {
+async function waitForGridReady(page, logger, timeoutMs = 45000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -55,7 +55,7 @@ async function waitForGridReady(page, logger, timeoutMs = 30000) {
       if (!state.found) return false;
       if (state.ready && !state.checking) return true;
     } catch {}
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 700));
   }
   logger && logger('Captcha grid not ready (timeout)');
   return false;
@@ -108,7 +108,9 @@ async function solveGridAntiCaptcha(page, apiKey, logger) {
     if (!info) return false;
     const { word, clip, centers } = info;
     logger && logger('Captcha detected', { type: 'grid', word });
-    const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
+  // small settle to ensure all tiles fully painted
+  await new Promise(r => setTimeout(r, 700));
+  const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
     const b64 = buf.toString('base64');
     const createResp = await fetch('https://api.anti-captcha.com/createTask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -146,8 +148,8 @@ async function solveGridAntiCaptcha(page, apiKey, logger) {
         await new Promise(r => setTimeout(r, 150));
       }
     }
-    await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
-    await new Promise(r => setTimeout(r, 800));
+  await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
+  await new Promise(r => setTimeout(r, 1500));
     const after = await page.evaluate(() => !!document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer'));
     if (!after) { logger && logger('Captcha solved'); return true; }
     // try refresh button once
@@ -173,7 +175,9 @@ async function solveGrid2Captcha(page, apiKey, logger) {
     if (!info) return false;
     const { word, clip, centers } = info;
     logger && logger('Captcha detected', { type: 'grid', word });
-    const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
+  // small settle to ensure all tiles fully painted
+  await new Promise(r => setTimeout(r, 700));
+  const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
     const b64 = buf.toString('base64');
     const params = new URLSearchParams();
     params.set('key', apiKey);
@@ -213,8 +217,8 @@ async function solveGrid2Captcha(page, apiKey, logger) {
         await new Promise(r => setTimeout(r, 150));
       }
     }
-    await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
-    await new Promise(r => setTimeout(r, 800));
+  await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) (b).click(); });
+  await new Promise(r => setTimeout(r, 1500));
     const after = await page.evaluate(() => !!document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer'));
     if (!after) { logger && logger('Captcha solved'); return true; }
     await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });

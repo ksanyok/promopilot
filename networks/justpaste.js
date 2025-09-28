@@ -215,7 +215,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => null);
   try { await page.click('.editArticleBottomButtons .publishButton'); } catch (_) {}
   screenshots.after_click = await takeScreenshot('after-click');
-  const deadline = Date.now() + 90000; // up to 90s
+  const deadline = Date.now() + 120000; // up to 120s to allow captcha to fully load/solve
   while (Date.now() < deadline) {
     // Try solve captcha if it appears
     try {
@@ -225,12 +225,28 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       }
       const solved = await solveIfCaptcha(page, logLine);
       if (solved) {
-        await new Promise(r=>setTimeout(r, 1000));
+        await new Promise(r=>setTimeout(r, 1200));
+        // Make sure we explicitly press Verify if captcha panel still visible
+        try {
+          await page.evaluate(() => {
+            const panel = document.querySelector('.captchaPanelMaster .captchaPanel');
+            if (panel) {
+              const btn = panel.querySelector('button.btn.btn-danger.CaptchaButtonVerify');
+              if (btn) btn.click();
+            }
+          });
+        } catch (_) {}
         // If still on editor, click Publish again to finalize
         try {
           const href = await page.evaluate(() => location.href);
           if (/\/edit|justpaste\.it\/?$/.test(href)) {
-            await page.click('.editArticleBottomButtons .publishButton').catch(()=>{});
+            await page.evaluate(() => {
+              // Do not touch premium links
+              const premium = document.querySelector('.becomePremiumPanel a.btn.btn-sm.btn-outline-danger');
+              if (premium) premium.removeAttribute('data-auto-click');
+              const btn = document.querySelector('.editArticleBottomButtons .publishButton');
+              if (btn) (btn).click();
+            });
           }
         } catch (_) {}
       }
