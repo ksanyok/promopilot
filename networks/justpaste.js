@@ -4,8 +4,8 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const fetch = require('node-fetch');
 const { generateText, cleanLLMOutput } = require('./ai_client');
+const { solveIfCaptcha } = require('./captcha');
 
 // Logger
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -50,7 +50,7 @@ function analyzeLinks(html, url, anchor) {
   } catch { return { totalLinks:0, ourLinkCount:0, externalCount:0, hasOurAnchorText:false }; }
 }
 
-async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, captchaCfg) {
+async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = { provider, openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '', model: process.env.OPENAI_MODEL || undefined, temperature: 0.2 };
   const meta = pageMeta || {};
@@ -60,12 +60,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   const region = (meta.region || '').toString().trim();
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
-  // Captcha config
-  const captcha = captchaCfg || (() => { try { const j = JSON.parse(process.env.PP_JOB || '{}'); return j.captcha || {}; } catch(_) { return {}; } })();
-  const captchaProvider = String((captcha && captcha.provider) || process.env.PP_CAPTCHA_PROVIDER || 'none').toLowerCase();
-  const captchaApiKey = String((captcha && captcha.apiKey) || process.env.PP_CAPTCHA_API_KEY || '').trim();
-
-  logLine('Publish start', { pageUrl, anchorText, language: pageLang, provider, captchaProvider: captchaProvider || 'none' });
+  logLine('Publish start', { pageUrl, anchorText, language: pageLang, provider });
 
   const prompts = {
     title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
@@ -200,562 +195,33 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     logLine('Fill editor failed', { error: String(e && e.message || e) });
   }
 
-  // Ensure editor change is registered
-  try {
-    await page.focus('.editArticleMiddle input.titleInput');
-    await page.keyboard.press('Tab').catch(()=>{});
-    await sleep(200);
-  } catch(_) {}
-  // Screenshot just before publish
-  async function takeScreenshot(label){
+  // Minimal publish-first flow with shared captcha solver
+  try { await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 15000 }); } catch (_) {}
+  const startUrl = page.url();
+  const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => null);
+  try { await page.click('.editArticleBottomButtons .publishButton'); } catch (_) {}
+  const deadline = Date.now() + 90000; // up to 90s
+  while (Date.now() < deadline) {
+    // Try solve captcha if it appears
+    try { const solved = await solveIfCaptcha(page, logLine); if (solved) { await new Promise(r=>setTimeout(r, 1000)); } } catch (_) {}
+    // Check if navigated to an article-like URL
     try {
-      const fname = `justpaste-${label}-${Date.now()}.png`;
-      const fpath = path.join(LOG_DIR, fname);
-      await page.screenshot({ path: fpath, fullPage: true });
-      logDbg('Screenshot', { label, path: fpath, url: page.url() });
-      return fpath;
-    } catch (e) { logLine('Screenshot error', { label, error: String(e && e.message || e) }); return ''; }
-  }
-  if (VERBOSE) await takeScreenshot('pre-publish');
-
-  // Extra: if page still on editor after publish try, retry once with re-toggling Html tab
-  async function extractPublishedUrl() {
-    // Prefer article-like URLs (not homepage), e.g., https://justpaste.it/abc12 or with a slug after domain
-    return await page.evaluate(() => {
-      const collect = new Set();
-      const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
-      const isArticleUrl = (s) => {
-        if (typeof s !== 'string') return false;
-        if (!/^https?:\/\//i.test(s)) return false; // only absolute URLs
-        try {
-          const u = new URL(s);
-          if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
-          const path = (u.pathname || '/').replace(/\/+/g,'/');
-          if (path === '/' || path === '') return false; // exclude homepage
-          // Exclude obvious non-article paths
-          if (/^\/(privacy|privacypolicy|terms|faq|pricing|premium|about)(?:\/|$)/i.test(path)) return false;
-          // Require at least one non-empty segment of 3+ chars (common pattern)
-          const segs = path.split('/').filter(Boolean);
-          return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
-        } catch { return false; }
-      };
-      // Gather anchors, excluding obvious ad/premium containers
-      for (const a of Array.from(document.querySelectorAll('a[href]'))) {
-        const withinAd = !!a.closest('.becomePremiumPanel, .ads, .advert, .premium, .ad, .sponsored');
-        const txt = (a.textContent || '').trim().toLowerCase();
-        if (withinAd) continue;
-        if (/premium/.test(txt)) continue;
-        add(a.href);
-      }
-      // Gather values from inputs/textareas ONLY if they look like absolute URLs
-      for (const el of Array.from(document.querySelectorAll('input[value], textarea'))) {
-        const v = (el.value || '').trim();
-        if (/^https?:\/\//i.test(v)) add(v);
-      }
-      // Also parse visible text for URLs
-      const text = document.body ? (document.body.innerText || '') : '';
-      const rx = /https?:\/\/(?:www\.)?justpaste\.it\/[A-Za-z0-9][A-Za-z0-9_-]{2,}[^\s"']*/g;
-      let m; while ((m = rx.exec(text)) !== null) add(m[0]);
-      // Rank by length (prefer deeper/slugged URLs)
-      const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
-      return cands[0] || null;
-    });
+      const href = await page.evaluate(() => location.href);
+      if (href && href !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(href) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(href)) break;
+    } catch (_) {}
+    // If navigation finished, break anyway
+    const navDone = await Promise.race([
+      navPromise,
+      new Promise(r => setTimeout(r, 500))
+    ]);
+    if (navDone) break;
   }
 
-  // Detect JustPaste custom grid captcha overlay
-  async function detectJpGridCaptcha() {
-    try {
-      return await page.evaluate(() => {
-        const wrap = document.querySelector('.captchaPanelMaster .captchaPanel .captchaGridContainer');
-        if (!wrap) return { found: false };
-        const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
-        const verifySel = !!document.querySelector('.captchaPanelMaster .CaptchaButtonVerify');
-        const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
-        return { found: true, word, tiles: tiles.length, verifySel };
-      });
-    } catch { return { found: false }; }
-  }
-
-  // Solve JustPaste grid captcha using Anti-Captcha (coordinates)
-  async function solveJpGridWithAntiCaptcha(maxTries = 2) {
-    if (!captchaApiKey) { logLine('Grid captcha: missing anti-captcha key'); return false; }
-    for (let attempt = 0; attempt < maxTries; attempt++) {
-      try {
-        const info = await page.evaluate(() => {
-          const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
-          const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
-          const rects = tiles.map(t => t.getBoundingClientRect());
-          if (rects.length === 0) return null;
-          let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-          rects.forEach(r => { left = Math.min(left, r.left); top = Math.min(top, r.top); right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom); });
-          const centers = rects.map(r => ({ x: r.left + r.width/2, y: r.top + r.height/2 }));
-          return { word, clip: { x: left, y: top, width: right-left, height: bottom-top }, centers };
-        });
-        if (!info) { logLine('Grid captcha: no tiles found'); return false; }
-        const { word, clip, centers } = info;
-        const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
-        const b64 = buf.toString('base64');
-        // Anti-captcha createTask
-        const createUrl = 'https://api.anti-captcha.com/createTask';
-        const resultUrl = 'https://api.anti-captcha.com/getTaskResult';
-        const payload = { clientKey: captchaApiKey, task: { type: 'ImageToCoordinatesTask', body: b64, comment: `Select all images with: ${word}` } };
-        logLine('Anti-captcha createTask (grid)');
-        const createResp = await fetch(createUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const createData = await createResp.json().catch(() => ({ errorId: 1, errorCode: 'JSON_ERR' }));
-        if (!createData || createData.errorId) { logLine('Anti-captcha createTask error', createData); continue; }
-        const taskId = createData.taskId;
-        const deadline = Date.now() + 180000;
-        let solution = null;
-        while (Date.now() < deadline) {
-          await sleep(5000);
-          const r = await fetch(resultUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: captchaApiKey, taskId }) });
-          const d = await r.json().catch(() => ({ errorId: 1, errorCode: 'JSON_ERR' }));
-          if (d && !d.errorId && d.status === 'ready') { solution = d.solution; break; }
-          if (d && d.errorId) { logLine('Anti-captcha getTaskResult error', d); break; }
-        }
-        if (!solution || !Array.isArray(solution.coordinates) || solution.coordinates.length === 0) { logLine('Anti-captcha timeout/no coordinates'); continue; }
-        const points = solution.coordinates.map(c => [Number(c.x)||0, Number(c.y)||0]);
-        const clickedIdx = new Set();
-        for (const [px, py] of points) {
-          const ax = clip.x + px; const ay = clip.y + py;
-          let best = -1; let bestDist = Infinity;
-          centers.forEach((c, i) => { const dx = c.x - ax, dy = c.y - ay; const dist = dx*dx + dy*dy; if (dist < bestDist) { bestDist = dist; best = i; } });
-          if (best >= 0 && !clickedIdx.has(best)) {
-            clickedIdx.add(best);
-            await page.evaluate((index) => {
-              const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
-              const el = tiles[index];
-              if (el) { el.scrollIntoView({block:'center'}); el.click(); }
-            }, best);
-            await sleep(150);
-          }
-        }
-        await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) { b.scrollIntoView({block:'center'}); (b).click(); } });
-        await sleep(800);
-        const after = await detectJpGridCaptcha();
-        if (!after || !after.found) { logLine('Grid captcha solved (anti-captcha)'); return true; }
-        // refresh and retry
-        await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
-        await sleep(600);
-      } catch (e) {
-        logLine('Grid captcha solve error', { error: String(e && e.message || e) });
-      }
-    }
-    return false;
-  }
-
-  // Solve JustPaste grid captcha using 2Captcha (coordinates)
-  async function solveJpGridWith2Captcha(maxTries = 2) {
-    if (!captchaApiKey) { logLine('Grid captcha: missing 2captcha key'); return false; }
-    for (let attempt = 0; attempt < maxTries; attempt++) {
-      try {
-        // Read instruction word and compute tight clip over union of tiles
-        const info = await page.evaluate(() => {
-          const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
-          const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
-          const rects = tiles.map(t => t.getBoundingClientRect());
-          if (rects.length === 0) return null;
-          let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-          rects.forEach(r => { left = Math.min(left, r.left); top = Math.min(top, r.top); right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom); });
-          const centers = rects.map(r => ({ x: r.left + r.width/2, y: r.top + r.height/2 }));
-          return { word, clip: { x: left, y: top, width: right-left, height: bottom-top }, centers };
-        });
-        if (!info) { logLine('Grid captcha: no tiles found'); return false; }
-        const { word, clip, centers } = info;
-        // Screenshot grid area
-        const buf = await page.screenshot({ clip: { x: Math.max(0, clip.x), y: Math.max(0, clip.y), width: Math.max(1, clip.width), height: Math.max(1, clip.height) } });
-        const b64 = buf.toString('base64');
-        // Send to 2captcha with coordinates mode
-        const params = new URLSearchParams();
-        params.set('key', captchaApiKey);
-        params.set('method', 'base64');
-        params.set('coordinatescaptcha', '1');
-        params.set('json', '1');
-        params.set('body', b64);
-        params.set('textinstructions', `Select all images with: ${word}`);
-        const inResp = await fetch('https://2captcha.com/in.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
-        const inData = await inResp.json().catch(() => ({}));
-        if (!inData || inData.status !== 1) { logLine('2captcha in.php error', inData); continue; }
-        const id = String(inData.request);
-        const deadline = Date.now() + 180000;
-        let coords = null;
-        while (Date.now() < deadline) {
-          await sleep(5000);
-          const ps = new URLSearchParams(); ps.set('key', captchaApiKey); ps.set('action','get'); ps.set('id', id); ps.set('json','1');
-          const r = await fetch('https://2captcha.com/res.php?' + ps.toString());
-          const d = await r.json().catch(() => ({}));
-          if (d && d.status === 1 && d.request) { coords = String(d.request); break; }
-          if (d && d.request && d.request !== 'CAPCHA_NOT_READY') { logLine('2captcha res.php error', d); break; }
-        }
-        if (!coords) { logLine('2captcha res.php timeout'); continue; }
-        // Parse coordinates like "x1,y1|x2,y2"
-        const points = coords.split('|').map(p => p.split(',').map(n => parseFloat(n))).filter(a => a.length === 2 && a.every(v => isFinite(v)));
-        // Map to nearest tile centers and click them
-        const clickedIdx = new Set();
-        for (const [px, py] of points) {
-          // px,py are relative to the clipped image; translate to page coords by adding clip.x/y
-          const ax = clip.x + px; const ay = clip.y + py;
-          let best = -1; let bestDist = Infinity;
-          centers.forEach((c, i) => { const dx = c.x - ax, dy = c.y - ay; const dist = dx*dx + dy*dy; if (dist < bestDist) { bestDist = dist; best = i; } });
-          if (best >= 0 && !clickedIdx.has(best)) {
-            clickedIdx.add(best);
-            await page.evaluate((index) => {
-              const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
-              const el = tiles[index];
-              if (el) { el.scrollIntoView({block:'center'}); el.click(); }
-            }, best);
-            await sleep(200);
-          }
-        }
-        // Click Verify
-        await page.evaluate(() => { const b = document.querySelector('.captchaPanelMaster .CaptchaButtonVerify'); if (b) { b.scrollIntoView({block:'center'}); (b).click(); } });
-        await sleep(800);
-        // Check if overlay disappeared
-        const after = await detectJpGridCaptcha();
-        if (!after || !after.found) { logLine('Grid captcha solved (2captcha)'); return true; }
-        // else try refresh button and retry
-        await page.evaluate(() => { const r = document.querySelector('.captchaPanelMaster .CaptchaBottom .btn.btn-danger'); if (r) (r).click(); });
-        await sleep(600);
-      } catch (e) {
-        logLine('Grid captcha solve error', { error: String(e && e.message || e) });
-      }
-    }
-    return false;
-  }
-
-  async function validateCandidateUrl(candidateUrl) {
-    // Open in a temp page to avoid messing with the main page
-    if (!candidateUrl || !/^https?:\/\//i.test(candidateUrl)) return { ok: false, reason: 'INVALID_URL' };
-    let temp;
-    try {
-      temp = await browser.newPage();
-      await temp.goto(candidateUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(()=>{});
-      const res = await temp.evaluate((expectedUrl, expectedTitle) => {
-        const body = document.body;
-        const html = body ? (body.innerHTML || '') : '';
-        const text = body ? (body.innerText || '') : '';
-        const hasBacklink = expectedUrl ? html.includes(expectedUrl) : false;
-        const t = (document.title || '').trim();
-        const h = (document.querySelector('h1,h2')?.innerText || '').trim();
-        const titleHit = expectedTitle ? (t.includes(expectedTitle) || h.includes(expectedTitle)) : false;
-        const isAd = !!document.querySelector('.becomePremiumPanel, .ads, .advert, .premium, .ad, .sponsored');
-        const premiumText = /premium\b/i.test(text) && /\$\s*\d+(?:\.\d{1,2})?/.test(text);
-        return { hasBacklink, titleHit, isAd, premiumText };
-      }, pageUrl, (titleClean || '').slice(0, 60));
-      const ok = (res.hasBacklink || res.titleHit) && !res.isAd && !res.premiumText;
-      return { ok, details: res };
-    } catch (e) {
-      return { ok: false, reason: 'VALIDATION_ERROR', error: String(e && e.message || e) };
-    } finally {
-      try { if (temp) await temp.close(); } catch(_) {}
-    }
-  }
-
-  async function doPublish() {
-    const startUrl = page.url();
-    let gridHandled = false;
-    const tryClick = async () => {
-      // Check terms/agree checkbox if present
-      await page.evaluate(() => {
-        const sel = 'input[type="checkbox"][name*="agree" i], input[type="checkbox"][id*="agree" i], input[type="checkbox"][name*="terms" i], input[type="checkbox"][id*="terms" i]';
-        const cb = document.querySelector(sel);
-        if (cb && !cb.checked && !cb.disabled) { try { cb.click(); } catch(_) {} }
-      }).catch(()=>{});
-      await sleep(100);
-
-      const info = await page.evaluate(() => {
-        const visible = (el) => {
-          if (!el) return false;
-          const cs = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-          if (rect.width <= 0 || rect.height <= 0) return false;
-          return true;
-        };
-        const all = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
-        const label = (el) => (el.innerText || el.textContent || '').trim();
-        const isPublish = (t, el) => /(^|\b)publish(\b|$)/i.test(t) || (el && el.classList && el.classList.contains('publishButton')) || /опубликовать/i.test(t);
-        const cands = [];
-        all.forEach((el, idx) => {
-          const text = label(el);
-          const cand = {
-            idx,
-            tag: el.tagName,
-            id: el.id || '',
-            classes: el.className || '',
-            text,
-            inBottom: !!el.closest('.editArticleBottomButtons'),
-            disabled: !!el.disabled,
-            visible: visible(el),
-            isPublish: isPublish(text, el)
-          };
-          if (cand.visible && cand.isPublish && !cand.disabled) cands.push(cand);
-        });
-        cands.sort((a,b) => Number(b.inBottom) - Number(a.inBottom));
-        const chosen = cands[0] || null;
-        if (chosen) {
-          const el = all[chosen.idx];
-          try { el.scrollIntoView({block:'center'}); } catch(_) {}
-          try { el.click(); } catch(_) {}
-        }
-        return { candidates: cands, chosen };
-      });
-      try { logDbg('Publish click info', info); } catch(_) {}
-      if (!info || !info.chosen) throw new Error('PUBLISH_BUTTON_NOT_FOUND');
-    };
-
-    // Try up to 3 click attempts, each with polling for navigation or a justpaste article URL in DOM
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (VERBOSE) await takeScreenshot(`attempt${attempt+1}-pre-click`);
-      try { await tryClick(); } catch (e) { logLine('tryClick error', { error: String(e && e.message || e) }); }
-      await sleep(350);
-      if (VERBOSE) await takeScreenshot(`attempt${attempt+1}-post-click`);
-      const t0 = Date.now();
-      let found = null;
-      while (Date.now() - t0 < 45000) { // 45s per attempt
-        // Navigation or URL change to an article-like URL
-        let now = null;
-        try { now = await page.evaluate(() => location.href); } catch (e) {
-          const closed = page.isClosed && page.isClosed();
-          logDbg('Page evaluate href failed', { error: String(e && e.message || e), closed });
-          if (closed) throw new Error('PAGE_CLOSED');
-        }
-        if (now && now !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(now) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(now)) {
-          return now;
-        }
-        // Handle custom grid captcha overlay
-        try {
-          const grid = await detectJpGridCaptcha();
-          if (grid && grid.found && !gridHandled) {
-            logLine('Captcha detected', { type: 'grid', word: grid.word });
-            let ok = false;
-            if (captchaProvider === 'anti-captcha') ok = await solveJpGridWithAntiCaptcha(2);
-            else if (captchaProvider === '2captcha') ok = await solveJpGridWith2Captcha(2);
-            gridHandled = true;
-            if (ok) { logLine('Captcha solved'); await sleep(1000); continue; }
-          }
-        } catch (_) {}
-        // Try extract from DOM
-        found = await extractPublishedUrl();
-        if (found) {
-          // Validate candidate (avoid premium/ad links)
-          try {
-            const v = await validateCandidateUrl(found);
-            if (v && v.ok) return found;
-            else logDbg('Discarded candidate URL', { found, validation: v });
-          } catch(_) {}
-        }
-        await sleep(500);
-      }
-      // If not found yet, small wait and retry
-      await sleep(1000);
-    }
-    throw new Error('PUBLISH_NO_NAVIGATION');
-  }
-  let resultUrl = null;
-  try { resultUrl = await doPublish(); }
-  catch (e) {
-    logDbg('Publish attempt failed, retrying after toggling Html', { error: String(e && e.message || e) });
-    try {
-      await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('#editArticleWidget .tabsBar a, .editArticleMiddle .tabsBar a'));
-        for (const t of tabs) {
-          const txt = (t.textContent||'').trim().toLowerCase();
-          if (txt === 'editor' || txt === 'html') t.click();
-        }
-      });
-    } catch(_) {}
-    await sleep(400);
-    resultUrl = await doPublish();
-  }
-
-  // Resolve final published URL: prefer detected article URL, fallback to current page URL, avoid homepage
-  let publishedUrl = resultUrl || page.url();
-  if (/^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
-    // Last-ditch attempt to extract from DOM if we somehow ended on homepage
-    const last = await extractPublishedUrl();
-    if (last) { publishedUrl = last; try { await page.goto(publishedUrl, { waitUntil: 'domcontentloaded' }); } catch(_) {} }
-  }
-  // Guard: ensure it’s an absolute justpaste URL; otherwise try to re-extract
-  if (!/^https?:\/\//i.test(publishedUrl) || !/^(?:https?:\/\/)(?:www\.)?justpaste\.it\//i.test(publishedUrl)) {
-    const last2 = await extractPublishedUrl();
-    if (last2) publishedUrl = last2;
-  }
-  // Final validation; if fails, keep the URL but mark as requiresCaptcha unless user opted otherwise
-  try {
-    const vfinal = await validateCandidateUrl(publishedUrl);
-    if (vfinal && !vfinal.ok) {
-      logLine('Final URL seems not an article, likely ad or blocked', { publishedUrl, validation: vfinal });
-    }
-  } catch(_) {}
-  if (VERBOSE) await takeScreenshot('post-publish');
-  // Try to load the article URL (to observe redirects/captcha)
-  let requiresCaptcha = false; let captchaType = '';
-  const detectCaptcha = async () => {
-    return await page.evaluate(() => {
-      const found = (sel) => !!document.querySelector(sel);
-      const hasText = (t) => (document.body?.innerText || '').toLowerCase().includes(t);
-      // reCAPTCHA
-      if (found('iframe[src*="recaptcha"], div.g-recaptcha, div#recaptcha, .grecaptcha-badge')) return { found: true, type: 'recaptcha' };
-      // hCaptcha
-      if (found('iframe[src*="hcaptcha"], .h-captcha')) return { found: true, type: 'hcaptcha' };
-      // Cloudflare challenge
-      if (hasText('just a moment') || found('#cf-challenge-running') || found('div#challenge-form')) return { found: true, type: 'cloudflare' };
-      // Generic
-      if (hasText('captcha') || hasText('verify you are human') || hasText('подтвердите что вы не робот')) return { found: true, type: 'generic' };
-      return { found: false, type: '' };
-    });
-  };
-  try {
-    if (publishedUrl && /^https?:\/\//i.test(publishedUrl)) {
-      await page.goto(publishedUrl, { waitUntil: 'networkidle2', timeout: 120000 }).catch(()=>{});
-      const res = await detectCaptcha();
-      if (res && res.found) { requiresCaptcha = true; captchaType = res.type || 'unknown'; }
-    }
-  } catch(_) {}
-
-  // If captcha is present, capture a screenshot for diagnostics
-  let captchaScreenshot = '';
-  let captchaSolved = false;
-  if (requiresCaptcha) {
-    try {
-      const fname = `justpaste-captcha-${Date.now()}.png`;
-      const fpath = path.join(LOG_DIR, fname);
-      await page.screenshot({ path: fpath, fullPage: true }).catch(()=>{});
-      captchaScreenshot = fpath;
-      logLine('Captcha detected', { captchaType, url: page.url() });
-    } catch(_) {}
-
-    // Attempt auto-solve if configured
-    if (captchaProvider !== 'none' && captchaApiKey) {
-      try {
-        const siteKey = await (async () => {
-          try {
-            return await page.evaluate(() => {
-              const out = { recaptcha: '', hcaptcha: '' };
-              const findParam = (src, key) => {
-                try {
-                  const u = new URL(src, location.href);
-                  return u.searchParams.get(key) || '';
-                } catch { return ''; }
-              };
-              // reCAPTCHA: data-sitekey or iframe k/sitekey param
-              const r1 = document.querySelector('div.g-recaptcha[data-sitekey]');
-              if (r1) out.recaptcha = r1.getAttribute('data-sitekey') || '';
-              if (!out.recaptcha) {
-                const r2 = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]')).map(f => findParam(f.getAttribute('src')||'', 'k') || findParam(f.getAttribute('src')||'', 'sitekey')).find(Boolean);
-                if (r2) out.recaptcha = r2;
-              }
-              // hCaptcha: data-sitekey or iframe sitekey param
-              const h1 = document.querySelector('div.h-captcha[data-sitekey], .h-captcha[data-sitekey]');
-              if (h1) out.hcaptcha = h1.getAttribute('data-sitekey') || '';
-              if (!out.hcaptcha) {
-                const h2 = Array.from(document.querySelectorAll('iframe[src*="hcaptcha.com"]')).map(f => findParam(f.getAttribute('src')||'', 'sitekey')).find(Boolean);
-                if (h2) out.hcaptcha = h2;
-              }
-              return out;
-            });
-          } catch { return { recaptcha:'', hcaptcha:'' }; }
-        })();
-
-        const sitekey = captchaType === 'hcaptcha' ? (siteKey && siteKey.hcaptcha) : (siteKey && siteKey.recaptcha);
-  logDbg('Captcha sitekey', { type: captchaType, sitekey: sitekey ? (sitekey.slice(0,6)+'...') : '' });
-        if (sitekey) {
-          const solve2Captcha = async () => {
-            const isH = captchaType === 'hcaptcha';
-            const inUrl = 'http://2captcha.com/in.php';
-            const resUrl = 'http://2captcha.com/res.php';
-            const params = new URLSearchParams();
-            params.set('key', captchaApiKey);
-            params.set('json', '1');
-            params.set('method', isH ? 'hcaptcha' : 'userrecaptcha');
-            if (isH) params.set('sitekey', sitekey); else params.set('googlekey', sitekey);
-            params.set('pageurl', publishedUrl);
-            let resp = await fetch(`${inUrl}?${params.toString()}`);
-            let data = await resp.json().catch(()=>({status:0,request:'JSON_ERR'}));
-            if (!data || data.status !== 1) throw new Error('2captcha in.php error: ' + (data && data.request));
-            const id = data.request;
-            const poll = async () => {
-              const ps = new URLSearchParams(); ps.set('key', captchaApiKey); ps.set('action','get'); ps.set('id', id); ps.set('json','1');
-              let r; let d;
-              const deadline = Date.now() + 180000; // 3min
-              while (Date.now() < deadline) {
-                await sleep(5000);
-                r = await fetch(`${resUrl}?${ps.toString()}`);
-                d = await r.json().catch(()=>({status:0,request:'JSON_ERR'}));
-                if (d && d.status === 1) return d.request;
-                if (d && typeof d.request === 'string' && d.request !== 'CAPCHA_NOT_READY') break;
-              }
-              throw new Error('2captcha res.php timeout or error: ' + (d && d.request));
-            };
-            return await poll();
-          };
-
-          const solveAntiCaptcha = async () => {
-            const isH = captchaType === 'hcaptcha';
-            const createUrl = 'https://api.anti-captcha.com/createTask';
-            const resultUrl = 'https://api.anti-captcha.com/getTaskResult';
-            const type = isH ? 'HCaptchaTaskProxyless' : 'NoCaptchaTaskProxyless';
-            const createPayload = { clientKey: captchaApiKey, task: { type, websiteURL: publishedUrl, websiteKey: sitekey } };
-            let resp = await fetch(createUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(createPayload) });
-            let data = await resp.json().catch(()=>({errorId:1,errorCode:'JSON_ERR'}));
-            if (!data || data.errorId) throw new Error('anti-captcha createTask error: ' + (data && (data.errorCode||data.errorDescription)));
-            const taskId = data.taskId;
-            const pollPayload = { clientKey: captchaApiKey, taskId };
-            const deadline = Date.now() + 180000;
-            while (Date.now() < deadline) {
-              await sleep(5000);
-              const r = await fetch(resultUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pollPayload) });
-              const d = await r.json().catch(()=>({errorId:1,errorCode:'JSON_ERR'}));
-              if (d && !d.errorId && d.status === 'ready') {
-                const sol = d.solution || {};
-                return sol.gRecaptchaResponse || sol.token || '';
-              }
-              if (d && d.errorId) throw new Error('anti-captcha getTaskResult error: ' + (d.errorCode||d.errorDescription));
-            }
-            throw new Error('anti-captcha timeout');
-          };
-
-          const token = captchaProvider === '2captcha' ? await solve2Captcha() : await solveAntiCaptcha();
-          logDbg('Captcha token obtained', { len: (token||'').length, provider: captchaProvider });
-          // Inject token and try to proceed
-          const injected = await page.evaluate((type, tok) => {
-            const inject = (name) => {
-              let el = document.querySelector(`textarea[name="${name}"]`) || document.querySelector(`#${name}`);
-              if (!el) { el = document.createElement('textarea'); el.name = name; el.id = name; el.style.display = 'none'; document.body.appendChild(el); }
-              el.value = tok;
-              try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch {}
-              return !!el;
-            };
-            let ok = false;
-            if (type === 'hcaptcha') { ok = inject('h-captcha-response'); }
-            else { ok = inject('g-recaptcha-response'); }
-            // Try to submit a containing form or click a visible continue/verify button
-            const form = document.querySelector('form');
-            if (form) { try { form.submit(); } catch {} }
-            const btn = Array.from(document.querySelectorAll('button, input[type="submit"], a'))
-              .find(el => /continue|verify|submit|продолжить|подтвердить/i.test(el.textContent||el.value||''));
-            if (btn) { try { btn.click(); } catch {} }
-            return ok;
-          }, captchaType, token);
-          await sleep(3000);
-          try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(()=>{}); } catch {}
-          // Re-check
-          const after = await detectCaptcha();
-          if (!after || !after.found) { captchaSolved = true; requiresCaptcha = false; captchaType = ''; logLine('Captcha solved'); }
-        } else {
-          logDbg('Captcha sitekey not found, auto-solve skipped');
-        }
-      } catch (e) {
-        logLine('Captcha solve error', { error: String(e && e.message || e) });
-      }
-    }
-  }
-
+  const publishedUrl = page.url();
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, requiresCaptcha, captchaType, captchaScreenshot, captchaSolved };
+  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE };
 }
 
 module.exports = { publish: publishToJustPaste };
@@ -784,7 +250,7 @@ if (require.main === module) {
         logLine('Run failed (missing openai key)', payload); console.log(JSON.stringify(payload)); process.exit(1);
       }
 
-  const res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job.captcha || null);
+  const res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
       logLine('Success result', res); console.log(JSON.stringify(res)); process.exit(0);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'justpaste', logFile: LOG_FILE };
