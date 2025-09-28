@@ -36,6 +36,31 @@ async function detectCaptcha(page) {
   } catch { return { found: false }; }
 }
 
+async function waitForGridReady(page, logger, timeoutMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const state = await page.evaluate(() => {
+        const wrap = document.querySelector('.captchaPanelMaster .captchaPanel');
+        if (!wrap) return { found: false };
+        const checking = !!Array.from(wrap.querySelectorAll('*')).find(el => /checking your browser/i.test(el.textContent||''));
+        const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
+        const ready = tiles.length > 0 && tiles.some(t => {
+          const cs = window.getComputedStyle(t);
+          const bg = cs.backgroundImage || '';
+          return /url\(.*\)/i.test(bg) && !/loader|loading|spinner/i.test(bg);
+        });
+        return { found: true, checking, ready, tiles: tiles.length };
+      });
+      if (!state.found) return false;
+      if (state.ready && !state.checking) return true;
+    } catch {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  logger && logger('Captcha grid not ready (timeout)');
+  return false;
+}
+
 async function getSiteKeys(page) {
   try {
     return await page.evaluate(() => {
@@ -67,6 +92,9 @@ async function getSiteKeys(page) {
 
 async function solveGridAntiCaptcha(page, apiKey, logger) {
   try {
+    // Wait until tiles are actually loaded (avoid spinner state)
+    const ready = await waitForGridReady(page, logger);
+    if (!ready) return false;
     const info = await page.evaluate(() => {
       const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
       const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));
@@ -130,6 +158,8 @@ async function solveGridAntiCaptcha(page, apiKey, logger) {
 
 async function solveGrid2Captcha(page, apiKey, logger) {
   try {
+    const ready = await waitForGridReady(page, logger);
+    if (!ready) return false;
     const info = await page.evaluate(() => {
       const word = (document.querySelector('.captchaPanelMaster .CaptchaHead .correctWord')?.textContent || '').trim();
       const tiles = Array.from(document.querySelectorAll('.captchaPanelMaster .clickableImage'));

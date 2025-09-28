@@ -118,6 +118,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   logDbg('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
   const browser = await puppeteer.launch(launchOpts);
   const page = await browser.newPage();
+  try { await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 }); } catch (_) {}
   page.setDefaultTimeout(300000); page.setDefaultNavigationTimeout(300000);
   await page.goto('https://justpaste.it/', { waitUntil: 'networkidle2' });
   // Log UA for diagnostics
@@ -223,7 +224,16 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
         screenshots.captcha = await takeScreenshot('captcha');
       }
       const solved = await solveIfCaptcha(page, logLine);
-      if (solved) { await new Promise(r=>setTimeout(r, 1000)); }
+      if (solved) {
+        await new Promise(r=>setTimeout(r, 1000));
+        // If still on editor, click Publish again to finalize
+        try {
+          const href = await page.evaluate(() => location.href);
+          if (/\/edit|justpaste\.it\/?$/.test(href)) {
+            await page.click('.editArticleBottomButtons .publishButton').catch(()=>{});
+          }
+        } catch (_) {}
+      }
     } catch (_) {}
     // Check if navigated to an article-like URL
     try {
