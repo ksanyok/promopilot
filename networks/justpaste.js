@@ -213,7 +213,13 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   try { await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 15000 }); } catch (_) {}
   const startUrl = page.url();
   const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => null);
-  try { await page.click('.editArticleBottomButtons .publishButton'); } catch (_) {}
+  let redirectDetected = false;
+  let redirectUrl = '';
+  let navigationResolved = false;
+  try {
+    await page.click('.editArticleBottomButtons .publishButton');
+    logLine('Publish button clicked', { startUrl });
+  } catch (_) {}
   screenshots.after_click = await takeScreenshot('after-click');
   const deadline = Date.now() + 120000; // up to 120s to allow captcha to fully load/solve
   while (Date.now() < deadline) {
@@ -259,19 +265,28 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     // Check if navigated to an article-like URL
     try {
       const href = await page.evaluate(() => location.href);
-      if (href && href !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(href) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(href)) break;
+      if (href && href !== startUrl && /https?:\/\/(?:www\.)?justpaste\.it\//.test(href) && !/https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(href)) {
+        redirectDetected = true;
+        redirectUrl = href;
+        logLine('Redirect detected', { from: startUrl, to: href });
+        break;
+      }
     } catch (_) {}
     // If navigation finished, break anyway
     const navDone = await Promise.race([
       navPromise,
       new Promise(r => setTimeout(r, 500))
     ]);
-    if (navDone) break;
+    if (navDone) { navigationResolved = true; break; }
   }
+
+  const currentUrl = page.url();
+  logLine('Navigation summary', { startUrl, currentUrl, redirectDetected, redirectUrl, navigationResolved });
 
   // If we still are on homepage, try to extract article URL from DOM
   async function extractPublishedUrl(p) {
-    return await page.evaluate(() => {
+    if (!p || typeof p.evaluate !== 'function') return null;
+    return await p.evaluate(() => {
       const collect = new Set();
       const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
       const isArticleUrl = (s) => {
@@ -342,10 +357,24 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
 
   // Determine final page and URL
   let targetPage = page;
-  let publishedUrl = page.url();
-  if (!publishedUrl || /^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
+  let publishedUrl = currentUrl;
+  const isHomepage = (url) => !url || /^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(url);
+  if (isHomepage(publishedUrl)) {
+    try {
+      const extractedHere = await extractPublishedUrl(page);
+      if (extractedHere) {
+        publishedUrl = extractedHere;
+        logLine('Article candidate located', { method: 'dom-extract', url: extractedHere });
+      }
+    } catch (_) {}
+  }
+  if (isHomepage(publishedUrl)) {
     const found = await findArticlePage();
-    if (found && found.url) { publishedUrl = found.url; targetPage = found.page || page; }
+    if (found && found.url) {
+      publishedUrl = found.url;
+      targetPage = found.page || page;
+      logLine('Article candidate located', { method: 'secondary-tab', url: publishedUrl });
+    }
   }
   // If still only homepage URL but we extracted candidate earlier, open it
   if (targetPage && publishedUrl && targetPage.url() !== publishedUrl) {
@@ -356,7 +385,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
       screenshots.published = await (async () => await targetPage.screenshot({ path: path.join(LOG_DIR, `justpaste-published-${Date.now()}.png`), fullPage: true }))();
     }
   } catch (e) { logLine('Screenshot error', { label: 'published', error: String(e && e.message || e) }); }
-  logLine('Published', { publishedUrl });
+  logLine('Published', { publishedUrl, redirected: Boolean(startUrl && publishedUrl && startUrl !== publishedUrl) });
   await browser.close();
   logLine('Browser closed');
   return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, screenshots };

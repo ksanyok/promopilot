@@ -318,18 +318,34 @@ async function solveTokenCaptcha(page, type, provider, apiKey, pageUrl, logger) 
 
 async function solveIfCaptcha(page, logger, takeScreenshot) {
   const { provider, apiKey } = readConfig();
-  if (!apiKey || provider === 'none') return false;
-  const det = await detectCaptcha(page);
-  if (!det || !det.found) return false;
-  if (det.type === 'grid') {
-    if (provider === 'anti-captcha') return await solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot);
-    if (provider === '2captcha') return await solveGrid2Captcha(page, apiKey, logger, takeScreenshot);
+  const log = typeof logger === 'function' ? logger : null;
+  log && log('Captcha solver init', { provider, apiKeyPresent: Boolean(apiKey) });
+  if (!apiKey || provider === 'none') {
+    log && log('Captcha solver skipped', { reason: !apiKey ? 'missing_api_key' : 'provider_none' });
     return false;
   }
-  if (det.type === 'recaptcha' || det.type === 'hcaptcha') {
-    return await solveTokenCaptcha(page, det.type, provider, apiKey, await page.url(), logger);
+  const det = await detectCaptcha(page);
+  if (!det || !det.found) {
+    log && log('Captcha detection', { provider, found: false, type: det && det.type ? det.type : 'unknown' });
+    return false;
   }
-  return false;
+  log && log('Captcha detection', { provider, found: true, type: det.type, details: det });
+  let result = false;
+  if (det.type === 'grid') {
+    if (provider === 'anti-captcha') {
+      result = await solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot);
+    } else if (provider === '2captcha') {
+      result = await solveGrid2Captcha(page, apiKey, logger, takeScreenshot);
+    } else {
+      log && log('Captcha solve result', { provider, type: det.type, success: false, reason: 'unsupported_provider' });
+      return false;
+    }
+  } else if (det.type === 'recaptcha' || det.type === 'hcaptcha') {
+    result = await solveTokenCaptcha(page, det.type, provider, apiKey, await page.url(), logger);
+  }
+  const success = Boolean(result && (result === true || result.solved));
+  log && log('Captcha solve result', { provider, type: det.type, success });
+  return result;
 }
 
 module.exports = { detectCaptcha, solveIfCaptcha };
