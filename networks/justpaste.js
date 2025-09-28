@@ -249,7 +249,7 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   }
 
   // If we still are on homepage, try to extract article URL from DOM
-  async function extractPublishedUrl() {
+  async function extractPublishedUrl(p) {
     return await page.evaluate(() => {
       const collect = new Set();
       const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
@@ -275,13 +275,66 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     });
   }
 
-  let publishedUrl = page.url();
-  if (/^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
-    try { const extracted = await extractPublishedUrl(); if (extracted) publishedUrl = extracted; } catch (_) {}
+  // Helper: find article page among all browser tabs
+  async function findArticlePage() {
+    try {
+      const pages = await browser.pages();
+      // 1) Prefer page whose current URL already looks like an article
+      for (const p of pages) {
+        const href = p.url();
+        if (/^https?:\/\/(?:www\.)?justpaste\.it\//.test(href) && !/^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(href)) {
+          return { page: p, url: href };
+        }
+      }
+      // 2) Otherwise try to extract candidate URL from DOM of each page
+      for (const p of pages) {
+        try {
+          const cand = await p.evaluate(() => {
+            const collect = new Set();
+            const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
+            const isArticleUrl = (s) => {
+              if (typeof s !== 'string') return false;
+              if (!/^https?:\/\//i.test(s)) return false;
+              try {
+                const u = new URL(s);
+                if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
+                const pth = (u.pathname || '/').replace(/\/+/g,'/');
+                if (pth === '/' || pth === '') return false;
+                if (/^\/(privacy|privacypolicy|terms|faq|pricing|premium|about)(?:\/|$)/i.test(pth)) return false;
+                const segs = pth.split('/').filter(Boolean);
+                return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
+              } catch { return false; }
+            };
+            Array.from(document.querySelectorAll('a[href]')).forEach(a => add(a.href));
+            const text = document.body ? (document.body.innerText || '') : '';
+            const rx = /https?:\/\/(?:www\.)?justpaste\.it\/[A-Za-z0-9][A-Za-z0-9_-]{2,}[^\s"']*/g;
+            let m; while ((m = rx.exec(text)) !== null) add(m[0]);
+            const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
+            return cands[0] || null;
+          });
+          if (cand) return { page: p, url: cand };
+        } catch {}
+      }
+    } catch {}
+    return null;
   }
-  // Load final page (for screenshot) if we have a candidate URL
-  try { if (publishedUrl) await page.goto(publishedUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(()=>{}); } catch (_) {}
-  screenshots.published = await takeScreenshot('published');
+
+  // Determine final page and URL
+  let targetPage = page;
+  let publishedUrl = page.url();
+  if (!publishedUrl || /^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
+    const found = await findArticlePage();
+    if (found && found.url) { publishedUrl = found.url; targetPage = found.page || page; }
+  }
+  // If still only homepage URL but we extracted candidate earlier, open it
+  if (targetPage && publishedUrl && targetPage.url() !== publishedUrl) {
+    try { await targetPage.goto(publishedUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(()=>{}); } catch (_) {}
+  }
+  try {
+    if (targetPage && !(targetPage.isClosed && targetPage.isClosed())) {
+      screenshots.published = await (async () => await targetPage.screenshot({ path: path.join(LOG_DIR, `justpaste-published-${Date.now()}.png`), fullPage: true }))();
+    }
+  } catch (e) { logLine('Screenshot error', { label: 'published', error: String(e && e.message || e) }); }
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
