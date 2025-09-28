@@ -5,7 +5,7 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 const { generateText, cleanLLMOutput } = require('./ai_client');
-const { solveIfCaptcha } = require('./captcha');
+const { solveIfCaptcha, detectCaptcha } = require('./captcha');
 
 // Logger
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -195,15 +195,36 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     logLine('Fill editor failed', { error: String(e && e.message || e) });
   }
 
+  // Screenshots helper (minimal logging)
+  async function takeScreenshot(label){
+    try {
+      const fname = `justpaste-${label}-${Date.now()}.png`;
+      const fpath = path.join(LOG_DIR, fname);
+      await page.screenshot({ path: fpath, fullPage: true });
+      logLine('Screenshot', { label, path: fpath });
+      return fpath;
+    } catch (e) { logLine('Screenshot error', { label, error: String(e && e.message || e) }); return ''; }
+  }
+  const screenshots = {};
+  screenshots.filled = await takeScreenshot('filled');
+
   // Minimal publish-first flow with shared captcha solver
   try { await page.waitForSelector('.editArticleBottomButtons .publishButton', { timeout: 15000 }); } catch (_) {}
   const startUrl = page.url();
   const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => null);
   try { await page.click('.editArticleBottomButtons .publishButton'); } catch (_) {}
+  screenshots.after_click = await takeScreenshot('after-click');
   const deadline = Date.now() + 90000; // up to 90s
   while (Date.now() < deadline) {
     // Try solve captcha if it appears
-    try { const solved = await solveIfCaptcha(page, logLine); if (solved) { await new Promise(r=>setTimeout(r, 1000)); } } catch (_) {}
+    try {
+      const det = await detectCaptcha(page);
+      if (det && det.found && !screenshots.captcha) {
+        screenshots.captcha = await takeScreenshot('captcha');
+      }
+      const solved = await solveIfCaptcha(page, logLine);
+      if (solved) { await new Promise(r=>setTimeout(r, 1000)); }
+    } catch (_) {}
     // Check if navigated to an article-like URL
     try {
       const href = await page.evaluate(() => location.href);
@@ -217,11 +238,44 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     if (navDone) break;
   }
 
-  const publishedUrl = page.url();
+  // If we still are on homepage, try to extract article URL from DOM
+  async function extractPublishedUrl() {
+    return await page.evaluate(() => {
+      const collect = new Set();
+      const add = (u) => { if (u && typeof u === 'string') collect.add(u.trim()); };
+      const isArticleUrl = (s) => {
+        if (typeof s !== 'string') return false;
+        if (!/^https?:\/\//i.test(s)) return false;
+        try {
+          const u = new URL(s);
+          if (!/^(?:www\.)?justpaste\.it$/i.test(u.hostname)) return false;
+          const p = (u.pathname || '/').replace(/\/+/g,'/');
+          if (p === '/' || p === '') return false;
+          if (/^\/(privacy|privacypolicy|terms|faq|pricing|premium|about)(?:\/|$)/i.test(p)) return false;
+          const segs = p.split('/').filter(Boolean);
+          return segs.some(seg => /[A-Za-z0-9_-]{3,}/.test(seg));
+        } catch { return false; }
+      };
+      Array.from(document.querySelectorAll('a[href]')).forEach(a => add(a.href));
+      const text = document.body ? (document.body.innerText || '') : '';
+      const rx = /https?:\/\/(?:www\.)?justpaste\.it\/[A-Za-z0-9][A-Za-z0-9_-]{2,}[^\s"']*/g;
+      let m; while ((m = rx.exec(text)) !== null) add(m[0]);
+      const cands = Array.from(collect).filter(isArticleUrl).sort((a,b) => b.length - a.length);
+      return cands[0] || null;
+    });
+  }
+
+  let publishedUrl = page.url();
+  if (/^https?:\/\/(?:www\.)?justpaste\.it\/?$/.test(publishedUrl)) {
+    try { const extracted = await extractPublishedUrl(); if (extracted) publishedUrl = extracted; } catch (_) {}
+  }
+  // Load final page (for screenshot) if we have a candidate URL
+  try { if (publishedUrl) await page.goto(publishedUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(()=>{}); } catch (_) {}
+  screenshots.published = await takeScreenshot('published');
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE };
+  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, screenshots };
 }
 
 module.exports = { publish: publishToJustPaste };
