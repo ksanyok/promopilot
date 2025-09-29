@@ -39,145 +39,37 @@ const config = {
   contentSelectors: ['#post-body', 'textarea#post-body', '#writer'],
   submitSelectors: ['#publish'],
   resultTimeoutMs: 180000,
-  preFill: async ({ page, logLine }) => {
+  preFill: async ({ page }) => {
     try {
       await page.evaluate(() => {
-        const ensureFormatAttributes = () => {
+        const formatInputs = Array.from(document.querySelectorAll('input[name="format"], input#format, select[name="format"], #format'));
+        for (const el of formatInputs) {
           try {
-            if (window.localStorage) {
-              try { window.localStorage.setItem('writeas-format', 'markdown'); } catch (_) {}
-              try { window.localStorage.setItem('format', 'markdown'); } catch (_) {}
+            const tag = (el.tagName || '').toLowerCase();
+            if (tag === 'select') {
+              el.value = 'markdown';
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if ('value' in el) {
+              el.value = 'markdown';
+              ['input', 'change'].forEach(evt => el.dispatchEvent(new Event(evt, { bubbles: true })));
             }
           } catch (_) {}
-          document.documentElement && document.documentElement.setAttribute('data-format', 'markdown');
-          if (document.body) { document.body.setAttribute('data-format', 'markdown'); }
-          const targets = Array.from(document.querySelectorAll('input[name="format"], input#format, input#post-format, select[name="format"], #format'));
-          targets.forEach(el => {
-            try {
-              if ('value' in el) {
-                el.value = 'markdown';
-              }
-              el.setAttribute('value', 'markdown');
-              if (typeof el.dispatchEvent === 'function') {
-                ['input', 'change'].forEach(evt => el.dispatchEvent(new Event(evt, { bubbles: true })));
-              }
-            } catch (_) {}
-          });
-          const form = document.querySelector('form[action], form#new-post, form.post-form');
-          if (form) {
-            form.setAttribute('data-format', 'markdown');
-            if (form.dataset) { form.dataset.format = 'markdown'; }
-          }
-        };
+        }
 
-        // Try to force markdown mode if there is a format control
-        const setMarkdownValue = () => {
-          // Try radio first
-          const radio = document.querySelector('input[type="radio"][value="markdown"], input[type="radio"][data-format="markdown"]');
-          if (radio) {
-            try { radio.click(); return true; } catch (_) {}
-          }
-          const inp = document.querySelector('input[name="format"], select[name="format"], #format');
-          if (!inp) return false;
-          const tag = (inp.tagName || '').toLowerCase();
-          if (tag === 'select') {
-            try { inp.value = 'markdown'; inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-            return true;
-          }
-          if ('value' in inp) {
-            try { inp.value = 'markdown'; ['input', 'change'].forEach(e=>inp.dispatchEvent(new Event(e, { bubbles: true }))); } catch (_) {}
-            return true;
-          }
-          return false;
-        };
-
-        const openMenus = () => {
-          const openers = Array.from(document.querySelectorAll('button, a'))
-            .filter(el => {
-              const text = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
-              if (!text) return false;
-              return (
-                text.includes('more') || text.includes('options') || text.includes('menu') ||
-                text.includes('format') || text.includes('preferences') || text.includes('настрой') || text.includes('опц')
-              );
-            });
-          for (const el of openers) {
-            try { el.click(); } catch (_) {}
-          }
-        };
-
-        const tryToggleMarkdown = () => {
-          // After menus opened, try to click Markdown toggles
-          const candidates = Array.from(document.querySelectorAll('button, a, label, input'))
-            .filter(el => {
-              const text = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
-              return text.includes('markdown');
-            });
-          for (const el of candidates) {
-            try {
-              const pressed = el.getAttribute('aria-pressed');
-              if (pressed === 'true') return true;
-              el.click();
-              return true;
-            } catch (_) {}
-          }
-          return false;
-        };
-
-        setMarkdownValue();
-        openMenus();
-        setTimeout(tryToggleMarkdown, 50);
-        ensureFormatAttributes();
-        setTimeout(ensureFormatAttributes, 120);
-        setTimeout(tryToggleMarkdown, 180);
+        const radio = document.querySelector('input[type="radio"][value="markdown"], input[type="radio"][data-format="markdown"]');
+        if (radio) {
+          try { radio.click(); } catch (_) {}
+        }
       });
-    } catch (e) {
-      logLine('Write.as preFill markdown toggle failed', { error: String(e && e.message || e) });
-    }
-  },
-  prepareBody: async ({ article, variants, logLine }) => {
-    let body = variants && variants.markdown ? String(variants.markdown) : String((variants && variants.html) || '');
-    body = body.replace(/\r\n?/g, '\n');
-    const title = article && typeof article.title === 'string' ? article.title.trim() : '';
-    const ensureTitleHeading = (text) => {
-      if (!title) { return text.trim(); }
-      const lines = (text || '').split(/\n+/);
-      let firstContentIndex = -1;
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() !== '') { firstContentIndex = i; break; }
-      }
-      const sameTitle = () => {
-        if (firstContentIndex === -1) { return false; }
-        const firstLine = lines[firstContentIndex];
-        const cleaned = firstLine.replace(/^#+\s+/, '').trim();
-        return cleaned && cleaned.localeCompare(title, undefined, { sensitivity: 'accent' }) === 0;
-      };
-      if (!sameTitle()) {
-        const heading = `# ${title}`;
-        return `${heading}\n\n${text.trim()}`.trim();
-      }
-      return text.trim();
-    };
-
-    const normalized = ensureTitleHeading(body);
-    let finalText = normalized.replace(/\n{3,}/g, '\n\n');
-    if (!/\n\s*$/.test(finalText)) { finalText = `${finalText}\n`; }
-    if (!/^#\s+/m.test(finalText) && title) {
-      finalText = `# ${title}\n\n${finalText.trim()}`;
-    }
-    const sampleDiagnostics = finalText.slice(0, 160);
-    logLine('Write.as prepared markdown snapshot', { snippet: sampleDiagnostics });
-    return finalText;
+    } catch (_) {}
   },
   transformBodyBeforeFill: async ({ body }) => {
     let text = String(body || '');
     // Fix cases like: [тут](<a href="https://...">https://...</a>) → [тут](https://...)
     text = text.replace(/\]\(\s*<a [^>]*href=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>\s*\)/gi, ']($1)');
-    // Remove any stray HTML tags left inside markdown
-    text = text.replace(/<\/?(?:p|div|span|strong|em|code|blockquote)>/gi, '');
-    // Normalize line endings and ensure blank line at top to help parsers
-    text = text.replace(/\r\n?/g, '\n');
-    if (!/^\s*#/.test(text) && !/^\s*\n/.test(text)) { text = '\n' + text; }
+  // Normalize line endings and ensure blank line at top to help parsers
+  text = text.replace(/\r\n?/g, '\n');
+  if (!/^\s*\n/.test(text)) text = '\n' + text;
     if (!/\n\s*$/.test(text)) text = text + '\n'; // trailing newline
     return text;
   },

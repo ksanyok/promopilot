@@ -1915,37 +1915,10 @@ function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 48
     $response = ['ok' => false, 'error' => 'NODE_RETURN_EMPTY'];
     $stdoutTrim = trim($stdout);
     if ($stdoutTrim !== '') {
-        $decoded = null;
-        $lines = preg_split("/\r?\n/", $stdoutTrim) ?: [];
-        for ($i = count($lines) - 1; $i >= 0; $i--) {
-            $line = trim($lines[$i]);
-            if ($line === '') { continue; }
-            $decoded = json_decode($line, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                break;
-            }
-            $decoded = null;
-        }
-
-        if (!is_array($decoded)) {
-            $lastBrace = strrpos($stdoutTrim, '}');
-            if ($lastBrace !== false) {
-                $candidateBlock = substr($stdoutTrim, 0, $lastBrace + 1);
-                while ($candidateBlock !== '') {
-                    $start = strrpos($candidateBlock, '{');
-                    if ($start === false) { break; }
-                    $jsonCandidate = substr($candidateBlock, $start);
-                    $decoded = json_decode($jsonCandidate, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                        break;
-                    }
-                    $candidateBlock = substr($candidateBlock, 0, $start);
-                    $decoded = null;
-                }
-            }
-        }
-
-        if (is_array($decoded)) {
+        $pos = strrpos($stdoutTrim, "\n");
+        $lastLine = trim($pos === false ? $stdoutTrim : substr($stdoutTrim, $pos + 1));
+        $decoded = json_decode($lastLine, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
             $response = $decoded;
         } else {
             $response = ['ok' => false, 'error' => 'INVALID_JSON', 'raw' => $stdoutTrim];
