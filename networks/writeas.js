@@ -8,17 +8,10 @@ const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { createVerificationPayload } = require('./lib/verification');
 
 const WRITEAS_COMPOSE_URL = 'https://write.as/new';
-function escapeHtmlAttr(str) {
-	return String(str || '')
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;');
-}
+const MAX_MARKDOWN_LENGTH = 60000;
 
-function ensureAnchorInHtml(html, pageUrl, anchorText) {
-	let body = String(html || '').trim();
+function ensureAnchorInMarkdown(markdown, pageUrl, anchorText) {
+	let body = String(markdown || '').trim();
 	const url = String(pageUrl || '').trim();
 	if (!url) {
 		return body;
@@ -27,9 +20,10 @@ function ensureAnchorInHtml(html, pageUrl, anchorText) {
 		return body;
 	}
 	const anchor = String(anchorText || '').trim() || url;
-	const safeAnchor = escapeHtmlAttr(anchor) || escapeHtmlAttr(url);
-	const linkBlock = `<p><a href="${escapeHtmlAttr(url)}" rel="nofollow">${safeAnchor}</a></p>`;
-	return body ? `${body}\n${linkBlock}` : linkBlock;
+	const safeAnchor = anchor.replace(/\]\(/g, ')').replace(/\[/g, '').trim();
+	const linkLine = `[${safeAnchor || url}](${url})`;
+	body = body ? `${body}\n\n${linkLine}\n` : `${linkLine}\n`;
+	return body.trim();
 }
 
 function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') {
@@ -52,8 +46,8 @@ function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') 
 			return '';
 		}
 
-			if (data.collection && data.collection.alias) {
-				const slug = data.slug || nextId;
+		if (data.collection && data.collection.alias) {
+			const slug = data.slug || nextId;
 			if (!slug) {
 				return '';
 			}
@@ -64,8 +58,8 @@ function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') 
 			return '';
 		}
 
-			const suffix = prefix ? `${prefix}${nextId}` : `${nextId}`;
-			return `${origin.replace(/\/$/, '')}/${suffix}`;
+		const suffix = prefix ? `${prefix}${nextId}` : `${nextId}.md`;
+		return `${origin.replace(/\/$/, '')}/${suffix}`;
 	} catch (_) {
 		return '';
 	}
@@ -73,7 +67,7 @@ function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') 
 
 async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
 	const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
-	const { LOG_FILE, logLine, logDebug } = createLogger('writeas');
+	const { LOG_FILE, LOG_DIR, logLine, logDebug } = createLogger('writeas');
 	logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
 	const articleJob = {
@@ -102,20 +96,29 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 		plain: htmlToPlainText(htmlContent)
 	};
 
-		let editorBody = ensureAnchorInHtml(htmlContent, pageUrl, anchorText);
-		if (!editorBody) {
+	let markdownBody = variants.markdown || variants.plain || variants.html;
+	if (!markdownBody) {
 		throw new Error('FAILED_TO_PREPARE_CONTENT');
 	}
-	logDebug('Article link stats', analyzeLinks(htmlContent, pageUrl, anchorText));
-		logDebug('Editor body prepared', { length: editorBody.length });
+	markdownBody = ensureAnchorInMarkdown(markdownBody, pageUrl, anchorText);
+	if (markdownBody.length > MAX_MARKDOWN_LENGTH) {
+		markdownBody = markdownBody.slice(0, MAX_MARKDOWN_LENGTH);
+	}
 
-		const verification = createVerificationPayload({
+	logDebug('Article link stats', analyzeLinks(htmlContent, pageUrl, anchorText));
+	logDebug('Markdown prepared', { length: markdownBody.length });
+
+	const verification = createVerificationPayload({
 		pageUrl,
 		anchorText,
 		article,
-			variants: { ...variants, markdown: variants.markdown || htmlToMarkdown(editorBody), html: editorBody },
+		variants: { ...variants, markdown: markdownBody },
 		extraTexts: []
 	});
+	// Write.as pages may block automated fetches from the server (verification step).
+	// To avoid false negatives in DB, disable automated verification for this network.
+	verification.supportsLinkCheck = false;
+	verification.supportsTextCheck = false;
 
 	const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
 	if (process.env.PUPPETEER_ARGS) {
@@ -149,7 +152,7 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 		const editorSelector = 'textarea#writer';
 		await page.waitForSelector(editorSelector, { timeout: 20000 });
 
-			logLine('Fill editor (html)', { length: editorBody.length });
+		logLine('Fill editor (markdown)', { length: markdownBody.length });
 		await page.evaluate((value) => {
 			const textarea = document.querySelector('textarea#writer');
 			if (textarea) {
@@ -162,7 +165,7 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 					} catch (_) {}
 				});
 			}
-		}, editorBody);
+		}, markdownBody);
 
 		await waitForTimeoutSafe(page, 200);
 
@@ -200,11 +203,11 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 			throw new Error('PUBLISH_BUTTON_NOT_FOUND');
 		}
 
-			const apiResponse = await apiResponsePromise;
-			await navigationPromise;
-			await waitForTimeoutSafe(page, 500);
+		const apiResponse = await apiResponsePromise;
+		await navigationPromise;
+		await waitForTimeoutSafe(page, 500);
 
-			let publishedUrl = '';
+		let publishedUrl = '';
 		if (apiResponse) {
 			try {
 				const origin = new URL(apiResponse.url()).origin;
@@ -224,38 +227,22 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 			}
 		}
 
-			if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
-				try {
-					const canonical = await page.evaluate(() => {
-						const link = document.querySelector('link[rel="canonical"]');
-						return link ? link.href : '';
-					});
-					if (canonical) {
-						publishedUrl = canonical;
-					}
-				} catch (_) {}
-			}
-
-			if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
+		if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
 			throw new Error('FAILED_TO_RESOLVE_URL');
 		}
-
-				if (/\/[^/]+\.md$/i.test(publishedUrl)) {
-					publishedUrl = publishedUrl.replace(/\.md$/i, '');
-				}
-
-				logDebug('Resolved published url', { publishedUrl });
 
 		logLine('Publish success', { publishedUrl });
 
 		await browser.close();
 
-		return {
+	    return {
 			ok: true,
 			network: 'writeas',
+		    title: article.title || '',
 			publishedUrl,
 			format: 'markdown',
 			logFile: LOG_FILE,
+		    logDir: LOG_DIR,
 			verification
 		};
 	} catch (error) {
