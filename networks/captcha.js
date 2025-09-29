@@ -114,6 +114,11 @@ async function detectCaptcha(page) {
 
   const frames = typeof page.frames === 'function' ? page.frames() : [];
   for (const frame of frames) {
+    let frameUrl = '';
+    try { frameUrl = frame.url(); } catch (_) { frameUrl = ''; }
+    if (frameUrl && /recaptcha|google\.com\/recaptcha|hcaptcha\.com/i.test(frameUrl)) {
+      return { found: true, type: frameUrl.includes('hcaptcha') ? 'hcaptcha' : 'recaptcha', context: 'frame-url', frameUrl };
+    }
     const frameRes = await detectInContext(frame);
     if (frameRes && frameRes.found) {
       return { ...frameRes, context: 'frame', frameUrl: frame.url ? frame.url() : '' };

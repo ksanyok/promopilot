@@ -1,14 +1,22 @@
 'use strict';
 
 const { createHttpPublisher } = require('./lib/httpPublishers');
-const { buildHtmlFile } = require('./lib/articleFiles');
+const { buildPdfFile, buildHtmlFile } = require('./lib/articleFiles');
 const { runCli } = require('./lib/genericPaste');
 
 const config = {
   slug: 'catbox',
   contentFormat: 'html',
-  buildRequest: async ({ article, variants, job }) => {
-    const file = buildHtmlFile({ article, variants, job });
+  buildRequest: async ({ article, variants, job, logLine }) => {
+    let file = null;
+    try {
+      file = await buildPdfFile({ article, variants, job });
+      logLine('Catbox PDF generated', { filename: file.filename, size: file.buffer.length });
+    } catch (error) {
+      logLine('Catbox PDF generation failed', { error: String(error && error.message || error) });
+      const fallback = buildHtmlFile({ article, variants, job });
+      file = { ...fallback, filename: fallback.filename.replace(/\.html$/i, '.fallback.html') };
+    }
     return {
       url: 'https://catbox.moe/user/api.php',
       method: 'POST',

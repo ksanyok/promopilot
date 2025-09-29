@@ -189,6 +189,11 @@ function ensure_schema(): void {
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
             `attempts` INT NOT NULL DEFAULT 0,
             `error` TEXT NULL,
+            `verification_status` VARCHAR(20) NULL,
+            `verification_checked_at` TIMESTAMP NULL DEFAULT NULL,
+            `verification_details` TEXT NULL,
+            `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
+            `pid` INT NULL DEFAULT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (`project_id`),
             INDEX `idx_publications_status` (`status`),
@@ -228,9 +233,18 @@ function ensure_schema(): void {
         if (!isset($pubCols['error'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `error` TEXT NULL AFTER `attempts`");
         }
+        if (!isset($pubCols['verification_status'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_status` VARCHAR(20) NULL AFTER `error`");
+        }
+        if (!isset($pubCols['verification_checked_at'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `verification_status`");
+        }
+        if (!isset($pubCols['verification_details'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_details` TEXT NULL AFTER `verification_checked_at`");
+        }
         // New: cancellation flag and process pid
         if (!isset($pubCols['cancel_requested'])) {
-            @$conn->query("ALTER TABLE `publications` ADD COLUMN `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `error`");
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `verification_details`");
         }
         if (!isset($pubCols['pid'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `pid` INT NULL DEFAULT NULL AFTER `cancel_requested`");
@@ -288,6 +302,8 @@ function ensure_schema(): void {
             `regions` TEXT NULL,
             `topics` TEXT NULL,
             `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+            `priority` INT NOT NULL DEFAULT 0,
+            `level` VARCHAR(50) NULL,
             `is_missing` TINYINT(1) NOT NULL DEFAULT 0,
             `last_check_status` VARCHAR(20) NULL,
             `last_check_run_id` INT NULL,
@@ -313,7 +329,9 @@ function ensure_schema(): void {
     $maybeAdd('regions', "`regions` TEXT NULL AFTER `meta`");
     $maybeAdd('topics', "`topics` TEXT NULL AFTER `regions`");
     $maybeAdd('enabled', "`enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `topics`");
-    $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `enabled`");
+    $maybeAdd('priority', "`priority` INT NOT NULL DEFAULT 0 AFTER `enabled`");
+    $maybeAdd('level', "`level` VARCHAR(50) NULL AFTER `priority`");
+    $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `level`");
     $maybeAdd('last_check_status', "`last_check_status` VARCHAR(20) NULL AFTER `is_missing`");
     $maybeAdd('last_check_run_id', "`last_check_run_id` INT NULL AFTER `last_check_status`");
     $maybeAdd('last_check_started_at', "`last_check_started_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_check_run_id`");
@@ -1181,19 +1199,27 @@ function pp_refresh_networks(bool $force = false): array {
 
     // snapshot existing enabled flags
     $existing = [];
-    if ($res = @$conn->query("SELECT slug, enabled FROM networks")) {
+    if ($res = @$conn->query("SELECT slug, enabled, priority, level FROM networks")) {
         while ($row = $res->fetch_assoc()) {
-            $existing[$row['slug']] = (int)$row['enabled'];
+            $existing[$row['slug']] = [
+                'enabled' => (int)($row['enabled'] ?? 0),
+                'priority' => (int)($row['priority'] ?? 0),
+                'level' => (string)($row['level'] ?? ''),
+            ];
         }
         $res->free();
     }
 
-    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, regions, topics, enabled, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), regions = VALUES(regions), topics = VALUES(topics), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
+    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), regions = VALUES(regions), topics = VALUES(topics), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
     if ($stmt) {
         foreach ($descriptors as $slug => $descriptor) {
             $enabled = $descriptor['enabled'] ? 1 : 0;
+            $priority = (int)($descriptor['priority'] ?? 0);
+            $level = trim((string)($descriptor['level'] ?? ''));
             if (array_key_exists($slug, $existing)) {
-                $enabled = $existing[$slug];
+                $enabled = (int)$existing[$slug]['enabled'];
+                $priority = (int)$existing[$slug]['priority'];
+                $level = (string)$existing[$slug]['level'];
             }
             $metaJson = json_encode($descriptor['meta'], JSON_UNESCAPED_UNICODE);
             $regionsArr = [];
@@ -1218,7 +1244,7 @@ function pp_refresh_networks(bool $force = false): array {
             $regionsStr = implode(', ', array_values($regionsArr));
             $topicsStr = implode(', ', array_values($topicsArr));
             $stmt->bind_param(
-                'ssssssssi',
+                'ssssssssiis',
                 $descriptor['slug'],
                 $descriptor['title'],
                 $descriptor['description'],
@@ -1227,7 +1253,9 @@ function pp_refresh_networks(bool $force = false): array {
                 $metaJson,
                 $regionsStr,
                 $topicsStr,
-                $enabled
+                $enabled,
+                $priority,
+                $level
             );
             $stmt->execute();
         }
@@ -1265,9 +1293,9 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
     $where = [];
     if ($onlyEnabled) { $where[] = "enabled = 1"; }
     if (!$includeMissing) { $where[] = "is_missing = 0"; }
-    $sql = "SELECT slug, title, description, handler, handler_type, meta, regions, topics, enabled, is_missing, last_check_status, last_check_run_id, last_check_started_at, last_check_finished_at, last_check_url, last_check_error, last_check_updated_at, created_at, updated_at FROM networks";
+    $sql = "SELECT slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, is_missing, last_check_status, last_check_run_id, last_check_started_at, last_check_finished_at, last_check_url, last_check_error, last_check_updated_at, created_at, updated_at FROM networks";
     if ($where) { $sql .= ' WHERE ' . implode(' AND ', $where); }
-    $sql .= ' ORDER BY title ASC';
+    $sql .= ' ORDER BY priority DESC, title ASC';
     $rows = [];
     if ($res = @$conn->query($sql)) {
         while ($row = $res->fetch_assoc()) {
@@ -1303,6 +1331,8 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
                 'regions' => $regionsList,
                 'topics' => $topicsList,
                 'enabled' => (bool)$row['enabled'],
+                'priority' => (int)($row['priority'] ?? 0),
+                'level' => trim((string)($row['level'] ?? '')),
                 'is_missing' => (bool)$row['is_missing'],
                 'last_check_status' => $row['last_check_status'] !== null ? (string)$row['last_check_status'] : null,
                 'last_check_run_id' => $row['last_check_run_id'] !== null ? (int)$row['last_check_run_id'] : null,
@@ -1372,7 +1402,8 @@ function pp_pick_network_for(?string $region, ?string $topic): ?array {
             elseif (in_array('general', $topics, true)) { $tScore = 1; }
             else { $tScore = 0; }
         }
-        $score = ($rScore * 10) + $tScore; // prioritize region
+    $priority = (int)($n['priority'] ?? 0);
+    $score = ($priority * 1000) + ($rScore * 10) + $tScore; // prioritize higher priority, then region
         $scored[] = ['score' => $score, 'net' => $n, 'title' => (string)($n['title'] ?? $n['slug'])];
     }
 
@@ -1395,12 +1426,29 @@ function pp_pick_network(): ?array {
     return $nets[0] ?? null;
 }
 
-function pp_set_networks_enabled(array $slugsToEnable): bool {
-    $map = [];
+function pp_set_networks_enabled(array $slugsToEnable, array $priorityMap = [], array $levelMap = []): bool {
+    $enabledMap = [];
     foreach ($slugsToEnable as $slug) {
         $norm = pp_normalize_slug((string)$slug);
-        if ($norm !== '') { $map[$norm] = true; }
+        if ($norm !== '') { $enabledMap[$norm] = true; }
     }
+
+    $priorityNorm = [];
+    foreach ($priorityMap as $slug => $value) {
+        $norm = pp_normalize_slug((string)$slug);
+        if ($norm === '') { continue; }
+        $priorityNorm[$norm] = max(0, (int)$value);
+    }
+
+    $levelNorm = [];
+    foreach ($levelMap as $slug => $value) {
+        $norm = pp_normalize_slug((string)$slug);
+        if ($norm === '') { continue; }
+        $str = trim((string)$value);
+        if (mb_strlen($str) > 50) { $str = mb_substr($str, 0, 50); }
+        $levelNorm[$norm] = $str;
+    }
+
     try {
         $conn = @connect_db();
     } catch (Throwable $e) {
@@ -1408,23 +1456,80 @@ function pp_set_networks_enabled(array $slugsToEnable): bool {
     }
     if (!$conn) { return false; }
 
-    $allSlugs = [];
+    $stmt = $conn->prepare("UPDATE networks SET enabled = ?, priority = ?, level = ? WHERE slug = ?");
+    if (!$stmt) { $conn->close(); return false; }
+
+    $slugs = [];
     if ($res = @$conn->query("SELECT slug FROM networks")) {
-        while ($row = $res->fetch_assoc()) { $allSlugs[] = (string)$row['slug']; }
+        while ($row = $res->fetch_assoc()) { $slugs[] = (string)$row['slug']; }
         $res->free();
     }
 
-    $stmt = $conn->prepare("UPDATE networks SET enabled = ? WHERE slug = ?");
-    if ($stmt) {
-        foreach ($allSlugs as $slug) {
-            $enabled = isset($map[$slug]) ? 1 : 0;
-            $stmt->bind_param('is', $enabled, $slug);
-            $stmt->execute();
-        }
-        $stmt->close();
+    foreach ($slugs as $slug) {
+        $enabled = isset($enabledMap[$slug]) ? 1 : 0;
+        $priority = $priorityNorm[$slug] ?? 0;
+        $level = $levelNorm[$slug] ?? '';
+        $stmt->bind_param('iiss', $enabled, $priority, $level, $slug);
+        $stmt->execute();
     }
+
+    $stmt->close();
     $conn->close();
     return true;
+}
+
+function pp_delete_network(string $slug): bool {
+    $slug = pp_normalize_slug($slug);
+    if ($slug === '') { return false; }
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return false;
+    }
+    if (!$conn) { return false; }
+
+    $isMissing = 0;
+    if ($stmt = $conn->prepare('SELECT is_missing FROM networks WHERE slug = ? LIMIT 1')) {
+        $stmt->bind_param('s', $slug);
+        if ($stmt->execute()) {
+            $stmt->bind_result($missingFlag);
+            if ($stmt->fetch()) {
+                $isMissing = (int)$missingFlag;
+            } else {
+                $stmt->close();
+                $conn->close();
+                return false;
+            }
+        }
+        $stmt->close();
+    } else {
+        $conn->close();
+        return false;
+    }
+
+    if ($isMissing !== 1) {
+        $conn->close();
+        return false;
+    }
+
+    $deleted = false;
+    if ($del = $conn->prepare('DELETE FROM networks WHERE slug = ? LIMIT 1')) {
+        $del->bind_param('s', $slug);
+        $del->execute();
+        $deleted = $del->affected_rows > 0;
+        $del->close();
+    }
+
+    if ($deleted) {
+        if ($clean = $conn->prepare('DELETE FROM network_check_results WHERE network_slug = ?')) {
+            $clean->bind_param('s', $slug);
+            $clean->execute();
+            $clean->close();
+        }
+    }
+
+    $conn->close();
+    return $deleted;
 }
 
 function pp_check_node_binary(string $bin, int $timeoutSeconds = 3): array {
@@ -2054,6 +2159,167 @@ function pp_abs_url(string $href, string $base): string {
     return $scheme . '://' . $host . $port . '/' . implode('/', $segments);
 }
 
+function pp_normalize_text_content(string $text): string {
+    $decoded = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $decoded = preg_replace('~\s+~u', ' ', $decoded);
+    $decoded = trim((string)$decoded);
+    if ($decoded === '') { return ''; }
+    if (function_exists('mb_strtolower')) {
+        return mb_strtolower($decoded, 'UTF-8');
+    }
+    return strtolower($decoded);
+}
+
+function pp_plain_text_from_html(string $html): string {
+    $doc = pp_html_dom($html);
+    if ($doc) {
+        $text = $doc->textContent ?? '';
+    } else {
+        $text = strip_tags($html);
+    }
+    return pp_normalize_text_content($text);
+}
+
+function pp_normalize_url_compare(string $url): string {
+    $url = trim((string)$url);
+    if ($url === '') { return ''; }
+    $lower = strtolower($url);
+    if (!preg_match('~^https?://~', $lower)) { return $lower; }
+    $parts = @parse_url($lower);
+    if (!$parts || empty($parts['host'])) { return $lower; }
+    $scheme = $parts['scheme'] ?? 'http';
+    $host = $parts['host'];
+    if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
+    $path = $parts['path'] ?? '/';
+    $path = $path === '' ? '/' : $path;
+    $path = rtrim($path, '/');
+    if ($path === '') { $path = '/'; }
+    $query = isset($parts['query']) && $parts['query'] !== '' ? ('?' . $parts['query']) : '';
+    return $scheme . '://' . $host . $path . $query;
+}
+
+function pp_verify_published_content(string $publishedUrl, ?array $verification, ?array $job = null): array {
+    $publishedUrl = trim($publishedUrl);
+    $verification = is_array($verification) ? $verification : [];
+    $supportsLink = array_key_exists('supportsLinkCheck', $verification) ? (bool)$verification['supportsLinkCheck'] : true;
+    $supportsText = array_key_exists('supportsTextCheck', $verification) ? (bool)$verification['supportsTextCheck'] : null;
+    $linkUrl = trim((string)($verification['linkUrl'] ?? ''));
+    if ($linkUrl === '' && isset($job['url'])) {
+        $linkUrl = trim((string)$job['url']);
+    }
+    $textSample = trim((string)($verification['textSample'] ?? ''));
+    if ($supportsText === null) {
+        $supportsText = ($textSample !== '');
+    }
+
+    $result = [
+        'status' => 'skipped',
+        'supports_link' => $supportsLink,
+        'supports_text' => $supportsText,
+        'link_found' => false,
+        'text_found' => false,
+        'http_status' => null,
+        'final_url' => null,
+        'content_type' => null,
+        'reason' => null,
+    ];
+
+    if ($publishedUrl === '' || (!$supportsLink && !$supportsText)) {
+        return $result;
+    }
+
+    $fetch = pp_http_fetch($publishedUrl, 18);
+    $status = (int)($fetch['status'] ?? 0);
+    $finalUrl = (string)($fetch['final_url'] ?? $publishedUrl);
+    $headers = $fetch['headers'] ?? [];
+    $body = (string)($fetch['body'] ?? '');
+    $contentType = strtolower((string)($headers['content-type'] ?? ''));
+
+    $result['http_status'] = $status;
+    $result['final_url'] = $finalUrl;
+    $result['content_type'] = $contentType;
+
+    if ($status >= 400 || $body === '') {
+        $result['status'] = 'error';
+        $result['reason'] = 'FETCH_FAILED';
+        return $result;
+    }
+
+    $doc = null;
+    if ($contentType === '' || strpos($contentType, 'text/') === 0 || strpos($contentType, 'html') !== false || strpos($contentType, 'xml') !== false) {
+        $doc = pp_html_dom($body);
+    }
+
+    if ($supportsLink && $linkUrl !== '') {
+        $targetNorm = pp_normalize_url_compare($linkUrl);
+        if ($doc) {
+            $xp = new DOMXPath($doc);
+            foreach ($xp->query('//a[@href]') as $node) {
+                if (!($node instanceof DOMElement)) { continue; }
+                $href = trim((string)$node->getAttribute('href'));
+                if ($href === '') { continue; }
+                $abs = pp_abs_url($href, $finalUrl);
+                $absNorm = pp_normalize_url_compare($abs);
+                if ($absNorm === $targetNorm) {
+                    $result['link_found'] = true;
+                    break;
+                }
+            }
+        }
+        if (!$result['link_found']) {
+            $haystack = strtolower($body);
+            $direct = strtolower($linkUrl);
+            if ($direct !== '' && strpos($haystack, $direct) !== false) {
+                $result['link_found'] = true;
+            } else {
+                $noScheme = preg_replace('~^https?://~i', '', $direct);
+                if ($noScheme && strpos($haystack, $noScheme) !== false) {
+                    $result['link_found'] = true;
+                }
+            }
+        }
+    } elseif ($supportsLink) {
+        $result['supports_link'] = false;
+    }
+
+    if ($supportsText) {
+        if ($textSample === '') {
+            $result['supports_text'] = false;
+        } else {
+            $bodyPlain = $doc ? pp_normalize_text_content($doc->textContent ?? '') : pp_plain_text_from_html($body);
+            $sampleNorm = pp_normalize_text_content($textSample);
+            if ($sampleNorm !== '' && strpos($bodyPlain, $sampleNorm) !== false) {
+                $result['text_found'] = true;
+            } elseif ($sampleNorm !== '') {
+                $len = function_exists('mb_strlen') ? mb_strlen($sampleNorm, 'UTF-8') : strlen($sampleNorm);
+                $short = $len > 120
+                    ? (function_exists('mb_substr') ? mb_substr($sampleNorm, 0, 120, 'UTF-8') : substr($sampleNorm, 0, 120))
+                    : $sampleNorm;
+                if ($short !== '' && strpos($bodyPlain, $short) !== false) {
+                    $result['text_found'] = true;
+                }
+            }
+        }
+    }
+
+    if ($supportsLink && !$result['link_found']) {
+        $result['status'] = 'failed';
+        $result['reason'] = 'LINK_MISSING';
+    } elseif ($supportsText && !$result['text_found']) {
+        if ($supportsLink && $result['link_found']) {
+            $result['status'] = 'partial';
+            $result['reason'] = 'TEXT_MISSING';
+        } else {
+            $result['status'] = 'failed';
+            $result['reason'] = 'TEXT_MISSING';
+        }
+    } else {
+        $result['status'] = 'success';
+    }
+
+    return $result;
+}
+
 function pp_analyze_url_data(string $url): ?array {
     $fetch = pp_http_fetch($url, 12);
     if (($fetch['status'] ?? 0) >= 400 || ($fetch['body'] ?? '') === '') {
@@ -2369,16 +2635,73 @@ if (!function_exists('pp_process_publication_job')) {
             }
         }
 
-    $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status='success', finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL WHERE id = ? LIMIT 1");
+        $netSlug = (string)($network['slug'] ?? $networkSlug);
+        $verificationPayload = is_array($result['verification'] ?? null) ? $result['verification'] : [];
+        $verificationResult = pp_verify_published_content($publishedUrl, $verificationPayload, $job);
+        $verificationStatus = (string)($verificationResult['status'] ?? 'skipped');
+        $expectedLink = trim((string)($verificationPayload['linkUrl'] ?? $job['url'] ?? ''));
+        $expectedSampleRaw = (string)($verificationPayload['textSample'] ?? '');
+        if ($expectedSampleRaw !== '') {
+            $expectedSample = function_exists('mb_substr')
+                ? mb_substr($expectedSampleRaw, 0, 320, 'UTF-8')
+                : substr($expectedSampleRaw, 0, 320);
+        } else {
+            $expectedSample = '';
+        }
+        $verificationStore = [
+            'result' => $verificationResult,
+            'expected' => [
+                'link' => $expectedLink,
+                'anchor' => $verificationPayload['anchorText'] ?? $job['anchor'] ?? '',
+                'supports_link' => $verificationResult['supports_link'] ?? ($verificationPayload['supportsLinkCheck'] ?? true),
+                'supports_text' => $verificationResult['supports_text'] ?? ($verificationPayload['supportsTextCheck'] ?? ($expectedSample !== '')),
+                'text_sample' => $expectedSample,
+            ],
+            'checked_at' => gmdate('c'),
+        ];
+        $verificationJson = json_encode($verificationStore, JSON_UNESCAPED_UNICODE);
+        if ($verificationJson === false) { $verificationJson = '{}'; }
+
+        $finalStatus = 'success';
+        $errorMsg = null;
+        switch ($verificationStatus) {
+            case 'success':
+                $finalStatus = 'success';
+                break;
+            case 'partial':
+                $finalStatus = 'partial';
+                break;
+            case 'failed':
+            case 'error':
+                $finalStatus = 'failed';
+                $reasonCode = strtoupper((string)($verificationResult['reason'] ?? 'FAILED'));
+                $errorMsg = 'VERIFICATION_' . $reasonCode;
+                break;
+            case 'skipped':
+            default:
+                $finalStatus = 'success';
+                break;
+        }
+
+        $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1");
         if ($up) {
-            $netSlug = (string)($network['slug'] ?? $networkSlug);
-            $up->bind_param('sssi', $publishedUrl, $netSlug, $publishedBy, $pubId);
+            $statusParam = $finalStatus;
+            $errorParam = $errorMsg;
+            $verificationStatusParam = $verificationStatus;
+            $detailsParam = $verificationJson;
+            $up->bind_param('sssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $verificationStatusParam, $detailsParam, $pubId);
             $up->execute();
             $up->close();
         }
-        // Reflect success in mirror queue and delete row (dequeue)
-        @$conn->query("UPDATE publication_queue SET status='success' WHERE publication_id = " . (int)$pubId);
-        @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
+
+        if ($finalStatus === 'failed') {
+            @$conn->query("UPDATE publication_queue SET status='failed' WHERE publication_id = " . (int)$pubId);
+            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
+        } else {
+            $queueStatus = ($finalStatus === 'partial') ? 'partial' : 'success';
+            @$conn->query("UPDATE publication_queue SET status='" . $queueStatus . "' WHERE publication_id = " . (int)$pubId);
+            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
+        }
         $conn->close();
     }
 }

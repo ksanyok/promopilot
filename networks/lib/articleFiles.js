@@ -1,5 +1,6 @@
 'use strict';
 
+const puppeteer = require('puppeteer');
 const { htmlToPlainText } = require('./contentFormats');
 
 function sanitizeForFilename(name) {
@@ -38,12 +39,12 @@ function buildTextFile({ article, variants, job }) {
   };
 }
 
-function buildHtmlFile({ article, variants, job }) {
+function composeHtmlDocument({ article, variants, job }) {
   const htmlContent = variants && variants.html ? variants.html : (article && article.htmlContent) || '';
   const plain = variants && variants.plain ? variants.plain : htmlToPlainText(htmlContent);
   const slugPart = sanitizeForFilename(article && article.title);
   const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const filename = `${slugPart || 'article'}-${timestamp}.html`;
+  const filenameBase = `${slugPart || 'article'}-${timestamp}`;
   const pageUrl = job && job.pageUrl ? String(job.pageUrl) : '';
   const pageMeta = job && job.meta ? job.meta : {};
   const lang = (article && article.language) || pageMeta.lang || (job && job.language) || 'ru';
@@ -68,7 +69,7 @@ function buildHtmlFile({ article, variants, job }) {
     footer a { color: inherit; }
   `;
 
-  const documentHtml = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="${escapeAttribute(lang)}">
   <head>
     <meta charset="utf-8" />
@@ -103,10 +104,57 @@ function buildHtmlFile({ article, variants, job }) {
 </html>`;
 
   return {
-    filename,
-    buffer: Buffer.from(documentHtml, 'utf8'),
+    filenameBase,
+    html,
+    title,
+    description,
+    author,
+    lang,
+    pageUrl
+  };
+}
+
+function buildHtmlFile(opts) {
+  const { filenameBase, html } = composeHtmlDocument(opts);
+  return {
+    filename: `${filenameBase}.html`,
+    buffer: Buffer.from(html, 'utf8'),
     mime: 'text/html; charset=utf-8'
   };
 }
 
-module.exports = { buildTextFile, buildHtmlFile };
+async function buildPdfFile(opts) {
+  const { filenameBase, html, title, author } = composeHtmlDocument(opts);
+
+  const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
+  if (process.env.PUPPETEER_ARGS) {
+    launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
+  }
+  const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
+  if (execPath) launchOpts.executablePath = execPath;
+
+  const browser = await puppeteer.launch(launchOpts);
+  try {
+    const page = await browser.newPage();
+    try { await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 }); } catch (_) {}
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.emulateMediaType('screen');
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '20mm', bottom: '22mm', left: '18mm', right: '18mm' },
+      displayHeaderFooter: false,
+      preferCSSPageSize: true
+    });
+    return {
+      filename: `${filenameBase}.pdf`,
+      buffer: pdfBuffer,
+      mime: 'application/pdf'
+    };
+  } finally {
+    try { await browser.close(); } catch (_) {}
+  }
+}
+
+module.exports = { buildTextFile, buildHtmlFile, buildPdfFile, composeHtmlDocument };

@@ -5,12 +5,45 @@ const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { solveIfCaptcha } = require('./captcha');
 
-const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]{4,}$/i;
+const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]+$/i;
 const RESULT_POLL_INTERVAL = 1500;
 const RESULT_TIMEOUT_MS = 180000;
+const CONTROL_C_NAV_PATHS = new Set([
+  '',
+  '/',
+  'login',
+  'register',
+  'terms',
+  'press',
+  'contact',
+  'getpaid.php',
+  'index.php?act=submit'
+]);
 
 function isValidControlCUrl(url) {
   return CONTROL_C_URL_REGEX.test(String(url || '').trim());
+}
+
+function pickBestControlCUrl(urls) {
+  const scored = [];
+  for (const raw of urls || []) {
+    const url = String(raw || '').trim();
+    if (!isValidControlCUrl(url)) continue;
+    let score = 0;
+    const lower = url.toLowerCase();
+    const pathMatch = lower.match(/controlc\.com\/(.*)$/);
+    const path = pathMatch ? pathMatch[1].split(/[?#]/)[0] : '';
+    if (path && CONTROL_C_NAV_PATHS.has(path)) continue;
+    if (/index\.php\?id=/i.test(path)) score += 50;
+    const idMatch = path.replace(/^index\.php\?id=/, '');
+    if (/[0-9]/.test(idMatch)) score += 20;
+    if (/^[a-f0-9]{6,12}$/i.test(idMatch)) score += 30;
+    if (idMatch.length >= 6 && idMatch.length <= 16) score += 10;
+    score += Math.max(0, 20 - path.length);
+    scored.push({ url, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.length ? scored[0].url : '';
 }
 
 async function collectCandidates(target) {
@@ -65,11 +98,10 @@ async function collectCandidates(target) {
       if (currentUrl) push(currentUrl);
 
       const urls = Array.from(collected);
-      const valid = urls.find((url) => pattern.test(url));
-      return { urls, valid: valid || '' };
+      return { urls };
     });
   } catch (_) {
-    return { urls: [], valid: '' };
+    return { urls: [] };
   }
 }
 
@@ -122,11 +154,12 @@ const config = {
     const deadline = Date.now() + RESULT_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      const { urls, valid } = await collectCandidates(target);
+      const { urls } = await collectCandidates(target);
       urls.forEach((url) => seen.add(url));
 
-      if (valid && isValidControlCUrl(valid)) {
-        return valid.trim();
+      const picked = pickBestControlCUrl(urls);
+      if (picked) {
+        return picked.trim();
       }
 
       if (Date.now() + RESULT_POLL_INTERVAL >= deadline) {
