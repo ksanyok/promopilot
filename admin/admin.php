@@ -656,6 +656,7 @@ $diagnostics = [
                     <th><?php echo __('Описание'); ?></th>
                     <th><?php echo __('Обработчик'); ?></th>
                     <th><?php echo __('Статус'); ?></th>
+                    <th class="text-end" style="width:160px;"><?php echo __('Диагностика'); ?></th>
                 </tr>
                 </thead>
                 <tbody>
@@ -681,6 +682,11 @@ $diagnostics = [
                             <?php else: ?>
                                 <span class="badge badge-secondary"><?php echo __('Отключена'); ?></span>
                             <?php endif; ?>
+                        </td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-sm btn-outline-warning" data-network-check-single="1" data-network-slug="<?php echo htmlspecialchars($network['slug']); ?>" data-network-title="<?php echo htmlspecialchars($network['title']); ?>" <?php echo $isMissing ? 'disabled' : ''; ?>>
+                                <i class="bi bi-play-circle me-1"></i><?php echo __('Проверить'); ?>
+                            </button>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -716,6 +722,7 @@ $diagnostics = [
                     <div class="text-muted small mb-1"><?php echo __('Последняя проверка сетей'); ?></div>
                     <div class="fw-semibold" data-summary-status>—</div>
                     <div class="text-muted small" data-summary-time>—</div>
+                    <div class="text-muted small" data-summary-mode style="display:none;">—</div>
                 </div>
                 <div class="text-lg-end">
                     <div class="small mb-1">
@@ -746,6 +753,9 @@ $diagnostics = [
                 <div id="networkCheckResults" class="network-check-results"></div>
             </div>
             <div class="pp-modal-footer">
+                <button type="button" class="btn btn-outline-success me-auto" id="networkCheckApplySuccess" style="display:none;">
+                    <i class="bi bi-toggle-on me-1"></i><?php echo __('Активировать успешные'); ?>
+                </button>
                 <button type="button" class="btn btn-outline-primary" data-pp-close><?php echo __('Закрыть'); ?></button>
             </div>
         </div>
@@ -765,6 +775,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const summaryTotal = summaryCard ? summaryCard.querySelector('[data-summary-total]') : null;
     const summaryFailed = summaryCard ? summaryCard.querySelector('[data-summary-failed]') : null;
     const summaryNote = summaryCard ? summaryCard.querySelector('[data-summary-note]') : null;
+    const summaryMode = summaryCard ? summaryCard.querySelector('[data-summary-mode]') : null;
 
     const modal = document.getElementById('networkCheckModal');
     const progressBar = document.getElementById('networkCheckProgressBar');
@@ -772,6 +783,10 @@ document.addEventListener('DOMContentLoaded', function(){
     const currentBox = document.getElementById('networkCheckCurrent');
     const metaBox = document.getElementById('networkCheckModalMeta');
     const noteBox = document.getElementById('networkCheckModalNote');
+    const applySuccessBtn = document.getElementById('networkCheckApplySuccess');
+    const singleButtons = Array.from(document.querySelectorAll('[data-network-check-single]'));
+    const singleButtonInitialDisabled = new WeakMap();
+    singleButtons.forEach(function(btn){ singleButtonInitialDisabled.set(btn, btn.disabled); });
 
     const labels = {
         success: <?php echo json_encode(__('Успешно'), JSON_UNESCAPED_UNICODE); ?>,
@@ -789,7 +804,13 @@ document.addEventListener('DOMContentLoaded', function(){
         open: <?php echo json_encode(__('Открыть'), JSON_UNESCAPED_UNICODE); ?>,
         notAvailable: <?php echo json_encode(__('Недоступно'), JSON_UNESCAPED_UNICODE); ?>,
         modalEmpty: <?php echo json_encode(__('Результаты отсутствуют.'), JSON_UNESCAPED_UNICODE); ?>,
-        alreadyRunning: <?php echo json_encode(__('Проверка уже выполняется.'), JSON_UNESCAPED_UNICODE); ?>
+        alreadyRunning: <?php echo json_encode(__('Проверка уже выполняется.'), JSON_UNESCAPED_UNICODE); ?>,
+        mode: <?php echo json_encode(__('Режим'), JSON_UNESCAPED_UNICODE); ?>,
+        bulkMode: <?php echo json_encode(__('Комплексная проверка'), JSON_UNESCAPED_UNICODE); ?>,
+        singleMode: <?php echo json_encode(__('Проверка одной сети'), JSON_UNESCAPED_UNICODE); ?>,
+        applySuccessHint: <?php echo json_encode(__('Активированы только успешные сети. Проверьте список ниже и сохраните изменения.'), JSON_UNESCAPED_UNICODE); ?>,
+        bulkStarted: <?php echo json_encode(__('Запущена комплексная проверка всех активных сетей.'), JSON_UNESCAPED_UNICODE); ?>,
+        singleStarted: <?php echo json_encode(__('Проверка запущена для сети: %s'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const errorMessages = {
@@ -799,6 +820,8 @@ document.addEventListener('DOMContentLoaded', function(){
         'DB_WRITE': <?php echo json_encode(__('Не удалось сохранить данные.'), JSON_UNESCAPED_UNICODE); ?>,
         'RUN_NOT_FOUND': <?php echo json_encode(__('Проверка не найдена.'), JSON_UNESCAPED_UNICODE); ?>,
         'CSRF': <?php echo json_encode(__('Ошибка безопасности.'), JSON_UNESCAPED_UNICODE); ?>,
+        'MISSING_SLUG': <?php echo json_encode(__('Не указана сеть для проверки.'), JSON_UNESCAPED_UNICODE); ?>,
+        'NETWORK_NOT_FOUND': <?php echo json_encode(__('Выбранная сеть недоступна для проверки.'), JSON_UNESCAPED_UNICODE); ?>,
         'DEFAULT': <?php echo json_encode(__('Произошла ошибка. Попробуйте снова.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
@@ -828,6 +851,71 @@ document.addEventListener('DOMContentLoaded', function(){
         messageBox.classList.remove('d-none');
         messageBox.classList.add(cls);
         messageBox.textContent = text;
+    }
+
+    function setControlsDisabled(disabled) {
+        if (startBtn) {
+            startBtn.disabled = disabled;
+        }
+        if (historyBtn) {
+            historyBtn.disabled = disabled && !modalOpen;
+        }
+        singleButtons.forEach(function(btn){
+            if (disabled) {
+                btn.disabled = true;
+            } else {
+                if (!singleButtonInitialDisabled.get(btn)) {
+                    btn.disabled = false;
+                }
+            }
+        });
+        if (applySuccessBtn && disabled) {
+            applySuccessBtn.disabled = true;
+            applySuccessBtn.style.display = 'none';
+        }
+    }
+
+    function updateApplySuccessButton(data) {
+        if (!applySuccessBtn) return;
+        const run = data && data.run ? data.run : null;
+        const results = data && Array.isArray(data.results) ? data.results : [];
+        const show = run && !run.in_progress && run.run_mode === 'bulk' && results.length > 0;
+        if (show) {
+            applySuccessBtn.style.display = '';
+            applySuccessBtn.disabled = false;
+        } else {
+            applySuccessBtn.style.display = 'none';
+        }
+    }
+
+    function applySuccessfulNetworks() {
+        if (!latestData || !Array.isArray(latestData.results)) {
+            setMessage('info', labels.modalEmpty);
+            return;
+        }
+        const observed = new Set();
+        const successful = new Set();
+        latestData.results.forEach(function(item){
+            const slug = (item.network_slug || '').trim();
+            if (!slug) return;
+            observed.add(slug);
+            if (item.status === 'success') {
+                successful.add(slug);
+            }
+        });
+        if (observed.size === 0) {
+            setMessage('info', labels.modalEmpty);
+            return;
+        }
+        document.querySelectorAll('input[name^="enable["]').forEach(function(input){
+            if (!(input instanceof HTMLInputElement)) return;
+            const match = input.name.match(/^enable\[(.+)\]$/);
+            if (!match) return;
+            const slug = match[1];
+            if (!observed.has(slug)) return;
+            input.checked = successful.has(slug);
+        });
+        setMessage('success', labels.applySuccessHint);
     }
 
     function escapeHtml(str) {
@@ -888,6 +976,10 @@ document.addEventListener('DOMContentLoaded', function(){
         if (!run) {
             summaryCard.style.display = 'none';
             if (historyBtn) historyBtn.style.display = 'none';
+            if (summaryMode) {
+                summaryMode.style.display = 'none';
+                summaryMode.textContent = '';
+            }
             return;
         }
         summaryCard.style.display = '';
@@ -899,6 +991,15 @@ document.addEventListener('DOMContentLoaded', function(){
         if (summaryTime) {
             const ts = run.finished_at_iso || run.started_at_iso || run.created_at_iso;
             summaryTime.textContent = ts ? formatDate(ts) : labels.notAvailable;
+        }
+        if (summaryMode) {
+            if (run.run_mode) {
+                summaryMode.textContent = run.run_mode === 'single' ? labels.singleMode : labels.bulkMode;
+                summaryMode.style.display = '';
+            } else {
+                summaryMode.style.display = 'none';
+                summaryMode.textContent = '';
+            }
         }
         if (summarySuccess) summarySuccess.textContent = run.success_count;
         if (summaryTotal) summaryTotal.textContent = run.total_networks;
@@ -961,6 +1062,9 @@ document.addEventListener('DOMContentLoaded', function(){
         }
         if (metaBox) {
             const metaParts = [];
+            if (run.run_mode) {
+                metaParts.push(labels.mode + ': ' + (run.run_mode === 'single' ? labels.singleMode : labels.bulkMode));
+            }
             metaParts.push(labels.total + ': ' + run.total_networks);
             metaParts.push(labels.success + ': ' + run.success_count);
             metaParts.push(labels.failed + ': ' + run.failure_count);
@@ -994,8 +1098,11 @@ document.addEventListener('DOMContentLoaded', function(){
 
     function updateUI(data) {
         latestData = data;
-        updateSummary(data ? data.run : null);
+        const run = data ? data.run : null;
+        updateSummary(run);
         updateModal(data || null);
+        setControlsDisabled(run ? run.in_progress : false);
+        updateApplySuccessButton(data || null);
     }
 
     function scheduleNext(intervalMs) {
@@ -1091,14 +1198,23 @@ document.addEventListener('DOMContentLoaded', function(){
         });
     }
 
-    async function startCheck() {
+    async function startCheck(slug = '', triggerBtn = null) {
         clearMessage();
-        const prevHtml = startBtn.innerHTML;
-        startBtn.disabled = true;
-        startBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + escapeHtml(startBtn.dataset.label || '');
+        const button = triggerBtn || startBtn;
+        const prevHtml = button ? button.innerHTML : '';
+        let runStarted = false;
+        if (button) {
+            button.disabled = true;
+            const label = button.dataset && button.dataset.label ? button.dataset.label : button.textContent;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + escapeHtml(label || '');
+        }
+        setControlsDisabled(true);
         try {
             const body = new URLSearchParams();
             body.set('csrf_token', window.CSRF_TOKEN || '');
+            if (slug) {
+                body.set('slug', slug);
+            }
             const response = await fetch(apiStart, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1111,16 +1227,34 @@ document.addEventListener('DOMContentLoaded', function(){
                 throw new Error(msg);
             }
             currentRunId = data.runId || null;
+            runStarted = true;
             if (data.alreadyRunning) {
                 setMessage('info', labels.alreadyRunning);
+            } else if (slug) {
+                const networkName = (triggerBtn && triggerBtn.dataset && triggerBtn.dataset.networkTitle) ? triggerBtn.dataset.networkTitle : slug;
+                setMessage('info', (labels.singleStarted || '').replace('%s', networkName));
+            } else {
+                setMessage('info', labels.bulkStarted);
             }
             openModal();
             await fetchRunStatus(currentRunId);
         } catch (err) {
             setMessage('danger', err.message || errorMessages.DEFAULT);
+            setControlsDisabled(false);
         } finally {
-            startBtn.disabled = false;
-            startBtn.innerHTML = prevHtml;
+            if (button) {
+                button.innerHTML = prevHtml;
+                if (!runStarted) {
+                    if (button === startBtn) {
+                        startBtn.disabled = false;
+                    } else if (!singleButtonInitialDisabled.get(button)) {
+                        button.disabled = false;
+                    }
+                }
+            }
+            if (!runStarted) {
+                setControlsDisabled(false);
+            }
         }
     }
 
@@ -1136,10 +1270,26 @@ document.addEventListener('DOMContentLoaded', function(){
     }
 
     if (startBtn) {
-        startBtn.addEventListener('click', startCheck);
+        startBtn.addEventListener('click', function(){ startCheck('', startBtn); });
     }
+    singleButtons.forEach(function(btn){
+        btn.addEventListener('click', function(){
+            const slug = btn.dataset ? (btn.dataset.networkSlug || '') : '';
+            if (!slug) {
+                setMessage('danger', errorMessages.MISSING_SLUG || errorMessages.DEFAULT);
+                return;
+            }
+            startCheck(slug, btn);
+        });
+    });
     if (historyBtn) {
         historyBtn.addEventListener('click', showHistory);
+    }
+
+    if (applySuccessBtn) {
+        applySuccessBtn.addEventListener('click', function(){
+            applySuccessfulNetworks();
+        });
     }
 
     fetchLatestStatus();

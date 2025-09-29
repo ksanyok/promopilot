@@ -23,7 +23,9 @@ if ($action === 'start') {
         exit;
     }
     $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
-    $result = pp_network_check_start($userId ?: null);
+    $slug = isset($_POST['slug']) ? (string)$_POST['slug'] : '';
+    $mode = $slug !== '' ? 'single' : 'bulk';
+    $result = pp_network_check_start($userId ?: null, $mode, $slug);
     if (!$result['ok']) {
         http_response_code(400);
     }

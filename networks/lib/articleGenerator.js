@@ -41,7 +41,30 @@ function analyzeLinks(html, url, anchor) {
   }
 }
 
-async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta }, logLine) {
+async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta, testMode }, logLine) {
+  const pageMeta = meta || {};
+  const pageLang = language || pageMeta.lang || 'ru';
+  const topicTitle = (pageMeta.title || '').toString().trim();
+  const topicDesc = (pageMeta.description || '').toString().trim();
+  const region = (pageMeta.region || '').toString().trim();
+  const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
+  const isTest = !!testMode;
+
+  if (isTest) {
+    const title = `PromoPilot: диагностика сетей`;
+    const body = `<p>Это тестовая публикация PromoPilot для проверки сетей. Сервис пытается разместить диагностическую ссылку <a href="${pageUrl}">${anchorText}</a> и убедиться, что площадка принимает стандартный HTML-контент.</p>`;
+    const stats = analyzeLinks(body, pageUrl, anchorText);
+    if (typeof logLine === 'function') {
+      logLine('Diagnostic article prepared', { links: stats, length: body.length });
+    }
+    return {
+      title,
+      htmlContent: body,
+      language: pageLang,
+      linkStats: stats,
+    };
+  }
+
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = {
     provider,
@@ -49,12 +72,6 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     model: process.env.OPENAI_MODEL || undefined,
     temperature: 0.2
   };
-  const pageMeta = meta || {};
-  const pageLang = language || pageMeta.lang || 'ru';
-  const topicTitle = (pageMeta.title || '').toString().trim();
-  const topicDesc = (pageMeta.description || '').toString().trim();
-  const region = (pageMeta.region || '').toString().trim();
-  const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
 
   const prompts = {
     title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
@@ -81,7 +98,9 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const titleClean = cleanLLMOutput(rawTitle).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
   let content = cleanLLMOutput(rawContent);
 
-  const wantOur = 2, wantExternal = 1, wantTotal = 3;
+  const wantOur = 2;
+  const wantExternal = 1;
+  const wantTotal = 3;
   let stat = analyzeLinks(content, pageUrl, anchorText);
 
   if (!(stat.ourLinkCount >= wantOur && stat.externalCount >= wantExternal && stat.totalLinks === wantTotal)) {

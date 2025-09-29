@@ -285,8 +285,17 @@ function ensure_schema(): void {
             `handler` VARCHAR(255) NOT NULL,
             `handler_type` VARCHAR(50) NOT NULL DEFAULT 'node',
             `meta` TEXT NULL,
+            `regions` TEXT NULL,
+            `topics` TEXT NULL,
             `enabled` TINYINT(1) NOT NULL DEFAULT 1,
             `is_missing` TINYINT(1) NOT NULL DEFAULT 0,
+            `last_check_status` VARCHAR(20) NULL,
+            `last_check_run_id` INT NULL,
+            `last_check_started_at` TIMESTAMP NULL DEFAULT NULL,
+            `last_check_finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `last_check_url` TEXT NULL,
+            `last_check_error` TEXT NULL,
+            `last_check_updated_at` TIMESTAMP NULL DEFAULT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`slug`)
@@ -300,11 +309,20 @@ function ensure_schema(): void {
         $maybeAdd('description', "`description` TEXT NULL AFTER `title`");
         $maybeAdd('handler', "`handler` VARCHAR(255) NOT NULL DEFAULT '' AFTER `description`");
         $maybeAdd('handler_type', "`handler_type` VARCHAR(50) NOT NULL DEFAULT 'node' AFTER `handler`");
-        $maybeAdd('meta', "`meta` TEXT NULL AFTER `handler_type`");
-        $maybeAdd('enabled', "`enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `meta`");
-        $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `enabled`");
-        $maybeAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `is_missing`");
-        $maybeAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+    $maybeAdd('meta', "`meta` TEXT NULL AFTER `handler_type`");
+    $maybeAdd('regions', "`regions` TEXT NULL AFTER `meta`");
+    $maybeAdd('topics', "`topics` TEXT NULL AFTER `regions`");
+    $maybeAdd('enabled', "`enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `topics`");
+    $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `enabled`");
+    $maybeAdd('last_check_status', "`last_check_status` VARCHAR(20) NULL AFTER `is_missing`");
+    $maybeAdd('last_check_run_id', "`last_check_run_id` INT NULL AFTER `last_check_status`");
+    $maybeAdd('last_check_started_at', "`last_check_started_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_check_run_id`");
+    $maybeAdd('last_check_finished_at', "`last_check_finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_check_started_at`");
+    $maybeAdd('last_check_url', "`last_check_url` TEXT NULL AFTER `last_check_finished_at`");
+    $maybeAdd('last_check_error', "`last_check_error` TEXT NULL AFTER `last_check_url`");
+    $maybeAdd('last_check_updated_at', "`last_check_updated_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_check_error`");
+    $maybeAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `last_check_updated_at`");
+    $maybeAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
     }
 
     // Network diagnostics (batch check runs + per-network results)
@@ -316,8 +334,10 @@ function ensure_schema(): void {
             `total_networks` INT NOT NULL DEFAULT 0,
             `success_count` INT NOT NULL DEFAULT 0,
             `failure_count` INT NOT NULL DEFAULT 0,
+            `run_mode` VARCHAR(20) NOT NULL DEFAULT 'bulk',
             `notes` TEXT NULL,
             `initiated_by` INT NULL,
+            `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `started_at` TIMESTAMP NULL DEFAULT NULL,
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
@@ -337,6 +357,8 @@ function ensure_schema(): void {
         $ncRunCheck('success_count', "`success_count` INT NOT NULL DEFAULT 0");
         $ncRunCheck('failure_count', "`failure_count` INT NOT NULL DEFAULT 0");
         $ncRunCheck('notes', "`notes` TEXT NULL");
+        $ncRunCheck('run_mode', "`run_mode` VARCHAR(20) NOT NULL DEFAULT 'bulk'");
+        $ncRunCheck('cancel_requested', "`cancel_requested` TINYINT(1) NOT NULL DEFAULT 0");
         $ncRunCheck('initiated_by', "`initiated_by` INT NULL");
         $ncRunCheck('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
         $ncRunCheck('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL");
@@ -364,6 +386,8 @@ function ensure_schema(): void {
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
             `published_url` TEXT NULL,
             `error` TEXT NULL,
+            `pid` INT NULL,
+            `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (`run_id`),
             INDEX `idx_nc_results_status` (`status`),
@@ -383,7 +407,9 @@ function ensure_schema(): void {
         $ncResCheck('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL");
         $ncResCheck('finished_at', "`finished_at` TIMESTAMP NULL DEFAULT NULL");
         $ncResCheck('published_url', "`published_url` TEXT NULL");
-        $ncResCheck('error', "`error` TEXT NULL");
+    $ncResCheck('error', "`error` TEXT NULL");
+    $ncResCheck('pid', "`pid` INT NULL");
+    $ncResCheck('cancel_requested', "`cancel_requested` TINYINT(1) NOT NULL DEFAULT 0");
         $ncResCheck('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
         if (pp_mysql_index_exists($conn, 'network_check_results', 'idx_nc_results_status') === false) {
             @$conn->query("CREATE INDEX `idx_nc_results_status` ON `network_check_results`(`status`)");
@@ -1075,7 +1101,7 @@ function pp_refresh_networks(bool $force = false): array {
         $res->free();
     }
 
-    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, enabled, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
+    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, regions, topics, enabled, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), regions = VALUES(regions), topics = VALUES(topics), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
     if ($stmt) {
         foreach ($descriptors as $slug => $descriptor) {
             $enabled = $descriptor['enabled'] ? 1 : 0;
@@ -1083,14 +1109,37 @@ function pp_refresh_networks(bool $force = false): array {
                 $enabled = $existing[$slug];
             }
             $metaJson = json_encode($descriptor['meta'], JSON_UNESCAPED_UNICODE);
+            $regionsArr = [];
+            $topicsArr = [];
+            $meta = $descriptor['meta'] ?? [];
+            $rawRegions = $meta['regions'] ?? [];
+            if (is_string($rawRegions)) { $rawRegions = [$rawRegions]; }
+            if (is_array($rawRegions)) {
+                foreach ($rawRegions as $reg) {
+                    $val = trim((string)$reg);
+                    if ($val !== '') { $regionsArr[$val] = $val; }
+                }
+            }
+            $rawTopics = $meta['topics'] ?? [];
+            if (is_string($rawTopics)) { $rawTopics = [$rawTopics]; }
+            if (is_array($rawTopics)) {
+                foreach ($rawTopics as $topic) {
+                    $val = trim((string)$topic);
+                    if ($val !== '') { $topicsArr[$val] = $val; }
+                }
+            }
+            $regionsStr = implode(', ', array_values($regionsArr));
+            $topicsStr = implode(', ', array_values($topicsArr));
             $stmt->bind_param(
-                'ssssssi',
+                'ssssssssi',
                 $descriptor['slug'],
                 $descriptor['title'],
                 $descriptor['description'],
                 $descriptor['handler_rel'],
                 $descriptor['handler_type'],
                 $metaJson,
+                $regionsStr,
+                $topicsStr,
                 $enabled
             );
             $stmt->execute();
@@ -1129,7 +1178,7 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
     $where = [];
     if ($onlyEnabled) { $where[] = "enabled = 1"; }
     if (!$includeMissing) { $where[] = "is_missing = 0"; }
-    $sql = "SELECT slug, title, description, handler, handler_type, meta, enabled, is_missing, created_at, updated_at FROM networks";
+    $sql = "SELECT slug, title, description, handler, handler_type, meta, regions, topics, enabled, is_missing, last_check_status, last_check_run_id, last_check_started_at, last_check_finished_at, last_check_url, last_check_error, last_check_updated_at, created_at, updated_at FROM networks";
     if ($where) { $sql .= ' WHERE ' . implode(' AND ', $where); }
     $sql .= ' ORDER BY title ASC';
     $rows = [];
@@ -1146,6 +1195,14 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
             }
             $absReal = realpath($abs);
             if ($absReal) { $abs = $absReal; }
+            $regionsRaw = (string)($row['regions'] ?? '');
+            $topicsRaw = (string)($row['topics'] ?? '');
+            $regionsList = array_values(array_filter(array_map(function($item){
+                return trim((string)$item);
+            }, preg_split('~[,;\n]+~', $regionsRaw) ?: [])));
+            $topicsList = array_values(array_filter(array_map(function($item){
+                return trim((string)$item);
+            }, preg_split('~[,;\n]+~', $topicsRaw) ?: [])));
             $rows[] = [
                 'slug' => (string)$row['slug'],
                 'title' => (string)$row['title'],
@@ -1154,8 +1211,19 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
                 'handler_abs' => $abs,
                 'handler_type' => (string)$row['handler_type'],
                 'meta' => json_decode((string)($row['meta'] ?? ''), true) ?: [],
+                'regions_raw' => $regionsRaw,
+                'topics_raw' => $topicsRaw,
+                'regions' => $regionsList,
+                'topics' => $topicsList,
                 'enabled' => (bool)$row['enabled'],
                 'is_missing' => (bool)$row['is_missing'],
+                'last_check_status' => $row['last_check_status'] !== null ? (string)$row['last_check_status'] : null,
+                'last_check_run_id' => $row['last_check_run_id'] !== null ? (int)$row['last_check_run_id'] : null,
+                'last_check_started_at' => $row['last_check_started_at'],
+                'last_check_finished_at' => $row['last_check_finished_at'],
+                'last_check_url' => (string)($row['last_check_url'] ?? ''),
+                'last_check_error' => (string)($row['last_check_error'] ?? ''),
+                'last_check_updated_at' => $row['last_check_updated_at'],
                 'created_at' => $row['created_at'],
                 'updated_at' => $row['updated_at'],
             ];
@@ -2277,12 +2345,22 @@ if (!function_exists('pp_network_check_launch_worker')) {
 }
 
 if (!function_exists('pp_network_check_start')) {
-    function pp_network_check_start(?int $userId = null): array {
+    function pp_network_check_start(?int $userId = null, ?string $mode = 'bulk', ?string $targetSlug = null): array {
+        $mode = in_array($mode, ['bulk','single'], true) ? $mode : 'bulk';
+        $targetSlug = pp_normalize_slug((string)$targetSlug);
         $enabledNetworks = array_values(array_filter(pp_get_networks(true, false), function(array $network): bool {
             return empty($network['is_missing']) && !empty($network['enabled']);
         }));
+        if ($mode === 'single') {
+            if ($targetSlug === '') {
+                return ['ok' => false, 'error' => 'MISSING_SLUG'];
+            }
+            $enabledNetworks = array_values(array_filter($enabledNetworks, function(array $network) use ($targetSlug): bool {
+                return pp_normalize_slug((string)$network['slug']) === $targetSlug;
+            }));
+        }
         if (empty($enabledNetworks)) {
-            return ['ok' => false, 'error' => 'NO_ENABLED_NETWORKS'];
+            return ['ok' => false, 'error' => $mode === 'single' ? 'NETWORK_NOT_FOUND' : 'NO_ENABLED_NETWORKS'];
         }
 
         try {
@@ -2304,13 +2382,13 @@ if (!function_exists('pp_network_check_start')) {
 
         $total = count($enabledNetworks);
         if ($userId !== null) {
-            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks, initiated_by) VALUES ('queued', ?, ?)");
+            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks, initiated_by, run_mode) VALUES ('queued', ?, ?, ?)");
             if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_WRITE']; }
-            $stmt->bind_param('ii', $total, $userId);
+            $stmt->bind_param('iis', $total, $userId, $mode);
         } else {
-            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks) VALUES ('queued', ?)");
+            $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks, run_mode) VALUES ('queued', ?, ?)");
             if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_WRITE']; }
-            $stmt->bind_param('i', $total);
+            $stmt->bind_param('is', $total, $mode);
         }
         if (!$stmt->execute()) {
             $stmt->close();
@@ -2384,7 +2462,7 @@ if (!function_exists('pp_network_check_get_status')) {
             return ['ok' => true, 'run' => null, 'results' => []];
         }
 
-        $stmt = $conn->prepare("SELECT id, status, total_networks, success_count, failure_count, notes, initiated_by, created_at, started_at, finished_at FROM network_check_runs WHERE id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, status, total_networks, success_count, failure_count, notes, initiated_by, run_mode, created_at, started_at, finished_at FROM network_check_runs WHERE id = ? LIMIT 1");
         if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_READ']; }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
@@ -2428,6 +2506,7 @@ if (!function_exists('pp_network_check_get_status')) {
             'success_count' => (int)$runRow['success_count'],
             'failure_count' => (int)$runRow['failure_count'],
             'notes' => (string)($runRow['notes'] ?? ''),
+            'run_mode' => (string)($runRow['run_mode'] ?? 'bulk'),
             'initiated_by' => $runRow['initiated_by'] !== null ? (int)$runRow['initiated_by'] : null,
             'created_at' => $runRow['created_at'],
             'created_at_iso' => pp_network_check_format_ts($runRow['created_at'] ?? null),
@@ -2457,7 +2536,7 @@ if (!function_exists('pp_process_network_check_run')) {
         }
         if (!$conn) { return; }
 
-        $stmt = $conn->prepare("SELECT id, status, total_networks FROM network_check_runs WHERE id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, status, total_networks, run_mode FROM network_check_runs WHERE id = ? LIMIT 1");
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
@@ -2467,7 +2546,7 @@ if (!function_exists('pp_process_network_check_run')) {
         $status = (string)$runRow['status'];
         if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
 
-        $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
+    $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
 
         $results = [];
         $resStmt = $conn->prepare("SELECT id, network_slug, network_title FROM network_check_results WHERE run_id = ? ORDER BY id ASC");
@@ -2505,6 +2584,7 @@ if (!function_exists('pp_process_network_check_run')) {
         $updateResultFail = $conn->prepare("UPDATE network_check_results SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id=? LIMIT 1");
         $updateRunCounts = $conn->prepare("UPDATE network_check_runs SET success_count=?, failure_count=?, status='running' WHERE id=? LIMIT 1");
 
+        $runMode = (string)($runRow['run_mode'] ?? 'bulk');
         foreach ($results as $row) {
             $resId = (int)$row['id'];
             $slug = (string)$row['network_slug'];
@@ -2538,6 +2618,7 @@ if (!function_exists('pp_process_network_check_run')) {
                 'wish' => 'Пожалуйста, создай короткую тестовую заметку (диагностика сетей PromoPilot) с положительным нейтральным тоном.',
                 'projectId' => 0,
                 'projectName' => 'PromoPilot Diagnostics',
+                'testMode' => true,
                 'aiProvider' => $aiProvider,
                 'openaiApiKey' => $openaiKey,
                 'openaiModel' => $openaiModel,
@@ -2596,7 +2677,7 @@ if (!function_exists('pp_process_network_check_run')) {
         if ($updateResultFail) { $updateResultFail->close(); }
         if ($updateRunCounts) { $updateRunCounts->close(); }
 
-        $finalStatus = ($failed === 0) ? 'success' : 'completed';
+    $finalStatus = ($failed === 0) ? 'success' : 'completed';
         $updFinish = $conn->prepare("UPDATE network_check_runs SET status=?, success_count=?, failure_count=?, total_networks=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
         if ($updFinish) {
             $updFinish->bind_param('siiii', $finalStatus, $success, $failed, $total, $runId);
