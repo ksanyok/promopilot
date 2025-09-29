@@ -538,6 +538,30 @@ function ensure_schema(): void {
     }
 }
 
+if (!function_exists('pp_network_check_log')) {
+    function pp_network_check_log(string $message, array $context = []): void {
+        try {
+            $dir = PP_ROOT_PATH . '/logs';
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0775, true);
+            }
+            $file = $dir . '/network_check.log';
+            $timestamp = date('Y-m-d H:i:s');
+            $line = '[' . $timestamp . '] ' . $message;
+            if (!empty($context)) {
+                $encoded = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+                if ($encoded !== false && $encoded !== null) {
+                    $line .= ' ' . $encoded;
+                }
+            }
+            $line .= "\n";
+            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+        } catch (Throwable $e) {
+            // Swallow logging errors silently
+        }
+    }
+}
+
 // ---- Version and update helpers ----
 if (!function_exists('get_version')) {
     function get_version(): string {
@@ -2335,6 +2359,7 @@ if (!function_exists('pp_network_check_launch_worker')) {
             return false;
         }
         $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        pp_network_check_log('Launching network check worker', ['runId' => $runId, 'command' => $cmd, 'phpBinary' => $phpBinary]);
         if (function_exists('popen')) {
             $handle = @popen($cmd, 'r');
             if (is_resource($handle)) { @pclose($handle); return true; }
@@ -2363,9 +2388,17 @@ if (!function_exists('pp_network_check_start')) {
             return ['ok' => false, 'error' => $mode === 'single' ? 'NETWORK_NOT_FOUND' : 'NO_ENABLED_NETWORKS'];
         }
 
+        pp_network_check_log('Request to start network check', [
+            'mode' => $mode,
+            'targetSlug' => $targetSlug ?: null,
+            'eligibleNetworks' => count($enabledNetworks),
+            'userId' => $userId,
+        ]);
+
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
+            pp_network_check_log('Network check start failed: DB connection error', ['mode' => $mode, 'targetSlug' => $targetSlug]);
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
         if (!$conn) { return ['ok' => false, 'error' => 'DB_CONNECTION']; }
@@ -2376,6 +2409,7 @@ if (!function_exists('pp_network_check_start')) {
             $res->free();
         }
         if ($activeId) {
+            pp_network_check_log('Network check already running', ['existingRunId' => $activeId]);
             $conn->close();
             return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true];
         }
@@ -2393,6 +2427,7 @@ if (!function_exists('pp_network_check_start')) {
         if (!$stmt->execute()) {
             $stmt->close();
             $conn->close();
+            pp_network_check_log('Network check start failed: insert run', ['mode' => $mode, 'targetSlug' => $targetSlug]);
             return ['ok' => false, 'error' => 'DB_WRITE'];
         }
         $stmt->close();
@@ -2410,6 +2445,8 @@ if (!function_exists('pp_network_check_start')) {
         }
         $conn->close();
 
+        pp_network_check_log('Network check run created', ['runId' => $runId, 'mode' => $mode, 'targetSlug' => $targetSlug ?: null, 'networks' => $total]);
+
         if (!pp_network_check_launch_worker($runId)) {
             try {
                 $conn2 = @connect_db();
@@ -2424,8 +2461,11 @@ if (!function_exists('pp_network_check_start')) {
                     $conn2->close();
                 }
             } catch (Throwable $e) { /* ignore */ }
+            pp_network_check_log('Network check worker launch failed', ['runId' => $runId]);
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
+
+        pp_network_check_log('Network check worker launched', ['runId' => $runId]);
 
         return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
     }
@@ -2526,9 +2566,11 @@ if (!function_exists('pp_network_check_get_status')) {
 
 if (!function_exists('pp_network_check_cancel')) {
     function pp_network_check_cancel(?int $runId = null, bool $force = false): array {
+            pp_network_check_log('Cancel network check requested', ['runId' => $runId, 'force' => $force]);
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
+                pp_network_check_log('Cancel network check failed: DB connection error', ['runId' => $runId]);
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
         if (!$conn) { return ['ok' => false, 'error' => 'DB_CONNECTION']; }
@@ -2572,6 +2614,7 @@ if (!function_exists('pp_network_check_cancel')) {
         @$conn->query("UPDATE network_check_runs SET cancel_requested=1 WHERE id=" . (int)$runId . " LIMIT 1");
 
         if ($alreadyDone && !$force) {
+            pp_network_check_log('Cancel ignored: run already finished', ['runId' => $runId, 'status' => $status]);
             $conn->close();
             return [
                 'ok' => true,
@@ -2601,6 +2644,7 @@ if (!function_exists('pp_network_check_cancel')) {
                 $upd->execute();
                 $upd->close();
             }
+            pp_network_check_log('Cancel applied immediately', ['runId' => $runId, 'success' => $success, 'failed' => $failed]);
             $conn->close();
             return ['ok' => true, 'runId' => $runId, 'status' => 'cancelled', 'cancelRequested' => true, 'finished' => true];
         }
@@ -2614,6 +2658,7 @@ if (!function_exists('pp_network_check_cancel')) {
             }
         }
         $conn->close();
+        pp_network_check_log('Cancel request recorded', ['runId' => $runId, 'status' => $status]);
         return ['ok' => true, 'runId' => $runId, 'status' => $status, 'cancelRequested' => true, 'finished' => false];
     }
 }
@@ -2627,6 +2672,7 @@ if (!function_exists('pp_process_network_check_run')) {
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
+            pp_network_check_log('Worker unable to connect to DB', ['runId' => $runId]);
             return;
         }
         if (!$conn) { return; }
@@ -2637,7 +2683,11 @@ if (!function_exists('pp_process_network_check_run')) {
         $stmt->execute();
         $runRow = $stmt->get_result()->fetch_assoc();
         $stmt->close();
-        if (!$runRow) { $conn->close(); return; }
+        if (!$runRow) {
+            pp_network_check_log('Worker run not found', ['runId' => $runId]);
+            $conn->close();
+            return;
+        }
 
         $status = (string)$runRow['status'];
         $existingNote = trim((string)($runRow['notes'] ?? ''));
@@ -2678,15 +2728,21 @@ if (!function_exists('pp_process_network_check_run')) {
             }
         };
 
-        if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
+        if (!in_array($status, ['queued','running'], true)) {
+            pp_network_check_log('Worker exiting: status not actionable', ['runId' => $runId, 'status' => $status]);
+            $conn->close();
+            return;
+        }
 
         if ($cancelRequested && $status === 'queued') {
             $finalizeCancelled(null, null);
+            pp_network_check_log('Worker cancelled queued run before start', ['runId' => $runId]);
             $conn->close();
             return;
         }
 
         $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
+        pp_network_check_log('Worker started processing', ['runId' => $runId, 'status' => $status]);
 
         $results = [];
         $resStmt = $conn->prepare("SELECT id, network_slug, network_title FROM network_check_results WHERE run_id = ? ORDER BY id ASC");
@@ -2709,17 +2765,20 @@ if (!function_exists('pp_process_network_check_run')) {
                 $upd->execute();
                 $upd->close();
             }
+            pp_network_check_log('Worker found no networks to process', ['runId' => $runId]);
             $conn->close();
             return;
         }
         if ((int)$runRow['total_networks'] !== $total) {
             $conn->query("UPDATE network_check_runs SET total_networks=" . $total . " WHERE id=" . (int)$runId . " LIMIT 1");
+            pp_network_check_log('Worker adjusted total networks', ['runId' => $runId, 'total' => $total]);
         }
 
         if ($cancelRequested && $status === 'running') {
             $successExisting = isset($runRow['success_count']) ? (int)$runRow['success_count'] : null;
             $failureExisting = isset($runRow['failure_count']) ? (int)$runRow['failure_count'] : null;
             $finalizeCancelled($successExisting, $failureExisting);
+            pp_network_check_log('Worker aborted run before loop due to cancellation', ['runId' => $runId]);
             $conn->close();
             return;
         }
@@ -2744,11 +2803,13 @@ if (!function_exists('pp_process_network_check_run')) {
         foreach ($results as $row) {
             if ($checkCancelled()) {
                 $cancelledMidway = true;
+                pp_network_check_log('Worker detected cancellation during loop', ['runId' => $runId]);
                 break;
             }
 
             $resId = (int)$row['id'];
             $slug = (string)$row['network_slug'];
+            pp_network_check_log('Worker starting network check', ['runId' => $runId, 'resultId' => $resId, 'slug' => $slug]);
             if ($updateResultRunning) {
                 $updateResultRunning->bind_param('i', $resId);
                 $updateResultRunning->execute();
@@ -2766,6 +2827,7 @@ if (!function_exists('pp_process_network_check_run')) {
                     $updateRunCounts->bind_param('iii', $success, $failed, $runId);
                     $updateRunCounts->execute();
                 }
+                pp_network_check_log('Worker skipped network: handler missing/disabled', ['runId' => $runId, 'slug' => $slug]);
                 continue;
             }
 
@@ -2809,6 +2871,7 @@ if (!function_exists('pp_process_network_check_run')) {
                     $updateResultSuccess->execute();
                 }
                 $success++;
+                pp_network_check_log('Worker network success', ['runId' => $runId, 'slug' => $slug, 'publishedUrl' => $publishedUrl]);
             } else {
                 $err = '';
                 if (is_array($result)) {
@@ -2825,6 +2888,7 @@ if (!function_exists('pp_process_network_check_run')) {
                     $updateResultFail->execute();
                 }
                 $failed++;
+                pp_network_check_log('Worker network failed', ['runId' => $runId, 'slug' => $slug, 'error' => $err]);
             }
 
             if ($updateRunCounts) {
@@ -2840,6 +2904,7 @@ if (!function_exists('pp_process_network_check_run')) {
 
         if ($cancelledMidway || $checkCancelled()) {
             $finalizeCancelled($success, $failed);
+            pp_network_check_log('Worker finalised cancellation after partial run', ['runId' => $runId, 'success' => $success, 'failed' => $failed]);
             $conn->close();
             return;
         }
@@ -2851,6 +2916,8 @@ if (!function_exists('pp_process_network_check_run')) {
             $updFinish->execute();
             $updFinish->close();
         }
+
+        pp_network_check_log('Worker finished run', ['runId' => $runId, 'status' => $finalStatus, 'success' => $success, 'failed' => $failed, 'total' => $total]);
 
         $conn->close();
     }

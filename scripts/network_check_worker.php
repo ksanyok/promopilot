@@ -14,6 +14,10 @@ if ($runId <= 0) {
     exit(1);
 }
 
+pp_network_check_log('CLI worker invoked', ['runId' => $runId, 'argv' => $argv]);
+
 pp_process_network_check_run($runId);
+
+pp_network_check_log('CLI worker completed', ['runId' => $runId]);
 
 exit(0);
