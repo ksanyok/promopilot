@@ -104,8 +104,42 @@ async function resolvePublishedUrl(page, logDebug) {
     return normalized;
   }
 
+  // Fallback: scan entire DOM for snippet-like URLs
+  try {
+    const html = await page.content();
+    const regex = /https?:\/\/dpaste\.org\/([A-Za-z0-9]{2,})(?:\b|\/|\?|#)/g;
+    let match;
+    const found = [];
+    while ((match = regex.exec(html)) !== null) {
+      const id = match[1];
+      if (!id) {
+        continue;
+      }
+      const candidate = `https://dpaste.org/${id}`;
+      if (!found.includes(candidate)) {
+        found.push(candidate);
+      }
+    }
+    if (found.length && typeof logDebug === 'function') {
+      logDebug('dpaste url fallback matches', { found });
+    }
+    for (const url of found) {
+      const normalized = normalizeDpasteUrl(url, DPasteBaseUrl);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  } catch (err) {
+    if (typeof logDebug === 'function') {
+      logDebug('dpaste url fallback error', { message: err && err.message });
+    }
+  }
+
   // fallback: use current page URL if it already points to dpaste snippet
   const fallback = normalizeDpasteUrl(baseUrl, DPasteBaseUrl);
+  if (!fallback || fallback === DPasteBaseUrl || fallback === `${DPasteBaseUrl.replace(/\/?$/, '')}/`) {
+    return '';
+  }
   return fallback;
 }
 
