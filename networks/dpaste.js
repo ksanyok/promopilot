@@ -62,8 +62,19 @@ async function resolvePublishedUrl(page, logDebug) {
         push(el.value || el.getAttribute('value') || '');
       });
 
-      document.querySelectorAll('a[href*="dpaste.org"]').forEach((el) => {
-        push(el.href || el.getAttribute('href') || '');
+      document.querySelectorAll('a[href]').forEach((el) => {
+        const rawHref = el.getAttribute('href') || '';
+        if (!rawHref || /^\s*$/.test(rawHref)) {
+          return;
+        }
+        if (/^javascript:/i.test(rawHref)) {
+          return;
+        }
+        push(rawHref);
+        try {
+          const abs = new URL(rawHref, window.location.href).toString();
+          push(abs);
+        } catch (_) {}
       });
 
       const canonical = document.querySelector('link[rel="canonical"]');
@@ -318,6 +329,10 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
 
     await navigationPromise;
     await waitForTimeoutSafe(page, 500);
+
+    try {
+      logDebug('dpaste post-submit url', { url: await page.url() });
+    } catch (_) {}
 
   const publishedUrl = await resolvePublishedUrl(page, logDebug);
     if (!publishedUrl) {
