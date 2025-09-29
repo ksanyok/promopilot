@@ -38,6 +38,9 @@ $postUrl = (string)($row['post_url'] ?? '');
 $network = (string)($row['network'] ?? '');
 $error = (string)($row['error'] ?? '');
 
+if ($status === 'partial') {
+    echo json_encode(['ok'=>true,'status'=>'manual_review','post_url'=>$postUrl,'network'=>$network]); exit;
+}
 if ($postUrl !== '' || $status === 'success') {
     echo json_encode(['ok'=>true,'status'=>'published','post_url'=>$postUrl,'network'=>$network]); exit;
 }

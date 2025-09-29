@@ -1157,6 +1157,40 @@ document.addEventListener('DOMContentLoaded', function() {
                     bindDynamicPublishButtons();
                     return;
                 }
+                if (status === 'manual_review') {
+                    const postUrl = payload.post_url || '';
+                    const networkLabel = payload.network_title || payload.network || '';
+                    if (tr) {
+                        tr.dataset.postUrl = postUrl;
+                        tr.dataset.network = networkLabel;
+                    }
+                    if (statusCell) {
+                        let html = '<span class="badge bg-warning text-dark"><?php echo __('Требует проверки'); ?></span>';
+                        if (postUrl) {
+                            html += '<div class="small mt-1"><a href="'+escapeHtml(postUrl)+'" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>';
+                        }
+                        html += '<div class="text-muted small mt-1"><?php echo __('Ссылка найдена, но текст не обнаружен. Нужна ручная проверка.'); ?></div>';
+                        if (networkLabel) {
+                            html += '<div class="text-muted small mt-1"><?php echo __('Сеть'); ?>: '+escapeHtml(networkLabel)+'</div>';
+                        }
+                        statusCell.innerHTML = html;
+                    }
+                    if (actionsCell) {
+                        let html = '';
+                        if (postUrl) {
+                            html += '<a href="'+escapeAttribute(postUrl)+'" target="_blank" rel="noopener" class="btn btn-outline-warning btn-sm me-1"><i class="bi bi-search me-1"></i><span class="d-none d-lg-inline"><?php echo __('Проверить'); ?></span></a>';
+                        }
+                        html += '<button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-flag-fill me-1"></i><span class="d-none d-lg-inline"><?php echo __('Ожидает проверки'); ?></span></button>';
+                        actionsCell.innerHTML = html;
+                    }
+                    const editBtns = tr.querySelectorAll('.action-edit, .action-remove');
+                    editBtns.forEach(btn => {
+                        btn.classList.add('disabled');
+                        btn.setAttribute('disabled', 'disabled');
+                    });
+                    bindDynamicPublishButtons();
+                    return;
+                }
                 if (statusCell) {
                     if (status === 'pending') {
                         statusCell.innerHTML = '<span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>';
@@ -1404,6 +1438,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (!data || !data.ok) continue;
                     if (data.status === 'published') {
                         updateRowUI(url, 'published', data);
+                    } else if (data.status === 'manual_review') {
+                        updateRowUI(url, 'manual_review', data);
                     } else if (data.status === 'failed') {
                         // Reset to not_published to allow retry; optionally show error via tooltip
                         updateRowUI(url, 'not_published', {});

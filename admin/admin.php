@@ -121,9 +121,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($levelInput as $slug => $value) {
                     $slugNorm = pp_normalize_slug((string)$slug);
                     if ($slugNorm === '') { continue; }
-                    $levelMap[$slugNorm] = trim((string)$value);
+                    $levelMap[$slugNorm] = $value;
                 }
             }
+            $defaultPriority = isset($_POST['default_priority']) ? (int)$_POST['default_priority'] : $networkDefaultPriority;
+            if ($defaultPriority < 0) { $defaultPriority = 0; }
+            if ($defaultPriority > 999) { $defaultPriority = 999; }
+            $defaultLevelsRaw = $_POST['default_levels'] ?? [];
+            if (!is_array($defaultLevelsRaw)) { $defaultLevelsRaw = [$defaultLevelsRaw]; }
+            $defaultLevelsValue = pp_normalize_network_levels($defaultLevelsRaw);
             $nodeBinaryNew = trim((string)($_POST['node_binary'] ?? ''));
             $puppeteerExecNew = trim((string)($_POST['puppeteer_executable_path'] ?? ''));
             $puppeteerArgsNew = trim((string)($_POST['puppeteer_args'] ?? ''));
@@ -131,7 +137,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'node_binary' => $nodeBinaryNew,
                 'puppeteer_executable_path' => $puppeteerExecNew,
                 'puppeteer_args' => $puppeteerArgsNew,
+                'network_default_priority' => $defaultPriority,
+                'network_default_levels' => $defaultLevelsValue,
             ]);
+            $networkDefaultPriority = $defaultPriority;
+            $networkDefaultLevels = $defaultLevelsValue;
+            $networkDefaultLevelsList = $networkDefaultLevels !== '' ? explode(',', $networkDefaultLevels) : [];
             if (pp_set_networks_enabled($enabledSlugs, $priorityMap, $levelMap)) {
                 $networksMsg = __('Параметры сетей сохранены.');
             } else {
@@ -207,6 +218,12 @@ $networks = pp_get_networks(false, true);
 $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
 $puppeteerExecStored = trim((string)get_setting('puppeteer_executable_path', ''));
 $puppeteerArgsStored = trim((string)get_setting('puppeteer_args', ''));
+$networkDefaultPriority = (int)get_setting('network_default_priority', 10);
+if ($networkDefaultPriority < 0) { $networkDefaultPriority = 0; }
+if ($networkDefaultPriority > 999) { $networkDefaultPriority = 999; }
+$networkDefaultLevelsRaw = (string)get_setting('network_default_levels', '');
+$networkDefaultLevels = pp_normalize_network_levels($networkDefaultLevelsRaw);
+$networkDefaultLevelsList = $networkDefaultLevels !== '' ? explode(',', $networkDefaultLevels) : [];
 $resolvedNode = pp_resolve_node_binary(2, true);
 $nodeBinaryEffective = $resolvedNode['path'] ?? pp_get_node_binary();
 $canRunShell = function_exists('shell_exec');
@@ -664,6 +681,31 @@ $diagnostics = [
                 <div class="form-text"><?php echo __('Аргументы будут добавлены к запуску браузера.'); ?></div>
             </div>
         </div>
+        <div class="row g-3 align-items-end mt-0">
+            <div class="col-md-4 col-lg-3">
+                <label class="form-label" for="defaultPriority" data-bs-toggle="tooltip" title="<?php echo __('Чем выше число, тем выше приоритет сети при подборе.'); ?>"><?php echo __('Приоритет по умолчанию'); ?></label>
+                <input type="number" class="form-control" id="defaultPriority" name="default_priority" value="<?php echo (int)$networkDefaultPriority; ?>" min="0" max="999" aria-describedby="defaultPriorityHelp">
+                <div id="defaultPriorityHelp" class="form-text"><?php echo __('Используется при добавлении новых сетей.'); ?></div>
+            </div>
+            <div class="col-md-8 col-lg-5">
+                <label class="form-label d-block" data-bs-toggle="tooltip" title="<?php echo __('Выберите уровни, которые будут назначены новым сетям по умолчанию.'); ?>"><?php echo __('Уровни по умолчанию'); ?></label>
+                <div class="d-flex flex-wrap gap-2">
+                    <?php foreach ([1,2,3] as $defaultLevel): ?>
+                        <?php $defaultChecked = in_array((string)$defaultLevel, $networkDefaultLevelsList, true); ?>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="default_levels[]" id="default-level-<?php echo (int)$defaultLevel; ?>" value="<?php echo (int)$defaultLevel; ?>" <?php echo $defaultChecked ? 'checked' : ''; ?>>
+                            <label class="form-check-label" for="default-level-<?php echo (int)$defaultLevel; ?>"><?php echo sprintf(__('Уровень %d'), $defaultLevel); ?></label>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                <div class="form-text"><?php echo __('Можно выбрать несколько уровней.'); ?></div>
+            </div>
+            <div class="col-md-12 col-lg-4">
+                <div class="alert alert-secondary mb-0 small" role="status">
+                    <i class="bi bi-info-circle me-1"></i><?php echo __('Эти значения применяются автоматически при появлении новых сетей.'); ?>
+                </div>
+            </div>
+        </div>
         <?php
         $normalizeFilterToken = static function ($value) {
             $value = trim((string)$value);
@@ -739,6 +781,20 @@ $diagnostics = [
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <div class="col-12">
+                    <label class="form-label form-label-sm d-block"><?php echo __('Фильтр по уровню'); ?></label>
+                    <div class="d-flex flex-wrap align-items-center gap-3">
+                        <div class="d-flex flex-wrap gap-2">
+                            <?php foreach ([1,2,3] as $filterLevel): ?>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input filter-level-checkbox" type="checkbox" id="filterLevel<?php echo (int)$filterLevel; ?>" name="filter_levels[]" value="<?php echo (int)$filterLevel; ?>">
+                                    <label class="form-check-label" for="filterLevel<?php echo (int)$filterLevel; ?>"><?php echo sprintf(__('Уровень %d'), $filterLevel); ?></label>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <span class="small text-muted"><?php echo __('Отметьте уровни, чтобы сократить список сетей.'); ?></span>
+                    </div>
+                </div>
                 <div class="col-12 d-flex flex-wrap align-items-center gap-2 filters-actions filters-actions-primary">
                     <button type="button" class="btn btn-outline-primary btn-sm" id="activateVerifiedBtn" data-message-template="<?php echo htmlspecialchars(__('Выбрано проверенных сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
                         <i class="bi bi-toggle2-on me-1"></i><?php echo __('Активировать проверенные'); ?>
@@ -788,6 +844,7 @@ $diagnostics = [
                     <th class="text-center" style="width:120px;">&nbsp;<?php echo __('Активация'); ?>&nbsp;</th>
                     <th class="text-center" style="width:110px;"><?php echo __('Приоритет'); ?></th>
                     <th style="width:180px;"><?php echo __('Уровни'); ?></th>
+                    <th style="width:240px;">&nbsp;<?php echo __('Примечание'); ?>&nbsp;</th>
                     <th><?php echo __('Статус'); ?></th>
                     <th><?php echo __('Последняя проверка'); ?></th>
                     <th class="text-end" style="width:180px;">&nbsp;<?php echo __('Диагностика'); ?>&nbsp;</th>
@@ -812,17 +869,16 @@ $diagnostics = [
                     $tooltipText = implode("\n", $tooltipParts);
                     $rowStatus = (string)($network['last_check_status'] ?? '');
                     $rowStatusAttr = $rowStatus !== '' ? $rowStatus : 'none';
-                    $levelTokens = [];
+                    $levelValues = [];
                     $rawLevel = (string)($network['level'] ?? '');
                     if ($rawLevel !== '') {
-                        $splitLevels = preg_split('~[,;/]+~', $rawLevel) ?: [];
-                        foreach ($splitLevels as $levelItem) {
-                            $token = $normalizeFilterToken($levelItem);
-                            if ($token !== '') {
-                                $levelTokens[] = $token;
+                        if (preg_match_all('~([1-3])~', $rawLevel, $lvlMatches)) {
+                            foreach ($lvlMatches[1] as $lvlVal) {
+                                $levelValues[$lvlVal] = $lvlVal;
                             }
                         }
                     }
+                    $levelValuesList = array_values($levelValues);
                     ?>
                     <tr class="<?php echo $isMissing ? 'table-warning' : ''; ?>"
                         data-status="<?php echo htmlspecialchars($rowStatusAttr); ?>"
@@ -832,7 +888,7 @@ $diagnostics = [
                         data-regions="<?php echo htmlspecialchars(implode('|', $regionTokens)); ?>"
                         data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>"
                         data-priority="<?php echo (int)($network['priority'] ?? 0); ?>"
-                        data-levels="<?php echo htmlspecialchars(implode('|', $levelTokens)); ?>">
+                        data-levels="<?php echo htmlspecialchars(implode('|', $levelValuesList)); ?>">
                         <td class="network-select-cell">
                             <div class="form-check mb-0">
                                 <input type="checkbox" class="form-check-input network-select" aria-label="<?php echo __('Выбор сети'); ?>" <?php echo $isMissing ? 'disabled' : ''; ?>>
@@ -860,10 +916,24 @@ $diagnostics = [
                             </div>
                         </td>
                         <td class="text-center">
-                            <input type="number" class="form-control form-control-sm text-center" name="priority[<?php echo htmlspecialchars($network['slug']); ?>]" value="<?php echo (int)($network['priority'] ?? 0); ?>" min="0" max="999" <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Приоритет'); ?>">
+                            <input type="number" class="form-control form-control-sm text-center" name="priority[<?php echo htmlspecialchars($network['slug']); ?>]" value="<?php echo (int)($network['priority'] ?? 0); ?>" min="0" max="999" <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Приоритет'); ?>" data-bs-toggle="tooltip" title="<?php echo __('Больший приоритет повышает шанс выбора сети.'); ?>">
                         </td>
                         <td>
-                            <input type="text" class="form-control form-control-sm" name="level[<?php echo htmlspecialchars($network['slug']); ?>]" value="<?php echo htmlspecialchars($network['level'] ?? ''); ?>" placeholder="<?php echo __('Например: L1,L2'); ?>" <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Уровни участия'); ?>">
+                            <input type="hidden" name="network_slugs[]" value="<?php echo htmlspecialchars($network['slug']); ?>">
+                            <div class="d-flex flex-wrap gap-2">
+                                <?php foreach ([1,2,3] as $levelOption): ?>
+                                    <?php $levelChecked = in_array((string)$levelOption, $levelValuesList, true); ?>
+                                    <div class="form-check form-check-inline mb-1">
+                                        <input type="checkbox" class="form-check-input level-checkbox" name="level[<?php echo htmlspecialchars($network['slug']); ?>][]" value="<?php echo (int)$levelOption; ?>" id="level-<?php echo htmlspecialchars($network['slug']); ?>-<?php echo (int)$levelOption; ?>" <?php echo $levelChecked ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?>>
+                                        <label class="form-check-label small" for="level-<?php echo htmlspecialchars($network['slug']); ?>-<?php echo (int)$levelOption; ?>"><?php echo sprintf(__('Уровень %d'), $levelOption); ?></label>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div class="form-text"><?php echo __('Выберите один или несколько уровней.'); ?></div>
+                        </td>
+                        <td class="network-note-cell">
+                            <textarea class="form-control form-control-sm network-note-input" rows="2" data-slug="<?php echo htmlspecialchars($network['slug']); ?>" data-initial-value="<?php echo htmlspecialchars($network['notes'] ?? ''); ?>" placeholder="<?php echo __('Добавьте внутреннюю заметку'); ?>"><?php echo htmlspecialchars($network['notes'] ?? ''); ?></textarea>
+                            <div class="small text-muted mt-1 d-none" data-note-status></div>
                         </td>
                         <td>
                             <?php if ($isMissing): ?>
@@ -1071,7 +1141,15 @@ document.addEventListener('DOMContentLoaded', function(){
         selectionStarted: <?php echo json_encode(__('Запущена проверка выбранных сетей (%d).'), JSON_UNESCAPED_UNICODE); ?>,
         selectionEmpty: <?php echo json_encode(__('Отметьте хотя бы одну сеть.'), JSON_UNESCAPED_UNICODE); ?>,
         selectionCleared: <?php echo json_encode(__('Выбор очищен.'), JSON_UNESCAPED_UNICODE); ?>,
-        selectedCount: <?php echo json_encode(__('Выбрано сетей: %d'), JSON_UNESCAPED_UNICODE); ?>
+        selectedCount: <?php echo json_encode(__('Выбрано сетей: %d'), JSON_UNESCAPED_UNICODE); ?>,
+        noteSaving: <?php echo json_encode(__('Сохраняем...'), JSON_UNESCAPED_UNICODE); ?>,
+        noteSaved: <?php echo json_encode(__('Заметка сохранена.'), JSON_UNESCAPED_UNICODE); ?>,
+        noteCleared: <?php echo json_encode(__('Заметка очищена.'), JSON_UNESCAPED_UNICODE); ?>,
+        notePending: <?php echo json_encode(__('Изменения не сохранены'), JSON_UNESCAPED_UNICODE); ?>,
+        noteError: <?php echo json_encode(__('Не удалось сохранить заметку.'), JSON_UNESCAPED_UNICODE); ?>,
+        noteErrorCsrf: <?php echo json_encode(__('Сессия устарела. Обновите страницу.'), JSON_UNESCAPED_UNICODE); ?>,
+        noteErrorNotFound: <?php echo json_encode(__('Сеть не найдена или недоступна.'), JSON_UNESCAPED_UNICODE); ?>,
+        noteErrorGeneric: <?php echo json_encode(__('Произошла ошибка при сохранении заметки.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const errorMessages = {
@@ -1090,11 +1168,185 @@ document.addEventListener('DOMContentLoaded', function(){
     const apiStart = <?php echo json_encode(pp_url('admin/network_check.php?action=start'), JSON_UNESCAPED_UNICODE); ?>;
     const apiStatus = <?php echo json_encode(pp_url('admin/network_check.php?action=status'), JSON_UNESCAPED_UNICODE); ?>;
     const apiCancel = <?php echo json_encode(pp_url('admin/network_check.php?action=cancel'), JSON_UNESCAPED_UNICODE); ?>;
+    const apiNote = <?php echo json_encode(pp_url('admin/network_note.php'), JSON_UNESCAPED_UNICODE); ?>;
 
     let pollTimer = 0;
     let currentRunId = null;
     let modalOpen = false;
     let latestData = null;
+
+    function initNetworkNotes(container) {
+        const root = container || document;
+        const noteInputs = Array.from(root.querySelectorAll('.network-note-input'));
+        if (!noteInputs.length) { return; }
+
+        const getLabel = (key, fallback = '') => {
+            if (labels && Object.prototype.hasOwnProperty.call(labels, key)) {
+                return labels[key];
+            }
+            if (fallback) { return fallback; }
+            if (errorMessages && Object.prototype.hasOwnProperty.call(errorMessages, key)) {
+                return errorMessages[key];
+            }
+            return fallback;
+        };
+
+        noteInputs.forEach((textarea) => {
+            if (!(textarea instanceof HTMLTextAreaElement)) { return; }
+            const slug = (textarea.dataset && textarea.dataset.slug) ? textarea.dataset.slug.trim() : '';
+            if (!slug) { return; }
+            const statusEl = textarea.closest('.network-note-cell')
+                ? textarea.closest('.network-note-cell').querySelector('[data-note-status]')
+                : null;
+            let debounceTimer = 0;
+            let hideTimer = 0;
+            let isSaving = false;
+            let pendingValue = null;
+            let lastSavedValue = (textarea.dataset && typeof textarea.dataset.initialValue !== 'undefined')
+                ? String(textarea.dataset.initialValue)
+                : String(textarea.value || '');
+
+            const showStatus = (type, message) => {
+                if (!statusEl) { return; }
+                if (hideTimer) {
+                    window.clearTimeout(hideTimer);
+                    hideTimer = 0;
+                }
+                const msg = (message || '').trim();
+                statusEl.classList.remove('d-none', 'text-success', 'text-danger', 'text-muted');
+                if (!msg) {
+                    statusEl.classList.add('d-none');
+                    statusEl.classList.add('text-muted');
+                    statusEl.textContent = '';
+                    return;
+                }
+                let cls = 'text-muted';
+                if (type === 'success') {
+                    cls = 'text-success';
+                } else if (type === 'error') {
+                    cls = 'text-danger';
+                }
+                statusEl.classList.add(cls);
+                statusEl.textContent = msg;
+                if (type === 'success') {
+                    hideTimer = window.setTimeout(() => {
+                        statusEl.classList.add('d-none');
+                        statusEl.classList.remove('text-success', 'text-danger');
+                        statusEl.classList.add('text-muted');
+                        statusEl.textContent = '';
+                        hideTimer = 0;
+                    }, 2500);
+                }
+            };
+
+            const triggerSave = () => {
+                if (isSaving) {
+                    if (!debounceTimer) {
+                        debounceTimer = window.setTimeout(() => {
+                            debounceTimer = 0;
+                            triggerSave();
+                        }, 400);
+                    }
+                    return;
+                }
+                const valueToSave = pendingValue;
+                if (valueToSave === null || typeof valueToSave === 'undefined') {
+                    return;
+                }
+                if (valueToSave === lastSavedValue) {
+                    showStatus('idle', '');
+                    pendingValue = null;
+                    return;
+                }
+                pendingValue = null;
+                void saveValue(valueToSave);
+            };
+
+            const scheduleSave = (immediate = false) => {
+                if (debounceTimer) {
+                    window.clearTimeout(debounceTimer);
+                    debounceTimer = 0;
+                }
+                pendingValue = String(textarea.value || '');
+                if (pendingValue === lastSavedValue) {
+                    showStatus('idle', '');
+                    return;
+                }
+                showStatus('pending', getLabel('notePending', ''));
+                const delay = immediate ? 0 : 800;
+                debounceTimer = window.setTimeout(() => {
+                    debounceTimer = 0;
+                    triggerSave();
+                }, delay);
+            };
+
+            async function saveValue(rawValue) {
+                isSaving = true;
+                showStatus('saving', getLabel('noteSaving', ''));
+                const body = new URLSearchParams();
+                body.set('csrf_token', window.CSRF_TOKEN || '');
+                body.set('slug', slug);
+                body.set('note', rawValue);
+                try {
+                    const response = await fetch(apiNote, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: body.toString(),
+                        credentials: 'same-origin'
+                    });
+                    const data = await response.json().catch(() => null);
+                    if (!response.ok || !data || !data.ok) {
+                        const errCode = data && data.error ? data.error : 'DEFAULT';
+                        let message = getLabel('noteErrorGeneric', getLabel('noteError', errorMessages.DEFAULT || ''));
+                        if (errCode === 'CSRF') {
+                            message = getLabel('noteErrorCsrf', message);
+                        } else if (errCode === 'NETWORK_NOT_FOUND' || errCode === 'INVALID_SLUG') {
+                            message = getLabel('noteErrorNotFound', message);
+                        } else if (errCode === 'SAVE_FAILED') {
+                            message = getLabel('noteError', message);
+                        }
+                        throw new Error(message || (errorMessages.DEFAULT || 'Error'));
+                    }
+                    const savedNote = typeof data.note === 'string' ? data.note : rawValue;
+                    if (textarea.value !== savedNote) {
+                        textarea.value = savedNote;
+                    }
+                    textarea.dataset.initialValue = savedNote;
+                    lastSavedValue = savedNote;
+                    if (savedNote === '') {
+                        showStatus('success', getLabel('noteCleared', getLabel('noteSaved', '')));
+                    } else {
+                        showStatus('success', getLabel('noteSaved', ''));
+                    }
+                } catch (err) {
+                    pendingValue = rawValue;
+                    showStatus('error', err && err.message ? err.message : getLabel('noteError', errorMessages.DEFAULT || ''));
+                } finally {
+                    isSaving = false;
+                    if (pendingValue !== null && pendingValue !== lastSavedValue) {
+                        scheduleSave(true);
+                    }
+                }
+            }
+
+            textarea.addEventListener('input', () => {
+                scheduleSave(false);
+            });
+
+            textarea.addEventListener('blur', () => {
+                if (textarea.value !== lastSavedValue) {
+                    scheduleSave(true);
+                }
+            });
+
+            textarea.addEventListener('keydown', (evt) => {
+                if ((evt.metaKey || evt.ctrlKey) && evt.key === 'Enter') {
+                    evt.preventDefault();
+                    scheduleSave(true);
+                }
+            });
+        });
+    }
 
     function clearMessage() {
         if (!messageBox) return;
@@ -1693,11 +1945,16 @@ document.addEventListener('DOMContentLoaded', function(){
 
     const networksTable = document.getElementById('networksTable');
     const filtersBar = document.getElementById('networkFiltersBar');
+
+    if (networksTable) {
+        initNetworkNotes(networksTable);
+    }
     if (networksTable && filtersBar) {
         const filterStatus = document.getElementById('filterStatus');
         const filterActive = document.getElementById('filterActive');
         const filterRegion = document.getElementById('filterRegion');
-        const filterTopic = document.getElementById('filterTopic');
+    const filterTopic = document.getElementById('filterTopic');
+    const filterLevelInputs = Array.from(filtersBar.querySelectorAll('.filter-level-checkbox'));
         const resetFiltersBtn = document.getElementById('resetNetworkFilters');
         const activateVerifiedBtn = document.getElementById('activateVerifiedBtn');
         activateSelectedBtnRef = document.getElementById('activateSelectedBtn');
@@ -1812,6 +2069,7 @@ document.addEventListener('DOMContentLoaded', function(){
             const activeVal = normalizeValue(filterActive ? filterActive.value : 'all');
             const regionVal = normalizeValue(filterRegion ? filterRegion.value : 'all');
             const topicVal = normalizeValue(filterTopic ? filterTopic.value : 'all');
+            const selectedLevels = filterLevelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
 
             rows.forEach((row) => {
                 let visible = true;
@@ -1820,6 +2078,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 const rowMissing = row.dataset.missing || '0';
                 const rowRegions = (row.dataset.regions || '').split('|').filter(Boolean);
                 const rowTopics = (row.dataset.topics || '').split('|').filter(Boolean);
+                const rowLevels = (row.dataset.levels || '').split('|').filter(Boolean);
 
                 if (statusVal && statusVal !== 'all') {
                     if (statusVal === 'success' && rowStatus !== 'success') {
@@ -1853,6 +2112,13 @@ document.addEventListener('DOMContentLoaded', function(){
                     visible = false;
                 }
 
+                if (visible && selectedLevels.length > 0) {
+                    const intersects = rowLevels.some((lvl) => selectedLevels.includes(lvl));
+                    if (!intersects) {
+                        visible = false;
+                    }
+                }
+
                 row.style.display = visible ? '' : 'none';
             });
 
@@ -1879,6 +2145,20 @@ document.addEventListener('DOMContentLoaded', function(){
                     applyNetworkFilters();
                 });
             }
+            const levelInputs = Array.from(row.querySelectorAll('.level-checkbox'));
+            const updateRowLevelsDataset = () => {
+                const selected = levelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+                row.dataset.levels = selected.join('|');
+            };
+            if (levelInputs.length) {
+                levelInputs.forEach((cb) => {
+                    cb.addEventListener('change', () => {
+                        updateRowLevelsDataset();
+                        applyNetworkFilters();
+                    });
+                });
+                updateRowLevelsDataset();
+            }
         });
 
         if (selectAllCheckboxRef) {
@@ -1901,6 +2181,7 @@ document.addEventListener('DOMContentLoaded', function(){
             if (filterActive) filterActive.addEventListener(evt, applyNetworkFilters);
             if (filterRegion) filterRegion.addEventListener(evt, applyNetworkFilters);
             if (filterTopic) filterTopic.addEventListener(evt, applyNetworkFilters);
+            filterLevelInputs.forEach((cb) => cb.addEventListener(evt, applyNetworkFilters));
         });
 
         if (resetFiltersBtn) {
@@ -1909,6 +2190,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 if (filterActive) filterActive.value = 'all';
                 if (filterRegion) filterRegion.value = 'all';
                 if (filterTopic) filterTopic.value = 'all';
+                filterLevelInputs.forEach((cb) => { cb.checked = false; });
                 setInfoMessage('');
                 applyNetworkFilters();
             });

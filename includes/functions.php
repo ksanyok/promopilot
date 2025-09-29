@@ -304,6 +304,7 @@ function ensure_schema(): void {
             `enabled` TINYINT(1) NOT NULL DEFAULT 1,
             `priority` INT NOT NULL DEFAULT 0,
             `level` VARCHAR(50) NULL,
+            `notes` TEXT NULL,
             `is_missing` TINYINT(1) NOT NULL DEFAULT 0,
             `last_check_status` VARCHAR(20) NULL,
             `last_check_run_id` INT NULL,
@@ -331,6 +332,7 @@ function ensure_schema(): void {
     $maybeAdd('enabled', "`enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `topics`");
     $maybeAdd('priority', "`priority` INT NOT NULL DEFAULT 0 AFTER `enabled`");
     $maybeAdd('level', "`level` VARCHAR(50) NULL AFTER `priority`");
+    $maybeAdd('notes', "`notes` TEXT NULL AFTER `level`");
     $maybeAdd('is_missing', "`is_missing` TINYINT(1) NOT NULL DEFAULT 0 AFTER `level`");
     $maybeAdd('last_check_status', "`last_check_status` VARCHAR(20) NULL AFTER `is_missing`");
     $maybeAdd('last_check_run_id', "`last_check_run_id` INT NULL AFTER `last_check_status`");
@@ -1199,27 +1201,48 @@ function pp_refresh_networks(bool $force = false): array {
 
     // snapshot existing enabled flags
     $existing = [];
-    if ($res = @$conn->query("SELECT slug, enabled, priority, level FROM networks")) {
+    if ($res = @$conn->query("SELECT slug, enabled, priority, level, notes FROM networks")) {
         while ($row = $res->fetch_assoc()) {
             $existing[$row['slug']] = [
                 'enabled' => (int)($row['enabled'] ?? 0),
                 'priority' => (int)($row['priority'] ?? 0),
                 'level' => (string)($row['level'] ?? ''),
+                'notes' => (string)($row['notes'] ?? ''),
             ];
         }
         $res->free();
     }
 
-    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), regions = VALUES(regions), topics = VALUES(topics), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
+    $defaultPrioritySetting = (int)get_setting('network_default_priority', 10);
+    if ($defaultPrioritySetting < 0) { $defaultPrioritySetting = 0; }
+    if ($defaultPrioritySetting > 999) { $defaultPrioritySetting = 999; }
+    $defaultLevelsSetting = pp_normalize_network_levels(get_setting('network_default_levels', ''));
+
+    $stmt = $conn->prepare("INSERT INTO networks (slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, notes, is_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), handler = VALUES(handler), handler_type = VALUES(handler_type), meta = VALUES(meta), regions = VALUES(regions), topics = VALUES(topics), is_missing = 0, updated_at = CURRENT_TIMESTAMP");
     if ($stmt) {
         foreach ($descriptors as $slug => $descriptor) {
             $enabled = $descriptor['enabled'] ? 1 : 0;
             $priority = (int)($descriptor['priority'] ?? 0);
             $level = trim((string)($descriptor['level'] ?? ''));
+            $notes = '';
             if (array_key_exists($slug, $existing)) {
                 $enabled = (int)$existing[$slug]['enabled'];
                 $priority = (int)$existing[$slug]['priority'];
                 $level = (string)$existing[$slug]['level'];
+                $notes = (string)$existing[$slug]['notes'];
+            } else {
+                $priority = $defaultPrioritySetting;
+                $level = $defaultLevelsSetting;
+            }
+            if ($priority < 0) { $priority = 0; }
+            if ($priority > 999) { $priority = 999; }
+            $level = pp_normalize_network_levels($level);
+            if ($notes !== '') {
+                if (function_exists('mb_substr')) {
+                    $notes = mb_substr($notes, 0, 2000, 'UTF-8');
+                } else {
+                    $notes = substr($notes, 0, 2000);
+                }
             }
             $metaJson = json_encode($descriptor['meta'], JSON_UNESCAPED_UNICODE);
             $regionsArr = [];
@@ -1244,7 +1267,7 @@ function pp_refresh_networks(bool $force = false): array {
             $regionsStr = implode(', ', array_values($regionsArr));
             $topicsStr = implode(', ', array_values($topicsArr));
             $stmt->bind_param(
-                'ssssssssiis',
+                'ssssssssiiss',
                 $descriptor['slug'],
                 $descriptor['title'],
                 $descriptor['description'],
@@ -1255,7 +1278,8 @@ function pp_refresh_networks(bool $force = false): array {
                 $topicsStr,
                 $enabled,
                 $priority,
-                $level
+                $level,
+                $notes
             );
             $stmt->execute();
         }
@@ -1293,7 +1317,7 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
     $where = [];
     if ($onlyEnabled) { $where[] = "enabled = 1"; }
     if (!$includeMissing) { $where[] = "is_missing = 0"; }
-    $sql = "SELECT slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, is_missing, last_check_status, last_check_run_id, last_check_started_at, last_check_finished_at, last_check_url, last_check_error, last_check_updated_at, created_at, updated_at FROM networks";
+    $sql = "SELECT slug, title, description, handler, handler_type, meta, regions, topics, enabled, priority, level, notes, is_missing, last_check_status, last_check_run_id, last_check_started_at, last_check_finished_at, last_check_url, last_check_error, last_check_updated_at, created_at, updated_at FROM networks";
     if ($where) { $sql .= ' WHERE ' . implode(' AND ', $where); }
     $sql .= ' ORDER BY priority DESC, title ASC';
     $rows = [];
@@ -1333,6 +1357,7 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
                 'enabled' => (bool)$row['enabled'],
                 'priority' => (int)($row['priority'] ?? 0),
                 'level' => trim((string)($row['level'] ?? '')),
+                'notes' => (string)($row['notes'] ?? ''),
                 'is_missing' => (bool)$row['is_missing'],
                 'last_check_status' => $row['last_check_status'] !== null ? (string)$row['last_check_status'] : null,
                 'last_check_run_id' => $row['last_check_run_id'] !== null ? (int)$row['last_check_run_id'] : null,
@@ -1426,6 +1451,31 @@ function pp_pick_network(): ?array {
     return $nets[0] ?? null;
 }
 
+function pp_normalize_network_levels($value): string {
+    $rawList = [];
+    if (is_array($value)) {
+        $rawList = $value;
+    } else {
+        $str = (string)$value;
+        if ($str !== '') {
+            $rawList = preg_split('~[\s,;/]+~u', $str) ?: [];
+        }
+    }
+    $levels = [];
+    foreach ($rawList as $item) {
+        if (!is_scalar($item)) { continue; }
+        $token = trim((string)$item);
+        if ($token === '') { continue; }
+        if (preg_match('~([1-3])~', $token, $m)) {
+            $lvl = $m[1];
+            $levels[$lvl] = $lvl;
+        }
+    }
+    if (empty($levels)) { return ''; }
+    ksort($levels, SORT_NUMERIC);
+    return implode(',', array_values($levels));
+}
+
 function pp_set_networks_enabled(array $slugsToEnable, array $priorityMap = [], array $levelMap = []): bool {
     $enabledMap = [];
     foreach ($slugsToEnable as $slug) {
@@ -1444,8 +1494,16 @@ function pp_set_networks_enabled(array $slugsToEnable, array $priorityMap = [], 
     foreach ($levelMap as $slug => $value) {
         $norm = pp_normalize_slug((string)$slug);
         if ($norm === '') { continue; }
-        $str = trim((string)$value);
-        if (mb_strlen($str) > 50) { $str = mb_substr($str, 0, 50); }
+        $str = pp_normalize_network_levels($value);
+        if ($str !== '') {
+            if (function_exists('mb_strlen')) {
+                if (mb_strlen($str, 'UTF-8') > 50) {
+                    $str = mb_substr($str, 0, 50, 'UTF-8');
+                }
+            } elseif (strlen($str) > 50) {
+                $str = substr($str, 0, 50);
+            }
+        }
         $levelNorm[$norm] = $str;
     }
 
@@ -1476,6 +1534,35 @@ function pp_set_networks_enabled(array $slugsToEnable, array $priorityMap = [], 
     $stmt->close();
     $conn->close();
     return true;
+}
+
+function pp_set_network_note(string $slug, string $note): bool {
+    $slug = pp_normalize_slug($slug);
+    if ($slug === '') { return false; }
+    $note = trim($note);
+    if ($note !== '') {
+        if (function_exists('mb_substr')) {
+            $note = mb_substr($note, 0, 2000, 'UTF-8');
+        } else {
+            $note = substr($note, 0, 2000);
+        }
+    }
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        return false;
+    }
+    if (!$conn) { return false; }
+    $ok = false;
+    if ($stmt = $conn->prepare('UPDATE networks SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ? LIMIT 1')) {
+        $stmt->bind_param('ss', $note, $slug);
+        if ($stmt->execute()) {
+            $ok = $stmt->affected_rows >= 0;
+        }
+        $stmt->close();
+    }
+    $conn->close();
+    return $ok;
 }
 
 function pp_delete_network(string $slug): bool {
