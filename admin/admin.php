@@ -729,8 +729,28 @@ $diagnostics = [
                         <i class="bi bi-arrow-counterclockwise me-1"></i><?php echo __('Сбросить фильтры'); ?>
                     </button>
                 </div>
+                <div class="col-12 d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-success btn-sm" id="activateSelectedBtn" data-selection-action="1" data-message-template="<?php echo htmlspecialchars(__('Включено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <i class="bi bi-check2-all me-1"></i><?php echo __('Включить выбранные'); ?>
+                    </button>
+                    <button type="button" class="btn btn-outline-warning btn-sm" id="deactivateSelectedBtn" data-selection-action="1" data-message-template="<?php echo htmlspecialchars(__('Отключено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <i class="bi bi-dash-circle me-1"></i><?php echo __('Отключить выбранные'); ?>
+                    </button>
+                    <button type="button" class="btn btn-outline-light btn-sm" id="clearSelectedBtn" data-selection-action="1" data-message-template="<?php echo htmlspecialchars(__('Выбор очищен.'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <i class="bi bi-x-circle me-1"></i><?php echo __('Снять выделение'); ?>
+                    </button>
+                    <button type="button" class="btn btn-outline-info btn-sm" id="checkSelectedBtn" data-selection-action="1" data-label="<?php echo __('Проверить выбранные'); ?>">
+                        <i class="bi bi-play-circle me-1"></i><?php echo __('Проверить выбранные'); ?>
+                    </button>
+                </div>
                 <div class="col-12">
-                    <div class="small text-muted" id="networkFiltersInfo" data-label-visible="<?php echo htmlspecialchars(__('Показано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"></div>
+                    <div class="small text-muted" id="networkFiltersInfo"
+                         data-label-visible="<?php echo htmlspecialchars(__('Показано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
+                         data-label-selected="<?php echo htmlspecialchars(__('Выбрано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
+                         data-label-activated="<?php echo htmlspecialchars(__('Включено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
+                         data-label-deactivated="<?php echo htmlspecialchars(__('Отключено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
+                         data-label-selection-empty="<?php echo htmlspecialchars(__('Отметьте хотя бы одну сеть.'), ENT_QUOTES, 'UTF-8'); ?>"
+                         data-label-selection-cleared="<?php echo htmlspecialchars(__('Выбор очищен.'), ENT_QUOTES, 'UTF-8'); ?>"></div>
                 </div>
             </div>
         </div>
@@ -740,6 +760,11 @@ $diagnostics = [
             <table class="table table-striped align-middle" id="networksTable">
                 <thead>
                 <tr>
+                    <th class="text-center network-select-head" style="width:48px;">
+                        <div class="form-check mb-0">
+                            <input type="checkbox" class="form-check-input" id="networkSelectAll" aria-label="<?php echo __('Выбрать все'); ?>">
+                        </div>
+                    </th>
                     <th style="width:70px;">&nbsp;</th>
                     <th><?php echo __('Сеть'); ?></th>
                     <th class="text-center" style="width:80px;">&nbsp;</th>
@@ -771,8 +796,14 @@ $diagnostics = [
                         data-status="<?php echo htmlspecialchars($rowStatusAttr); ?>"
                         data-active="<?php echo ($network['enabled'] && !$isMissing) ? '1' : '0'; ?>"
                         data-missing="<?php echo $isMissing ? '1' : '0'; ?>"
+                        data-slug="<?php echo htmlspecialchars($network['slug']); ?>"
                         data-regions="<?php echo htmlspecialchars(implode('|', $regionTokens)); ?>"
                         data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>">
+                        <td class="network-select-cell">
+                            <div class="form-check mb-0">
+                                <input type="checkbox" class="form-check-input network-select" aria-label="<?php echo __('Выбор сети'); ?>" <?php echo $isMissing ? 'disabled' : ''; ?>>
+                            </div>
+                        </td>
                         <td>
                             <div class="form-check mb-0">
                                 <input type="checkbox" class="form-check-input" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="net-<?php echo htmlspecialchars($network['slug']); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?>>
@@ -926,6 +957,15 @@ $diagnostics = [
 
 <script>
 document.addEventListener('DOMContentLoaded', function(){
+    let checkSelectedBtnRef = null;
+    let activateSelectedBtnRef = null;
+    let deactivateSelectedBtnRef = null;
+    let clearSelectedBtnRef = null;
+    let updateSelectionActionsState = function(){};
+    let checkSelectedDisabledByRun = false;
+    let setNetworkFiltersMessage = function(message) { void message; };
+    let triggerNetworkFiltersRefresh = function(){};
+
     const startBtn = document.getElementById('networkCheckButton');
     const stopBtn = document.getElementById('networkCheckStopButton');
     if (!startBtn) return;
@@ -980,7 +1020,12 @@ document.addEventListener('DOMContentLoaded', function(){
         singleStarted: <?php echo json_encode(__('Проверка запущена для сети: %s'), JSON_UNESCAPED_UNICODE); ?>,
         canceling: <?php echo json_encode(__('Останавливаем проверку...'), JSON_UNESCAPED_UNICODE); ?>,
         cancelRequested: <?php echo json_encode(__('Остановка запрошена. Подождите завершения.'), JSON_UNESCAPED_UNICODE); ?>,
-        cancelSuccess: <?php echo json_encode(__('Проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>
+        cancelSuccess: <?php echo json_encode(__('Проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>,
+        selectionMode: <?php echo json_encode(__('Выборочная проверка'), JSON_UNESCAPED_UNICODE); ?>,
+        selectionStarted: <?php echo json_encode(__('Запущена проверка выбранных сетей (%d).'), JSON_UNESCAPED_UNICODE); ?>,
+        selectionEmpty: <?php echo json_encode(__('Отметьте хотя бы одну сеть.'), JSON_UNESCAPED_UNICODE); ?>,
+        selectionCleared: <?php echo json_encode(__('Выбор очищен.'), JSON_UNESCAPED_UNICODE); ?>,
+        selectedCount: <?php echo json_encode(__('Выбрано сетей: %d'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const errorMessages = {
@@ -1045,6 +1090,8 @@ document.addEventListener('DOMContentLoaded', function(){
             applySuccessBtn.disabled = true;
             applySuccessBtn.style.display = 'none';
         }
+        checkSelectedDisabledByRun = !!disabled;
+        updateSelectionActionsState();
     }
 
     function updateStopButton(run) {
@@ -1110,7 +1157,13 @@ document.addEventListener('DOMContentLoaded', function(){
             const slug = match[1];
             if (!observed.has(slug)) return;
             input.checked = successful.has(slug);
+            const row = input.closest('tr');
+            if (row) {
+                row.dataset.active = (input.checked && !input.disabled) ? '1' : '0';
+            }
         });
+        triggerNetworkFiltersRefresh();
+        setNetworkFiltersMessage(labels.applySuccessHint);
         setMessage('success', labels.applySuccessHint);
     }
 
@@ -1194,7 +1247,13 @@ document.addEventListener('DOMContentLoaded', function(){
         }
         if (summaryMode) {
             if (run.run_mode) {
-                summaryMode.textContent = run.run_mode === 'single' ? labels.singleMode : labels.bulkMode;
+                let modeLabel = labels.bulkMode;
+                if (run.run_mode === 'single') {
+                    modeLabel = labels.singleMode;
+                } else if (run.run_mode === 'selection') {
+                    modeLabel = labels.selectionMode || labels.bulkMode;
+                }
+                summaryMode.textContent = modeLabel;
                 summaryMode.style.display = '';
             } else {
                 summaryMode.style.display = 'none';
@@ -1267,7 +1326,13 @@ document.addEventListener('DOMContentLoaded', function(){
         if (metaBox) {
             const metaParts = [];
             if (run.run_mode) {
-                metaParts.push(labels.mode + ': ' + (run.run_mode === 'single' ? labels.singleMode : labels.bulkMode));
+                let modeLabel = labels.bulkMode;
+                if (run.run_mode === 'single') {
+                    modeLabel = labels.singleMode;
+                } else if (run.run_mode === 'selection') {
+                    modeLabel = labels.selectionMode || labels.bulkMode;
+                }
+                metaParts.push(labels.mode + ': ' + modeLabel);
             }
             metaParts.push(labels.total + ': ' + run.total_networks);
             metaParts.push(labels.success + ': ' + run.success_count);
@@ -1455,11 +1520,27 @@ document.addEventListener('DOMContentLoaded', function(){
         });
     }
 
-    async function startCheck(slug = '', triggerBtn = null) {
+    async function startCheck(slug = '', triggerBtn = null, options = null) {
         clearMessage();
         const button = triggerBtn || startBtn;
         const prevHtml = button ? button.innerHTML : '';
         let runStarted = false;
+        const opts = (options && typeof options === 'object') ? options : {};
+        const normalizedSelection = Array.isArray(opts.slugs) ? Array.from(new Set(opts.slugs.filter(function(item){
+            return typeof item === 'string' && item.trim() !== '';
+        }).map(function(item){ return item.trim(); }))) : [];
+        let mode = 'bulk';
+        if (slug) {
+            mode = 'single';
+        } else if (typeof opts.mode === 'string') {
+            const rawMode = opts.mode.toLowerCase();
+            if (rawMode === 'single') { mode = 'single'; }
+            else if (rawMode === 'selection') { mode = 'selection'; }
+        }
+        if (mode === 'selection' && normalizedSelection.length === 0) {
+            setMessage('warning', labels.selectionEmpty || errorMessages.DEFAULT);
+            return;
+        }
         if (button) {
             button.disabled = true;
             const label = button.dataset && button.dataset.label ? button.dataset.label : button.textContent;
@@ -1471,6 +1552,12 @@ document.addEventListener('DOMContentLoaded', function(){
             body.set('csrf_token', window.CSRF_TOKEN || '');
             if (slug) {
                 body.set('slug', slug);
+            }
+            body.set('mode', mode);
+            if (mode === 'selection') {
+                normalizedSelection.forEach(function(selSlug){
+                    body.append('slugs[]', selSlug);
+                });
             }
             const response = await fetch(apiStart, {
                 method: 'POST',
@@ -1487,9 +1574,12 @@ document.addEventListener('DOMContentLoaded', function(){
             runStarted = true;
             if (data.alreadyRunning) {
                 setMessage('info', labels.alreadyRunning);
-            } else if (slug) {
+            } else if (mode === 'single') {
                 const networkName = (triggerBtn && triggerBtn.dataset && triggerBtn.dataset.networkTitle) ? triggerBtn.dataset.networkTitle : slug;
                 setMessage('info', (labels.singleStarted || '').replace('%s', networkName));
+            } else if (mode === 'selection') {
+                const template = labels.selectionStarted || '';
+                setMessage('info', template ? template.replace('%d', normalizedSelection.length) : '');
             } else {
                 setMessage('info', labels.bulkStarted);
             }
@@ -1564,17 +1654,118 @@ document.addEventListener('DOMContentLoaded', function(){
         const filterTopic = document.getElementById('filterTopic');
         const resetFiltersBtn = document.getElementById('resetNetworkFilters');
         const activateVerifiedBtn = document.getElementById('activateVerifiedBtn');
+        activateSelectedBtnRef = document.getElementById('activateSelectedBtn');
+        deactivateSelectedBtnRef = document.getElementById('deactivateSelectedBtn');
+        clearSelectedBtnRef = document.getElementById('clearSelectedBtn');
+        checkSelectedBtnRef = document.getElementById('checkSelectedBtn');
+        selectAllCheckboxRef = document.getElementById('networkSelectAll');
         const filtersInfo = document.getElementById('networkFiltersInfo');
         const rows = Array.from(networksTable.querySelectorAll('tbody tr'));
 
         const normalizeValue = (val) => (val || '').toString().trim().toLowerCase();
+        const getVisibleRows = () => rows.filter((row) => row.style.display !== 'none');
+        const getSelectedRows = () => rows.filter((row) => row.dataset.selected === '1');
+        const selectionCheckboxFromRow = (row) => row.querySelector('.network-select');
+        const activationCheckboxFromRow = (row) => row.querySelector('input.form-check-input[name^="enable"]');
+
+        let infoMessage = '';
+
+        const updateFiltersInfo = () => {
+            if (!filtersInfo) { return; }
+            const parts = [];
+            const total = rows.length;
+            const visibleCount = getVisibleRows().length;
+            if (filtersInfo.dataset && filtersInfo.dataset.labelVisible && visibleCount !== total) {
+                parts.push(filtersInfo.dataset.labelVisible.replace('%d', visibleCount));
+            }
+            const selectedCount = getSelectedRows().length;
+            if (filtersInfo.dataset && filtersInfo.dataset.labelSelected && selectedCount > 0) {
+                parts.push(filtersInfo.dataset.labelSelected.replace('%d', selectedCount));
+            }
+            if (infoMessage) {
+                parts.push(infoMessage);
+            }
+            filtersInfo.textContent = parts.join(' | ');
+        };
+
+        const setInfoMessage = (message) => {
+            infoMessage = message ? String(message) : '';
+            updateFiltersInfo();
+        };
+
+        setNetworkFiltersMessage = setInfoMessage;
+
+        const refreshSelectAllState = () => {
+            if (!selectAllCheckboxRef) { return; }
+            const visibleRows = getVisibleRows();
+            const selectableVisible = visibleRows.filter((row) => {
+                const checkbox = selectionCheckboxFromRow(row);
+                return checkbox && !checkbox.disabled;
+            });
+            const selectedVisible = selectableVisible.filter((row) => row.dataset.selected === '1');
+            if (selectableVisible.length === 0) {
+                selectAllCheckboxRef.checked = false;
+                selectAllCheckboxRef.indeterminate = false;
+                return;
+            }
+            if (selectedVisible.length === selectableVisible.length) {
+                selectAllCheckboxRef.checked = true;
+                selectAllCheckboxRef.indeterminate = false;
+            } else if (selectedVisible.length === 0) {
+                selectAllCheckboxRef.checked = false;
+                selectAllCheckboxRef.indeterminate = false;
+            } else {
+                selectAllCheckboxRef.checked = false;
+                selectAllCheckboxRef.indeterminate = true;
+            }
+        };
+
+        let updateSelectionActionsStateLocal = function() {
+            const selectedCount = getSelectedRows().length;
+            const disabledByRun = checkSelectedDisabledByRun;
+            if (activateSelectedBtnRef) {
+                activateSelectedBtnRef.disabled = disabledByRun || selectedCount === 0;
+            }
+            if (deactivateSelectedBtnRef) {
+                deactivateSelectedBtnRef.disabled = disabledByRun || selectedCount === 0;
+            }
+            if (clearSelectedBtnRef) {
+                clearSelectedBtnRef.disabled = disabledByRun || selectedCount === 0;
+            }
+            if (checkSelectedBtnRef) {
+                checkSelectedBtnRef.disabled = disabledByRun || selectedCount === 0;
+            }
+        };
+
+        updateSelectionActionsState = updateSelectionActionsStateLocal;
+
+        const setRowSelected = (row, selected, silent = false) => {
+            let state = !!selected;
+            const checkbox = selectionCheckboxFromRow(row);
+            if (checkbox) {
+                if (checkbox.disabled) {
+                    state = false;
+                    checkbox.checked = false;
+                } else {
+                    checkbox.checked = state;
+                }
+            } else {
+                state = false;
+            }
+            row.dataset.selected = state ? '1' : '0';
+            row.classList.toggle('table-active', state);
+            if (!silent) {
+                refreshSelectAllState();
+                updateSelectionActionsStateLocal();
+                updateFiltersInfo();
+            }
+        };
 
         const applyNetworkFilters = () => {
             const statusVal = normalizeValue(filterStatus ? filterStatus.value : 'all');
             const activeVal = normalizeValue(filterActive ? filterActive.value : 'all');
             const regionVal = normalizeValue(filterRegion ? filterRegion.value : 'all');
             const topicVal = normalizeValue(filterTopic ? filterTopic.value : 'all');
-            let visibleCount = 0;
 
             rows.forEach((row) => {
                 let visible = true;
@@ -1608,32 +1799,56 @@ document.addEventListener('DOMContentLoaded', function(){
                     }
                 }
 
-                if (visible && regionVal && regionVal !== 'all') {
-                    if (!rowRegions.includes(regionVal)) {
-                        visible = false;
-                    }
+                if (visible && regionVal && regionVal !== 'all' && !rowRegions.includes(regionVal)) {
+                    visible = false;
                 }
 
-                if (visible && topicVal && topicVal !== 'all') {
-                    if (!rowTopics.includes(topicVal)) {
-                        visible = false;
-                    }
+                if (visible && topicVal && topicVal !== 'all' && !rowTopics.includes(topicVal)) {
+                    visible = false;
                 }
 
                 row.style.display = visible ? '' : 'none';
-                if (visible) {
-                    visibleCount++;
-                }
             });
 
-            if (filtersInfo) {
-                filtersInfo.textContent = visibleCount === rows.length
-                    ? ''
-                    : filtersInfo.dataset && filtersInfo.dataset.labelVisible
-                        ? filtersInfo.dataset.labelVisible.replace('%d', visibleCount)
-                        : '';
-            }
+            refreshSelectAllState();
+            updateSelectionActionsStateLocal();
+            updateFiltersInfo();
         };
+
+        triggerNetworkFiltersRefresh = applyNetworkFilters;
+
+        rows.forEach((row) => {
+            row.dataset.selected = row.dataset.selected === '1' ? '1' : '0';
+            row.classList.toggle('table-active', row.dataset.selected === '1');
+            const selectionInput = selectionCheckboxFromRow(row);
+            if (selectionInput) {
+                selectionInput.addEventListener('change', () => {
+                    setRowSelected(row, selectionInput.checked);
+                });
+            }
+            const enableInput = activationCheckboxFromRow(row);
+            if (enableInput) {
+                enableInput.addEventListener('change', () => {
+                    row.dataset.active = (enableInput.checked && !enableInput.disabled) ? '1' : '0';
+                    applyNetworkFilters();
+                });
+            }
+        });
+
+        if (selectAllCheckboxRef) {
+            selectAllCheckboxRef.addEventListener('change', () => {
+                const targetState = selectAllCheckboxRef.checked;
+                rows.forEach((row) => {
+                    if (row.style.display === 'none') { return; }
+                    const selectionInput = selectionCheckboxFromRow(row);
+                    if (!selectionInput || selectionInput.disabled) { return; }
+                    setRowSelected(row, targetState, true);
+                });
+                refreshSelectAllState();
+                updateSelectionActionsStateLocal();
+                updateFiltersInfo();
+            });
+        }
 
         ['change', 'input'].forEach((evt) => {
             if (filterStatus) filterStatus.addEventListener(evt, applyNetworkFilters);
@@ -1648,9 +1863,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 if (filterActive) filterActive.value = 'all';
                 if (filterRegion) filterRegion.value = 'all';
                 if (filterTopic) filterTopic.value = 'all';
-                if (filtersInfo) {
-                    filtersInfo.textContent = '';
-                }
+                setInfoMessage('');
                 applyNetworkFilters();
             });
         }
@@ -1659,28 +1872,118 @@ document.addEventListener('DOMContentLoaded', function(){
             activateVerifiedBtn.addEventListener('click', () => {
                 let activated = 0;
                 rows.forEach((row) => {
-                    const checkbox = row.querySelector('input[type="checkbox"]');
-                    if (!checkbox || checkbox.disabled) {
-                        return;
-                    }
+                    const checkbox = activationCheckboxFromRow(row);
+                    if (!checkbox || checkbox.disabled) { return; }
                     const isSuccess = normalizeValue(row.dataset.status || '') === 'success';
                     checkbox.checked = isSuccess;
-                    if (isSuccess) {
-                        activated++;
-                    }
+                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    if (isSuccess) { activated++; }
                 });
-                if (filtersInfo) {
-                    const template = activateVerifiedBtn.getAttribute('data-message-template') || '';
-                    if (template) {
-                        filtersInfo.textContent = template.replace('%d', activated);
-                    } else {
-                        filtersInfo.textContent = activated ? String(activated) : '';
-                    }
+                applyNetworkFilters();
+                const template = activateVerifiedBtn.getAttribute('data-message-template') || '';
+                if (template) {
+                    setInfoMessage(template.replace('%d', activated));
+                } else {
+                    setInfoMessage('');
                 }
             });
         }
 
+        const selectionEmptyMessage = (filtersInfo && filtersInfo.dataset && filtersInfo.dataset.labelSelectionEmpty)
+            ? filtersInfo.dataset.labelSelectionEmpty
+            : (labels.selectionEmpty || '');
+        const selectionClearedMessage = (filtersInfo && filtersInfo.dataset && filtersInfo.dataset.labelSelectionCleared)
+            ? filtersInfo.dataset.labelSelectionCleared
+            : (labels.selectionCleared || '');
+        const activatedTemplateDefault = (filtersInfo && filtersInfo.dataset && filtersInfo.dataset.labelActivated)
+            ? filtersInfo.dataset.labelActivated
+            : (labels.selectedCount || '');
+        const deactivatedTemplateDefault = (filtersInfo && filtersInfo.dataset && filtersInfo.dataset.labelDeactivated)
+            ? filtersInfo.dataset.labelDeactivated
+            : (labels.selectedCount || '');
+
+        if (activateSelectedBtnRef) {
+            activateSelectedBtnRef.addEventListener('click', () => {
+                const selectedRows = getSelectedRows();
+                if (!selectedRows.length) {
+                    setInfoMessage(selectionEmptyMessage);
+                    return;
+                }
+                let affected = 0;
+                selectedRows.forEach((row) => {
+                    const checkbox = activationCheckboxFromRow(row);
+                    if (!checkbox || checkbox.disabled) { return; }
+                    checkbox.checked = true;
+                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    affected++;
+                });
+                applyNetworkFilters();
+                const template = activateSelectedBtnRef.getAttribute('data-message-template') || activatedTemplateDefault;
+                setInfoMessage(template ? template.replace('%d', affected) : '');
+            });
+        }
+
+        if (deactivateSelectedBtnRef) {
+            deactivateSelectedBtnRef.addEventListener('click', () => {
+                const selectedRows = getSelectedRows();
+                if (!selectedRows.length) {
+                    setInfoMessage(selectionEmptyMessage);
+                    return;
+                }
+                let affected = 0;
+                selectedRows.forEach((row) => {
+                    const checkbox = activationCheckboxFromRow(row);
+                    if (!checkbox || checkbox.disabled) { return; }
+                    checkbox.checked = false;
+                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    affected++;
+                });
+                applyNetworkFilters();
+                const template = deactivateSelectedBtnRef.getAttribute('data-message-template') || deactivatedTemplateDefault;
+                setInfoMessage(template ? template.replace('%d', affected) : '');
+            });
+        }
+
+        if (clearSelectedBtnRef) {
+            clearSelectedBtnRef.addEventListener('click', () => {
+                const selectedRows = getSelectedRows();
+                if (!selectedRows.length) {
+                    setInfoMessage(selectionEmptyMessage);
+                    return;
+                }
+                selectedRows.forEach((row) => {
+                    setRowSelected(row, false, true);
+                });
+                refreshSelectAllState();
+                updateSelectionActionsStateLocal();
+                updateFiltersInfo();
+                const template = clearSelectedBtnRef.getAttribute('data-message-template') || selectionClearedMessage;
+                setInfoMessage(template);
+            });
+        }
+
+        if (checkSelectedBtnRef) {
+            checkSelectedBtnRef.addEventListener('click', () => {
+                const selectedRows = getSelectedRows();
+                if (!selectedRows.length) {
+                    const msg = labels.selectionEmpty || selectionEmptyMessage || errorMessages.DEFAULT;
+                    setMessage('warning', msg);
+                    setInfoMessage(selectionEmptyMessage);
+                    return;
+                }
+                const slugs = selectedRows.map((row) => (row.dataset.slug || '').trim()).filter(Boolean);
+                if (!slugs.length) {
+                    const msg = labels.selectionEmpty || errorMessages.DEFAULT;
+                    setMessage('warning', msg);
+                    return;
+                }
+                startCheck('', checkSelectedBtnRef, { mode: 'selection', slugs: slugs });
+            });
+        }
+
         applyNetworkFilters();
+        updateSelectionActionsStateLocal();
+        updateFiltersInfo();
 
         if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
             const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));

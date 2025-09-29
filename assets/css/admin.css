@@ -65,6 +65,30 @@
   background: #121521;
 }
 
+.table tbody tr.table-active>td,
+.table tbody tr.table-active>th {
+  background: rgba(77, 163, 255, 0.18) !important;
+  border-color: rgba(77, 163, 255, 0.25) !important;
+}
+
+#networksTable .network-select-head .form-check,
+#networksTable .network-select-cell .form-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+
+#networksTable .network-select-cell {
+  width: 48px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+#networksTable .network-select-cell .form-check-input,
+#networkSelectAll {
+  cursor: pointer;
+}
 /* Pretty switch */
 .pp-switch {
   --h: 24px;
@@ -160,12 +184,37 @@
 .table-striped>tbody>tr:nth-of-type(even)>* { background: #0f1117; }
 .table > :not(caption) > * > * { border-bottom-color: var(--pp-border); }
 
+.table tbody tr.table-active>td,
+.table tbody tr.table-active>th {
+  background: rgba(77, 163, 255, 0.18) !important;
+  border-color: rgba(77, 163, 255, 0.25) !important;
+}
+
+#networksTable .network-select-head .form-check,
+#networksTable .network-select-cell .form-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+
+#networksTable .network-select-cell {
+  width: 48px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+#networksTable .network-select-cell .form-check-input,
+#networkSelectAll {
+  cursor: pointer;
+}
+
 /* Networks filters bar */
 #networkFiltersBar {
-  background: #111420;
-  border: 1px solid var(--pp-border);
-  border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(4, 6, 12, 0.45);
+  background: #10131d;
+  border: 1px solid rgba(42, 47, 58, 0.85);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(6, 8, 15, 0.35);
   color: var(--pp-text);
 }
 
@@ -200,6 +249,9 @@
 #networkFiltersBar .btn {
   border-radius: 10px;
   font-weight: 600;
+  padding: 6px 12px;
+  font-size: .875rem;
+  transition: all .15s ease;
 }
 
 #networkFiltersBar .btn-outline-primary,
@@ -226,6 +278,44 @@
 #networkFiltersBar .btn-outline-secondary:hover {
   background: rgba(154, 164, 178, 0.12);
   color: var(--pp-text);
+}
+
+#networkFiltersBar .btn-outline-success,
+#networkFiltersBar .btn-outline-warning,
+#networkFiltersBar .btn-outline-info,
+#networkFiltersBar .btn-outline-light {
+  border-width: 1px;
+  background: transparent;
+  color: var(--pp-muted);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+#networkFiltersBar .btn-outline-success:hover {
+  color: var(--pp-success);
+  border-color: rgba(61, 220, 151, 0.45);
+  background: rgba(61, 220, 151, 0.16);
+}
+
+#networkFiltersBar .btn-outline-warning:hover {
+  color: var(--pp-warning);
+  border-color: rgba(255, 176, 32, 0.45);
+  background: rgba(255, 176, 32, 0.16);
+}
+
+#networkFiltersBar .btn-outline-info:hover {
+  color: var(--pp-primary);
+  border-color: rgba(77, 163, 255, 0.45);
+  background: rgba(77, 163, 255, 0.18);
+}
+
+#networkFiltersBar .btn-outline-light {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+#networkFiltersBar .btn-outline-light:hover {
+  color: var(--pp-text);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 #networkFiltersBar #networkFiltersInfo {

@@ -200,5 +200,16 @@ $lang = [
     'Проверка не найдена.' => 'Check not found.',
     'Ошибка безопасности.' => 'Security error.',
     'Произошла ошибка. Попробуйте снова.' => 'An error occurred. Please try again.',
+    'Включить выбранные' => 'Enable selected',
+    'Отключить выбранные' => 'Disable selected',
+    'Снять выделение' => 'Clear selection',
+    'Проверить выбранные' => 'Check selected',
+    'Выбор очищен.' => 'Selection cleared.',
+    'Выбрано сетей: %d' => 'Selected networks: %d',
+    'Включено сетей: %d' => 'Enabled networks: %d',
+    'Отключено сетей: %d' => 'Disabled networks: %d',
+    'Отметьте хотя бы одну сеть.' => 'Select at least one network.',
+    'Выборочная проверка' => 'Selective check',
+    'Запущена проверка выбранных сетей (%d).' => 'Started checking selected networks (%d).',
 ];
 ?>

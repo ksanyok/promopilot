@@ -2433,28 +2433,63 @@ if (!function_exists('pp_network_check_launch_worker')) {
 }
 
 if (!function_exists('pp_network_check_start')) {
-    function pp_network_check_start(?int $userId = null, ?string $mode = 'bulk', ?string $targetSlug = null): array {
-        $mode = in_array($mode, ['bulk','single'], true) ? $mode : 'bulk';
+    function pp_network_check_start(?int $userId = null, ?string $mode = 'bulk', ?string $targetSlug = null, ?array $targetSlugs = null): array {
+        $mode = in_array($mode, ['bulk','single','selection'], true) ? $mode : 'bulk';
         $targetSlug = pp_normalize_slug((string)$targetSlug);
-        $enabledNetworks = array_values(array_filter(pp_get_networks(true, false), function(array $network): bool {
-            return empty($network['is_missing']) && !empty($network['enabled']);
-        }));
-        if ($mode === 'single') {
+        $selectionMap = [];
+        if (is_array($targetSlugs)) {
+            foreach ($targetSlugs as $sel) {
+                $normalized = pp_normalize_slug((string)$sel);
+                if ($normalized !== '') {
+                    $selectionMap[$normalized] = true;
+                }
+            }
+        }
+        $targetSlugs = array_keys($selectionMap);
+
+        $allNetworks = pp_get_networks(false, false);
+        $availableNetworks = [];
+        foreach ($allNetworks as $network) {
+            $slug = pp_normalize_slug((string)$network['slug']);
+            if ($slug === '') { continue; }
+            if (!empty($network['is_missing'])) { continue; }
+            $availableNetworks[$slug] = $network;
+        }
+
+        $eligibleNetworks = [];
+        if ($mode === 'bulk') {
+            foreach ($availableNetworks as $net) {
+                if (!empty($net['enabled'])) {
+                    $eligibleNetworks[] = $net;
+                }
+            }
+            if (empty($eligibleNetworks)) {
+                return ['ok' => false, 'error' => 'NO_ENABLED_NETWORKS'];
+            }
+        } elseif ($mode === 'single') {
             if ($targetSlug === '') {
                 return ['ok' => false, 'error' => 'MISSING_SLUG'];
             }
-            $enabledNetworks = array_values(array_filter($enabledNetworks, function(array $network) use ($targetSlug): bool {
-                return pp_normalize_slug((string)$network['slug']) === $targetSlug;
-            }));
-        }
-        if (empty($enabledNetworks)) {
-            return ['ok' => false, 'error' => $mode === 'single' ? 'NETWORK_NOT_FOUND' : 'NO_ENABLED_NETWORKS'];
+            if (!isset($availableNetworks[$targetSlug])) {
+                return ['ok' => false, 'error' => 'NETWORK_NOT_FOUND'];
+            }
+            $eligibleNetworks[] = $availableNetworks[$targetSlug];
+        } else { // selection
+            foreach ($targetSlugs as $sel) {
+                if (isset($availableNetworks[$sel])) {
+                    $eligibleNetworks[] = $availableNetworks[$sel];
+                }
+            }
+            if (empty($eligibleNetworks)) {
+                return ['ok' => false, 'error' => 'NETWORK_NOT_FOUND'];
+            }
         }
 
         pp_network_check_log('Request to start network check', [
             'mode' => $mode,
             'targetSlug' => $targetSlug ?: null,
-            'eligibleNetworks' => count($enabledNetworks),
+            'selectedSlugs' => $mode === 'selection' ? $targetSlugs : null,
+            'eligibleNetworks' => count($eligibleNetworks),
             'userId' => $userId,
         ]);
 
@@ -2477,7 +2512,7 @@ if (!function_exists('pp_network_check_start')) {
             return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true];
         }
 
-        $total = count($enabledNetworks);
+        $total = count($eligibleNetworks);
         if ($userId !== null) {
             $stmt = $conn->prepare("INSERT INTO network_check_runs (status, total_networks, initiated_by, run_mode) VALUES ('queued', ?, ?, ?)");
             if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_WRITE']; }
@@ -2498,7 +2533,7 @@ if (!function_exists('pp_network_check_start')) {
 
         $resStmt = $conn->prepare("INSERT INTO network_check_results (run_id, network_slug, network_title) VALUES (?, ?, ?)");
         if ($resStmt) {
-            foreach ($enabledNetworks as $net) {
+            foreach ($eligibleNetworks as $net) {
                 $slug = (string)$net['slug'];
                 $title = (string)($net['title'] ?? $slug);
                 $resStmt->bind_param('iss', $runId, $slug, $title);
@@ -2763,7 +2798,7 @@ if (!function_exists('pp_process_network_check_run')) {
         }
         if (!$conn) { return; }
 
-        $stmt = $conn->prepare("SELECT id, status, total_networks, run_mode, cancel_requested, notes, success_count, failure_count FROM network_check_runs WHERE id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, status, total_networks, run_mode, cancel_requested, notes, success_count, failure_count FROM network_check_runs WHERE id = ? LIMIT 1");
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
@@ -2775,7 +2810,8 @@ if (!function_exists('pp_process_network_check_run')) {
             return;
         }
 
-        $status = (string)$runRow['status'];
+    $status = (string)$runRow['status'];
+    $runMode = isset($runRow['run_mode']) ? (string)$runRow['run_mode'] : 'bulk';
         $existingNote = trim((string)($runRow['notes'] ?? ''));
         $cancelRequested = !empty($runRow['cancel_requested']);
         $cancelNoteBase = __('Проверка остановлена администратором.');
@@ -2924,7 +2960,8 @@ if (!function_exists('pp_process_network_check_run')) {
             ]);
 
             $network = pp_get_network($slug);
-            if (!$network || !empty($network['is_missing']) || empty($network['enabled'])) {
+            $allowDisabled = in_array($runMode, ['single','selection'], true);
+            if (!$network || !empty($network['is_missing']) || (!$allowDisabled && empty($network['enabled']))) {
                 $errMsg = __('Обработчик сети недоступен.');
                 if ($updateResultFail) {
                     $updateResultFail->bind_param('si', $errMsg, $resId);

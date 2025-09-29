@@ -24,8 +24,33 @@ if ($action === 'start') {
     }
     $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
     $slug = isset($_POST['slug']) ? (string)$_POST['slug'] : '';
-    $mode = $slug !== '' ? 'single' : 'bulk';
-    $result = pp_network_check_start($userId ?: null, $mode, $slug);
+    $requestedMode = strtolower(trim((string)($_POST['mode'] ?? '')));
+    $selectionRaw = isset($_POST['slugs']) ? (array)$_POST['slugs'] : [];
+    $selectionMap = [];
+    foreach ($selectionRaw as $sel) {
+        $normalized = pp_normalize_slug((string)$sel);
+        if ($normalized !== '') {
+            $selectionMap[$normalized] = true;
+        }
+    }
+    $selection = array_keys($selectionMap);
+    $mode = 'bulk';
+    if ($requestedMode === 'single') {
+        $mode = 'single';
+    } elseif ($requestedMode === 'selection') {
+        $mode = 'selection';
+    } elseif ($slug !== '') {
+        $mode = 'single';
+    }
+    if ($mode === 'single' && $slug === '') {
+        $mode = 'bulk';
+    }
+    if ($mode === 'selection' && empty($selection)) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'MISSING_SLUG'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $result = pp_network_check_start($userId ?: null, $mode, $slug, $selection);
     if (!$result['ok']) {
         http_response_code(400);
     }
