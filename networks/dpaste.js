@@ -14,16 +14,27 @@ function normalizeDpasteUrl(value, baseUrl = DPasteBaseUrl) {
   if (!raw) {
     return '';
   }
-  let normalized = raw;
+
+  let urlObject;
   try {
-    normalized = new URL(raw, baseUrl).toString();
+    urlObject = new URL(raw, baseUrl);
   } catch (_) {
     return '';
   }
-  if (!/https?:\/\/dpaste\.org\//i.test(normalized)) {
+
+  const hostname = urlObject.hostname.toLowerCase();
+  if (!hostname.endsWith('dpaste.org')) {
     return '';
   }
-  return normalized.replace(/\s+/g, '').trim();
+
+  const slugMatch = urlObject.pathname.match(/^\/?([A-Za-z0-9]{2,})\/?$/);
+  if (!slugMatch) {
+    return '';
+  }
+
+  const slug = slugMatch[1];
+  const normalized = `https://dpaste.org/${slug}`;
+  return normalized;
 }
 
 async function resolvePublishedUrl(page, logDebug) {
