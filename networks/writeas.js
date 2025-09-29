@@ -29,19 +29,27 @@ function normalizeWriteAsUrl(rawUrl) {
 const config = {
   slug: 'writeas',
   baseUrl: 'https://write.as/new',
+  // Write.as expects Markdown in the main textarea
   contentFormat: 'markdown',
-  waitForSelector: '#writer',
+  // As a safety, we can later consider plain text fallback if needed
+  // Support legacy/new selectors
+  waitForSelector: '#post-body, #writer, textarea#post-body',
   disableTitle: true,
-  contentSelectors: ['#writer'],
+  // Try common editor targets first
+  contentSelectors: ['#post-body', 'textarea#post-body', '#writer'],
   submitSelectors: ['#publish'],
   resultTimeoutMs: 180000,
   beforeSubmit: async ({ page, logLine }) => {
     try {
       await page.waitForFunction(() => {
         const btn = document.querySelector('#publish');
-        const content = document.querySelector('#writer');
+        const content = document.querySelector('#post-body, #writer, textarea#post-body');
         if (!btn || !content) return false;
-        const hasText = typeof content.value === 'string' && content.value.trim().length > 0;
+        let raw = '';
+        if (typeof content.value === 'string') raw = content.value;
+        else if (typeof content.innerText === 'string') raw = content.innerText;
+        else if (typeof content.textContent === 'string') raw = content.textContent;
+        const hasText = !!raw && raw.trim().length > 0;
         const enabled = !btn.disabled && !btn.classList.contains('disabled');
         return hasText && enabled;
       }, { timeout: 15000 });
