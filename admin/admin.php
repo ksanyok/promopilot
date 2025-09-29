@@ -465,21 +465,21 @@ $diagnostics = [
                     <input type="text" name="openai_api_key" class="form-control" id="openaiApiKeyInput" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
                     <button type="button" class="btn btn-outline-secondary" id="checkOpenAiKey" data-check-url="<?php echo pp_url('public/check_openai.php'); ?>">
                         <i class="bi bi-shield-check me-1"></i><?php echo __('Проверить'); ?>
-                    </button>
-                </div>
-                <div class="form-text" id="openaiCheckStatus"></div>
-                <div id="openaiCheckMessages" class="d-none"
-                     data-empty="<?php echo htmlspecialchars(__('Введите ключ перед проверкой.')); ?>"
-                     data-checking="<?php echo htmlspecialchars(__('Проверяем ключ...')); ?>"
-                     data-ok="<?php echo htmlspecialchars(__('Ключ подтверждён. Доступно моделей:')); ?>"
-                     data-error="<?php echo htmlspecialchars(__('Ошибка сервиса OpenAI.')); ?>"
-                     data-request="<?php echo htmlspecialchars(__('Не удалось выполнить запрос.')); ?>"
-                     data-no-curl="<?php echo htmlspecialchars(__('Расширение cURL недоступно.')); ?>"
-                     data-unauthorized="<?php echo htmlspecialchars(__('Неверный ключ или нет доступа.')); ?>"
-                     data-forbidden="<?php echo htmlspecialchars(__('Нет прав.')); ?>"
-                     data-connection="<?php echo htmlspecialchars(__('Не удалось соединиться с OpenAI.')); ?>"
-                     data-checking-short="<?php echo htmlspecialchars(__('Проверка...')); ?>"
-                ></div>
+                    <tr>
+                        <th class="text-center network-select-head" style="width:46px;">
+                            <div class="form-check mb-0">
+                                <input type="checkbox" class="form-check-input" id="networkSelectAll" aria-label="<?php echo __('Выбрать все'); ?>">
+                            </div>
+                        </th>
+                        <th><?php echo __('Сеть'); ?></th>
+                        <th class="text-center" style="width:80px;">&nbsp;</th>
+                        <th><?php echo __('Описание'); ?></th>
+                        <th><?php echo __('Обработчик'); ?></th>
+                        <th class="text-center network-activate-head" style="width:120px;">&nbsp;<?php echo __('Активация'); ?>&nbsp;</th>
+                        <th><?php echo __('Статус'); ?></th>
+                        <th><?php echo __('Последняя проверка'); ?></th>
+                        <th class="text-end" style="width:180px;">&nbsp;</th>
+                    </tr>
 
                 <label class="form-label mt-3"><?php echo __('Модель OpenAI'); ?></label>
                 <select name="openai_model" class="form-select form-control" id="openaiModelSelect">
@@ -721,7 +721,7 @@ $diagnostics = [
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="col-12 d-flex flex-wrap gap-2">
+                <div class="col-12 d-flex flex-wrap align-items-center gap-2 filters-actions filters-actions-primary">
                     <button type="button" class="btn btn-outline-primary btn-sm" id="activateVerifiedBtn" data-message-template="<?php echo htmlspecialchars(__('Выбрано проверенных сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
                         <i class="bi bi-toggle2-on me-1"></i><?php echo __('Активировать проверенные'); ?>
                     </button>
@@ -729,7 +729,7 @@ $diagnostics = [
                         <i class="bi bi-arrow-counterclockwise me-1"></i><?php echo __('Сбросить фильтры'); ?>
                     </button>
                 </div>
-                <div class="col-12 d-flex flex-wrap gap-2">
+                <div class="col-12 d-flex flex-wrap align-items-center gap-2 filters-actions filters-actions-selection">
                     <button type="button" class="btn btn-outline-success btn-sm" id="activateSelectedBtn" data-selection-action="1" data-message-template="<?php echo htmlspecialchars(__('Включено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
                         <i class="bi bi-check2-all me-1"></i><?php echo __('Включить выбранные'); ?>
                     </button>
@@ -744,7 +744,7 @@ $diagnostics = [
                     </button>
                 </div>
                 <div class="col-12">
-                    <div class="small text-muted" id="networkFiltersInfo"
+                    <div class="small text-muted filters-info" id="networkFiltersInfo"
                          data-label-visible="<?php echo htmlspecialchars(__('Показано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
                          data-label-selected="<?php echo htmlspecialchars(__('Выбрано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
                          data-label-activated="<?php echo htmlspecialchars(__('Включено сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"
@@ -805,11 +805,6 @@ $diagnostics = [
                             </div>
                         </td>
                         <td>
-                            <div class="form-check mb-0">
-                                <input type="checkbox" class="form-check-input" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="net-<?php echo htmlspecialchars($network['slug']); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?>>
-                            </div>
-                        </td>
-                        <td>
                             <strong><?php echo htmlspecialchars($network['title']); ?></strong>
                             <div class="text-muted small"><?php echo htmlspecialchars($network['slug']); ?></div>
                         </td>
@@ -824,6 +819,13 @@ $diagnostics = [
                         </td>
                         <td><?php echo htmlspecialchars($network['description']); ?></td>
                         <td><code><?php echo htmlspecialchars($network['handler']); ?></code></td>
+                        <td class="network-activate-cell text-center">
+                            <div class="pp-switch pp-switch-sm network-activate-switch">
+                                <?php $toggleId = 'net-enable-' . pp_normalize_slug((string)$network['slug']); ?>
+                                <input type="checkbox" class="network-enable-toggle" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="<?php echo htmlspecialchars($toggleId); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Активация сети'); ?>">
+                                <label for="<?php echo htmlspecialchars($toggleId); ?>" class="track" aria-hidden="true"><span class="thumb"></span></label>
+                            </div>
+                        </td>
                         <td>
                             <?php if ($isMissing): ?>
                                 <span class="badge bg-warning text-dark"><?php echo __('Файл не найден'); ?></span>

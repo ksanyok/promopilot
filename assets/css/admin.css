@@ -88,34 +88,109 @@
 #networksTable .network-select-cell .form-check-input,
 #networkSelectAll {
   cursor: pointer;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 6px;
+  border: 1.5px solid rgba(138, 152, 174, 0.45);
+  background-color: #0e111b;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease, transform .12s ease;
+}
+
+#networksTable .network-select-cell .form-check-input:hover:not(:disabled),
+#networkSelectAll:hover:not(:disabled) {
+  border-color: rgba(77, 163, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.12);
+  transform: scale(1.05);
+}
+
+#networksTable .network-select-cell .form-check-input:active:not(:disabled),
+#networkSelectAll:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+#networksTable .network-select-cell .form-check-input:focus-visible,
+#networkSelectAll:focus-visible {
+  outline: none;
+  border-color: rgba(77, 163, 255, 0.75);
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.2);
+}
+
+#networksTable .network-select-cell .form-check-input:checked,
+#networkSelectAll:checked {
+  background-color: var(--pp-primary);
+  border-color: var(--pp-primary);
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.18);
+}
+
+#networksTable .network-select-cell .form-check-input:disabled,
+#networkSelectAll:disabled {
+  background-color: rgba(24, 28, 42, 0.5);
+  border-color: rgba(134, 146, 170, 0.25);
+  cursor: not-allowed;
+  opacity: 0.65;
+  transform: none;
 }
 /* Pretty switch */
 .pp-switch {
   --h: 24px;
+  --w: 46px;
+  --thumb-offset: 3px;
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
+.pp-switch-sm {
+  --h: 20px;
+  --w: 38px;
+}
 .pp-switch input { display:none; }
 .pp-switch .track {
-  width: 46px; height: var(--h);
-  background: #2a2f3a;
+  width: var(--w);
+  height: var(--h);
+  background: rgba(36, 42, 60, 0.85);
   border-radius: calc(var(--h) / 2);
   position: relative;
-  transition: background .2s ease;
+  transition: background .2s ease, box-shadow .2s ease, opacity .2s ease;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  cursor: pointer;
 }
 .pp-switch .thumb {
-  width: calc(var(--h) - 6px);
-  height: calc(var(--h) - 6px);
-  background: #fff;
+  width: calc(var(--h) - (var(--thumb-offset) * 2));
+  height: calc(var(--h) - (var(--thumb-offset) * 2));
+  background: #f1f5ff;
   border-radius: 50%;
   position: absolute;
-  top: 3px; left: 3px;
-  transition: transform .2s ease, background .2s ease;
+  top: var(--thumb-offset);
+  left: var(--thumb-offset);
+  transition: transform .2s ease, background .2s ease, box-shadow .2s ease;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
 }
-.pp-switch input:checked + .track { background: var(--pp-primary); }
-.pp-switch input:checked + .track .thumb { transform: translateX(22px); }
+.pp-switch:hover .track {
+  box-shadow: inset 0 0 0 1px rgba(77, 163, 255, 0.25);
+}
+.pp-switch input:checked + .track {
+  background: linear-gradient(135deg, rgba(77, 163, 255, 0.95), rgba(46, 146, 255, 0.85));
+  box-shadow: 0 6px 16px rgba(32, 84, 140, 0.35);
+}
+.pp-switch input:checked + .track .thumb {
+  transform: translateX(calc(var(--w) - var(--h)));
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(19, 33, 54, 0.45);
+}
+.pp-switch input:focus-visible + .track {
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.35);
+}
+.pp-switch input:disabled + .track {
+  background: rgba(32, 36, 48, 0.7);
+  cursor: not-allowed;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  opacity: 0.75;
+}
+.pp-switch input:disabled + .track .thumb {
+  background: rgba(209, 214, 224, 0.65);
+  box-shadow: none;
+}
 
 /* Modal (scrollable, high-contrast) */
 .pp-modal {
@@ -204,42 +279,70 @@
   vertical-align: middle;
 }
 
-#networksTable .network-select-cell .form-check-input,
-#networkSelectAll {
-  cursor: pointer;
-}
-
 /* Networks filters bar */
 #networkFiltersBar {
-  background: #10131d;
-  border: 1px solid rgba(42, 47, 58, 0.85);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(6, 8, 15, 0.35);
+  position: relative;
+  z-index: 0;
+  background: linear-gradient(135deg, rgba(18, 24, 38, 0.95), rgba(10, 12, 20, 0.98));
+  border: 1px solid rgba(82, 110, 156, 0.35);
+  border-radius: 14px;
+  box-shadow: 0 18px 36px rgba(6, 8, 20, 0.35);
   color: var(--pp-text);
+  padding: 20px 22px;
+  overflow: hidden;
+}
+
+#networkFiltersBar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(160% 120% at 95% -20%, rgba(77, 163, 255, 0.18), transparent 55%);
+  z-index: -1;
+}
+
+#networkFiltersBar .row {
+  row-gap: 18px;
 }
 
 #networkFiltersBar .form-label {
-  color: var(--pp-muted);
+  color: rgba(197, 205, 224, 0.85);
   font-size: 0.75rem;
-  letter-spacing: .03em;
+  font-weight: 600;
+  letter-spacing: .05em;
   text-transform: uppercase;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 #networkFiltersBar .form-select,
 #networkFiltersBar .form-control {
-  background: #0c0f18;
-  border: 1px solid rgba(142, 152, 170, 0.18);
+  background: rgba(12, 16, 29, 0.95);
+  border: 1px solid rgba(120, 138, 170, 0.35);
   color: var(--pp-text);
-  border-radius: 10px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-  transition: border-color .15s ease, box-shadow .15s ease;
+  border-radius: 12px;
+  padding: 8px 14px;
+  min-height: 40px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  backdrop-filter: blur(6px);
+}
+
+#networkFiltersBar .form-select:hover,
+#networkFiltersBar .form-control:hover {
+  border-color: rgba(77, 163, 255, 0.5);
 }
 
 #networkFiltersBar .form-select:focus,
 #networkFiltersBar .form-control:focus {
   border-color: var(--pp-primary);
-  box-shadow: 0 0 0 .2rem rgba(77, 163, 255, 0.15);
+  box-shadow: 0 0 0 .2rem rgba(77, 163, 255, 0.18);
+  background: rgba(14, 20, 34, 0.98);
+}
+
+#networkFiltersBar .form-select-sm,
+#networkFiltersBar .form-control-sm {
+  padding: 8px 14px;
+  font-size: .85rem;
 }
 
 #networkFiltersBar .form-select option {
@@ -247,36 +350,63 @@
 }
 
 #networkFiltersBar .btn {
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
   font-weight: 600;
-  padding: 6px 12px;
-  font-size: .875rem;
-  transition: all .15s ease;
+  padding: 7px 15px;
+  font-size: .85rem;
+  transition: transform .15s ease, box-shadow .15s ease, color .15s ease, background .15s ease, border-color .15s ease;
+  background: rgba(18, 24, 38, 0.6);
+  border: 1px solid rgba(118, 138, 170, 0.35);
+  color: rgba(214, 226, 249, 0.85);
 }
 
-#networkFiltersBar .btn-outline-primary,
-#networkFiltersBar .btn-outline-secondary {
-  border-width: 1px;
-  background: transparent;
-  color: var(--pp-muted);
+#networkFiltersBar .btn .bi {
+  font-size: 1rem;
+  opacity: 0.75;
+}
+
+#networkFiltersBar .btn:hover {
+  transform: translateY(-1px);
+  background: rgba(26, 34, 52, 0.95);
+  border-color: rgba(77, 163, 255, 0.55);
+  color: var(--pp-text);
+}
+
+#networkFiltersBar .btn:active {
+  transform: translateY(0);
+}
+
+#networkFiltersBar .btn:hover .bi {
+  opacity: 1;
+}
+
+#networkFiltersBar .btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.2);
 }
 
 #networkFiltersBar .btn-outline-primary {
   color: var(--pp-primary);
-  border-color: rgba(77, 163, 255, 0.45);
+  border-color: rgba(77, 163, 255, 0.55);
+  background: rgba(26, 36, 58, 0.45);
 }
 
 #networkFiltersBar .btn-outline-primary:hover {
-  background: rgba(77, 163, 255, 0.12);
+  background: rgba(77, 163, 255, 0.16);
   color: var(--pp-text);
 }
 
 #networkFiltersBar .btn-outline-secondary {
-  border-color: rgba(154, 164, 178, 0.35);
+  color: rgba(214, 226, 249, 0.8);
+  border-color: rgba(154, 164, 178, 0.4);
+  background: rgba(20, 26, 40, 0.45);
 }
 
 #networkFiltersBar .btn-outline-secondary:hover {
-  background: rgba(154, 164, 178, 0.12);
+  background: rgba(154, 164, 178, 0.16);
   color: var(--pp-text);
 }
 
@@ -284,46 +414,85 @@
 #networkFiltersBar .btn-outline-warning,
 #networkFiltersBar .btn-outline-info,
 #networkFiltersBar .btn-outline-light {
-  border-width: 1px;
-  background: transparent;
-  color: var(--pp-muted);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(18, 24, 38, 0.35);
+  color: rgba(214, 226, 249, 0.85);
 }
 
 #networkFiltersBar .btn-outline-success:hover {
   color: var(--pp-success);
   border-color: rgba(61, 220, 151, 0.45);
-  background: rgba(61, 220, 151, 0.16);
+  background: rgba(61, 220, 151, 0.18);
 }
 
 #networkFiltersBar .btn-outline-warning:hover {
   color: var(--pp-warning);
   border-color: rgba(255, 176, 32, 0.45);
-  background: rgba(255, 176, 32, 0.16);
+  background: rgba(255, 176, 32, 0.18);
 }
 
 #networkFiltersBar .btn-outline-info:hover {
   color: var(--pp-primary);
   border-color: rgba(77, 163, 255, 0.45);
-  background: rgba(77, 163, 255, 0.18);
+  background: rgba(77, 163, 255, 0.2);
 }
 
 #networkFiltersBar .btn-outline-light {
-  border-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(222, 230, 245, 0.85);
 }
 
 #networkFiltersBar .btn-outline-light:hover {
   color: var(--pp-text);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.08);
 }
 
-#networkFiltersBar #networkFiltersInfo {
+#networkFiltersBar .filters-actions {
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#networkFiltersBar .filters-actions-primary {
+  margin-top: 18px;
+}
+
+#networkFiltersBar .filters-actions-selection {
+  margin-top: 10px;
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+#networkFiltersBar .filters-info {
+  border-left: 3px solid rgba(77, 163, 255, 0.4);
+  border-radius: 11px;
+  padding: 10px 14px;
+  background: rgba(12, 17, 29, 0.65);
+  min-height: 38px;
   color: var(--pp-muted);
-  min-height: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+#networkFiltersBar #networkFiltersInfo {
+  color: inherit;
 }
 
 #networkFiltersBar .text-muted { color: var(--pp-muted) !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  #networkFiltersBar .btn,
+  #networkFiltersBar .form-select,
+  #networkFiltersBar .form-control,
+  .pp-switch .track,
+  .pp-switch .thumb,
+  #networksTable .network-select-cell .form-check-input,
+  #networkSelectAll {
+    transition: none !important;
+  }
+}
 
 /* Network diagnostics */
 .network-check-summary-card {
