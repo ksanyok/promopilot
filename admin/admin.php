@@ -465,22 +465,8 @@ $diagnostics = [
                     <input type="text" name="openai_api_key" class="form-control" id="openaiApiKeyInput" value="<?php echo htmlspecialchars($settings['openai_api_key']); ?>" placeholder="sk-...">
                     <button type="button" class="btn btn-outline-secondary" id="checkOpenAiKey" data-check-url="<?php echo pp_url('public/check_openai.php'); ?>">
                         <i class="bi bi-shield-check me-1"></i><?php echo __('Проверить'); ?>
-                    <tr>
-                        <th class="text-center network-select-head" style="width:46px;">
-                            <div class="form-check mb-0">
-                                <input type="checkbox" class="form-check-input" id="networkSelectAll" aria-label="<?php echo __('Выбрать все'); ?>">
-                            </div>
-                        </th>
-                        <th><?php echo __('Сеть'); ?></th>
-                        <th class="text-center" style="width:80px;">&nbsp;</th>
-                        <th><?php echo __('Описание'); ?></th>
-                        <th><?php echo __('Обработчик'); ?></th>
-                        <th class="text-center network-activate-head" style="width:120px;">&nbsp;<?php echo __('Активация'); ?>&nbsp;</th>
-                        <th><?php echo __('Статус'); ?></th>
-                        <th><?php echo __('Последняя проверка'); ?></th>
-                        <th class="text-end" style="width:180px;">&nbsp;</th>
-                    </tr>
-
+                    </button>
+                </div>
                 <label class="form-label mt-3"><?php echo __('Модель OpenAI'); ?></label>
                 <select name="openai_model" class="form-select form-control" id="openaiModelSelect">
                     <?php
