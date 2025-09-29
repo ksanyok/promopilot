@@ -656,7 +656,8 @@ $diagnostics = [
                     <th><?php echo __('Описание'); ?></th>
                     <th><?php echo __('Обработчик'); ?></th>
                     <th><?php echo __('Статус'); ?></th>
-                    <th class="text-end" style="width:160px;"><?php echo __('Диагностика'); ?></th>
+                    <th><?php echo __('Последняя проверка'); ?></th>
+                    <th class="text-end" style="width:180px;"><?php echo __('Диагностика'); ?></th>
                 </tr>
                 </thead>
                 <tbody>
@@ -681,6 +682,44 @@ $diagnostics = [
                                 <span class="badge badge-success"><?php echo __('Активна'); ?></span>
                             <?php else: ?>
                                 <span class="badge badge-secondary"><?php echo __('Отключена'); ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php
+                            $lastStatus = (string)($network['last_check_status'] ?? '');
+                            $lastStarted = $network['last_check_started_at'] ?? null;
+                            $lastFinished = $network['last_check_finished_at'] ?? null;
+                            $lastUrl = trim((string)($network['last_check_url'] ?? ''));
+                            $lastError = trim((string)($network['last_check_error'] ?? ''));
+                            $lastRunId = $network['last_check_run_id'] ?? null;
+                            $statusMap = [
+                                'success' => ['label' => __('Успешно'), 'class' => 'bg-success'],
+                                'failed' => ['label' => __('С ошибками'), 'class' => 'bg-danger'],
+                                'running' => ['label' => __('Выполняется'), 'class' => 'bg-primary'],
+                                'queued' => ['label' => __('В ожидании'), 'class' => 'bg-secondary'],
+                                'cancelled' => ['label' => __('Отменено'), 'class' => 'bg-warning text-dark'],
+                            ];
+                            $badge = $statusMap[$lastStatus] ?? null;
+                            if ($badge): ?>
+                                <span class="badge <?php echo htmlspecialchars($badge['class']); ?>"><?php echo htmlspecialchars($badge['label']); ?></span>
+                            <?php else: ?>
+                                <span class="text-muted small"><?php echo __('Нет данных'); ?></span>
+                            <?php endif; ?>
+                            <?php if ($lastFinished || $lastStarted): ?>
+                                <div class="text-muted small">
+                                    <?php echo htmlspecialchars(date('Y-m-d H:i', strtotime($lastFinished ?: $lastStarted))); ?>
+                                    <?php if ($lastRunId): ?>
+                                        <span class="text-muted">#<?php echo (int)$lastRunId; ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                            <?php if ($lastUrl): ?>
+                                <a href="<?php echo htmlspecialchars($lastUrl); ?>" target="_blank" rel="noopener" class="small d-inline-flex align-items-center gap-1">
+                                    <i class="bi bi-box-arrow-up-right"></i><?php echo __('Открыть'); ?>
+                                </a>
+                            <?php endif; ?>
+                            <?php if ($lastError): ?>
+                                <div class="small text-danger mt-1" title="<?php echo htmlspecialchars($lastError); ?>"><?php echo htmlspecialchars(mb_strimwidth($lastError, 0, 80, '…')); ?></div>
                             <?php endif; ?>
                         </td>
                         <td class="text-end">
