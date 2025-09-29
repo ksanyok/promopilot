@@ -271,6 +271,22 @@ async function waitForResult(page, startUrl, hints = {}) {
   return lastUrl;
 }
 
+async function waitForTimeoutSafe(target, ms) {
+  const duration = Number.isFinite(ms) ? Number(ms) : 0;
+  if (!(duration > 0)) {
+    return;
+  }
+  if (target && typeof target.waitForTimeout === 'function') {
+    try {
+      await target.waitForTimeout(duration);
+      return;
+    } catch (_) {
+      // fall back to generic sleep
+    }
+  }
+  await sleep(duration);
+}
+
 function formatForConsole(title, url) {
   const cleanTitle = stripTags(title || '').slice(0, 140);
   return `${cleanTitle} -> ${url}`;
@@ -284,4 +300,5 @@ module.exports = {
   waitForResult,
   formatForConsole,
   sleep,
+  waitForTimeoutSafe,
 };

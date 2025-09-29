@@ -1,6 +1,7 @@
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 const config = {
   slug: 'paste2',
@@ -12,7 +13,7 @@ const config = {
   submitSelectors: ['input[type="submit"]', 'button[type="submit"]'],
   resultSelector: 'input[value^="https://paste2.org/"]',
   resolveResult: async ({ page }) => {
-    await page.waitForTimeout(2000).catch(() => {});
+    await waitForTimeoutSafe(page, 2000);
     let current = '';
     try { current = page.url(); } catch (_) {}
     if (current && /https?:\/\/paste2\.org\//i.test(current) && !current.includes('new-paste')) {

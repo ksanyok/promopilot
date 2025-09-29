@@ -1,6 +1,7 @@
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 function randomSlug() {
   return 'promo-' + Math.random().toString(36).slice(2, 9);
@@ -16,7 +17,7 @@ const config = {
   submitSelectors: [],
   manualSubmit: async () => {},
   resolveResult: async ({ page }) => {
-    await page.waitForTimeout(1200);
+    await waitForTimeoutSafe(page, 1200);
     try { return page.url(); } catch (_) { return ''; }
   }
 };

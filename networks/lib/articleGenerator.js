@@ -41,6 +41,64 @@ function analyzeLinks(html, url, anchor) {
   }
 }
 
+function hashString(str) {
+  let hash = 0;
+  const input = String(str || '');
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash << 5) - hash + input.charCodeAt(i);
+    hash |= 0; // Keep 32-bit
+  }
+  return hash;
+}
+
+const AUTHOR_CANDIDATES = {
+  ru: ['Алексей Петров', 'Мария Смирнова', 'Иван Орлов', 'Ольга Кузнецова', 'Дмитрий Соколов', 'Елена Васильева'],
+  en: ['Alex Parker', 'Taylor Morgan', 'Jordan Lee', 'Casey Bennett', 'Morgan Reed', 'Jamie Collins'],
+  es: ['Lucía García', 'Diego Ramos', 'Elena Fernández', 'Mateo Álvarez'],
+  fr: ['Camille Laurent', 'Julien Moreau', 'Sophie Bernard'],
+  de: ['Lena Fischer', 'Jonas Becker', 'Mia Schneider'],
+  generic: ['PromoPilot Contributor']
+};
+
+function pickAuthorName(language, seed) {
+  const code = String(language || '').toLowerCase().split(/[-_]/)[0];
+  const pool = AUTHOR_CANDIDATES[code] || AUTHOR_CANDIDATES.generic;
+  if (!Array.isArray(pool) || pool.length === 0) {
+    return 'PromoPilot Contributor';
+  }
+  const base = hashString(seed || '') % pool.length;
+  const index = ((base % pool.length) + pool.length) % pool.length;
+  return pool[index];
+}
+
+function buildDiagnosticArticle(pageUrl, anchorText) {
+  const externalLink = 'https://ru.wikipedia.org/wiki/Веб-аналитика';
+  const altAnchor = 'интерактивная панель PromoPilot';
+  const sections = [
+    `<h2>Введение</h2>
+<p>Диагностика рекламных кампаний часто затягивается из-за разрозненных данных и несогласованных показателей. Ссылка <a href="${pageUrl}">${anchorText}</a> открывает компактную витрину со сводкой ключевых метрик, которые нужны маркетологу в первые минуты проверки.</p>
+<p>PromoPilot собирает историю публикаций, частоту отклонений и оперативные подсказки по оптимизации. Это экономит время специалиста и позволяет сразу увидеть, где именно кампания теряет охваты или конверсии.</p>`,
+    `<h2>Как устроена ссылка диагностики</h2>
+<p>На странице доступны интерактивные графики, таблица с последними публикациями и рекомендации по каждой сети. Кнопка перехода на <a href="${pageUrl}">${altAnchor}</a> ведет к расширенной панели, где можно сравнить показатели за разные недели и отметить проблемные площадки.</p>
+<p>Секция «Действия» показывает, какие шаги уже предприняла команда: повторный запуск, обновление креативов или запрос в службу поддержки сети. Это помогает не дублировать работу и удерживать контекст внутри одной ссылки.</p>`,
+    `<h2>Мониторинг ошибок</h2>
+<p>Через диагностику удобно отслеживать тайминги публикаций, коды ответов и частоту разрывов по капче. Для каждой сети указано, когда фиксировался последний сбой и какие параметры стоит перепроверить. Это особенно полезно для команд, работающих в нескольких часовых поясах.</p>
+<p>Журнал событий формируется автоматически: наименование сети, шаг скрипта, краткое описание проблемы и подсказка, какие настройки изменить. Благодаря этому распределённая команда быстрее синхронизируется и исключает повторные простои.</p>`,
+    `<h2>Интеграция с аналитикой</h2>
+<p>PromoPilot собирает данные из рекламных кабинетов и CMS, чтобы аналитики видели причину падения трафика ещё до встречи. При необходимости можно открыть <a href="${externalLink}">обзор по веб-аналитике</a> и сравнить метрики с отраслевыми ориентирами.</p>
+<p>Расширенный режим позволяет выгружать отчёт в CSV и делиться ссылкой с подрядчиками. Даже если они не имеют доступа к основному проекту, диагностическая страница поможет им понять контекст задачи.</p>`,
+    `<h2>Выводы</h2>
+<p>Когда команда использует единую ссылку диагностики, исчезают «слепые зоны»: статус каждой публикации прозрачен, а история шагов фиксируется автоматически. Это повышает скорость реакции на сбой и улучшает качество кампаний.</p>
+<p>Сохраняйте ссылку в закладках и возвращайтесь к ней после каждой проверки. Она служит живым центром знаний по проекту и позволяет специалистам PromoPilot работать слаженно даже в условиях постоянных изменений.</p>`
+  ];
+
+  return {
+    title: 'PromoPilot: диагностика сетей',
+    author: 'Алексей Петров',
+    html: sections.join('\n\n')
+  };
+}
+
 async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta, testMode }, logLine) {
   const pageMeta = meta || {};
   const pageLang = language || pageMeta.lang || 'ru';
@@ -51,17 +109,17 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const isTest = !!testMode;
 
   if (isTest) {
-    const title = `PromoPilot: диагностика сетей`;
-    const body = `<p>Это тестовая публикация PromoPilot для проверки сетей. Сервис пытается разместить диагностическую ссылку <a href="${pageUrl}">${anchorText}</a> и убедиться, что площадка принимает стандартный HTML-контент.</p>`;
-    const stats = analyzeLinks(body, pageUrl, anchorText);
+    const preset = buildDiagnosticArticle(pageUrl, anchorText);
+    const stats = analyzeLinks(preset.html, pageUrl, anchorText);
     if (typeof logLine === 'function') {
-      logLine('Diagnostic article prepared', { links: stats, length: body.length });
+      logLine('Diagnostic article prepared', { links: stats, length: preset.html.length, author: preset.author });
     }
     return {
-      title,
-      htmlContent: body,
+      title: preset.title,
+      htmlContent: preset.html,
       language: pageLang,
       linkStats: stats,
+      author: preset.author,
     };
   }
 
@@ -114,11 +172,24 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     }
   }
 
+  const authorFromMeta = (pageMeta.author || '').toString().trim();
+  const author = authorFromMeta || pickAuthorName(pageLang, `${pageUrl}|${anchorText}|${topicTitle}|${topicDesc}|${region}`);
+
+  if (typeof logLine === 'function') {
+    logLine('Article generated', {
+      language: pageLang,
+      author,
+      length: String(content || '').length,
+      links: stat
+    });
+  }
+
   return {
     title: titleClean || topicTitle || anchorText,
     htmlContent: String(content || '').trim(),
     language: pageLang,
-    linkStats: stat
+    linkStats: stat,
+    author,
   };
 }
 

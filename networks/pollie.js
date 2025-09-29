@@ -4,6 +4,7 @@ const puppeteer = require('puppeteer');
 const { createLogger } = require('./lib/logger');
 const { generatePoll } = require('./lib/pollGenerator');
 const { runCli } = require('./lib/genericPaste');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const slug = 'pollie';
@@ -90,7 +91,7 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
       }
     }, poll);
 
-    await page.waitForTimeout(500);
+  await waitForTimeoutSafe(page, 500);
 
     const createButton = await page.evaluateHandle(() => {
       const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
@@ -107,8 +108,8 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
       await page.keyboard.press('Enter').catch(() => {});
     }
 
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    await page.waitForTimeout(1200);
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+  await waitForTimeoutSafe(page, 1200);
 
     const publishedUrl = await page.evaluate(() => {
       const candidates = [window.location.href];

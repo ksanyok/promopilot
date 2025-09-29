@@ -1,6 +1,7 @@
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 const config = {
   slug: 'zerobin',
@@ -11,7 +12,7 @@ const config = {
   submitSelectors: ['button#encrypt-btn', 'button#paste', 'button[type="submit"]'],
   disableTitle: true,
   resolveResult: async ({ page }) => {
-    await page.waitForTimeout(1500);
+    await waitForTimeoutSafe(page, 1500);
     try {
       const current = page.url();
       if (current && /https?:\/\//i.test(current) && current.includes('#')) {

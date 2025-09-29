@@ -1,6 +1,7 @@
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 const config = {
   slug: 'writeas',
@@ -12,7 +13,7 @@ const config = {
   submitSelectors: ['button[type="submit"]', 'button.btn-primary'],
   disableTitle: false,
   resolveResult: async ({ page }) => {
-    await page.waitForTimeout(2000).catch(() => {});
+    await waitForTimeoutSafe(page, 2000);
     let current = '';
     try { current = page.url(); } catch (_) {}
     if (current && /https?:\/\/write\.as\//i.test(current) && !current.includes('/notes')) {

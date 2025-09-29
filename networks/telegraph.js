@@ -3,7 +3,8 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const { generateText, cleanLLMOutput } = require('./ai_client');
+const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 
 // Simple file logger (one log file per process run)
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -22,144 +23,44 @@ function logLine(msg, data){
   const line = `[${new Date().toISOString()}] ${msg}${data ? ' ' + safeStringify(data) : ''}\n`;
   try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
 }
-
-async function generateTextWithChat(prompt, opts) {
-  const provider = (opts && opts.provider) || process.env.PP_AI_PROVIDER || 'openai';
-  logLine('AI request', { provider, promptPreview: String(prompt||'').slice(0,160) });
-  try {
-    const out = await generateText(String(prompt || ''), opts || {});
-    logLine('AI response ok', { length: String(out||'').length });
-    return out;
-  } catch (e) {
-    logLine('AI error', { error: String(e && e.message || e) });
-    throw e;
-  }
+function normalizeContent(html) {
+  let s = String(html || '').trim();
+  s = s.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '<h2>$1</h2>');
+  s = s.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, inner) => `<p>— ${inner.trim()}</p>`);
+  s = s.replace(/<\/(?:ul|ol)>/gi, '').replace(/<(?:ul|ol)[^>]*>/gi, '');
+  s = s.replace(/<p([^>]*)>\s*[-–—•∙·]\s+(.*?)<\/p>/gi, '<p$1>— $2</p>');
+  s = s.replace(/<p[^>]*>(?:\s|<br[^>]*>)*<\/p>/gi, '');
+  return s;
 }
 
-async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
-  const aiOpts = {
-    provider,
-    openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || undefined,
-    temperature: 0.2
+  logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
+
+  const articleJob = {
+    pageUrl,
+    anchorText,
+    language,
+    openaiApiKey,
+    aiProvider: provider,
+    wish,
+    meta: pageMeta,
+    testMode: !!jobOptions.testMode
   };
-  logLine('Publish start', { pageUrl, anchorText, language, provider });
 
-  const meta = pageMeta || {};
-  const pageLang = language || meta.lang || 'ru';
-  const topicTitle = (meta.title || '').toString().trim();
-  const topicDesc = (meta.description || '').toString().trim();
-  const region = (meta.region || '').toString().trim();
-  const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
+  const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
+    ? { ...jobOptions.preparedArticle }
+    : await generateArticle(articleJob, logLine);
 
-  const prompts = {
-    title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
-      `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
-    author: `Предложи нейтральное имя автора на ${pageLang} (1–2 слова).\n` +
-            `Constraints: reply with the name only (no extra words), no emojis, no quotes, no punctuation except spaces or hyphen.`,
-    content:
-      `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
-      `Требования:\n` +
-      `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
-      `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
-      `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").\n` +
-      `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en, если нет подходящей локали). Естественный анкор.\n` +
-      `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.\n` +
-      `- 3–5 смысловых секций и короткое заключение.\n` +
-      `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.\n` +
-      `Ответь только телом статьи.`
-  };
-  logLine('Prompts prepared');
-
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-  const rawTitle = await generateTextWithChat(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек, эмодзи и пояснений.', keepRaw: true });
-  await sleep(800);
-  const rawAuthor = await generateTextWithChat(prompts.author, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.', keepRaw: true });
-  await sleep(800);
-  const rawContent = await generateTextWithChat(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в простом HTML (<p>, <h2>). Без markdown и пояснений.', keepRaw: true });
-
-  const titleClean = cleanLLMOutput(rawTitle);
-  const authorClean = cleanLLMOutput(rawAuthor);
-  let content = cleanLLMOutput(rawContent);
-  logLine('AI raw/clean', {
-    title: { rawPrev: String(rawTitle||'').slice(0,120), cleanPrev: String(titleClean||'').slice(0,120) },
-    author: { rawPrev: String(rawAuthor||'').slice(0,120), cleanPrev: String(authorClean||'').slice(0,120) },
-    content: { rawPrev: String(rawContent||'').slice(0,120), cleanPrev: String(content||'').slice(0,120) }
-  });
-
-  // Analyze links in raw vs cleaned to ensure we're not stripping anchors
-  const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  function analyzeLinks(html, url, anchor) {
-    try {
-      const str = String(html || '');
-      const hrefMatches = Array.from(str.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/ig));
-      const totalLinks = hrefMatches.length;
-      let ourLinkCount = 0;
-      let externalCount = 0;
-      const externalDomains = new Set();
-      let hasExactAnchor = false;
-      const normalize = (t) => String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
-      const expectedAnchor = normalize(anchor);
-      for (const m of hrefMatches) {
-        const href = m[1];
-        const inner = m[2].replace(/<[^>]+>/g, '');
-        const isOur = href === url;
-        if (isOur) {
-          ourLinkCount++;
-          if (expectedAnchor && normalize(inner) === expectedAnchor) {
-            hasExactAnchor = true;
-          }
-        } else {
-          externalCount++;
-          const dm = /^(?:https?:\/\/)?([^\/]+)/i.exec(href);
-          if (dm && dm[1]) externalDomains.add(dm[1].toLowerCase());
-        }
-      }
-      const hasOurUrl = ourLinkCount > 0;
-      const firstIdx = hrefMatches.findIndex(m => m[1] === url);
-      const snippet = firstIdx >= 0 ? str.slice(Math.max(0, firstIdx - 40), firstIdx + 160) : '';
-      return { totalLinks, ourLinkCount, hasOurUrl, hasOurAnchorText: hasExactAnchor, externalCount, externalDomains: Array.from(externalDomains).slice(0,3), snippet: snippet.slice(0,200) };
-    } catch (_) { return { totalLinks: 0, ourLinkCount: 0, hasOurUrl: false, hasOurAnchorText: false, snippet: '' }; }
+  const title = (article.title || (pageMeta && pageMeta.title) || anchorText || '').toString().trim();
+  const author = (article.author || '').toString().trim() || 'PromoPilot Автор';
+  const rawContent = String(article.htmlContent || '').trim();
+  if (!rawContent) {
+    throw new Error('EMPTY_ARTICLE_CONTENT');
   }
-  logLine('AI link analysis', {
-    raw: analyzeLinks(rawContent, pageUrl, anchorText),
-    cleaned: analyzeLinks(content, pageUrl, anchorText)
-  });
+  const initialLinks = article.linkStats || analyzeLinks(rawContent, pageUrl, anchorText);
+  logLine('Article ready', { title: title.slice(0, 140), author, links: initialLinks });
 
-  // If constraints not met, try a single regeneration with a stricter hint
-  const wantOur = 2, wantExternal = 1, wantTotal = wantOur + wantExternal;
-  const check = (html) => analyzeLinks(html, pageUrl, anchorText);
-  let linkStat = check(content);
-  if (!(linkStat.ourLinkCount >= wantOur && linkStat.externalCount >= wantExternal && linkStat.totalLinks === wantTotal)) {
-    logLine('Link constraints unmet, regenerating once', { stat: linkStat, want: { our: wantOur, external: wantExternal, total: wantTotal } });
-    const stricter = prompts.content + `\nСТРОГО: включи ровно ${wantTotal} ссылки: две на ${pageUrl} (одна с анкором "${anchorText}", вторая с другим анкором) и одну на авторитетный внешний источник. Не добавляй других ссылок.`;
-    const retryRaw = await generateTextWithChat(stricter, { ...aiOpts, systemPrompt: 'Соблюдай требования ссылок строго. Только тело статьи в простом HTML.', keepRaw: true });
-    const retryClean = cleanLLMOutput(retryRaw);
-    logLine('AI retry link analysis', { raw: analyzeLinks(retryRaw, pageUrl, anchorText), cleaned: analyzeLinks(retryClean, pageUrl, anchorText) });
-    // Replace content with retry if it improved towards constraints
-    const retryStat = analyzeLinks(retryClean, pageUrl, anchorText);
-    if (retryStat.ourLinkCount >= linkStat.ourLinkCount || retryStat.totalLinks > linkStat.totalLinks) {
-      linkStat = retryStat;
-      // use retry content
-      content = retryClean;
-    }
-  }
-
-  // Minimal cleanup only (global cleanup happens in ai_client)
-  let title = String(titleClean || '').replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').replace(/^\*+|\*+$/g,'').trim();
-  let author = String(authorClean || '').replace(/[\"'«»]/g, '').trim();
-  if (author) author = author.split(/\s+/).slice(0,2).join(' ');
-  if (!title || title.replace(/[*_\-\s]+/g,'') === '') title = topicTitle || anchorText;
-  if (!author) {
-    try {
-      const retryAuthor = await generateTextWithChat(`Имя автора на ${pageLang} нейтральное (1–2 слова). Ответь только именем, без кавычек и эмодзи.`, { ...aiOpts, systemPrompt: 'Только имя автора (1–2 слова). Без кавычек, эмодзи и пояснений.' });
-      author = String(retryAuthor || '').replace(/[\"'«»]/g, '').trim().split(/\s+/).slice(0,2).join(' ');
-    } catch (_) {}
-  }
-
-  // Launch browser and publish
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) {
     launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
@@ -180,21 +81,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
   try { await page.click(editorSelector); } catch (_) {}
-  function normalizeContent(html) {
-    let s = String(html || '').trim();
-    // Convert any H1 to H2
-    s = s.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '<h2>$1</h2>');
-    // Convert list items to paragraphs with dashes
-    s = s.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, inner) => `<p>— ${inner.trim()}</p>`);
-    s = s.replace(/<\/(?:ul|ol)>/gi, '').replace(/<(?:ul|ol)[^>]*>/gi, '');
-    // Normalize paragraph bullets if present
-    s = s.replace(/<p([^>]*)>\s*[-–—•∙·]\s+(.*?)<\/p>/gi, '<p$1>— $2</p>');
-    // Drop empty paragraphs (only <br> or whitespace)
-    s = s.replace(/<p[^>]*>(?:\s|<br[^>]*>)*<\/p>/gi, '');
-    return s;
-  }
-  const cleanedContent = normalizeContent(String(content || ''));
-  // Log analysis after normalization too
+  const cleanedContent = normalizeContent(rawContent);
   logLine('Normalized link analysis', analyzeLinks(cleanedContent, pageUrl, anchorText));
   await page.evaluate((html) => {
     const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
@@ -203,7 +90,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
       try { root.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch(_) { try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {} }
     }
   }, cleanedContent);
-  await new Promise(r => setTimeout(r, 120));
+  await waitForTimeoutSafe(page, 120);
 
   // Helper to set text in editable fields (title/author) via keyboard only
   const setEditableText = async (selector, value) => {
@@ -216,11 +103,11 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   // 2) Set title and 3) author
   logLine('Fill title');
   await setEditableText('h1[data-placeholder="Title"]', title);
-  await new Promise(r => setTimeout(r, 80));
+  await waitForTimeoutSafe(page, 80);
 
   logLine('Fill author');
   await setEditableText('address[data-placeholder="Your name"]', author);
-  await new Promise(r => setTimeout(r, 80));
+  await waitForTimeoutSafe(page, 80);
 
   // Diagnostic: check final DOM title
   try {
@@ -273,7 +160,7 @@ if (require.main === module) {
         process.exit(1);
       }
 
-      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
+      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(0);
