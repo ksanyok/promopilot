@@ -46,8 +46,8 @@ function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') 
 			return '';
 		}
 
-		if (data.collection && data.collection.alias) {
-			const slug = data.slug || nextId;
+			if (data.collection && data.collection.alias) {
+				const slug = data.slug || nextId;
 			if (!slug) {
 				return '';
 			}
@@ -58,8 +58,8 @@ function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') 
 			return '';
 		}
 
-		const suffix = prefix ? `${prefix}${nextId}` : `${nextId}.md`;
-		return `${origin.replace(/\/$/, '')}/${suffix}`;
+			const suffix = prefix ? `${prefix}${nextId}` : `${nextId}`;
+			return `${origin.replace(/\/$/, '')}/${suffix}`;
 	} catch (_) {
 		return '';
 	}
@@ -108,7 +108,7 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 	logDebug('Article link stats', analyzeLinks(htmlContent, pageUrl, anchorText));
 	logDebug('Markdown prepared', { length: markdownBody.length });
 
-	const verification = createVerificationPayload({
+		const verification = createVerificationPayload({
 		pageUrl,
 		anchorText,
 		article,
@@ -199,11 +199,11 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 			throw new Error('PUBLISH_BUTTON_NOT_FOUND');
 		}
 
-		const apiResponse = await apiResponsePromise;
-		await navigationPromise;
-		await waitForTimeoutSafe(page, 500);
+			const apiResponse = await apiResponsePromise;
+			await navigationPromise;
+			await waitForTimeoutSafe(page, 500);
 
-		let publishedUrl = '';
+			let publishedUrl = '';
 		if (apiResponse) {
 			try {
 				const origin = new URL(apiResponse.url()).origin;
@@ -223,9 +223,35 @@ async function publishToWriteAs(pageUrl, anchorText, language, openaiApiKey, aiP
 			}
 		}
 
-		if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
+			if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
+				try {
+					const canonical = await page.evaluate(() => {
+						const link = document.querySelector('link[rel="canonical"]');
+						return link ? link.href : '';
+					});
+					if (canonical) {
+						publishedUrl = canonical;
+					}
+				} catch (_) {}
+			}
+
+			if (!publishedUrl || /\/new\b/i.test(publishedUrl)) {
 			throw new Error('FAILED_TO_RESOLVE_URL');
 		}
+
+			if (/\/[^/]+\.md$/i.test(publishedUrl)) {
+				publishedUrl = publishedUrl.replace(/\.md$/i, '');
+			}
+
+			if (verification) {
+				verification.supportsTextCheck = false;
+				if (verification.textSample) {
+					delete verification.textSample;
+				}
+				verification.linkUrl = pageUrl;
+			}
+
+			logDebug('Resolved published url', { publishedUrl });
 
 		logLine('Publish success', { publishedUrl });
 
