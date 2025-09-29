@@ -1,14 +1,14 @@
 'use strict';
 
 const { createHttpPublisher } = require('./lib/httpPublishers');
-const { buildTextFile } = require('./lib/articleFiles');
+const { buildHtmlFile } = require('./lib/articleFiles');
 const { runCli } = require('./lib/genericPaste');
 
 const config = {
   slug: 'catbox',
-  contentFormat: 'text',
+  contentFormat: 'html',
   buildRequest: async ({ article, variants, job }) => {
-    const file = buildTextFile({ article, variants, job });
+    const file = buildHtmlFile({ article, variants, job });
     return {
       url: 'https://catbox.moe/user/api.php',
       method: 'POST',

@@ -1,14 +1,76 @@
+
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
-const { waitForResult } = require('./lib/puppeteerUtils');
+const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { solveIfCaptcha } = require('./captcha');
 
-const RESULT_SELECTOR = 'input#link, input[name="link"], input#siteurl, input#shortlink';
 const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]{4,}$/i;
+const RESULT_POLL_INTERVAL = 1500;
+const RESULT_TIMEOUT_MS = 180000;
 
 function isValidControlCUrl(url) {
   return CONTROL_C_URL_REGEX.test(String(url || '').trim());
+}
+
+async function collectCandidates(target) {
+  try {
+    return await target.evaluate(() => {
+      const collected = new Set();
+      const push = (val) => {
+        if (!val || typeof val !== 'string') return;
+        const trimmed = val.trim();
+        if (trimmed) collected.add(trimmed);
+      };
+
+      const pattern = /https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]{4,}/i;
+
+      const bySelectors = [
+        'input#link',
+        'input[name="link"]',
+        'input#siteurl',
+        'input#shortlink',
+        'input#copylink',
+        'textarea#codes',
+        'textarea[name="codes"]',
+        'textarea[name="content"]',
+      ];
+
+      bySelectors.forEach((selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return;
+        const value = node.value || node.getAttribute('value') || node.innerText || node.textContent || '';
+        if (value) {
+          if (/https?:\/\//i.test(value)) {
+            push(value);
+          } else {
+            const match = value.match(pattern);
+            if (match && match[0]) push(match[0]);
+          }
+        }
+      });
+
+      const anchors = Array.from(document.querySelectorAll('a[href*="controlc.com/"]'));
+      anchors.forEach((anchor) => {
+        if (anchor && anchor.href) push(anchor.href);
+      });
+
+      const bodyText = document.body ? document.body.innerText : '';
+      if (bodyText) {
+        const bodyMatches = bodyText.match(/https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]{4,}/gi) || [];
+        bodyMatches.forEach(push);
+      }
+
+      const currentUrl = location.href;
+      if (currentUrl) push(currentUrl);
+
+      const urls = Array.from(collected);
+      const valid = urls.find((url) => pattern.test(url));
+      return { urls, valid: valid || '' };
+    });
+  } catch (_) {
+    return { urls: [], valid: '' };
+  }
 }
 
 const config = {
@@ -16,10 +78,18 @@ const config = {
   baseUrl: 'https://controlc.com/',
   contentFormat: 'markdown',
   waitForSelector: 'form textarea',
-  submitSelectors: ['button[type="submit"]', '#submit'],
-  resultSelector: RESULT_SELECTOR,
+  submitSelectors: [
+    'button[type="submit"]',
+    '#submit',
+    '#submitbutton',
+    '#submit_button',
+    'button#submitbutton',
+    'button[name="Submit"]',
+    'input[type="submit"]',
+    'input[name="submit"]'
+  ],
   titleSelectors: ['input#paste_title', 'input[name="title"]'],
-  resultTimeoutMs: 180000,
+  resultTimeoutMs: RESULT_TIMEOUT_MS,
   beforeSubmit: async ({ page, logLine }) => {
     try {
       const solved = await solveIfCaptcha(page, logLine);
@@ -36,77 +106,38 @@ const config = {
       if (solved) {
         logLine('ControlC captcha solved', { stage: 'afterSubmit' });
       }
+      try {
+        await Promise.race([
+          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => null),
+          waitForTimeoutSafe(page, 2000)
+        ]);
+      } catch (_) {}
     } catch (error) {
       logLine('ControlC captcha solve error', { stage: 'afterSubmit', error: String(error && error.message || error) });
     }
   },
   resolveResult: async ({ page, popupPage, startUrl, logLine }) => {
     const target = popupPage || page;
-    const resolved = await waitForResult(target, startUrl, {
-      resultSelector: RESULT_SELECTOR,
-      resultTimeoutMs: 180000,
-      resultEval: () => {
-        const input = document.querySelector('input#link, input[name="link"], input#siteurl, input#shortlink');
-        if (input) {
-          const val = input.value || input.getAttribute('value') || input.innerText || '';
-          if (val) return val.trim();
-        }
-        const textarea = document.querySelector('textarea#codes, textarea[name="codes"]');
-        if (textarea) {
-          const raw = (textarea.value || textarea.innerText || '').trim();
-          const match = raw.match(/https?:\/\/controlc\.com\/[a-z0-9]+/i);
-          if (match) return match[0];
-        }
-        const anchor = document.querySelector('a[href*="controlc.com/"]');
-        if (anchor) return anchor.href;
-        const bodyText = document.body ? document.body.innerText : '';
-        const bodyMatch = bodyText.match(/https?:\/\/controlc\.com\/[a-z0-9]+/i);
-        return bodyMatch ? bodyMatch[0] : '';
-      },
-    });
+    const seen = new Set();
+    const deadline = Date.now() + RESULT_TIMEOUT_MS;
 
-    const candidates = [];
-    if (resolved) {
-      candidates.push(resolved);
-    }
+    while (Date.now() < deadline) {
+      const { urls, valid } = await collectCandidates(target);
+      urls.forEach((url) => seen.add(url));
 
-    try {
-      const domValue = await target.evaluate(() => {
-        const input = document.querySelector('input#link, input[name="link"], input#siteurl, input#shortlink');
-        if (input) {
-          const val = input.value || input.getAttribute('value') || input.innerText || '';
-          return val.trim();
-        }
-        const textarea = document.querySelector('textarea#codes, textarea[name="codes"]');
-        if (textarea) {
-          const raw = (textarea.value || textarea.innerText || '').trim();
-          const match = raw.match(/https?:\/\/controlc\.com\/[a-z0-9]+/i);
-          if (match) return match[0];
-        }
-        return '';
-      });
-      if (domValue) {
-        candidates.push(domValue);
+      if (valid && isValidControlCUrl(valid)) {
+        return valid.trim();
       }
-    } catch (_) {
-      // ignore
-    }
 
-    try {
-      const currentUrl = typeof target.url === 'function' ? target.url() : '';
-      if (currentUrl && currentUrl !== startUrl) {
-        candidates.push(currentUrl);
+      if (Date.now() + RESULT_POLL_INTERVAL >= deadline) {
+        break;
       }
-    } catch (_) {
-      // ignore
+
+      await waitForTimeoutSafe(target, RESULT_POLL_INTERVAL);
     }
 
-    const finalUrl = candidates.find(isValidControlCUrl);
-    if (finalUrl) {
-      return finalUrl.trim();
-    }
-
-    logLine('ControlC result invalid', { candidates });
+    const allCandidates = Array.from(seen).filter(Boolean);
+    logLine('ControlC result invalid', { candidates: allCandidates, startUrl });
     throw new Error('FAILED_TO_RESOLVE_URL');
   },
 };
