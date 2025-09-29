@@ -1448,7 +1448,37 @@ function pp_pick_network_for(?string $region, ?string $topic): ?array {
 
 function pp_pick_network(): ?array {
     $nets = pp_get_networks(true, false);
-    return $nets[0] ?? null;
+    if (empty($nets)) {
+        return null;
+    }
+
+    $weights = [];
+    $total = 0;
+    foreach ($nets as $net) {
+        $priority = (int)($net['priority'] ?? 0);
+        $weight = $priority > 0 ? $priority : 1;
+        $weights[] = $weight;
+        $total += $weight;
+    }
+
+    if ($total <= 0) {
+        return $nets[array_rand($nets)];
+    }
+
+    try {
+        $target = random_int(1, $total);
+    } catch (Throwable $e) {
+        $target = mt_rand(1, max(1, $total));
+    }
+
+    foreach ($nets as $idx => $net) {
+        $target -= $weights[$idx];
+        if ($target <= 0) {
+            return $net;
+        }
+    }
+
+    return $nets[array_rand($nets)];
 }
 
 function pp_normalize_network_levels($value): string {

@@ -7,6 +7,108 @@ const { htmlToMarkdown, htmlToPlainText } = require('./lib/contentFormats');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { createVerificationPayload } = require('./lib/verification');
 
+const DPasteBaseUrl = 'https://dpaste.org/';
+
+function normalizeDpasteUrl(value, baseUrl = DPasteBaseUrl) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  let normalized = raw;
+  try {
+    normalized = new URL(raw, baseUrl).toString();
+  } catch (_) {
+    return '';
+  }
+  if (!/https?:\/\/dpaste\.org\//i.test(normalized)) {
+    return '';
+  }
+  return normalized.replace(/\s+/g, '').trim();
+}
+
+async function resolvePublishedUrl(page, logDebug) {
+  let baseUrl = DPasteBaseUrl;
+  try {
+    const current = page.url();
+    if (current) {
+      baseUrl = current;
+    }
+  } catch (_) {}
+
+  let candidates = [];
+  try {
+    candidates = await page.evaluate(() => {
+      const results = [];
+      const push = (val) => {
+        if (!val) return;
+        const text = String(val).trim();
+        if (!text) return;
+        results.push(text);
+      };
+
+      const selectors = [
+        'input#id_shortlink',
+        'input#id_permalink',
+        'input[name="permalink"]',
+        'input[name="shortlink"]',
+        'input[name="short_url"]',
+        'input[readonly][value*="dpaste.org"]',
+        'textarea#id_permalink',
+        'textarea[name="permalink"]'
+      ];
+      selectors.forEach((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) return;
+        push(el.value || el.getAttribute('value') || '');
+      });
+
+      document.querySelectorAll('a[href*="dpaste.org"]').forEach((el) => {
+        push(el.href || el.getAttribute('href') || '');
+      });
+
+      const canonical = document.querySelector('link[rel="canonical"]');
+      if (canonical) {
+        push(canonical.href || canonical.getAttribute('href') || '');
+      }
+      const metaOg = document.querySelector('meta[property="og:url"], meta[name="og:url"]');
+      if (metaOg) {
+        push(metaOg.content || metaOg.getAttribute('content') || '');
+      }
+
+      const shareInput = document.querySelector('input[type="text"][value^="https://dpaste.org"], input[type="url"]');
+      if (shareInput) {
+        push(shareInput.value || shareInput.getAttribute('value') || '');
+      }
+
+      return results;
+    });
+  } catch (_) {
+    candidates = [];
+  }
+
+  if (!Array.isArray(candidates)) {
+    candidates = [];
+  }
+
+  if (typeof logDebug === 'function') {
+    logDebug('dpaste url candidates', { candidates, baseUrl });
+  }
+
+  const seen = new Set();
+  for (const item of candidates) {
+    const normalized = normalizeDpasteUrl(item, baseUrl);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    return normalized;
+  }
+
+  // fallback: use current page URL if it already points to dpaste snippet
+  const fallback = normalizeDpasteUrl(baseUrl, DPasteBaseUrl);
+  return fallback;
+}
+
 function ensureAnchorInMarkdown(markdown, pageUrl, anchorText) {
   let body = String(markdown || '').trim();
   const url = String(pageUrl || '').trim();
@@ -162,7 +264,7 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
     }
 
     logLine('Submit form');
-    const navigationPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
+  const navigationPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
     try {
       const clicked = await page.evaluate(() => {
         const btn = document.querySelector('form button[type="submit"], form button.btn-primary, form input[type="submit"]');
@@ -183,33 +285,8 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
     await navigationPromise;
     await waitForTimeoutSafe(page, 500);
 
-    let publishedUrl = '';
-    try {
-      publishedUrl = page.url();
-    } catch (_) {
-      publishedUrl = '';
-    }
-
-    if (!publishedUrl || !/https?:\/\/dpaste\.org\//i.test(publishedUrl)) {
-      try {
-        const fallback = await page.evaluate(() => {
-          const link = document.querySelector('a[href*="dpaste.org"], a.permalink, a.button.is-primary');
-          if (link) {
-            return link.href || link.getAttribute('href') || '';
-          }
-          const canonical = document.querySelector('link[rel="canonical"]');
-          if (canonical && canonical.href) {
-            return canonical.href;
-          }
-          return '';
-        });
-        if (fallback) {
-          publishedUrl = fallback;
-        }
-      } catch (_) {}
-    }
-
-    if (!publishedUrl || !/https?:\/\/dpaste\.org\//i.test(publishedUrl)) {
+  const publishedUrl = await resolvePublishedUrl(page, logDebug);
+    if (!publishedUrl) {
       throw new Error('FAILED_TO_RESOLVE_URL');
     }
 
