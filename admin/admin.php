@@ -751,14 +751,12 @@ $diagnostics = [
                             <input type="checkbox" class="form-check-input" id="networkSelectAll" aria-label="<?php echo __('Выбрать все'); ?>">
                         </div>
                     </th>
-                    <th style="width:70px;">&nbsp;</th>
                     <th><?php echo __('Сеть'); ?></th>
-                    <th class="text-center" style="width:80px;">&nbsp;</th>
                     <th><?php echo __('Описание'); ?></th>
-                    <th><?php echo __('Обработчик'); ?></th>
+                    <th class="text-center" style="width:120px;">&nbsp;<?php echo __('Активация'); ?>&nbsp;</th>
                     <th><?php echo __('Статус'); ?></th>
                     <th><?php echo __('Последняя проверка'); ?></th>
-                    <th class="text-end" style="width:180px;"><?php echo __('Диагностика'); ?></th>
+                    <th class="text-end" style="width:180px;">&nbsp;<?php echo __('Диагностика'); ?>&nbsp;</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -773,6 +771,9 @@ $diagnostics = [
                     }
                     if (!empty($network['topics'])) {
                         $tooltipParts[] = __('Тематики') . ': ' . implode(', ', $network['topics']);
+                    }
+                    if (!empty($network['handler'])) {
+                        $tooltipParts[] = __('Обработчик') . ': ' . $network['handler'];
                     }
                     $tooltipText = implode("\n", $tooltipParts);
                     $rowStatus = (string)($network['last_check_status'] ?? '');
@@ -791,20 +792,19 @@ $diagnostics = [
                             </div>
                         </td>
                         <td>
-                            <strong><?php echo htmlspecialchars($network['title']); ?></strong>
-                            <div class="text-muted small"><?php echo htmlspecialchars($network['slug']); ?></div>
-                        </td>
-                        <td class="text-center">
-                            <?php if (!empty($tooltipText)): ?>
-                                <span class="text-primary" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo htmlspecialchars($tooltipText, ENT_QUOTES, 'UTF-8'); ?>">
-                                    <i class="bi bi-info-circle"></i>
-                                </span>
-                            <?php else: ?>
-                                <span class="text-muted">—</span>
-                            <?php endif; ?>
+                            <div class="d-flex align-items-start gap-2">
+                                <?php if (!empty($tooltipText)): ?>
+                                    <span class="network-info-icon text-primary mt-1" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo htmlspecialchars($tooltipText, ENT_QUOTES, 'UTF-8'); ?>">
+                                        <i class="bi bi-info-circle"></i>
+                                    </span>
+                                <?php endif; ?>
+                                <div>
+                                    <strong><?php echo htmlspecialchars($network['title']); ?></strong>
+                                    <div class="text-muted small"><?php echo htmlspecialchars($network['slug']); ?></div>
+                                </div>
+                            </div>
                         </td>
                         <td><?php echo htmlspecialchars($network['description']); ?></td>
-                        <td><code><?php echo htmlspecialchars($network['handler']); ?></code></td>
                         <td class="network-activate-cell text-center">
                             <div class="pp-switch pp-switch-sm network-activate-switch">
                                 <?php $toggleId = 'net-enable-' . pp_normalize_slug((string)$network['slug']); ?>
