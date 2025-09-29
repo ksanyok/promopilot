@@ -203,7 +203,6 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
 
   const titleSource = (article.title || (pageMeta && pageMeta.title) || anchorText || '').toString();
   const title = titleSource.trim().slice(0, 140) || 'PromoPilot статья';
-  const author = (article.author || 'PromoPilot Автор').toString().trim().slice(0, 120);
   const htmlContent = String(article.htmlContent || '').trim();
   if (!htmlContent) {
     throw new Error('EMPTY_ARTICLE_CONTENT');
@@ -232,7 +231,7 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
     anchorText,
     article,
     variants: { ...variants, markdown: markdownBody },
-    extraTexts: [title, author]
+    extraTexts: [title]
   });
 
   const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
@@ -257,34 +256,6 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
     await page.goto('https://dpaste.org/', { waitUntil: 'networkidle2' });
 
     await page.waitForSelector('form textarea[name="content"], form textarea#id_content', { timeout: 20000 });
-
-    logLine('Fill title');
-    await page.evaluate((value) => {
-      const el = document.querySelector('input[name="title"], input#id_title, input[placeholder*="Title" i]');
-      if (el) {
-        el.value = value;
-        try {
-          ['input', 'change', 'keyup', 'blur'].forEach((evt) => {
-            el.dispatchEvent(new Event(evt, { bubbles: true }));
-          });
-        } catch (_) {}
-      }
-    }, title);
-    await waitForTimeoutSafe(page, 80);
-
-    logLine('Fill author');
-    await page.evaluate((value) => {
-      const el = document.querySelector('input[name="author"], input#id_author, input[placeholder*="Author" i]');
-      if (el) {
-        el.value = value;
-        try {
-          ['input', 'change', 'keyup', 'blur'].forEach((evt) => {
-            el.dispatchEvent(new Event(evt, { bubbles: true }));
-          });
-        } catch (_) {}
-      }
-    }, author);
-    await waitForTimeoutSafe(page, 60);
 
     logLine('Fill content (markdown)', { length: markdownBody.length });
     await page.evaluate((value) => {
@@ -350,7 +321,7 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
       throw new Error('FAILED_TO_RESOLVE_URL');
     }
 
-    logLine('Publish success', { publishedUrl });
+  logLine('Publish success', { publishedUrl });
 
     await browser.close();
 
@@ -358,7 +329,6 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
       ok: true,
       network: 'dpaste',
       title,
-      author,
       publishedUrl,
       format: 'markdown',
       logFile: LOG_FILE,
@@ -412,7 +382,7 @@ if (require.main === module) {
         process.exit(1);
       }
 
-      const res = await publishToDpaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
+  const res = await publishToDpaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(res.ok ? 0 : 1);
