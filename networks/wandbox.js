@@ -5,6 +5,7 @@ const { createLogger } = require('./lib/logger');
 const { generateArticle } = require('./lib/articleGenerator');
 const { htmlToPlainText } = require('./lib/contentFormats');
 const { runCli } = require('./lib/genericPaste');
+const { createVerificationPayload } = require('./lib/verification');
 
 function buildCode(text) {
   const escaped = String(text || '')
@@ -48,7 +49,8 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
     throw new Error('NO_WANDBOX_URL');
   }
   logLine('Publish success', { publishedUrl });
-  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE };
+  const verification = createVerificationPayload({ pageUrl, anchorText, article, extraTexts: [plain] });
+  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE, verification };
 }
 
 module.exports = { publish };

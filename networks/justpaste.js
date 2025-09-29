@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { generateText, cleanLLMOutput } = require('./ai_client');
 const { solveIfCaptcha, detectCaptcha } = require('./captcha');
+const { htmlToPlainText } = require('./lib/contentFormats');
+const { prepareTextSample, createVerificationPayload } = require('./lib/verification');
 
 // Logger
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -557,7 +559,15 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
   logLine('Published', { publishedUrl, redirected: Boolean(startUrl && publishedUrl && startUrl !== publishedUrl) });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, screenshots };
+  const plainArticle = htmlToPlainText(content);
+  const verificationSample = prepareTextSample([plainArticle]);
+  const verificationArticle = {
+    htmlContent: content,
+    plainText: plainArticle,
+    verificationSample,
+  };
+  const verification = createVerificationPayload({ pageUrl, anchorText, article: verificationArticle, extraTexts: [titleClean] });
+  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, screenshots, verification };
 }
 
 module.exports = { publish: publishToJustPaste };

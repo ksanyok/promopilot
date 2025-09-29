@@ -5,6 +5,7 @@ const { createLogger } = require('./logger');
 const { generateArticle } = require('./articleGenerator');
 const { htmlToMarkdown, htmlToPlainText } = require('./contentFormats');
 const { fillTitleField, fillContentField, clickSubmit, waitForResult, sleep } = require('./puppeteerUtils');
+const { createVerificationPayload } = require('./verification');
 
 function pickContentVariant(format, variants) {
   switch ((format || '').toLowerCase()) {
@@ -40,6 +41,8 @@ function createGenericPastePublisher(config) {
       markdown: htmlToMarkdown(article.htmlContent),
       plain: htmlToPlainText(article.htmlContent)
     };
+
+    const verification = createVerificationPayload({ pageUrl, anchorText, article, variants });
 
     let body = pickContentVariant(config.contentFormat || 'html', variants);
     if (config.prepareBody) {
@@ -199,7 +202,8 @@ function createGenericPastePublisher(config) {
         publishedUrl,
         format: config.contentFormat || 'html',
         logFile: LOG_FILE,
-        logDir: LOG_DIR
+        logDir: LOG_DIR,
+        verification,
       };
     } catch (error) {
       try { await browser.close(); } catch (_) {}

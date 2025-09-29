@@ -84,6 +84,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $networksMsg = __('Ошибка обновления списка сетей.');
             }
         }
+    } elseif (isset($_POST['delete_network'])) {
+        if (!verify_csrf()) {
+            $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $slugRaw = (string)($_POST['delete_network'] ?? '');
+            $slugNorm = pp_normalize_slug($slugRaw);
+            if ($slugNorm === '') {
+                $networksMsg = __('Не удалось удалить сеть.');
+            } elseif (pp_delete_network($slugNorm)) {
+                $networksMsg = __('Сеть удалена из списка.');
+            } else {
+                $networksMsg = __('Не удалось удалить сеть.');
+            }
+        }
     } elseif (isset($_POST['networks_submit'])) {
         if (!verify_csrf()) {
             $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
@@ -91,6 +105,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $enabledSlugs = [];
             if (!empty($_POST['enable']) && is_array($_POST['enable'])) {
                 $enabledSlugs = array_keys($_POST['enable']);
+            }
+            $priorityInput = $_POST['priority'] ?? [];
+            $priorityMap = [];
+            if (is_array($priorityInput)) {
+                foreach ($priorityInput as $slug => $value) {
+                    $slugNorm = pp_normalize_slug((string)$slug);
+                    if ($slugNorm === '') { continue; }
+                    $priorityMap[$slugNorm] = (int)$value;
+                }
+            }
+            $levelInput = $_POST['level'] ?? [];
+            $levelMap = [];
+            if (is_array($levelInput)) {
+                foreach ($levelInput as $slug => $value) {
+                    $slugNorm = pp_normalize_slug((string)$slug);
+                    if ($slugNorm === '') { continue; }
+                    $levelMap[$slugNorm] = trim((string)$value);
+                }
             }
             $nodeBinaryNew = trim((string)($_POST['node_binary'] ?? ''));
             $puppeteerExecNew = trim((string)($_POST['puppeteer_executable_path'] ?? ''));
@@ -100,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'puppeteer_executable_path' => $puppeteerExecNew,
                 'puppeteer_args' => $puppeteerArgsNew,
             ]);
-            if (pp_set_networks_enabled($enabledSlugs)) {
+            if (pp_set_networks_enabled($enabledSlugs, $priorityMap, $levelMap)) {
                 $networksMsg = __('Параметры сетей сохранены.');
             } else {
                 $networksMsg = __('Не удалось обновить параметры сетей.');
@@ -754,6 +786,8 @@ $diagnostics = [
                     <th><?php echo __('Сеть'); ?></th>
                     <th><?php echo __('Описание'); ?></th>
                     <th class="text-center" style="width:120px;">&nbsp;<?php echo __('Активация'); ?>&nbsp;</th>
+                    <th class="text-center" style="width:110px;"><?php echo __('Приоритет'); ?></th>
+                    <th style="width:180px;"><?php echo __('Уровни'); ?></th>
                     <th><?php echo __('Статус'); ?></th>
                     <th><?php echo __('Последняя проверка'); ?></th>
                     <th class="text-end" style="width:180px;">&nbsp;<?php echo __('Диагностика'); ?>&nbsp;</th>
@@ -778,6 +812,17 @@ $diagnostics = [
                     $tooltipText = implode("\n", $tooltipParts);
                     $rowStatus = (string)($network['last_check_status'] ?? '');
                     $rowStatusAttr = $rowStatus !== '' ? $rowStatus : 'none';
+                    $levelTokens = [];
+                    $rawLevel = (string)($network['level'] ?? '');
+                    if ($rawLevel !== '') {
+                        $splitLevels = preg_split('~[,;/]+~', $rawLevel) ?: [];
+                        foreach ($splitLevels as $levelItem) {
+                            $token = $normalizeFilterToken($levelItem);
+                            if ($token !== '') {
+                                $levelTokens[] = $token;
+                            }
+                        }
+                    }
                     ?>
                     <tr class="<?php echo $isMissing ? 'table-warning' : ''; ?>"
                         data-status="<?php echo htmlspecialchars($rowStatusAttr); ?>"
@@ -785,7 +830,9 @@ $diagnostics = [
                         data-missing="<?php echo $isMissing ? '1' : '0'; ?>"
                         data-slug="<?php echo htmlspecialchars($network['slug']); ?>"
                         data-regions="<?php echo htmlspecialchars(implode('|', $regionTokens)); ?>"
-                        data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>">
+                        data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>"
+                        data-priority="<?php echo (int)($network['priority'] ?? 0); ?>"
+                        data-levels="<?php echo htmlspecialchars(implode('|', $levelTokens)); ?>">
                         <td class="network-select-cell">
                             <div class="form-check mb-0">
                                 <input type="checkbox" class="form-check-input network-select" aria-label="<?php echo __('Выбор сети'); ?>" <?php echo $isMissing ? 'disabled' : ''; ?>>
@@ -811,6 +858,12 @@ $diagnostics = [
                                 <input type="checkbox" class="network-enable-toggle" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="<?php echo htmlspecialchars($toggleId); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Активация сети'); ?>">
                                 <label for="<?php echo htmlspecialchars($toggleId); ?>" class="track" aria-hidden="true"><span class="thumb"></span></label>
                             </div>
+                        </td>
+                        <td class="text-center">
+                            <input type="number" class="form-control form-control-sm text-center" name="priority[<?php echo htmlspecialchars($network['slug']); ?>]" value="<?php echo (int)($network['priority'] ?? 0); ?>" min="0" max="999" <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Приоритет'); ?>">
+                        </td>
+                        <td>
+                            <input type="text" class="form-control form-control-sm" name="level[<?php echo htmlspecialchars($network['slug']); ?>]" value="<?php echo htmlspecialchars($network['level'] ?? ''); ?>" placeholder="<?php echo __('Например: L1,L2'); ?>" <?php echo $isMissing ? 'disabled' : ''; ?> aria-label="<?php echo __('Уровни участия'); ?>">
                         </td>
                         <td>
                             <?php if ($isMissing): ?>
@@ -863,6 +916,11 @@ $diagnostics = [
                             <button type="button" class="btn btn-sm btn-outline-warning" data-network-check-single="1" data-network-slug="<?php echo htmlspecialchars($network['slug']); ?>" data-network-title="<?php echo htmlspecialchars($network['title']); ?>" <?php echo $isMissing ? 'disabled' : ''; ?>>
                                 <i class="bi bi-play-circle me-1"></i><?php echo __('Проверить'); ?>
                             </button>
+                            <?php if ($isMissing): ?>
+                                <button type="submit" name="delete_network" value="<?php echo htmlspecialchars($network['slug']); ?>" class="btn btn-sm btn-outline-danger ms-1" onclick="return confirm('<?php echo htmlspecialchars(__('Удалить эту сеть из списка?'), ENT_QUOTES, 'UTF-8'); ?>');">
+                                    <i class="bi bi-trash me-1"></i><?php echo __('Удалить'); ?>
+                                </button>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

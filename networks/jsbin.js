@@ -4,6 +4,7 @@ const fetch = require('node-fetch');
 const { createLogger } = require('./lib/logger');
 const { generateArticle } = require('./lib/articleGenerator');
 const { runCli } = require('./lib/genericPaste');
+const { createVerificationPayload } = require('./lib/verification');
 
 async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const slug = 'jsbin';
@@ -55,7 +56,8 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
   }
 
   logLine('Publish success', { publishedUrl });
-  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE };
+  const verification = createVerificationPayload({ pageUrl, anchorText, article });
+  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE, verification };
 }
 
 module.exports = { publish };

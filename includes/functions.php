@@ -2288,16 +2288,67 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
         } else {
             $bodyPlain = $doc ? pp_normalize_text_content($doc->textContent ?? '') : pp_plain_text_from_html($body);
             $sampleNorm = pp_normalize_text_content($textSample);
+            $matchFragment = '';
             if ($sampleNorm !== '' && strpos($bodyPlain, $sampleNorm) !== false) {
                 $result['text_found'] = true;
+                $matchFragment = $sampleNorm;
             } elseif ($sampleNorm !== '') {
-                $len = function_exists('mb_strlen') ? mb_strlen($sampleNorm, 'UTF-8') : strlen($sampleNorm);
-                $short = $len > 120
-                    ? (function_exists('mb_substr') ? mb_substr($sampleNorm, 0, 120, 'UTF-8') : substr($sampleNorm, 0, 120))
-                    : $sampleNorm;
+                if (function_exists('mb_strlen')) {
+                    $strlen = static function($str) { return mb_strlen($str, 'UTF-8'); };
+                } else {
+                    $strlen = static function($str) { return strlen($str); };
+                }
+                if (function_exists('mb_substr')) {
+                    $substr = static function($str, $start, $length) { return mb_substr($str, $start, $length, 'UTF-8'); };
+                } else {
+                    $substr = static function($str, $start, $length) { return substr($str, $start, $length); };
+                }
+                $len = $strlen($sampleNorm);
+                $short = $len > 120 ? $substr($sampleNorm, 0, 120) : $sampleNorm;
                 if ($short !== '' && strpos($bodyPlain, $short) !== false) {
                     $result['text_found'] = true;
+                    $matchFragment = $short;
                 }
+                if (!$result['text_found'] && $len > 0) {
+                    $window = min(220, max(80, (int)ceil($len * 0.4)));
+                    $step = max(40, (int)floor($window / 2));
+                    for ($offset = 0; $offset < $len; $offset += $step) {
+                        if ($offset + $window > $len) {
+                            $offset = max(0, $len - $window);
+                        }
+                        $fragment = trim($substr($sampleNorm, $offset, $window));
+                        if ($fragment === '' || $strlen($fragment) < 40) {
+                            if ($offset + $window >= $len) { break; }
+                            continue;
+                        }
+                        if (strpos($bodyPlain, $fragment) !== false) {
+                            $result['text_found'] = true;
+                            $matchFragment = $fragment;
+                            break;
+                        }
+                        if ($offset + $window >= $len) { break; }
+                    }
+                }
+                if (!$result['text_found']) {
+                    $sentences = preg_split('~[.!?…]+\s*~u', $sampleNorm) ?: [];
+                    $foundParts = [];
+                    foreach ($sentences as $sentence) {
+                        $sentence = trim($sentence);
+                        if ($sentence === '') { continue; }
+                        if ($strlen($sentence) < 40) { continue; }
+                        if (strpos($bodyPlain, $sentence) !== false) {
+                            $foundParts[] = $sentence;
+                            if (count($foundParts) >= 2) {
+                                $result['text_found'] = true;
+                                $matchFragment = implode(' ', array_slice($foundParts, 0, 2));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if ($result['text_found'] && $matchFragment !== '') {
+                $result['matched_fragment'] = $strlen($matchFragment) > 220 ? $substr($matchFragment, 0, 220) : $matchFragment;
             }
         }
     }

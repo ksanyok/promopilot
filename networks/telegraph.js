@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
+const { createVerificationPayload } = require('./lib/verification');
 
 // Simple file logger (one log file per process run)
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -125,7 +126,8 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   logLine('Published', { publishedUrl });
   await browser.close();
   logLine('Browser closed');
-  return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE };
+  const verification = createVerificationPayload({ pageUrl, anchorText, article, extraTexts: [title, author] });
+  return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE, verification };
 }
 
 module.exports = { publish: publishToTelegraph };

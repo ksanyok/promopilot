@@ -5,6 +5,7 @@ const { createLogger } = require('./lib/logger');
 const { generateArticle } = require('./lib/articleGenerator');
 const { htmlToPlainText } = require('./lib/contentFormats');
 const { runCli } = require('./lib/genericPaste');
+const { createVerificationPayload } = require('./lib/verification');
 
 async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const slug = 'hastebin';
@@ -32,7 +33,8 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
   const key = String(data.key).trim();
   const publishedUrl = `https://toptal.com/developers/hastebin/${key}`;
   logLine('Publish success', { publishedUrl });
-  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE };
+  const verification = createVerificationPayload({ pageUrl, anchorText, article, extraTexts: [text] });
+  return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE, verification };
 }
 
 module.exports = { publish };

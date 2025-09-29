@@ -1,6 +1,8 @@
 'use strict';
 
 const { generateText, cleanLLMOutput } = require('../ai_client');
+const { htmlToPlainText } = require('./contentFormats');
+const { prepareTextSample } = require('./verification');
 
 function analyzeLinks(html, url, anchor) {
   try {
@@ -184,12 +186,18 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     });
   }
 
+  const htmlContent = String(content || '').trim();
+  const plainText = htmlToPlainText(htmlContent);
+  const verificationSample = prepareTextSample([plainText]);
+
   return {
     title: titleClean || topicTitle || anchorText,
-    htmlContent: String(content || '').trim(),
+    htmlContent,
     language: pageLang,
     linkStats: stat,
     author,
+    plainText,
+    verificationSample,
   };
 }
 

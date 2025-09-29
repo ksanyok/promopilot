@@ -5,6 +5,7 @@ const { createLogger } = require('./lib/logger');
 const { generatePoll } = require('./lib/pollGenerator');
 const { runCli } = require('./lib/genericPaste');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
+const { createVerificationPayload } = require('./lib/verification');
 
 async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
   const slug = 'strawpoll';
@@ -144,9 +145,11 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
       throw new Error('POLL_URL_NOT_FOUND');
     }
 
-    logLine('Publish success', { publishedUrl });
-    await browser.close();
-    return { ok: true, network: slug, publishedUrl, title: poll.question, logFile: LOG_FILE };
+  logLine('Publish success', { publishedUrl });
+  await browser.close();
+  const extraTexts = [poll.question, poll.description, Array.isArray(poll.options) ? poll.options.join(' ') : ''];
+  const verification = createVerificationPayload({ pageUrl, anchorText, extraTexts });
+  return { ok: true, network: slug, publishedUrl, title: poll.question, logFile: LOG_FILE, verification };
   } catch (error) {
     await browser.close().catch(() => {});
     logLine('Publish failed', { error: String(error && error.message || error) });

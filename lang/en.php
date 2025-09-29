@@ -166,6 +166,8 @@ $lang = [
     'Готово' => 'Done',
     'Язык' => 'Language',
     'Пожелание' => 'Wish',
+    'Приоритет' => 'Priority',
+    'Уровень' => 'Level',
     'Проверить сети' => 'Check networks',
     'Остановить проверку' => 'Stop check',
     'Показать последний результат' => 'Show latest result',
@@ -211,5 +213,11 @@ $lang = [
     'Отметьте хотя бы одну сеть.' => 'Select at least one network.',
     'Выборочная проверка' => 'Selective check',
     'Запущена проверка выбранных сетей (%d).' => 'Started checking selected networks (%d).',
+    'Удалить сеть' => 'Delete network',
+    'Подтвердить удаление' => 'Confirm deletion',
+    'Удалить выбранную сеть? Эта операция необратима.' => 'Delete the selected network? This operation cannot be undone.',
+    'Сеть успешно удалена.' => 'Network deleted successfully.',
+    'Сеть не найдена или уже удалена.' => 'Network not found or already deleted.',
+    'Неверный запрос удаления сети.' => 'Invalid network deletion request.',
 ];
 ?>

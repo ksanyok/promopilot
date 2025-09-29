@@ -6,6 +6,7 @@ const net = require('net');
 const { createLogger } = require('./logger');
 const { generateArticle } = require('./articleGenerator');
 const { htmlToMarkdown, htmlToPlainText } = require('./contentFormats');
+const { createVerificationPayload } = require('./verification');
 
 function pickVariant(format, variants) {
   switch ((format || '').toLowerCase()) {
@@ -99,7 +100,8 @@ function createHttpPublisher(config) {
     }
 
     logLine('Publish success', { publishedUrl });
-    return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE };
+    const verification = createVerificationPayload({ pageUrl, anchorText, article, variants });
+    return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE, verification };
   }
 
   return { publish };
@@ -162,7 +164,8 @@ function createTcpPublisher(config) {
       throw new Error('NO_URL_FROM_TCP');
     }
     logLine('Publish success', { publishedUrl });
-    return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE };
+    const verification = createVerificationPayload({ pageUrl, anchorText, article, variants });
+    return { ok: true, network: slug, title: article.title, publishedUrl, logFile: LOG_FILE, verification };
   }
 
   return { publish };
