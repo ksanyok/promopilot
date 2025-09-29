@@ -210,6 +210,15 @@
   box-shadow: 0 0 0 1px rgba(77, 163, 255, 0.25);
 }
 
+.network-check-item.cancelled {
+  border-color: rgba(108, 117, 125, 0.45);
+  opacity: 0.9;
+}
+
+.network-check-item.cancelled .network-check-error {
+  color: var(--pp-muted);
+}
+
 .network-check-item-header {
   display: flex;
   justify-content: space-between;
@@ -238,6 +247,7 @@
 .network-check-badge.failed { background: rgba(255, 107, 107, 0.18); color: var(--pp-danger); }
 .network-check-badge.running { background: rgba(77, 163, 255, 0.18); color: var(--pp-primary); }
 .network-check-badge.queued { background: rgba(122, 128, 140, 0.18); color: var(--pp-muted); }
+.network-check-badge.cancelled { background: rgba(108, 117, 125, 0.18); color: var(--pp-muted); }
 
 .network-check-item-body {
   margin-top: 8px;

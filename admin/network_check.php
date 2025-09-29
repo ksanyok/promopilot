@@ -33,6 +33,27 @@ if ($action === 'start') {
     exit;
 }
 
+if ($action === 'cancel') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['ok' => false, 'error' => 'METHOD_NOT_ALLOWED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (!verify_csrf()) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'CSRF'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $runId = isset($_POST['run_id']) ? (int)$_POST['run_id'] : null;
+    $force = !empty($_POST['force']);
+    $result = pp_network_check_cancel($runId ?: null, $force);
+    if (!$result['ok']) {
+        http_response_code(400);
+    }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($action === 'status') {
     $runId = isset($_GET['run_id']) ? (int)$_GET['run_id'] : null;
     $result = pp_network_check_get_status($runId);

@@ -711,6 +711,11 @@ $diagnostics = [
 
     <div class="d-flex flex-wrap gap-2 mt-3">
         <button type="button" class="btn btn-warning" id="networkCheckButton" data-label="<?php echo __('Проверить сети'); ?>"><i class="bi bi-activity me-1"></i><?php echo __('Проверить сети'); ?></button>
+        <button type="button" class="btn btn-outline-danger" id="networkCheckStopButton" style="display:none;"
+            data-label-html="<?php echo htmlspecialchars('<i class=\"bi bi-stop-circle me-1\"></i>' . __('Остановить проверку'), ENT_QUOTES, 'UTF-8'); ?>"
+            data-wait-label="<?php echo htmlspecialchars(__('Ожидаем остановки…'), ENT_QUOTES, 'UTF-8'); ?>">
+            <i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить проверку'); ?>
+        </button>
         <button type="button" class="btn btn-outline-light" id="networkCheckHistoryButton" style="display:none;" data-label="<?php echo __('Показать последний результат'); ?>"><i class="bi bi-clock-history me-1"></i><?php echo __('Показать последний результат'); ?></button>
     </div>
     <div class="alert alert-warning mt-3 d-none" id="networkCheckMessage"></div>
@@ -765,6 +770,7 @@ $diagnostics = [
 <script>
 document.addEventListener('DOMContentLoaded', function(){
     const startBtn = document.getElementById('networkCheckButton');
+    const stopBtn = document.getElementById('networkCheckStopButton');
     if (!startBtn) return;
     const historyBtn = document.getElementById('networkCheckHistoryButton');
     const messageBox = document.getElementById('networkCheckMessage');
@@ -784,6 +790,8 @@ document.addEventListener('DOMContentLoaded', function(){
     const metaBox = document.getElementById('networkCheckModalMeta');
     const noteBox = document.getElementById('networkCheckModalNote');
     const applySuccessBtn = document.getElementById('networkCheckApplySuccess');
+    const stopBtnDefaultHtml = stopBtn ? (stopBtn.getAttribute('data-label-html') || stopBtn.innerHTML) : '';
+    const stopBtnWaitLabel = stopBtn ? (stopBtn.getAttribute('data-wait-label') || '') : '';
     const singleButtons = Array.from(document.querySelectorAll('[data-network-check-single]'));
     const singleButtonInitialDisabled = new WeakMap();
     singleButtons.forEach(function(btn){ singleButtonInitialDisabled.set(btn, btn.disabled); });
@@ -793,9 +801,11 @@ document.addEventListener('DOMContentLoaded', function(){
         failed: <?php echo json_encode(__('С ошибками'), JSON_UNESCAPED_UNICODE); ?>,
         running: <?php echo json_encode(__('Выполняется'), JSON_UNESCAPED_UNICODE); ?>,
         queued: <?php echo json_encode(__('В ожидании'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelled: <?php echo json_encode(__('Отменено'), JSON_UNESCAPED_UNICODE); ?>,
         allGood: <?php echo json_encode(__('Все сети опубликованы успешно'), JSON_UNESCAPED_UNICODE); ?>,
         partial: <?php echo json_encode(__('Часть сетей завершилась с ошибками'), JSON_UNESCAPED_UNICODE); ?>,
         failedSummary: <?php echo json_encode(__('Проверка не выполнена'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelledSummary: <?php echo json_encode(__('Проверка остановлена'), JSON_UNESCAPED_UNICODE); ?>,
         noData: <?php echo json_encode(__('Проверка ещё не запускалась'), JSON_UNESCAPED_UNICODE); ?>,
         current: <?php echo json_encode(__('Сейчас выполняется'), JSON_UNESCAPED_UNICODE); ?>,
         startedAt: <?php echo json_encode(__('Запущено'), JSON_UNESCAPED_UNICODE); ?>,
@@ -810,7 +820,10 @@ document.addEventListener('DOMContentLoaded', function(){
         singleMode: <?php echo json_encode(__('Проверка одной сети'), JSON_UNESCAPED_UNICODE); ?>,
         applySuccessHint: <?php echo json_encode(__('Активированы только успешные сети. Проверьте список ниже и сохраните изменения.'), JSON_UNESCAPED_UNICODE); ?>,
         bulkStarted: <?php echo json_encode(__('Запущена комплексная проверка всех активных сетей.'), JSON_UNESCAPED_UNICODE); ?>,
-        singleStarted: <?php echo json_encode(__('Проверка запущена для сети: %s'), JSON_UNESCAPED_UNICODE); ?>
+        singleStarted: <?php echo json_encode(__('Проверка запущена для сети: %s'), JSON_UNESCAPED_UNICODE); ?>,
+        canceling: <?php echo json_encode(__('Останавливаем проверку...'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelRequested: <?php echo json_encode(__('Остановка запрошена. Подождите завершения.'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelSuccess: <?php echo json_encode(__('Проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const errorMessages = {
@@ -818,6 +831,7 @@ document.addEventListener('DOMContentLoaded', function(){
         'WORKER_LAUNCH_FAILED': <?php echo json_encode(__('Не удалось запустить фоновый процесс.'), JSON_UNESCAPED_UNICODE); ?>,
         'DB_CONNECTION': <?php echo json_encode(__('Ошибка подключения к базе данных.'), JSON_UNESCAPED_UNICODE); ?>,
         'DB_WRITE': <?php echo json_encode(__('Не удалось сохранить данные.'), JSON_UNESCAPED_UNICODE); ?>,
+        'DB_READ': <?php echo json_encode(__('Не удалось прочитать данные.'), JSON_UNESCAPED_UNICODE); ?>,
         'RUN_NOT_FOUND': <?php echo json_encode(__('Проверка не найдена.'), JSON_UNESCAPED_UNICODE); ?>,
         'CSRF': <?php echo json_encode(__('Ошибка безопасности.'), JSON_UNESCAPED_UNICODE); ?>,
         'MISSING_SLUG': <?php echo json_encode(__('Не указана сеть для проверки.'), JSON_UNESCAPED_UNICODE); ?>,
@@ -827,6 +841,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
     const apiStart = <?php echo json_encode(pp_url('admin/network_check.php?action=start'), JSON_UNESCAPED_UNICODE); ?>;
     const apiStatus = <?php echo json_encode(pp_url('admin/network_check.php?action=status'), JSON_UNESCAPED_UNICODE); ?>;
+    const apiCancel = <?php echo json_encode(pp_url('admin/network_check.php?action=cancel'), JSON_UNESCAPED_UNICODE); ?>;
 
     let pollTimer = 0;
     let currentRunId = null;
@@ -872,6 +887,30 @@ document.addEventListener('DOMContentLoaded', function(){
         if (applySuccessBtn && disabled) {
             applySuccessBtn.disabled = true;
             applySuccessBtn.style.display = 'none';
+        }
+    }
+
+    function updateStopButton(run) {
+        if (!stopBtn) return;
+        const restoreDefault = function() {
+            if (stopBtnDefaultHtml) {
+                stopBtn.innerHTML = stopBtnDefaultHtml;
+            }
+        };
+        if (run && (run.status === 'queued' || run.status === 'running')) {
+            stopBtn.style.display = '';
+            if (run.cancel_requested) {
+                const waitText = stopBtnWaitLabel || labels.canceling || '';
+                stopBtn.disabled = true;
+                stopBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + escapeHtml(waitText);
+            } else {
+                stopBtn.disabled = false;
+                restoreDefault();
+            }
+        } else {
+            stopBtn.style.display = 'none';
+            stopBtn.disabled = true;
+            restoreDefault();
         }
     }
 
@@ -937,6 +976,7 @@ document.addEventListener('DOMContentLoaded', function(){
             case 'success': return { cls: 'success', label: labels.success };
             case 'failed': return { cls: 'failed', label: labels.failed };
             case 'running': return { cls: 'running', label: labels.running };
+            case 'cancelled': return { cls: 'cancelled', label: labels.cancelled };
             default: return { cls: 'queued', label: labels.queued };
         }
     }
@@ -949,11 +989,12 @@ document.addEventListener('DOMContentLoaded', function(){
         progressBar.style.width = percent + '%';
         progressBar.setAttribute('aria-valuenow', String(percent));
         progressBar.textContent = percent + '%';
-        progressBar.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+        progressBar.classList.remove('bg-success', 'bg-danger', 'bg-warning', 'bg-secondary');
         if (!run) return;
         if (run.status === 'success') progressBar.classList.add('bg-success');
         else if (run.status === 'completed') progressBar.classList.add('bg-warning');
         else if (run.status === 'failed') progressBar.classList.add('bg-danger');
+        else if (run.status === 'cancelled') progressBar.classList.add('bg-secondary');
     }
 
     function summaryStatusText(run) {
@@ -966,6 +1007,8 @@ document.addEventListener('DOMContentLoaded', function(){
                 return labels.allGood;
             case 'completed':
                 return labels.partial;
+            case 'cancelled':
+                return labels.cancelledSummary;
             default:
                 return labels.failedSummary;
         }
@@ -1025,6 +1068,7 @@ document.addEventListener('DOMContentLoaded', function(){
             const badge = buildBadge(item.status);
             const classes = ['network-check-item'];
             if (item.status === 'running') classes.push('running');
+            if (item.status === 'cancelled') classes.push('cancelled');
             const parts = [];
             if (item.published_url && item.status === 'success') {
                 parts.push('<a class="network-check-link" href="' + escapeHtml(item.published_url) + '" target="_blank" rel="noopener">' + escapeHtml(labels.open) + '</a>');
@@ -1037,6 +1081,9 @@ document.addEventListener('DOMContentLoaded', function(){
             }
             if (item.status === 'failed' && item.error) {
                 parts.push('<div class="network-check-error">' + escapeHtml(item.error) + '</div>');
+            }
+            if (item.status === 'cancelled') {
+                parts.push('<div class="network-check-error">' + escapeHtml(labels.cancelled) + '</div>');
             }
             return '<div class="' + classes.join(' ') + '">' +
                 '<div class="network-check-item-header">' +
@@ -1102,6 +1149,7 @@ document.addEventListener('DOMContentLoaded', function(){
         updateSummary(run);
         updateModal(data || null);
         setControlsDisabled(run ? run.in_progress : false);
+        updateStopButton(run);
         updateApplySuccessButton(data || null);
     }
 
@@ -1166,6 +1214,58 @@ document.addEventListener('DOMContentLoaded', function(){
         } catch (err) {
             // ignore background errors for latest summary
         }
+    }
+
+    async function cancelRun(force = false) {
+        clearMessage();
+        if (!currentRunId && latestData && latestData.run) {
+            currentRunId = latestData.run.id;
+        }
+        if (!currentRunId) {
+            setMessage('warning', errorMessages.RUN_NOT_FOUND || errorMessages.DEFAULT);
+            return;
+        }
+        if (!stopBtn) {
+            setMessage('danger', errorMessages.DEFAULT);
+            return;
+        }
+        const previousHtml = stopBtn.innerHTML;
+        stopBtn.disabled = true;
+        stopBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + escapeHtml(labels.canceling || stopBtnWaitLabel || '');
+        try {
+            const body = new URLSearchParams();
+            body.set('csrf_token', window.CSRF_TOKEN || '');
+            body.set('run_id', String(currentRunId));
+            if (force) {
+                body.set('force', '1');
+            }
+            const response = await fetch(apiCancel, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body.toString(),
+                credentials: 'same-origin'
+            });
+            const data = await response.json().catch(() => ({ ok: false, error: 'DEFAULT' }));
+            if (!data.ok) {
+                const msg = errorMessages[data.error || 'DEFAULT'] || errorMessages.DEFAULT;
+                throw new Error(msg);
+            }
+            setMessage('info', labels.cancelRequested);
+            if (data.finished || data.status === 'cancelled') {
+                setMessage('success', labels.cancelSuccess);
+            }
+            if (data.runId) {
+                currentRunId = data.runId;
+            }
+            await fetchRunStatus(currentRunId);
+        } catch (err) {
+            stopBtn.innerHTML = previousHtml;
+            stopBtn.disabled = false;
+            setMessage('danger', err.message || errorMessages.DEFAULT);
+            updateStopButton(latestData && latestData.run ? latestData.run : null);
+            return;
+        }
+        updateStopButton(latestData && latestData.run ? latestData.run : null);
     }
 
     function openModal() {
@@ -1284,6 +1384,12 @@ document.addEventListener('DOMContentLoaded', function(){
     });
     if (historyBtn) {
         historyBtn.addEventListener('click', showHistory);
+    }
+    if (stopBtn) {
+        stopBtn.addEventListener('click', function(e){
+            const force = !!(e && (e.shiftKey || e.altKey));
+            cancelRun(force);
+        });
     }
 
     if (applySuccessBtn) {

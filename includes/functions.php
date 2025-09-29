@@ -2462,7 +2462,7 @@ if (!function_exists('pp_network_check_get_status')) {
             return ['ok' => true, 'run' => null, 'results' => []];
         }
 
-    $stmt = $conn->prepare("SELECT id, status, total_networks, success_count, failure_count, notes, initiated_by, run_mode, created_at, started_at, finished_at FROM network_check_runs WHERE id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, status, total_networks, success_count, failure_count, notes, initiated_by, run_mode, cancel_requested, created_at, started_at, finished_at FROM network_check_runs WHERE id = ? LIMIT 1");
         if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_READ']; }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
@@ -2508,6 +2508,7 @@ if (!function_exists('pp_network_check_get_status')) {
             'notes' => (string)($runRow['notes'] ?? ''),
             'run_mode' => (string)($runRow['run_mode'] ?? 'bulk'),
             'initiated_by' => $runRow['initiated_by'] !== null ? (int)$runRow['initiated_by'] : null,
+            'cancel_requested' => !empty($runRow['cancel_requested']),
             'created_at' => $runRow['created_at'],
             'created_at_iso' => pp_network_check_format_ts($runRow['created_at'] ?? null),
             'started_at' => $runRow['started_at'],
@@ -2520,6 +2521,100 @@ if (!function_exists('pp_network_check_get_status')) {
         $run['has_failures'] = ($run['failure_count'] > 0);
 
         return ['ok' => true, 'run' => $run, 'results' => $results];
+    }
+}
+
+if (!function_exists('pp_network_check_cancel')) {
+    function pp_network_check_cancel(?int $runId = null, bool $force = false): array {
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return ['ok' => false, 'error' => 'DB_CONNECTION'];
+        }
+        if (!$conn) { return ['ok' => false, 'error' => 'DB_CONNECTION']; }
+
+        if ($runId === null || $runId <= 0) {
+            if ($res = @$conn->query("SELECT id FROM network_check_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
+                if ($row = $res->fetch_assoc()) { $runId = (int)$row['id']; }
+                $res->free();
+            }
+        }
+        if (!$runId) {
+            $conn->close();
+            return ['ok' => true, 'status' => 'idle'];
+        }
+
+        $stmt = $conn->prepare("SELECT id, status, cancel_requested, notes, success_count, failure_count FROM network_check_runs WHERE id = ? LIMIT 1");
+        if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB_READ']; }
+        $stmt->bind_param('i', $runId);
+        $stmt->execute();
+        $runRow = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if (!$runRow) {
+            $conn->close();
+            return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
+        }
+
+        $status = (string)$runRow['status'];
+        $alreadyDone = !in_array($status, ['queued','running'], true);
+        $existingNote = trim((string)($runRow['notes'] ?? ''));
+        $cancelRequested = !empty($runRow['cancel_requested']);
+        $cancelNote = __('Проверка остановлена администратором.');
+        $note = $cancelNote;
+        if ($existingNote !== '') {
+            if (stripos($existingNote, $cancelNote) !== false) {
+                $note = $existingNote;
+            } else {
+                $note .= ' | ' . $existingNote;
+            }
+        }
+
+        @$conn->query("UPDATE network_check_runs SET cancel_requested=1 WHERE id=" . (int)$runId . " LIMIT 1");
+
+        if ($alreadyDone && !$force) {
+            $conn->close();
+            return [
+                'ok' => true,
+                'runId' => $runId,
+                'status' => $status,
+                'cancelRequested' => true,
+                'alreadyFinished' => true,
+                'finished' => true,
+            ];
+        }
+
+        $forceApply = $force || $status === 'queued';
+        if ($forceApply) {
+            @$conn->query("UPDATE network_check_results SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE run_id=" . (int)$runId . " AND status IN ('queued','running')");
+            $success = 0;
+            $failed = 0;
+            if ($resCnt = @$conn->query("SELECT SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failure_count FROM network_check_results WHERE run_id=" . (int)$runId)) {
+                if ($rowCnt = $resCnt->fetch_assoc()) {
+                    $success = (int)($rowCnt['success_count'] ?? 0);
+                    $failed = (int)($rowCnt['failure_count'] ?? 0);
+                }
+                $resCnt->free();
+            }
+            $upd = $conn->prepare("UPDATE network_check_runs SET status='cancelled', success_count=?, failure_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), notes=?, cancel_requested=1 WHERE id=? LIMIT 1");
+            if ($upd) {
+                $upd->bind_param('iisi', $success, $failed, $note, $runId);
+                $upd->execute();
+                $upd->close();
+            }
+            $conn->close();
+            return ['ok' => true, 'runId' => $runId, 'status' => 'cancelled', 'cancelRequested' => true, 'finished' => true];
+        }
+
+        if (!$cancelRequested) {
+            $updNote = $conn->prepare("UPDATE network_check_runs SET notes=?, cancel_requested=1 WHERE id=? LIMIT 1");
+            if ($updNote) {
+                $updNote->bind_param('si', $note, $runId);
+                $updNote->execute();
+                $updNote->close();
+            }
+        }
+        $conn->close();
+        return ['ok' => true, 'runId' => $runId, 'status' => $status, 'cancelRequested' => true, 'finished' => false];
     }
 }
 
@@ -2536,17 +2631,62 @@ if (!function_exists('pp_process_network_check_run')) {
         }
         if (!$conn) { return; }
 
-    $stmt = $conn->prepare("SELECT id, status, total_networks, run_mode FROM network_check_runs WHERE id = ? LIMIT 1");
+        $stmt = $conn->prepare("SELECT id, status, total_networks, run_mode, cancel_requested, notes, success_count, failure_count FROM network_check_runs WHERE id = ? LIMIT 1");
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
         $runRow = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         if (!$runRow) { $conn->close(); return; }
+
         $status = (string)$runRow['status'];
+        $existingNote = trim((string)($runRow['notes'] ?? ''));
+        $cancelRequested = !empty($runRow['cancel_requested']);
+        $cancelNoteBase = __('Проверка остановлена администратором.');
+        $noteFormatter = static function(string $baseNote, string $existing): string {
+            $base = trim($baseNote);
+            $existing = trim($existing);
+            if ($base === '') { return $existing; }
+            if ($existing === '') { return $base; }
+            if (stripos($existing, $base) !== false) { return $existing; }
+            return $base . ' | ' . $existing;
+        };
+        $recalcCounts = function() use ($conn, $runId): array {
+            $success = 0;
+            $failed = 0;
+            if ($res = @$conn->query("SELECT SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failure_count FROM network_check_results WHERE run_id = " . (int)$runId)) {
+                if ($row = $res->fetch_assoc()) {
+                    $success = (int)($row['success_count'] ?? 0);
+                    $failed = (int)($row['failure_count'] ?? 0);
+                }
+                $res->free();
+            }
+            return [$success, $failed];
+        };
+        $finalizeCancelled = function(?int $successOverride = null, ?int $failureOverride = null) use ($conn, $runId, $cancelNoteBase, &$existingNote, $recalcCounts, $noteFormatter): void {
+            @$conn->query("UPDATE network_check_results SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE run_id = " . (int)$runId . " AND status IN ('queued','running')");
+            [$success, $failed] = $recalcCounts();
+            if ($successOverride !== null) { $success = $successOverride; }
+            if ($failureOverride !== null) { $failed = $failureOverride; }
+            $note = $noteFormatter($cancelNoteBase, $existingNote);
+            $existingNote = $note;
+            $upd = $conn->prepare("UPDATE network_check_runs SET status='cancelled', success_count=?, failure_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), notes=?, cancel_requested=1 WHERE id=? LIMIT 1");
+            if ($upd) {
+                $upd->bind_param('iisi', $success, $failed, $note, $runId);
+                $upd->execute();
+                $upd->close();
+            }
+        };
+
         if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
 
-    $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
+        if ($cancelRequested && $status === 'queued') {
+            $finalizeCancelled(null, null);
+            $conn->close();
+            return;
+        }
+
+        $conn->query("UPDATE network_check_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
 
         $results = [];
         $resStmt = $conn->prepare("SELECT id, network_slug, network_title FROM network_check_results WHERE run_id = ? ORDER BY id ASC");
@@ -2576,16 +2716,37 @@ if (!function_exists('pp_process_network_check_run')) {
             $conn->query("UPDATE network_check_runs SET total_networks=" . $total . " WHERE id=" . (int)$runId . " LIMIT 1");
         }
 
+        if ($cancelRequested && $status === 'running') {
+            $successExisting = isset($runRow['success_count']) ? (int)$runRow['success_count'] : null;
+            $failureExisting = isset($runRow['failure_count']) ? (int)$runRow['failure_count'] : null;
+            $finalizeCancelled($successExisting, $failureExisting);
+            $conn->close();
+            return;
+        }
+
         $success = 0;
         $failed = 0;
+        $checkCancelled = function() use ($conn, $runId): bool {
+            if ($res = @$conn->query("SELECT cancel_requested FROM network_check_runs WHERE id = " . (int)$runId . " LIMIT 1")) {
+                $row = $res->fetch_assoc();
+                $res->free();
+                return !empty($row['cancel_requested']);
+            }
+            return false;
+        };
 
         $updateResultRunning = $conn->prepare("UPDATE network_check_results SET status='running', started_at=CURRENT_TIMESTAMP, error=NULL WHERE id=? LIMIT 1");
         $updateResultSuccess = $conn->prepare("UPDATE network_check_results SET status='success', finished_at=CURRENT_TIMESTAMP, published_url=?, error=NULL WHERE id=? LIMIT 1");
         $updateResultFail = $conn->prepare("UPDATE network_check_results SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id=? LIMIT 1");
         $updateRunCounts = $conn->prepare("UPDATE network_check_runs SET success_count=?, failure_count=?, status='running' WHERE id=? LIMIT 1");
 
-        $runMode = (string)($runRow['run_mode'] ?? 'bulk');
+    $cancelledMidway = false;
         foreach ($results as $row) {
+            if ($checkCancelled()) {
+                $cancelledMidway = true;
+                break;
+            }
+
             $resId = (int)$row['id'];
             $slug = (string)$row['network_slug'];
             if ($updateResultRunning) {
@@ -2677,7 +2838,13 @@ if (!function_exists('pp_process_network_check_run')) {
         if ($updateResultFail) { $updateResultFail->close(); }
         if ($updateRunCounts) { $updateRunCounts->close(); }
 
-    $finalStatus = ($failed === 0) ? 'success' : 'completed';
+        if ($cancelledMidway || $checkCancelled()) {
+            $finalizeCancelled($success, $failed);
+            $conn->close();
+            return;
+        }
+
+        $finalStatus = ($failed === 0) ? 'success' : 'completed';
         $updFinish = $conn->prepare("UPDATE network_check_runs SET status=?, success_count=?, failure_count=?, total_networks=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
         if ($updFinish) {
             $updFinish->bind_param('siiii', $finalStatus, $success, $failed, $total, $runId);
