@@ -3,7 +3,7 @@
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
-const { solveIfCaptcha } = require('./captcha');
+const { solveIfCaptcha, detectCaptcha } = require('./captcha');
 
 const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]+$/i;
 const RESULT_POLL_INTERVAL = 1500;
@@ -64,9 +64,16 @@ async function collectCandidates(target) {
         'input#siteurl',
         'input#shortlink',
         'input#copylink',
+        'input#directlink',
+        'input[name="direct_link"]',
+        'input[name="directlink"]',
         'textarea#codes',
         'textarea[name="codes"]',
         'textarea[name="content"]',
+        'textarea#copylink',
+        'textarea#copytextarea',
+        '#copytextarea',
+        '#copylink',
       ];
 
       bySelectors.forEach((selector) => {
@@ -88,6 +95,12 @@ async function collectCandidates(target) {
         if (anchor && anchor.href) push(anchor.href);
       });
 
+      const widgets = Array.from(document.querySelectorAll('[data-shortlink], [data-directlink]'));
+      widgets.forEach((node) => {
+        const direct = node.getAttribute('data-directlink') || node.getAttribute('data-shortlink');
+        if (direct) push(direct);
+      });
+
       const bodyText = document.body ? document.body.innerText : '';
       if (bodyText) {
         const bodyMatches = bodyText.match(/https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]{4,}/gi) || [];
@@ -103,6 +116,87 @@ async function collectCandidates(target) {
   } catch (_) {
     return { urls: [] };
   }
+}
+
+async function isRecaptchaSolved(page) {
+  try {
+    return await page.evaluate(() => {
+      const hasResponseField = () => {
+        const field = document.querySelector('#g-recaptcha-response, textarea[name="g-recaptcha-response"], textarea#g-recaptcha-response');
+        return !!(field && typeof field.value === 'string' && field.value.trim().length > 0);
+      };
+      try {
+        if (window.grecaptcha && typeof window.grecaptcha.getResponse === 'function') {
+          const response = window.grecaptcha.getResponse();
+          if (typeof response === 'string' && response.trim().length > 0) return true;
+        }
+      } catch (_) {}
+      return hasResponseField();
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
+async function resetRecaptcha(page) {
+  try {
+    await page.evaluate(() => {
+      if (window.grecaptcha && typeof window.grecaptcha.reset === 'function') {
+        window.grecaptcha.reset();
+      }
+      const field = document.querySelector('#g-recaptcha-response, textarea[name="g-recaptcha-response"], textarea#g-recaptcha-response');
+      if (field) field.value = '';
+    });
+  } catch (_) {}
+}
+
+async function ensureRecaptchaSolved(page, logLine, { attempts = 3, label = 'beforeSubmit' } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await isRecaptchaSolved(page)) {
+      logLine('ControlC captcha already solved', { stage: label, attempt });
+      return true;
+    }
+
+    logLine('ControlC captcha solve attempt', { stage: label, attempt });
+    const result = await solveIfCaptcha(page, logLine);
+    const success = Boolean(result && (result === true || result.solved));
+    if (success) {
+      try {
+        await page.waitForFunction(
+          () => {
+            const field = document.querySelector('#g-recaptcha-response, textarea[name="g-recaptcha-response"], textarea#g-recaptcha-response');
+            if (field && field.value && field.value.trim().length > 0) return true;
+            if (window.grecaptcha && typeof window.grecaptcha.getResponse === 'function') {
+              const resp = window.grecaptcha.getResponse();
+              return typeof resp === 'string' && resp.trim().length > 0;
+            }
+            return false;
+          },
+          { timeout: 15000 }
+        );
+      } catch (_) {}
+
+      if (await isRecaptchaSolved(page)) {
+        logLine('ControlC captcha solved', { stage: label, attempt });
+        return true;
+      }
+    }
+
+    logLine('ControlC captcha attempt failed', { stage: label, attempt, success });
+    await resetRecaptcha(page);
+    await waitForTimeoutSafe(page, 2000);
+
+    try {
+      const det = await detectCaptcha(page);
+      if (!det || !det.found) {
+        logLine('ControlC captcha no longer detected', { stage: label, attempt });
+        if (await isRecaptchaSolved(page)) return true;
+      }
+    } catch (_) {}
+  }
+
+  logLine('ControlC captcha unresolved', { stage: label, attempts });
+  return false;
 }
 
 const config = {
@@ -124,26 +218,37 @@ const config = {
   resultTimeoutMs: RESULT_TIMEOUT_MS,
   beforeSubmit: async ({ page, logLine }) => {
     try {
-      const solved = await solveIfCaptcha(page, logLine);
-      if (solved) {
-        logLine('ControlC captcha solved', { stage: 'beforeSubmit' });
+      const solved = await ensureRecaptchaSolved(page, logLine, { attempts: 3, label: 'beforeSubmit' });
+      if (!solved) {
+        throw new Error('CAPTCHA_UNSOLVED');
       }
+      await page.evaluate(() => {
+        try {
+          if (typeof window.tpOnSubmit === 'function') {
+            window.tpOnSubmit();
+          }
+        } catch (_) {}
+      });
     } catch (error) {
       logLine('ControlC captcha solve error', { stage: 'beforeSubmit', error: String(error && error.message || error) });
+      throw error;
     }
   },
   afterSubmit: async ({ page, logLine }) => {
     try {
-      const solved = await solveIfCaptcha(page, logLine);
-      if (solved) {
-        logLine('ControlC captcha solved', { stage: 'afterSubmit' });
+      await Promise.race([
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => null),
+        waitForTimeoutSafe(page, 2000)
+      ]);
+
+      const sameUrl = await page.url();
+      if (sameUrl && /^https?:\/\/controlc\.com\/?$/i.test(sameUrl) && !(await isRecaptchaSolved(page))) {
+        const det = await detectCaptcha(page);
+        if (det && det.found) {
+          logLine('ControlC captcha re-challenge detected', { stage: 'afterSubmit', type: det.type });
+          await ensureRecaptchaSolved(page, logLine, { attempts: 2, label: 'afterSubmit' });
+        }
       }
-      try {
-        await Promise.race([
-          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => null),
-          waitForTimeoutSafe(page, 2000)
-        ]);
-      } catch (_) {}
     } catch (error) {
       logLine('ControlC captcha solve error', { stage: 'afterSubmit', error: String(error && error.message || error) });
     }
