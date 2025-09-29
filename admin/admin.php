@@ -646,13 +646,103 @@ $diagnostics = [
                 <div class="form-text"><?php echo __('Аргументы будут добавлены к запуску браузера.'); ?></div>
             </div>
         </div>
+        <?php
+        $normalizeFilterToken = static function ($value) {
+            $value = trim((string)$value);
+            if ($value === '') {
+                return '';
+            }
+            if (function_exists('mb_strtolower')) {
+                $value = mb_strtolower($value, 'UTF-8');
+            } else {
+                $value = strtolower($value);
+            }
+            return preg_replace('~\s+~', ' ', $value);
+        };
+        $regionOptions = [];
+        $topicOptions = [];
+        if (!empty($networks)) {
+            foreach ($networks as $netMeta) {
+                foreach (($netMeta['regions'] ?? []) as $regionItem) {
+                    $key = $normalizeFilterToken($regionItem);
+                    if ($key !== '' && !isset($regionOptions[$key])) {
+                        $regionOptions[$key] = $regionItem;
+                    }
+                }
+                foreach (($netMeta['topics'] ?? []) as $topicItem) {
+                    $key = $normalizeFilterToken($topicItem);
+                    if ($key !== '' && !isset($topicOptions[$key])) {
+                        $topicOptions[$key] = $topicItem;
+                    }
+                }
+            }
+            ksort($regionOptions, SORT_STRING);
+            ksort($topicOptions, SORT_STRING);
+        }
+        ?>
+        <?php if (!empty($networks)): ?>
+        <div class="bg-light border rounded p-3 mt-3" id="networkFiltersBar">
+            <div class="row g-3 align-items-end">
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label form-label-sm" for="filterStatus"><?php echo __('Статус проверки'); ?></label>
+                    <select id="filterStatus" class="form-select form-select-sm">
+                        <option value="all"><?php echo __('Все'); ?></option>
+                        <option value="success"><?php echo __('Успешно'); ?></option>
+                        <option value="failed"><?php echo __('С ошибками'); ?></option>
+                        <option value="progress"><?php echo __('В процессе'); ?></option>
+                        <option value="cancelled"><?php echo __('Отменено'); ?></option>
+                        <option value="none"><?php echo __('Нет данных'); ?></option>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label form-label-sm" for="filterActive"><?php echo __('Активность'); ?></label>
+                    <select id="filterActive" class="form-select form-select-sm">
+                        <option value="all"><?php echo __('Все'); ?></option>
+                        <option value="active"><?php echo __('Активные'); ?></option>
+                        <option value="inactive"><?php echo __('Неактивные'); ?></option>
+                        <option value="missing"><?php echo __('Файл недоступен'); ?></option>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label form-label-sm" for="filterRegion"><?php echo __('Регион'); ?></label>
+                    <select id="filterRegion" class="form-select form-select-sm">
+                        <option value="all"><?php echo __('Все'); ?></option>
+                        <?php foreach ($regionOptions as $key => $label): ?>
+                            <option value="<?php echo htmlspecialchars($key); ?>"><?php echo htmlspecialchars($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label form-label-sm" for="filterTopic"><?php echo __('Тематика'); ?></label>
+                    <select id="filterTopic" class="form-select form-select-sm">
+                        <option value="all"><?php echo __('Все'); ?></option>
+                        <?php foreach ($topicOptions as $key => $label): ?>
+                            <option value="<?php echo htmlspecialchars($key); ?>"><?php echo htmlspecialchars($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-12 d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="activateVerifiedBtn" data-message-template="<?php echo htmlspecialchars(__('Выбрано проверенных сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <i class="bi bi-toggle2-on me-1"></i><?php echo __('Активировать проверенные'); ?>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="resetNetworkFilters">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i><?php echo __('Сбросить фильтры'); ?>
+                    </button>
+                </div>
+                <div class="col-12">
+                    <div class="small text-muted" id="networkFiltersInfo" data-label-visible="<?php echo htmlspecialchars(__('Показано сетей: %d'), ENT_QUOTES, 'UTF-8'); ?>"></div>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
         <div class="table-responsive mt-3">
             <?php if (!empty($networks)): ?>
-            <table class="table table-striped align-middle">
+            <table class="table table-striped align-middle" id="networksTable">
                 <thead>
                 <tr>
                     <th style="width:70px;">&nbsp;</th>
                     <th><?php echo __('Сеть'); ?></th>
+                    <th class="text-center" style="width:80px;">&nbsp;</th>
                     <th><?php echo __('Описание'); ?></th>
                     <th><?php echo __('Обработчик'); ?></th>
                     <th><?php echo __('Статус'); ?></th>
@@ -662,8 +752,27 @@ $diagnostics = [
                 </thead>
                 <tbody>
                 <?php foreach ($networks as $network): ?>
-                    <?php $isMissing = $network['is_missing']; ?>
-                    <tr class="<?php echo $isMissing ? 'table-warning' : ''; ?>">
+                    <?php
+                    $isMissing = $network['is_missing'];
+                    $regionTokens = array_values(array_filter(array_map($normalizeFilterToken, $network['regions'] ?? [])));
+                    $topicTokens = array_values(array_filter(array_map($normalizeFilterToken, $network['topics'] ?? [])));
+                    $tooltipParts = [];
+                    if (!empty($network['regions'])) {
+                        $tooltipParts[] = __('Регионы') . ': ' . implode(', ', $network['regions']);
+                    }
+                    if (!empty($network['topics'])) {
+                        $tooltipParts[] = __('Тематики') . ': ' . implode(', ', $network['topics']);
+                    }
+                    $tooltipText = implode("\n", $tooltipParts);
+                    $rowStatus = (string)($network['last_check_status'] ?? '');
+                    $rowStatusAttr = $rowStatus !== '' ? $rowStatus : 'none';
+                    ?>
+                    <tr class="<?php echo $isMissing ? 'table-warning' : ''; ?>"
+                        data-status="<?php echo htmlspecialchars($rowStatusAttr); ?>"
+                        data-active="<?php echo ($network['enabled'] && !$isMissing) ? '1' : '0'; ?>"
+                        data-missing="<?php echo $isMissing ? '1' : '0'; ?>"
+                        data-regions="<?php echo htmlspecialchars(implode('|', $regionTokens)); ?>"
+                        data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>">
                         <td>
                             <div class="form-check mb-0">
                                 <input type="checkbox" class="form-check-input" name="enable[<?php echo htmlspecialchars($network['slug']); ?>]" value="1" id="net-<?php echo htmlspecialchars($network['slug']); ?>" <?php echo ($network['enabled'] && !$isMissing) ? 'checked' : ''; ?> <?php echo $isMissing ? 'disabled' : ''; ?>>
@@ -672,6 +781,15 @@ $diagnostics = [
                         <td>
                             <strong><?php echo htmlspecialchars($network['title']); ?></strong>
                             <div class="text-muted small"><?php echo htmlspecialchars($network['slug']); ?></div>
+                        </td>
+                        <td class="text-center">
+                            <?php if (!empty($tooltipText)): ?>
+                                <span class="text-primary" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo htmlspecialchars($tooltipText, ENT_QUOTES, 'UTF-8'); ?>">
+                                    <i class="bi bi-info-circle"></i>
+                                </span>
+                            <?php else: ?>
+                                <span class="text-muted">—</span>
+                            <?php endif; ?>
                         </td>
                         <td><?php echo htmlspecialchars($network['description']); ?></td>
                         <td><code><?php echo htmlspecialchars($network['handler']); ?></code></td>
@@ -1434,6 +1552,146 @@ document.addEventListener('DOMContentLoaded', function(){
     if (applySuccessBtn) {
         applySuccessBtn.addEventListener('click', function(){
             applySuccessfulNetworks();
+        });
+    }
+
+    const networksTable = document.getElementById('networksTable');
+    const filtersBar = document.getElementById('networkFiltersBar');
+    if (networksTable && filtersBar) {
+        const filterStatus = document.getElementById('filterStatus');
+        const filterActive = document.getElementById('filterActive');
+        const filterRegion = document.getElementById('filterRegion');
+        const filterTopic = document.getElementById('filterTopic');
+        const resetFiltersBtn = document.getElementById('resetNetworkFilters');
+        const activateVerifiedBtn = document.getElementById('activateVerifiedBtn');
+        const filtersInfo = document.getElementById('networkFiltersInfo');
+        const rows = Array.from(networksTable.querySelectorAll('tbody tr'));
+
+        const normalizeValue = (val) => (val || '').toString().trim().toLowerCase();
+
+        const applyNetworkFilters = () => {
+            const statusVal = normalizeValue(filterStatus ? filterStatus.value : 'all');
+            const activeVal = normalizeValue(filterActive ? filterActive.value : 'all');
+            const regionVal = normalizeValue(filterRegion ? filterRegion.value : 'all');
+            const topicVal = normalizeValue(filterTopic ? filterTopic.value : 'all');
+            let visibleCount = 0;
+
+            rows.forEach((row) => {
+                let visible = true;
+                const rowStatus = normalizeValue(row.dataset.status || '');
+                const rowActive = row.dataset.active || '0';
+                const rowMissing = row.dataset.missing || '0';
+                const rowRegions = (row.dataset.regions || '').split('|').filter(Boolean);
+                const rowTopics = (row.dataset.topics || '').split('|').filter(Boolean);
+
+                if (statusVal && statusVal !== 'all') {
+                    if (statusVal === 'success' && rowStatus !== 'success') {
+                        visible = false;
+                    } else if (statusVal === 'failed' && rowStatus !== 'failed') {
+                        visible = false;
+                    } else if (statusVal === 'progress' && !(rowStatus === 'running' || rowStatus === 'queued')) {
+                        visible = false;
+                    } else if (statusVal === 'cancelled' && rowStatus !== 'cancelled') {
+                        visible = false;
+                    } else if (statusVal === 'none' && rowStatus !== '' && rowStatus !== 'none') {
+                        visible = false;
+                    }
+                }
+
+                if (visible && activeVal && activeVal !== 'all') {
+                    if (activeVal === 'active' && rowActive !== '1') {
+                        visible = false;
+                    } else if (activeVal === 'inactive' && !(rowActive === '0' && rowMissing === '0')) {
+                        visible = false;
+                    } else if (activeVal === 'missing' && rowMissing !== '1') {
+                        visible = false;
+                    }
+                }
+
+                if (visible && regionVal && regionVal !== 'all') {
+                    if (!rowRegions.includes(regionVal)) {
+                        visible = false;
+                    }
+                }
+
+                if (visible && topicVal && topicVal !== 'all') {
+                    if (!rowTopics.includes(topicVal)) {
+                        visible = false;
+                    }
+                }
+
+                row.style.display = visible ? '' : 'none';
+                if (visible) {
+                    visibleCount++;
+                }
+            });
+
+            if (filtersInfo) {
+                filtersInfo.textContent = visibleCount === rows.length
+                    ? ''
+                    : filtersInfo.dataset && filtersInfo.dataset.labelVisible
+                        ? filtersInfo.dataset.labelVisible.replace('%d', visibleCount)
+                        : '';
+            }
+        };
+
+        ['change', 'input'].forEach((evt) => {
+            if (filterStatus) filterStatus.addEventListener(evt, applyNetworkFilters);
+            if (filterActive) filterActive.addEventListener(evt, applyNetworkFilters);
+            if (filterRegion) filterRegion.addEventListener(evt, applyNetworkFilters);
+            if (filterTopic) filterTopic.addEventListener(evt, applyNetworkFilters);
+        });
+
+        if (resetFiltersBtn) {
+            resetFiltersBtn.addEventListener('click', () => {
+                if (filterStatus) filterStatus.value = 'all';
+                if (filterActive) filterActive.value = 'all';
+                if (filterRegion) filterRegion.value = 'all';
+                if (filterTopic) filterTopic.value = 'all';
+                if (filtersInfo) {
+                    filtersInfo.textContent = '';
+                }
+                applyNetworkFilters();
+            });
+        }
+
+        if (activateVerifiedBtn) {
+            activateVerifiedBtn.addEventListener('click', () => {
+                let activated = 0;
+                rows.forEach((row) => {
+                    const checkbox = row.querySelector('input[type="checkbox"]');
+                    if (!checkbox || checkbox.disabled) {
+                        return;
+                    }
+                    const isSuccess = normalizeValue(row.dataset.status || '') === 'success';
+                    checkbox.checked = isSuccess;
+                    if (isSuccess) {
+                        activated++;
+                    }
+                });
+                if (filtersInfo) {
+                    const template = activateVerifiedBtn.getAttribute('data-message-template') || '';
+                    if (template) {
+                        filtersInfo.textContent = template.replace('%d', activated);
+                    } else {
+                        filtersInfo.textContent = activated ? String(activated) : '';
+                    }
+                }
+            });
+        }
+
+        applyNetworkFilters();
+
+        if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+                try { new bootstrap.Tooltip(tooltipTriggerEl); } catch (err) {}
+            });
+        }
+    } else if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+            try { new bootstrap.Tooltip(tooltipTriggerEl); } catch (err) {}
         });
     }
 
