@@ -6,14 +6,27 @@ const { generateArticle } = require('./lib/articleGenerator');
 const { runCli } = require('./lib/genericPaste');
 const { createVerificationPayload } = require('./lib/verification');
 
-async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const slug = 'jsbin';
   const { LOG_FILE, logLine } = createLogger(slug);
-  logLine('Publish start', { pageUrl, anchorText, language });
+  const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+  const job = {
+    pageUrl,
+    anchorText,
+    language: jobOptions.language || language,
+    openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
+    aiProvider: provider,
+    wish: jobOptions.wish || wish,
+    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
+    testMode: !!jobOptions.testMode
+  };
+  logLine('Publish start', { pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });
 
-  const article = await generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta }, logLine);
+  const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
+    ? { ...jobOptions.preparedArticle }
+    : await generateArticle(job, logLine);
 
-  const html = `<!DOCTYPE html><html lang="${language || 'en'}"><head><meta charset="utf-8"><title>${article.title}</title></head><body>${article.htmlContent}</body></html>`;
+  const html = `<!DOCTYPE html><html lang="${job.language || 'en'}"><head><meta charset="utf-8"><title>${article.title}</title></head><body>${article.htmlContent}</body></html>`;
 
   const response = await fetch('https://jsbin.com/api/save', {
     method: 'POST',

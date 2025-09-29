@@ -27,13 +27,28 @@ function createGenericPastePublisher(config) {
 
   const slug = config.slug;
 
-  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
     const { LOG_FILE, LOG_DIR, logLine, logDebug } = createLogger(slug);
-    logLine('Publish start', { slug, pageUrl, anchorText, language, provider: aiProvider || process.env.PP_AI_PROVIDER || 'openai' });
 
-    const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta };
+    const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+    const apiKey = jobOptions.openaiApiKey || openaiApiKey;
+    const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
+    const job = {
+      pageUrl,
+      anchorText,
+      language: jobOptions.language || language,
+      openaiApiKey: apiKey,
+      aiProvider: provider,
+      wish: jobOptions.wish || wish,
+      meta,
+      testMode: !!jobOptions.testMode
+    };
 
-    const article = await generateArticle(job, logLine);
+    logLine('Publish start', { slug, pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });
+
+    const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
+      ? { ...jobOptions.preparedArticle }
+      : await generateArticle(job, logLine);
     logDebug('Article link stats', article.linkStats);
 
     const variants = {
@@ -254,7 +269,16 @@ function runCli(moduleObj, publishFn, slug) {
         process.exit(1);
       }
 
-      const res = await publishFn(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
+      const res = await publishFn(
+        pageUrl,
+        anchor,
+        language,
+        apiKey,
+        provider,
+        wish,
+        job.page_meta || job.meta || null,
+        job
+      );
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(res.ok ? 0 : 1);

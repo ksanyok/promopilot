@@ -14,13 +14,25 @@ function buildCode(text) {
   return `text = """${escaped.replace(/"""/g, '\\"\\"\\"')}"""\nprint(text)`;
 }
 
-async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const slug = 'wandbox';
   const { LOG_FILE, logLine } = createLogger(slug);
-  const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta };
-  logLine('Publish start', { pageUrl, anchorText });
+  const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+  const job = {
+    pageUrl,
+    anchorText,
+    language: jobOptions.language || language,
+    openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
+    aiProvider: provider,
+    wish: jobOptions.wish || wish,
+    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
+    testMode: !!jobOptions.testMode
+  };
+  logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
 
-  const article = await generateArticle(job, logLine);
+  const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
+    ? { ...jobOptions.preparedArticle }
+    : await generateArticle(job, logLine);
   const plain = htmlToPlainText(article.htmlContent);
   const code = buildCode(plain);
 

@@ -7,12 +7,25 @@ const { htmlToPlainText } = require('./lib/contentFormats');
 const { runCli } = require('./lib/genericPaste');
 const { createVerificationPayload } = require('./lib/verification');
 
-async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const slug = 'hastebin';
   const { LOG_FILE, logLine } = createLogger(slug);
-  logLine('Publish start', { pageUrl, anchorText, language });
+  const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+  const job = {
+    pageUrl,
+    anchorText,
+    language: jobOptions.language || language,
+    openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
+    aiProvider: provider,
+    wish: jobOptions.wish || wish,
+    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
+    testMode: !!jobOptions.testMode
+  };
+  logLine('Publish start', { pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });
 
-  const article = await generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta }, logLine);
+  const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
+    ? { ...jobOptions.preparedArticle }
+    : await generateArticle(job, logLine);
   const text = htmlToPlainText(article.htmlContent);
   const body = text || `${article.title}\n\n${article.htmlContent}`;
 

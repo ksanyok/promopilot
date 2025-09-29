@@ -21,8 +21,10 @@ function pickVariant(format, variants) {
   }
 }
 
-async function composeArticle(job, logLine) {
-  const article = await generateArticle(job, logLine);
+async function composeArticle(job, logLine, preparedArticle) {
+  const article = (preparedArticle && preparedArticle.htmlContent)
+    ? { ...preparedArticle }
+    : await generateArticle(job, logLine);
   const variants = {
     html: article.htmlContent,
     markdown: htmlToMarkdown(article.htmlContent),
@@ -44,12 +46,22 @@ function createHttpPublisher(config) {
 
   const slug = config.slug;
 
-  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
     const { LOG_FILE, logLine } = createLogger(slug);
-    const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta };
-    logLine('Publish start', { pageUrl, anchorText });
+    const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+    const job = {
+      pageUrl,
+      anchorText,
+      language: jobOptions.language || language,
+      openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
+      aiProvider: provider,
+      wish: jobOptions.wish || wish,
+      meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
+      testMode: !!jobOptions.testMode
+    };
+    logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
 
-    const { article, variants } = await composeArticle(job, logLine);
+    const { article, variants } = await composeArticle(job, logLine, jobOptions.preparedArticle);
     let body = pickVariant(config.contentFormat || 'markdown', variants);
     if (config.prepareBody) {
       body = await config.prepareBody({ job, article, variants, logLine }) || body;
@@ -120,12 +132,22 @@ function createTcpPublisher(config) {
 
   const slug = config.slug;
 
-  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta) {
+  async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
     const { LOG_FILE, logLine } = createLogger(slug);
-    const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta: pageMeta };
-    logLine('Publish start', { pageUrl, anchorText });
+    const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+    const job = {
+      pageUrl,
+      anchorText,
+      language: jobOptions.language || language,
+      openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
+      aiProvider: provider,
+      wish: jobOptions.wish || wish,
+      meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
+      testMode: !!jobOptions.testMode
+    };
+    logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
 
-    const { article, variants } = await composeArticle(job, logLine);
+    const { article, variants } = await composeArticle(job, logLine, jobOptions.preparedArticle);
     const body = await (config.prepareBody ? config.prepareBody({ job, article, variants, logLine }) : null) || pickVariant(config.contentFormat || 'text', variants);
 
     const payload = config.wrapPayload ? config.wrapPayload(body, { article, variants, job }) : body;
