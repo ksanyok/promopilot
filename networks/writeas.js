@@ -39,6 +39,49 @@ const config = {
   contentSelectors: ['#post-body', 'textarea#post-body', '#writer'],
   submitSelectors: ['#publish'],
   resultTimeoutMs: 180000,
+  preFill: async ({ page, logLine }) => {
+    try {
+      await page.evaluate(() => {
+        // Try to force markdown mode if there is a format control
+        const setMarkdownValue = () => {
+          const inp = document.querySelector('input[name="format"], select[name="format"], #format');
+          if (!inp) return false;
+          const tag = (inp.tagName || '').toLowerCase();
+          if (tag === 'select') {
+            try { inp.value = 'markdown'; inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+            return true;
+          }
+          if ('value' in inp) {
+            try { inp.value = 'markdown'; ['input', 'change'].forEach(e=>inp.dispatchEvent(new Event(e, { bubbles: true }))); } catch (_) {}
+            return true;
+          }
+          return false;
+        };
+
+        const tryToggleMarkdown = () => {
+          const candidates = Array.from(document.querySelectorAll('button, a, label, input'))
+            .filter(el => {
+              const text = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
+              return text.includes('markdown');
+            });
+          for (const el of candidates) {
+            try {
+              const pressed = el.getAttribute('aria-pressed');
+              if (pressed === 'true') return true;
+              el.click();
+              return true;
+            } catch (_) {}
+          }
+          return false;
+        };
+
+        setMarkdownValue();
+        tryToggleMarkdown();
+      });
+    } catch (e) {
+      logLine('Write.as preFill markdown toggle failed', { error: String(e && e.message || e) });
+    }
+  },
   beforeSubmit: async ({ page, logLine }) => {
     try {
       await page.waitForFunction(() => {
