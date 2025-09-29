@@ -44,6 +44,11 @@ const config = {
       await page.evaluate(() => {
         // Try to force markdown mode if there is a format control
         const setMarkdownValue = () => {
+          // Try radio first
+          const radio = document.querySelector('input[type="radio"][value="markdown"], input[type="radio"][data-format="markdown"]');
+          if (radio) {
+            try { radio.click(); return true; } catch (_) {}
+          }
           const inp = document.querySelector('input[name="format"], select[name="format"], #format');
           if (!inp) return false;
           const tag = (inp.tagName || '').toLowerCase();
@@ -58,7 +63,23 @@ const config = {
           return false;
         };
 
+        const openMenus = () => {
+          const openers = Array.from(document.querySelectorAll('button, a'))
+            .filter(el => {
+              const text = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
+              if (!text) return false;
+              return (
+                text.includes('more') || text.includes('options') || text.includes('menu') ||
+                text.includes('format') || text.includes('preferences') || text.includes('настрой') || text.includes('опц')
+              );
+            });
+          for (const el of openers) {
+            try { el.click(); } catch (_) {}
+          }
+        };
+
         const tryToggleMarkdown = () => {
+          // After menus opened, try to click Markdown toggles
           const candidates = Array.from(document.querySelectorAll('button, a, label, input'))
             .filter(el => {
               const text = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
@@ -76,11 +97,24 @@ const config = {
         };
 
         setMarkdownValue();
-        tryToggleMarkdown();
+        openMenus();
+        setTimeout(tryToggleMarkdown, 50);
       });
     } catch (e) {
       logLine('Write.as preFill markdown toggle failed', { error: String(e && e.message || e) });
     }
+  },
+  transformBodyBeforeFill: async ({ body }) => {
+    let text = String(body || '');
+    // Fix cases like: [тут](<a href="https://...">https://...</a>) → [тут](https://...)
+    text = text.replace(/\]\(\s*<a [^>]*href=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>\s*\)/gi, ']($1)');
+    // Remove any stray HTML tags left inside markdown
+    text = text.replace(/<\/?(?:p|div|span|strong|em|code|blockquote)>/gi, '');
+    // Normalize line endings and ensure blank line at top to help parsers
+    text = text.replace(/\r\n?/g, '\n');
+    if (!/^\s*\n/.test(text)) text = '\n' + text; // leading newline helps some engines recognize headers
+    if (!/\n\s*$/.test(text)) text = text + '\n'; // trailing newline
+    return text;
   },
   beforeSubmit: async ({ page, logLine }) => {
     try {
