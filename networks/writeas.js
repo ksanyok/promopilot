@@ -155,7 +155,7 @@ const config = {
       logLine('Write.as wait after submit error', { error: String(error && error.message || error) });
     }
   },
-  resolveResult: async ({ page, logLine, startUrl }) => {
+  resolveResult: async ({ page, logLine, startUrl, variants }) => {
     const poll = async () => {
       try {
         return await page.evaluate(() => {
@@ -195,6 +195,101 @@ const config = {
       logLine('Write.as resolve result fallback empty', { attempts });
     } else {
       logLine('Write.as resolve result', { attempts, best });
+    }
+
+    // Post-publish check: if page shows raw markdown (e.g., '## ' visible and no headings), try to edit and re-publish with markdown mode enforced
+    try {
+      if (best) {
+        // Ensure we're on the published page
+        try { await page.goto(best, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (_) {}
+        const looksRaw = await page.evaluate(() => {
+          const body = document.querySelector('.e-content, #post-body, article');
+          if (!body) return false;
+          const html = (body.innerHTML || '').toLowerCase();
+          const text = (body.innerText || '').toLowerCase();
+          const hasMdSymbols = /\n?\s*##\s+/.test(text) || /\[[^\]]+\]\([^\)]+\)/.test(text);
+          const hasRendered = /<h1|<h2|<h3|<a\s/i.test(html);
+          return hasMdSymbols && !hasRendered;
+        });
+        if (looksRaw) {
+          logLine('Write.as detected raw markdown after publish — attempting auto-fix via Edit');
+          // Try to click Edit link/button
+          try {
+            const clicked = await page.evaluate(() => {
+              const edits = Array.from(document.querySelectorAll('a,button'))
+                .filter(el => {
+                  const href = (el.getAttribute('href') || '').toLowerCase();
+                  const txt = ((el.innerText || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
+                  return href.endsWith('/edit') || href.includes('/edit?') || txt.includes('edit') || txt.includes('редакт');
+                });
+              for (const el of edits) {
+                try { el.click(); return true; } catch (_) {}
+              }
+              return false;
+            });
+            if (clicked) {
+              try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }); } catch (_) {}
+            }
+          } catch (_) {}
+
+          // Ensure editor is ready
+          try { await page.waitForSelector('#post-body, #writer, textarea#post-body', { timeout: 15000 }); } catch (_) {}
+          // Force markdown mode (re-use preFill logic inline)
+          try {
+            await page.evaluate(() => {
+              const radio = document.querySelector('input[type="radio"][value="markdown"], input[type="radio"][data-format="markdown"]');
+              if (radio) { try { radio.click(); } catch (_) {} }
+              const inp = document.querySelector('input[name="format"], select[name="format"], #format');
+              if (inp) {
+                const tag = (inp.tagName || '').toLowerCase();
+                if (tag === 'select') { try { inp.value = 'markdown'; inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {} }
+                if ('value' in inp) { try { inp.value = 'markdown'; ['input','change'].forEach(e=>inp.dispatchEvent(new Event(e, { bubbles: true }))); } catch (_) {} }
+              }
+              const openers = Array.from(document.querySelectorAll('button, a'))
+                .filter(el => {
+                  const t = ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase();
+                  return t.includes('format') || t.includes('options') || t.includes('more') || t.includes('markdown');
+                });
+              for (const el of openers) { try { el.click(); } catch (_) {} }
+              const mdToggle = Array.from(document.querySelectorAll('button, a, label, input'))
+                .find(el => ((el.innerText || el.value || el.title || el.getAttribute('aria-label') || '') + '').toLowerCase().includes('markdown'));
+              if (mdToggle) { try { mdToggle.click(); } catch (_) {} }
+            });
+          } catch (_) {}
+
+          // Refill content with our markdown variant (sanitized by transform)
+          const bodyMarkdown = (variants && variants.markdown) ? variants.markdown : '';
+          if (bodyMarkdown) {
+            try {
+              await page.evaluate((val) => {
+                const el = document.querySelector('#post-body, textarea#post-body, #writer');
+                if (el) {
+                  if ('value' in el) { el.value = val; ['input','change','keyup','blur'].forEach(e=>el.dispatchEvent(new Event(e,{bubbles:true}))); }
+                  else if (typeof el.innerHTML !== 'undefined') { el.innerHTML = val; }
+                }
+              }, bodyMarkdown);
+            } catch (_) {}
+          }
+
+          // Re-publish
+          try {
+            await page.evaluate(() => { const btn = document.querySelector('#publish'); if (btn) btn.click(); });
+            try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }); } catch (_) {}
+          } catch (_) {}
+
+          // Re-resolve canonical URL
+          try {
+            const fixed = await page.evaluate(() => {
+              const canonical = document.querySelector('link[rel="canonical"]');
+              if (canonical && canonical.href) return canonical.href.trim();
+              return window.location ? window.location.href : '';
+            });
+            if (fixed) { best = normalizeWriteAsUrl(fixed); }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      logLine('Write.as post-fix failed (continuing)', { error: String(e && e.message || e) });
     }
 
     return best;
