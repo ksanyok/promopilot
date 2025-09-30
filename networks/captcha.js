@@ -664,25 +664,54 @@ async function injectCaptchaToken(page, type, token) {
   if (!token) return false;
   try {
     return await page.evaluate((captType, tok) => {
-      const ensureField = (name) => {
-        let el = document.querySelector(`textarea[name="${name}"]`) || document.querySelector(`#${name}`);
-        if (!el) {
-          el = document.createElement('textarea');
-          el.name = name;
-          el.id = name;
-          el.style.display = 'none';
-          document.body.appendChild(el);
-        }
-        el.value = tok;
-        try {
-          ['input', 'change', 'keyup', 'blur'].forEach(evt => el.dispatchEvent(new Event(evt, { bubbles: true })));
-        } catch (_) {}
-        return el;
-      };
       const names = captType === 'hcaptcha' ? ['h-captcha-response'] : ['g-recaptcha-response'];
-      let ok = false;
-      names.forEach(name => { if (ensureField(name)) ok = true; });
-      return ok;
+
+      const createHidden = (container, name) => {
+        try {
+          let el = container.querySelector(`textarea[name="${name}"]`) || container.querySelector(`#${name}`);
+          if (!el) {
+            el = document.createElement('textarea');
+            el.name = name;
+            el.id = name;
+            el.style.display = 'none';
+            container.appendChild(el);
+          }
+          el.value = tok;
+          ['input', 'change', 'keyup', 'blur'].forEach(evt => {
+            try { el.dispatchEvent(new Event(evt, { bubbles: true })); } catch(_) {}
+          });
+          return true;
+        } catch(_) { return false; }
+      };
+
+      let placed = false;
+      // 1) Prefer putting tokens inside forms that look like auth forms
+      const forms = Array.from(document.querySelectorAll('form'));
+      const candidateForms = forms.filter(f => {
+        const txt = (f.textContent || '').toLowerCase();
+        const hasAuthInputs = f.querySelector('input[type=email], input[name=email], input[type=password], input[name=password]');
+        const hasSubmit = f.querySelector('button[type=submit], input[type=submit]');
+        return hasAuthInputs || hasSubmit || txt.includes('sign') || txt.includes('login') || txt.includes('register');
+      });
+      if (candidateForms.length) {
+        for (const form of candidateForms) {
+          for (const n of names) { if (createHidden(form, n)) placed = true; }
+        }
+      }
+      // 2) Also add to any form that contains a visible submit button to be safe
+      if (!placed) {
+        for (const form of forms) {
+          const hasSubmit = form.querySelector('button[type=submit], input[type=submit]');
+          if (hasSubmit) { for (const n of names) { if (createHidden(form, n)) placed = true; } }
+        }
+      }
+      // 3) Fallback: add to body
+      for (const n of names) { if (createHidden(document.body, n)) placed = true; }
+
+      // Provide an escape hatch for SPA listeners
+      try { window.__pp_grecaptcha_token = tok; } catch(_) {}
+
+      return placed;
     }, type, token);
   } catch {
     return false;

@@ -216,7 +216,7 @@ async function mssgRegister({ language = 'uk' } = {}){
         if (det.type === 'recaptcha-v3' || det.type === 'recaptcha-anchor') {
           logLine('Captcha badge/script detected (v3) - waiting for visible challenge');
         } else {
-          if (captchaSolveAttempts >= 2) {
+          if (captchaSolveAttempts >= 3) {
             logLine('Captcha attempts limit reached', { attempts: captchaSolveAttempts });
             break;
           }
