@@ -125,28 +125,39 @@ async function loginAndPublish(job) {
     await waitForVisible(page, '.login', 15000);
     // Let animations finish a tick
     await sleep(350);
-    // Pick robust selectors (support both blog/username naming)
-    const userSel = await pickVisibleSelector(page, [
-      '.login input[name="blog"]',
-      '.login input[name="username"]',
-      '.login .username input',
-      '.login input[type="text"]'
-    ], 4000);
-    const passSel = await pickVisibleSelector(page, [
-      '.login input[name="pass"]',
-      '.login input[type="password"]'
-    ], 4000);
+    // Primary selectors exactly as in the working snippet
+    let userSel = '.login input[name="blog"]';
+    let passSel = '.login input[name="pass"]';
+    // Ensure they exist; else fall back to robust candidates
+    const hasUser = !!(await page.$(userSel).catch(() => null));
+    const hasPass = !!(await page.$(passSel).catch(() => null));
+    if (!hasUser) {
+      userSel = (await pickVisibleSelector(page, [
+        '.login input[name="blog"]',
+        '.login input[name="username"]',
+        '.login .username input',
+        '.login input[type="text"]'
+      ], 4000)) || '.login input[name="blog"]';
+    }
+    if (!hasPass) {
+      passSel = (await pickVisibleSelector(page, [
+        '.login input[name="pass"]',
+        '.login input[type="password"]'
+      ], 4000)) || '.login input[name="pass"]';
+    }
     logLine('login-selectors', { userSel, passSel });
     await snap(page, 'L2a-login-ready');
 
-    // 3) Fill credentials with real typing after focusing fields
-    if (userSel && username) {
+    // 3) Fill credentials using direct typing like in the provided working code
+    if (username) {
+      try { await page.$eval(userSel, el => el && el.scrollIntoView({ block: 'center' })); } catch {}
       await page.click(userSel, { clickCount: 3 }).catch(() => {});
-      await page.type(userSel, String(username), { delay: 25 }).catch(() => {});
+      await page.type(userSel, String(username), { delay: 20 }).catch(() => {});
     }
-    if (passSel && password) {
+    if (password) {
+      try { await page.$eval(passSel, el => el && el.scrollIntoView({ block: 'center' })); } catch {}
       await page.click(passSel, { clickCount: 3 }).catch(() => {});
-      await page.type(passSel, String(password), { delay: 25 }).catch(() => {});
+      await page.type(passSel, String(password), { delay: 20 }).catch(() => {});
     }
     // Confirm values
     const confirmed = await page.evaluate(({ uSel, pSel }) => {
