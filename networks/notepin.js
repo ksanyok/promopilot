@@ -98,8 +98,18 @@ async function loginAndPublish(job) {
       return { ok: true, network: 'notepin', mode: 'login-only', username: username || '', finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
     }
 
-    // 6) Click "new post" to go to the write page
-    const origin = new URL(safeUrl(page) || 'https://notepin.co').origin;
+    // 6) Ensure we're on the blog subdomain (avoid notepin.co which can show signup modal)
+    try {
+      const loc = new URL(safeUrl(page) || 'https://notepin.co');
+      if (loc.hostname === 'notepin.co' && username) {
+        await page.goto(`https://${username}.notepin.co/`, { waitUntil: 'domcontentloaded' });
+        await snap(page, 'L3b-blog-home');
+      }
+    } catch {}
+
+    // 7) Click "new post" to go to the write page on the blog subdomain
+    const current = new URL(safeUrl(page) || `https://${username || 'notepin'}.notepin.co`);
+    const origin = (current.hostname === 'notepin.co' && username) ? `https://${username}.notepin.co` : current.origin;
     const navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
     const clicked = await page.evaluate(() => {
       const el = document.querySelector('a[href="write"] .newPost, p.newPost, a[href="write"], a[href$="/write"]');
@@ -113,7 +123,7 @@ async function loginAndPublish(job) {
     }
     await snap(page, 'P1-write-page');
 
-    // 7) Generate or use provided article
+    // 8) Generate or use provided article
     const genJob = {
       pageUrl: job.url || job.pageUrl || job.jobUrl || '',
       anchorText: job.anchor || 'PromoPilot link',
@@ -128,8 +138,9 @@ async function loginAndPublish(job) {
       ? { ...job.preparedArticle }
       : await generateArticle(genJob, logLine);
     const htmlContent = String(article.htmlContent || '<p></p>');
+    const title = (article.title || (genJob.meta && genJob.meta.title) || genJob.anchorText || 'New Post').toString().slice(0, 120);
 
-    // 8) Fill editor content
+    // 9) Fill editor content
     await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
     await page.evaluate((html) => {
       const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
@@ -137,20 +148,57 @@ async function loginAndPublish(job) {
     }, htmlContent).catch(() => {});
     await snap(page, 'P2-editor-filled');
 
-    // 9) Publish
+    // 10) Publish — handle logged-in modal (title/visibility)
     const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
     await page.click('.publish button, .publish > button').catch(async () => {
       await page.evaluate(() => { const b = document.querySelector('.publish button, .publish > button'); if (b && typeof b.dispatchEvent === 'function') b.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     });
-    // If no nav, wait briefly for URL change to a post page
+    // Wait for publish modal and fill if present
+    const modalAppeared = await page.waitForSelector('.publishMenu', { timeout: 15000 }).then(() => true).catch(() => false);
+    if (modalAppeared) {
+      const isLoggedInModal = await page.$('.publishMenu .titleInp').then(Boolean).catch(() => false);
+      const hasSignupFields = await page.$('.publishMenu input[name="blog"], .publishMenu input[name="username"], .publishMenu input[name="pass"]').then(Boolean).catch(() => false);
+      if (isLoggedInModal && !hasSignupFields) {
+        // Title
+        await page.click('.publishMenu .titleInp', { clickCount: 3 }).catch(() => {});
+        await page.type('.publishMenu .titleInp', title, { delay: 15 }).catch(() => {});
+        // Public visibility
+        await page.evaluate(() => {
+          const btn = document.querySelector('.publishMenu .options[data-do="visible"] button[data-type="public"]');
+          if (btn && !btn.classList.contains('chosen')) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        }).catch(() => {});
+        // CF token
+        await page.waitForFunction(() => {
+          const el = document.querySelector('input[name="cf-turnstile-response"]');
+          return !!(el && el instanceof HTMLInputElement && el.value && el.value.length > 20);
+        }, { timeout: 20000 }).catch(() => null);
+        await snap(page, 'P3-modal-filled');
+        const navSubmit = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+        await page.click('.publishMenu .finish p, .publishMenu .finish').catch(async () => {
+          await page.evaluate(() => {
+            const el = document.querySelector('.publishMenu .finish p') || document.querySelector('.publishMenu .finish');
+            if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          });
+        });
+        await Promise.race([
+          navSubmit,
+          page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 15000 }).catch(() => null),
+          sleep(1200)
+        ]);
+        await snap(page, 'P4-after-submit');
+      } else {
+        // Unexpected: signup modal visible after login
+        await snap(page, 'P3-unexpected-signup-modal');
+      }
+    }
+
+    // If still no nav, wait briefly for URL change to a post page
     await Promise.race([
       navPub,
       page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 8000 }).catch(() => null),
-      sleep(1200)
+      sleep(800)
     ]);
-  await snap(page, 'P3-after-publish');
-  await sleep(500);
-  await snap(page, 'P4-final');
+    await snap(page, 'P5-final');
 
   const finalUrl = safeUrl(page);
     await browser.close();
