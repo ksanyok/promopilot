@@ -22,7 +22,10 @@ try {
 const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('./lib/logger');
-const { generateArticle } = require('./lib/articleGenerator');
+const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
+const { htmlToMarkdown } = require('./lib/contentFormats');
+let marked;
+try { marked = require('marked'); } catch (_) { marked = null; }
 
 function safeUrl(p) { try { return p.url(); } catch { return ''; } }
 function ensureDirSync(filePath) {
@@ -32,18 +35,6 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, m
 
 async function loginNotepin(username, password, job = {}) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
-
-  // Screenshot helper
-  let snapStep = 0; const snapPrefix = LOG_FILE.replace(/\.log$/i, '');
-  const snap = async (pg, name) => {
-    try { if (pg.isClosed && pg.isClosed()) return; } catch {}
-    try {
-      snapStep++; const idx = String(snapStep).padStart(2, '0');
-      const file = `${snapPrefix}-${idx}-${String(name).replace(/[^\w.-]+/g, '-')}.png`;
-      ensureDirSync(file); await pg.screenshot({ path: file, fullPage: true });
-      logLine('screenshot', { name: `${idx}-${name}`, file, url: safeUrl(pg) });
-    } catch {}
-  };
 
   // Launch minimal browser
   const args = ['--no-sandbox', '--disable-setuid-sandbox'];
@@ -57,8 +48,7 @@ async function loginNotepin(username, password, job = {}) {
 
   try {
     // 1) Open homepage
-    await page.goto('https://notepin.co/', { waitUntil: 'domcontentloaded' });
-    await snap(page, 'L1-home');
+  await page.goto('https://notepin.co/', { waitUntil: 'domcontentloaded' });
 
     // 2) Open login modal
     await page.evaluate(() => {
@@ -72,10 +62,7 @@ async function loginNotepin(username, password, job = {}) {
     // 3) Fill credentials
     if (username) { await page.type('.login input[name="blog"]', String(username), { delay: 20 }); }
     if (password) { await page.type('.login input[name="pass"]', String(password), { delay: 20 }); }
-    // Unmask password only for the screenshot so it's visible in diagnostics, then revert
-    try { await page.evaluate(() => { const p = document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'text'); }); } catch {}
-    await snap(page, 'L2-login-modal');
-    try { await page.evaluate(() => { const p = document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'password'); }); } catch {}
+  // Fill complete; proceed to submit
 
     // 4) Submit
     const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
@@ -86,8 +73,7 @@ async function loginNotepin(username, password, job = {}) {
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
     });
-    await Promise.race([nav, hostChange, sleep(1200)]);
-    await snap(page, 'L3-after-login');
+  await Promise.race([nav, hostChange, sleep(1200)]);
 
     // If login-only requested, return right away
     if (/^(1|true|yes)$/i.test(String(process.env.PP_NOTEPIN_LOGIN_ONLY || ''))) {
@@ -97,7 +83,7 @@ async function loginNotepin(username, password, job = {}) {
     }
 
     // 5) We should be on /dash automatically; take a dash screenshot
-    await snap(page, 'D1-dash');
+  // On dashboard
 
     // 6) Click "new post" and go to write page
     const navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
@@ -110,7 +96,7 @@ async function loginNotepin(username, password, job = {}) {
       // Fallback: direct navigation to /write
       try { const base = new URL(safeUrl(page) || 'https://notepin.co'); await page.goto(`${base.origin}/write`, { waitUntil: 'domcontentloaded' }); } catch {}
     }
-    await snap(page, 'P1-write-page');
+    // On write page
 
     // 7) Generate or use provided article
     const genJob = {
@@ -129,16 +115,74 @@ async function loginNotepin(username, password, job = {}) {
     } catch (_) {
       article = { title: 'PromoPilot Post', htmlContent: `<h2>PromoPilot Post</h2><p>Automated post content.</p>` };
     }
-    const htmlContent = String(article.htmlContent || '<p></p>');
-    const title = (article.title || (genJob.meta && genJob.meta.title) || genJob.anchorText || 'PromoPilot Post').toString().slice(0, 120);
+    let htmlContent = String(article.htmlContent || '<p></p>');
+    const title = (article.title || (genJob.meta && genJob.meta.title) || genJob.anchorText || 'PromoPilot Post')
+      .toString()
+      .slice(0, 120);
+
+    // Repair links if generator output is malformed or missing required links
+    try {
+      const s = analyzeLinks(htmlContent, genJob.pageUrl, genJob.anchorText);
+      const ok = s && s.totalLinks === 3 && s.ourLinkCount >= 2 && s.externalCount >= 1;
+      if (!ok) {
+        const pageUrl = genJob.pageUrl || '';
+        const anchorTx = genJob.anchorText || 'подробнее';
+        const lang = String(genJob.language || 'ru').toLowerCase();
+        const wiki = lang.startsWith('ru') ? 'https://ru.wikipedia.org/wiki/Подвеска_автомобиля' : 'https://en.wikipedia.org/wiki/Suspension_(vehicle)';
+        // Remove all anchors to avoid duplications and breakages
+        let base = htmlContent.replace(/<a[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+        // Ensure base has paragraphs
+        if (!/<p[\s>]/i.test(base)) {
+          const parts = base.split(/\n{2,}/).map(t => t.trim()).filter(Boolean);
+          base = parts.map(p => `<p>${p}</p>`).join('\n');
+        }
+        const our1 = `<p><a href="${pageUrl}" rel="nofollow noopener noreferrer" target="_blank">${anchorTx}</a></p>`;
+        const ext = `<p><a href="${wiki}" rel="nofollow noopener noreferrer" target="_blank">Википедия: подвеска автомобиля</a></p>`;
+        const our2 = `<p><a href="${pageUrl}" rel="nofollow noopener noreferrer" target="_blank">${anchorTx} — подробности</a></p>`;
+        htmlContent = `${base}\n${our1}\n${ext}\n${our2}`;
+      }
+    } catch {}
 
     // 8) Fill editor
     await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
+    // Optional: normalize via Markdown pipeline to fix malformed tags
+    let contentForEditor = htmlContent;
+    try {
+      // Skip MD pipeline if links are already OK to reduce risk of altering anchors
+      let linksOk = false;
+      try {
+        const ss = analyzeLinks(htmlContent, genJob.pageUrl, genJob.anchorText);
+        linksOk = !!(ss && ss.totalLinks === 3 && ss.ourLinkCount >= 2 && ss.externalCount >= 1);
+      } catch {}
+      const useMd = !linksOk && String(
+        (job && job.useMarkdownPipeline) ? '1' : (process.env.PP_NOTEPIN_MARKDOWN_PIPELINE || '1')
+      ) === '1';
+      if (useMd) {
+        const md = htmlToMarkdown(String(htmlContent || ''));
+        if (marked && typeof marked.parse === 'function') {
+          const normalized = marked.parse(md, { mangle: false, headerIds: false });
+          if (normalized && typeof normalized === 'string') {
+            contentForEditor = normalized
+              // Drop any scripts
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              // Drop ins/adsense blocks
+              .replace(/<ins[^>]*class=["']adsbygoogle["'][\s\S]*?<\/ins>/gi, '')
+              // Drop stray async adsbygoogle scripts
+              .replace(/<script[^>]*pagead2\.googlesyndication\.com[\s\S]*?<\/script>/gi, '')
+              ;
+          }
+        }
+      }
+    } catch {}
+
     await page.evaluate((html) => {
-      const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
-      if (el) { el.innerHTML = String(html); try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {} }
-    }, htmlContent).catch(() => {});
-    await snap(page, 'P2-editor-filled');
+        const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
+        if (el) {
+          el.innerHTML = String(html);
+          try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}
+        }
+    }, contentForEditor).catch(() => {});
+  // Editor filled
 
     // 9) Click Publish -> wait for logged-in modal
     const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
@@ -147,11 +191,10 @@ async function loginNotepin(username, password, job = {}) {
     });
     const modalAppeared = await page.waitForSelector('.publishMenu', { timeout: 15000 }).then(() => true).catch(() => false);
     if (!modalAppeared) {
-      await snap(page, 'P3-no-modal');
       await browser.close();
       return { ok: false, network: 'notepin', error: 'PUBLISH_MODAL_NOT_FOUND', logFile: LOG_FILE, logDir: LOG_DIR };
     }
-    await snap(page, 'P3-publish-modal');
+    // Publish modal opened
 
     // 10) Fill Title, ensure Public, wait for CF token
     await page.click('.publishMenu .titleInp', { clickCount: 3 }).catch(() => {});
@@ -183,7 +226,7 @@ async function loginNotepin(username, password, job = {}) {
       page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 15000 }).catch(() => null),
       sleep(1200)
     ]);
-    await snap(page, 'P4-published');
+    // Published
 
     // Raw URL right after publish (may be editor/preview, not public)
     const publishedUrlRaw = safeUrl(page);
@@ -199,7 +242,6 @@ async function loginNotepin(username, password, job = {}) {
         await Promise.race([navBlog, sleep(1500)]);
         // Poll up to 3 times in case listing lags
         for (let i = 0; i < 3; i++) {
-          await snap(page, i === 0 ? 'B1-blog-home' : `B1-blog-home-reload-${i}`);
           const { items } = await page.evaluate(() => {
             const items = [];
             const org = location.origin;
@@ -262,7 +304,6 @@ async function loginNotepin(username, password, job = {}) {
       logDir: LOG_DIR
     };
   } catch (error) {
-    try { await snap(page, 'Lx-error'); } catch {}
     try { await browser.close(); } catch {}
     return { ok: false, network: 'notepin', mode: 'login-only', error: String((error && error.message) || error) };
   }
