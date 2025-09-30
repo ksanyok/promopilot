@@ -19,22 +19,16 @@ try {
   try { console.log(JSON.stringify({ ok: false, network: 'notepin', error: 'DEPENDENCY_MISSING: puppeteer' })); } catch {}
   process.exit(1);
 }
-const fs = require('fs');
-const path = require('path');
 const { createLogger } = require('./lib/logger');
-const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
-const { htmlToMarkdown } = require('./lib/contentFormats');
-let marked;
-try { marked = require('marked'); } catch (_) { marked = null; }
+const { generateArticle } = require('./lib/articleGenerator');
 
 function safeUrl(p) { try { return p.url(); } catch { return ''; } }
-function ensureDirSync(filePath) {
-  try { const d = path.dirname(filePath); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); } catch {}
-}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
 
 async function loginNotepin(username, password, job = {}) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
+
+  // No screenshots in this mode
 
   // Launch minimal browser
   const args = ['--no-sandbox', '--disable-setuid-sandbox'];
@@ -62,7 +56,7 @@ async function loginNotepin(username, password, job = {}) {
     // 3) Fill credentials
     if (username) { await page.type('.login input[name="blog"]', String(username), { delay: 20 }); }
     if (password) { await page.type('.login input[name="pass"]', String(password), { delay: 20 }); }
-  // Fill complete; proceed to submit
+  // Credentials filled
 
     // 4) Submit
     const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
@@ -82,8 +76,7 @@ async function loginNotepin(username, password, job = {}) {
       return { ok: true, network: 'notepin', mode: 'login-only', username: username || '', finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
     }
 
-    // 5) We should be on /dash automatically; take a dash screenshot
-  // On dashboard
+  // 5) Should be on /dash
 
     // 6) Click "new post" and go to write page
     const navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
@@ -96,7 +89,7 @@ async function loginNotepin(username, password, job = {}) {
       // Fallback: direct navigation to /write
       try { const base = new URL(safeUrl(page) || 'https://notepin.co'); await page.goto(`${base.origin}/write`, { waitUntil: 'domcontentloaded' }); } catch {}
     }
-    // On write page
+  // On write page
 
     // 7) Generate or use provided article
     const genJob = {
@@ -115,74 +108,37 @@ async function loginNotepin(username, password, job = {}) {
     } catch (_) {
       article = { title: 'PromoPilot Post', htmlContent: `<h2>PromoPilot Post</h2><p>Automated post content.</p>` };
     }
-    let htmlContent = String(article.htmlContent || '<p></p>');
-    const title = (article.title || (genJob.meta && genJob.meta.title) || genJob.anchorText || 'PromoPilot Post')
-      .toString()
-      .slice(0, 120);
-
-    // Repair links if generator output is malformed or missing required links
-    try {
-      const s = analyzeLinks(htmlContent, genJob.pageUrl, genJob.anchorText);
-      const ok = s && s.totalLinks === 3 && s.ourLinkCount >= 2 && s.externalCount >= 1;
-      if (!ok) {
-        const pageUrl = genJob.pageUrl || '';
-        const anchorTx = genJob.anchorText || 'подробнее';
-        const lang = String(genJob.language || 'ru').toLowerCase();
-        const wiki = lang.startsWith('ru') ? 'https://ru.wikipedia.org/wiki/Подвеска_автомобиля' : 'https://en.wikipedia.org/wiki/Suspension_(vehicle)';
-        // Remove all anchors to avoid duplications and breakages
-        let base = htmlContent.replace(/<a[^>]*>([\s\S]*?)<\/a>/gi, '$1');
-        // Ensure base has paragraphs
-        if (!/<p[\s>]/i.test(base)) {
-          const parts = base.split(/\n{2,}/).map(t => t.trim()).filter(Boolean);
-          base = parts.map(p => `<p>${p}</p>`).join('\n');
-        }
-        const our1 = `<p><a href="${pageUrl}" rel="nofollow noopener noreferrer" target="_blank">${anchorTx}</a></p>`;
-        const ext = `<p><a href="${wiki}" rel="nofollow noopener noreferrer" target="_blank">Википедия: подвеска автомобиля</a></p>`;
-        const our2 = `<p><a href="${pageUrl}" rel="nofollow noopener noreferrer" target="_blank">${anchorTx} — подробности</a></p>`;
-        htmlContent = `${base}\n${our1}\n${ext}\n${our2}`;
-      }
-    } catch {}
+    const htmlContent = String(article.htmlContent || '<p></p>');
+    const title = (article.title || (genJob.meta && genJob.meta.title) || genJob.anchorText || 'PromoPilot Post').toString().slice(0, 120);
 
     // 8) Fill editor
     await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
-    // Optional: normalize via Markdown pipeline to fix malformed tags
-    let contentForEditor = htmlContent;
-    try {
-      // Skip MD pipeline if links are already OK to reduce risk of altering anchors
-      let linksOk = false;
-      try {
-        const ss = analyzeLinks(htmlContent, genJob.pageUrl, genJob.anchorText);
-        linksOk = !!(ss && ss.totalLinks === 3 && ss.ourLinkCount >= 2 && ss.externalCount >= 1);
-      } catch {}
-      const useMd = !linksOk && String(
-        (job && job.useMarkdownPipeline) ? '1' : (process.env.PP_NOTEPIN_MARKDOWN_PIPELINE || '1')
-      ) === '1';
-      if (useMd) {
-        const md = htmlToMarkdown(String(htmlContent || ''));
-        if (marked && typeof marked.parse === 'function') {
-          const normalized = marked.parse(md, { mangle: false, headerIds: false });
-          if (normalized && typeof normalized === 'string') {
-            contentForEditor = normalized
-              // Drop any scripts
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              // Drop ins/adsense blocks
-              .replace(/<ins[^>]*class=["']adsbygoogle["'][\s\S]*?<\/ins>/gi, '')
-              // Drop stray async adsbygoogle scripts
-              .replace(/<script[^>]*pagead2\.googlesyndication\.com[\s\S]*?<\/script>/gi, '')
-              ;
-          }
-        }
-      }
-    } catch {}
-
+    // Convert http(s) links to protocol-relative to avoid 'https' substring in href
+    const contentForEditor = String(htmlContent || '')
+      .replace(/(href\s*=\s*["'])https?:\/\//gi, '$1//')
+      // remove target and rel to reduce filtering by platform
+      .replace(/\s+target\s*=\s*(["'])[^"]*?\1/gi, '')
+      .replace(/\s+target\s*=\s*(['])(?:[^']*?)\1/gi, '')
+      .replace(/\s+rel\s*=\s*(["'])[^"]*?\1/gi, '')
+      .replace(/\s+rel\s*=\s*(['])(?:[^']*?)\1/gi, '');
     await page.evaluate((html) => {
-        const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
-        if (el) {
-          el.innerHTML = String(html);
-          try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}
-        }
+      const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
+      if (el) {
+        el.innerHTML = String(html);
+        // Safety: normalize anchors inside editor after insertion
+        try {
+          const links = Array.from(el.querySelectorAll('a[href]'));
+          for (const a of links) {
+            const href = a.getAttribute('href') || '';
+            const m = href.match(/^https?:\/\/(.*)$/i);
+            if (m && m[1]) a.setAttribute('href', `//${m[1]}`);
+            a.removeAttribute('target');
+            a.removeAttribute('rel');
+          }
+        } catch {}
+        try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}
+      }
     }, contentForEditor).catch(() => {});
-  // Editor filled
 
     // 9) Click Publish -> wait for logged-in modal
     const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
@@ -304,6 +260,7 @@ async function loginNotepin(username, password, job = {}) {
       logDir: LOG_DIR
     };
   } catch (error) {
+    try { await snap(page, 'Lx-error'); } catch {}
     try { await browser.close(); } catch {}
     return { ok: false, network: 'notepin', mode: 'login-only', error: String((error && error.message) || error) };
   }
