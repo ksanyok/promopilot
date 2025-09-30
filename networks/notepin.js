@@ -33,6 +33,58 @@ function ensureDirSync(filePath) {
 // Puppeteer-agnostic sleep (older versions may not have page.waitForTimeout)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
 
+// Minimal stealth tweaks (no extra deps)
+async function applyStealth(page) {
+  // Realistic UA without "HeadlessChrome"
+  const UA = process.env.PUPPETEER_UA
+    || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  try { await page.setUserAgent(UA); } catch {}
+  try { await page.setExtraHTTPHeaders({ 'Accept-Language': 'ru,uk;q=0.9,en-US;q=0.8,en;q=0.7' }); } catch {}
+  try { await page.setViewport({ width: 1360, height: 900, deviceScaleFactor: 1 }); } catch {}
+
+  // Patch common bot fingerprints
+  try {
+    await page.evaluateOnNewDocument(() => {
+      // webdriver flag
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+      // chrome object
+      window.chrome = window.chrome || { runtime: {} };
+
+      // languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['ru-UA', 'ru', 'uk', 'en-US', 'en'] });
+
+      // plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+      });
+
+      // Permissions query fix (for notifications)
+      const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+      if (originalQuery) {
+        window.navigator.permissions.query = (parameters) => (
+          parameters && parameters.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters)
+        );
+      }
+
+      // WebGL vendor/renderer
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function (parameter) {
+        const UNMASKED_VENDOR_WEBGL = 0x9245;
+        const UNMASKED_RENDERER_WEBGL = 0x9246;
+        if (parameter === UNMASKED_VENDOR_WEBGL) return 'Intel Inc.';
+        if (parameter === UNMASKED_RENDERER_WEBGL) return 'Intel(R) Iris(TM) Graphics';
+        return getParameter.call(this, parameter);
+      };
+
+      // Navigator hardwareConcurrency spoof
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    });
+  } catch {}
+}
+
 async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
   // screenshot helper
@@ -64,14 +116,22 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
   const args = ['--no-sandbox', '--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) args.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
-  const browser = await puppeteer.launch({ headless: true, args: Array.from(new Set(args)), executablePath: execPath || undefined });
+  const headlessFlag = String(process.env.PP_HEADLESS || 'true').toLowerCase() !== 'false';
+  const browser = await puppeteer.launch({
+    headless: headlessFlag,
+    args: Array.from(new Set(args.concat(['--disable-blink-features=AutomationControlled']))),
+    executablePath: execPath || undefined
+  });
   let page = await browser.newPage();
-  page.setDefaultTimeout(60000); page.setDefaultNavigationTimeout(60000);
+  await applyStealth(page);
+  page.setDefaultTimeout(90000); page.setDefaultNavigationTimeout(90000);
 
   let createdBlog = '';
   try {
     // 1) Open editor and fill content
     await page.goto('https://notepin.co/write', { waitUntil: 'domcontentloaded' });
+    await sleep(600 + Math.floor(Math.random() * 400));
+    try { await page.evaluate(() => window.scrollBy(0, 300)); } catch {}
     await snap(page, '01-open-write');
     await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
     await page.evaluate((html) => {
@@ -90,26 +150,68 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       const blog = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3));
       const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
       createdBlog = blog; logLine('credentials', { blog, pass });
-      await page.type('.publishMenu input[name="blog"]', blog, { delay: 10 }).catch(() => {});
-      await page.type('.publishMenu input[name="pass"]', pass, { delay: 10 }).catch(() => {});
+      // Fill fields with human-like typing + ensure blur/validation fired
+      const blogSel = '.publishMenu input[name="blog"]';
+      const passSel = '.publishMenu input[name="pass"]';
+
+      // Ensure inputs exist
+      await page.waitForSelector(blogSel, { timeout: 15000 });
+      await page.waitForSelector(passSel, { timeout: 15000 });
+
+      // Clear + type blog (trigger keyup/blur for availability ajax)
+      await page.click(blogSel, { clickCount: 3 }).catch(() => {});
+      await page.keyboard.type(blog, { delay: 40 });
+      await page.keyboard.press('Tab').catch(() => {});
+      await sleep(900); // give time for username validation/availability request
+
+      // Re-validate username if field is in "invalid" state — regenerate once
+      const blogIsValid = await page.evaluate((sel) => {
+        const i = document.querySelector(sel);
+        if (!i) return false;
+        // consider invalid if HTML5 validity fails or if CSS class indicates error
+        const invalid = (i.checkValidity ? !i.checkValidity() : false) || i.classList.contains('error') || i.matches('.invalid, .error');
+        return !invalid;
+      }, blogSel).catch(() => true);
+      if (!blogIsValid) {
+        const second = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
+        createdBlog = second; logLine('credentials-regenerated', { blog: second });
+        await page.click(blogSel, { clickCount: 3 }).catch(() => {});
+        await page.keyboard.type(second, { delay: 45 });
+        await page.keyboard.press('Tab').catch(() => {});
+        await sleep(1000);
+      }
+
+      // Type password
+      await page.click(passSel, { clickCount: 3 }).catch(() => {});
+      await page.keyboard.type(pass, { delay: 35 });
+      await page.keyboard.press('Tab').catch(() => {});
+      await sleep(200);
+
       await snap(page, '04-modal-filled');
-      // Short wait for Turnstile token
+
+      // Wait for Cloudflare Turnstile token (invisible)
       await page.waitForFunction(() => {
         const el = document.querySelector('input[name="cf-turnstile-response"]');
         return !!(el && el.value && el.value.length > 20);
-      }, { timeout: 8000 }).catch(() => {});
+      }, { timeout: 15000 }).catch(() => {});
 
       // Prepare for nav/new tab
-      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
-      const newTarget = page.browser().waitForTarget(t => t.type() === 'page' && t.opener() && t.opener() === page.target(), { timeout: 20000 }).catch(() => null);
+      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+      const newTarget = page.browser().waitForTarget(
+        t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
+        { timeout: 25000 }
+      ).catch(() => null);
 
-      // Click finish
-      await page.click('.publishMenu .finish p, .publishMenu .finish').catch(async () => {
-        await page.evaluate(() => {
-          const el = document.querySelector('.publishMenu .finish p') || document.querySelector('.publishMenu .finish');
+      // Click the actual submit button (works both for button and clickable div)
+      const finishSel = '.publishMenu button[type="submit"], .publishMenu .finish button, .publishMenu .finish p, .publishMenu .finish';
+      try {
+        await page.click(finishSel, { delay: 50 });
+      } catch {
+        await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
           if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        });
-      });
+        }, finishSel);
+      }
 
       const [_, target] = await Promise.allSettled([nav, newTarget]);
       if (target && target.status === 'fulfilled' && target.value) {
@@ -117,6 +219,34 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       }
   await sleep(300);
       await snap(page, '05-after-modal-submit');
+
+      // If the modal is still open and username shows validation error, retry once
+      const modalStillOpen = await page.$('.publishMenu').then(Boolean).catch(() => false);
+      if (modalStillOpen) {
+        const usernameInvalid = await page.evaluate(() => {
+          const i = document.querySelector('.publishMenu input[name="blog"]');
+          if (!i) return false;
+          return (i.checkValidity ? !i.checkValidity() : false) || i.classList.contains('error') || i.matches('.invalid, .error');
+        }).catch(() => false);
+
+        if (usernameInvalid) {
+          // Regenerate username, retype and re-click
+          const retryBlog = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
+          try {
+            const blogSel = '.publishMenu input[name="blog"]';
+            await page.click(blogSel, { clickCount: 3 });
+            await page.keyboard.type(retryBlog, { delay: 45 });
+            await page.keyboard.press('Tab');
+            await sleep(1200);
+            createdBlog = retryBlog; logLine('retry-username', { blog: retryBlog });
+
+            const finishSel = '.publishMenu button[type="submit"], .publishMenu .finish button, .publishMenu .finish p, .publishMenu .finish';
+            await page.click(finishSel).catch(() => {});
+            await sleep(400);
+          } catch {}
+          await snap(page, '05a-retry-after-invalid-username');
+        }
+      }
 
       // If still on /write, try click Publish again fast
       if (/\/write\b/i.test(safeUrl(page))) {
@@ -208,4 +338,3 @@ if (require.main === module) {
     }
   })();
 }
-
