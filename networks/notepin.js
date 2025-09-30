@@ -1,6 +1,8 @@
 'use strict';
 
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 const { createLogger } = require('./lib/logger');
 const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
 const { htmlToPlainText } = require('./lib/contentFormats');
@@ -9,6 +11,24 @@ const { createVerificationPayload } = require('./lib/verification');
 
 async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const { LOG_FILE, LOG_DIR, logLine, logDebug } = createLogger('notepin');
+  // Screenshots helper (saves alongside LOG_FILE)
+  let snapStep = 0;
+  const snapPrefix = LOG_FILE.replace(/\.log$/i, '');
+  const snap = async (pg, name) => {
+    try {
+      snapStep += 1;
+      const idx = String(snapStep).padStart(2, '0');
+      const safe = String(name || 'step').replace(/[^a-z0-9_-]+/gi, '-');
+      const file = `${snapPrefix}-${idx}-${safe}.png`;
+      try { const d = path.dirname(file); if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); } } catch(_) {}
+      await pg.screenshot({ path: file, fullPage: true });
+      let url = '';
+      try { url = pg.url(); } catch(_) {}
+      logLine('Screenshot saved', { name: `${idx}-${safe}`, file, url });
+    } catch (e) {
+      logLine('Screenshot failed', { name, error: String(e && e.message || e) });
+    }
+  };
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
@@ -54,6 +74,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
 
     logLine('Goto Notepin', { url: 'https://notepin.co/write' });
     await page.goto('https://notepin.co/write', { waitUntil: 'networkidle2' });
+  await snap(page, '00-open-write');
 
     // editable region
     const editorSelector = '.pad .elements .element.medium-editor-element[contenteditable="true"]';
@@ -72,6 +93,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     }, htmlContent, pageUrl, anchorText);
 
     await waitForTimeoutSafe(page, 200);
+  await snap(page, '01-editor-filled');
 
     // Click Publish
     logLine('Click publish');
@@ -79,24 +101,25 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     await page.waitForSelector(publishBtnSelector, { timeout: 30000 });
 
     // Click publish; either navigate directly or show blog creation modal
-  const navPrimary = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => null);
+    const navPrimary = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => null);
     await page.click(publishBtnSelector);
     await navPrimary;
     await waitForTimeoutSafe(page, 200);
+    await snap(page, '02-after-publish-click');
 
     // If still on /write, a modal likely appeared — fill it and publish
     let currentUrl = '';
     try { currentUrl = page.url(); } catch(_) { currentUrl = ''; }
     if (!currentUrl || /\/write\b/i.test(currentUrl)) {
-      const modalSel = '.publishMenu';
+  const modalSel = '.publishMenu';
       const menu = await page.$(modalSel);
       if (menu) {
         // Generate unique blog login and password
         const randId = () => 'pp' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-  const blog = randId();
+    const blog = randId();
         const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
         logLine('Notepin credentials', { blog, pass });
-  createdBlog = blog;
+    createdBlog = blog;
 
         // Fill inputs and trigger input events
         await page.evaluate(({ blog, pass }) => {
@@ -114,6 +137,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         }, { blog, pass });
 
         await waitForTimeoutSafe(page, 200);
+  await snap(page, '03-modal-filled');
 
         // Click "Publish My Blog"
         const navAfterModal = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
@@ -132,6 +156,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         // As a fallback, wait for dashboard posts list to appear
         try { await page.waitForSelector('.posts a[href^="write?id="]', { timeout: 30000 }); } catch(_) {}
         await waitForTimeoutSafe(page, 400);
+  await snap(page, '04-after-modal-submit');
 
         // Open the first draft/editor link and publish the post explicitly
         try {
@@ -153,6 +178,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               }
             }, htmlContent);
             await waitForTimeoutSafe(page, 200);
+            await snap(page, '05-draft-editor');
             // Click publish on editor
             try {
               const navPost = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
@@ -161,6 +187,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               try { await page.click(sel); } catch(_) {}
               await navPost;
               await waitForTimeoutSafe(page, 300);
+              await snap(page, '06-post-publish-clicked');
             } catch(_) {}
           }
         } catch(_) {}
@@ -192,6 +219,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         logLine('Open blog homepage to resolve post URL', { blogUrl });
         await page.goto(blogUrl, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.posts a', { timeout: 20000 }).catch(() => {});
+        await snap(page, '07-blog-home');
         const firstPost = await page.evaluate((base) => {
           const a = document.querySelector('.posts a[href]');
           if (!a) return '';
@@ -214,6 +242,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     if (!publishedUrl || /\/write\b/i.test(publishedUrl)) {
       throw new Error('FAILED_TO_RESOLVE_URL');
     }
+    await snap(page, '99-final');
 
     logLine('Publish success', { publishedUrl });
     await browser.close();
