@@ -185,9 +185,82 @@ async function loginNotepin(username, password, job = {}) {
     ]);
     await snap(page, 'P4-published');
 
-    const publishedUrl = safeUrl(page);
+    // Raw URL right after publish (may be editor/preview, not public)
+    const publishedUrlRaw = safeUrl(page);
+
+    // 12) Go to blog homepage and pick the newest post URL
+    let blogHome = '';
+    try { blogHome = `https://${String(username).trim()}.notepin.co/`; } catch {}
+    let candidates = [];
+    let blogFinal = '';
+    try {
+      if (blogHome) {
+        const navBlog = page.goto(blogHome, { waitUntil: 'domcontentloaded' }).catch(() => null);
+        await Promise.race([navBlog, sleep(1500)]);
+        // Poll up to 3 times in case listing lags
+        for (let i = 0; i < 3; i++) {
+          await snap(page, i === 0 ? 'B1-blog-home' : `B1-blog-home-reload-${i}`);
+          const { items } = await page.evaluate(() => {
+            const items = [];
+            const org = location.origin;
+            const aTags = Array.from(document.querySelectorAll('.posts a[href]'));
+            for (const a of aTags) {
+              const href = a.getAttribute('href') || '';
+              let url = href;
+              try { if (/^\//.test(href)) url = new URL(href, org).href; } catch {}
+              // Try to extract some nearby text context
+              let text = a.textContent || '';
+              let block = '';
+              try {
+                const post = a.closest('.post');
+                if (post) block = post.innerText || '';
+              } catch {}
+              items.push({ url, text, block });
+            }
+            return { items };
+          }).catch(() => ({ items: [] }));
+
+          // Prefer items whose text/block include our title
+          const t = (title || '').trim().toLowerCase();
+          const titleMatched = t ? items.filter(it =>
+            it && it.url && (!/\/-----$/.test(it.url)) && /\/[^/]{3,}$/.test(it.url) &&
+            (!blogHome || it.url.startsWith(blogHome)) &&
+            ((it.text || '').toLowerCase().includes(t) || (it.block || '').toLowerCase().includes(t))
+          ) : [];
+          if (titleMatched.length) {
+            candidates = Array.from(new Set(titleMatched.map(x => x.url)));
+            break;
+          }
+
+          // Else filter by shape
+          const filtered = Array.from(new Set(items.map(x => x.url)))
+            .filter(u => u && (!blogHome || u.startsWith(blogHome)))
+            .filter(u => !/\/-----$/.test(u))
+            .filter(u => /\/[^/]{3,}$/.test(u));
+          if (filtered.length) { candidates = filtered; break; }
+          await sleep(1200);
+          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        }
+        // Prefer the first candidate as newest
+        if (candidates.length) blogFinal = candidates[0];
+      }
+    } catch {}
+
+    const publishedUrl = blogFinal || publishedUrlRaw || blogHome || '';
     await browser.close();
-    return { ok: true, network: 'notepin', mode: 'publish', username: username || '', publishedUrl, title, logFile: LOG_FILE, logDir: LOG_DIR };
+    return {
+      ok: true,
+      network: 'notepin',
+      mode: 'publish',
+      username: username || '',
+      publishedUrl,
+      publishedUrlRaw,
+      blogHome,
+      candidates,
+      title,
+      logFile: LOG_FILE,
+      logDir: LOG_DIR
+    };
   } catch (error) {
     try { await snap(page, 'Lx-error'); } catch {}
     try { await browser.close(); } catch {}
