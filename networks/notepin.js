@@ -77,13 +77,62 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     const publishBtnSelector = '.publish button, .publish > button';
     await page.waitForSelector(publishBtnSelector, { timeout: 30000 });
 
-    const nav = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
+    // Click publish; either navigate directly or show blog creation modal
+    const navPrimary = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
     await page.click(publishBtnSelector);
-    await nav;
-    await waitForTimeoutSafe(page, 400);
+    await navPrimary;
+    await waitForTimeoutSafe(page, 200);
 
-    let publishedUrl = '';
-    try { publishedUrl = page.url(); } catch (_) { publishedUrl = ''; }
+    // If still on /write, a modal likely appeared — fill it and publish
+    let currentUrl = '';
+    try { currentUrl = page.url(); } catch(_) { currentUrl = ''; }
+    if (!currentUrl || /\/write\b/i.test(currentUrl)) {
+      const modalSel = '.publishMenu';
+      const menu = await page.$(modalSel);
+      if (menu) {
+        // Generate unique blog login and password
+        const randId = () => 'pp' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+        const blog = randId();
+        const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
+        logLine('Notepin credentials', { blog, pass });
+
+        // Fill inputs and trigger input events
+        await page.evaluate(({ blog, pass }) => {
+          const setVal = (sel, val) => {
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            el.focus();
+            el.value = val;
+            try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
+            try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch(_) {}
+            return true;
+          };
+          setVal('.publishMenu input[name="blog"]', blog);
+          setVal('.publishMenu input[name="pass"]', pass);
+        }, { blog, pass });
+
+        await waitForTimeoutSafe(page, 200);
+
+        // Click "Publish My Blog"
+        const navAfterModal = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
+        const clickedFinish = await page.evaluate(() => {
+          const btn = document.querySelector('.publishMenu .finish p');
+          if (btn) { (btn instanceof HTMLElement) && btn.click(); return true; }
+          const alt = document.querySelector('.publishMenu .finish');
+          if (alt) { (alt instanceof HTMLElement) && alt.click(); return true; }
+          return false;
+        });
+        if (!clickedFinish) {
+          // fallback: press Enter on password
+          try { await page.focus('.publishMenu input[name="pass"]'); await page.keyboard.press('Enter'); } catch(_) {}
+        }
+        await navAfterModal;
+        await waitForTimeoutSafe(page, 400);
+      }
+    }
+
+  let publishedUrl = '';
+  try { publishedUrl = page.url(); } catch (_) { publishedUrl = ''; }
     if (!publishedUrl || !/^https?:\/\//i.test(publishedUrl)) {
       // Fallback: try to read any visible URL
       try {
