@@ -53,7 +53,7 @@ async function loginAndPublish(job) {
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
   const headless = String(process.env.PP_HEADLESS || 'true').toLowerCase() !== 'false';
   const browser = await puppeteer.launch({ headless, args: Array.from(new Set(args)), executablePath: execPath || undefined });
-  const page = await browser.newPage();
+  let page = await browser.newPage();
   page.setDefaultTimeout(Number(process.env.PP_TIMEOUT_MS || 90000));
   page.setDefaultNavigationTimeout(Number(process.env.PP_NAV_TIMEOUT_MS || 90000));
 
@@ -98,28 +98,52 @@ async function loginAndPublish(job) {
       return { ok: true, network: 'notepin', mode: 'login-only', username: username || '', finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
     }
 
-    // 6) Ensure we're on the blog subdomain (avoid notepin.co which can show signup modal)
-    try {
-      const loc = new URL(safeUrl(page) || 'https://notepin.co');
-      if (loc.hostname === 'notepin.co' && username) {
-        await page.goto(`https://${username}.notepin.co/`, { waitUntil: 'domcontentloaded' });
-        await snap(page, 'L3b-blog-home');
-      }
-    } catch {}
-
-    // 7) Click "new post" to go to the write page on the blog subdomain
-    const current = new URL(safeUrl(page) || `https://${username || 'notepin'}.notepin.co`);
-    const origin = (current.hostname === 'notepin.co' && username) ? `https://${username}.notepin.co` : current.origin;
-    const navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
-    const clicked = await page.evaluate(() => {
+    // 6) Click "new post" to go to the write page (stay in same session/context)
+    const current = new URL(safeUrl(page) || 'https://notepin.co');
+    let origin = current.origin;
+    let navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
+    let newTarget = page.browser().waitForTarget(
+      t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
+      { timeout: 20000 }
+    ).catch(() => null);
+    let clicked = await page.evaluate(() => {
       const el = document.querySelector('a[href="write"] .newPost, p.newPost, a[href="write"], a[href$="/write"]');
       if (el && typeof el.dispatchEvent === 'function') { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
       return false;
     }).catch(() => false);
     if (!clicked) {
+      // Try direct navigation to /write on current origin first
       await page.goto(`${origin}/write`, { waitUntil: 'domcontentloaded' }).catch(() => {});
     } else {
-      await Promise.race([navWrite, sleep(1000)]);
+      const res = await Promise.race([navWrite, newTarget, sleep(1200)]);
+      if (res && res.targetInfo) {
+        try { const np = await res.page(); if (np) page = np; } catch {}
+      }
+    }
+    // If still not on /write and we have a username, try the blog subdomain then retry
+    if (!/\/write\b/i.test(safeUrl(page)) && username) {
+      try {
+        await page.goto(`https://${username}.notepin.co/`, { waitUntil: 'domcontentloaded' });
+        await snap(page, 'L3b-blog-home');
+        navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
+        newTarget = page.browser().waitForTarget(
+          t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
+          { timeout: 20000 }
+        ).catch(() => null);
+        clicked = await page.evaluate(() => {
+          const el = document.querySelector('a[href="write"] .newPost, p.newPost, a[href="write"], a[href$="/write"]');
+          if (el && typeof el.dispatchEvent === 'function') { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+          return false;
+        }).catch(() => false);
+        if (!clicked) {
+          await page.goto(`https://${username}.notepin.co/write`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        } else {
+          const res2 = await Promise.race([navWrite, newTarget, sleep(1200)]);
+          if (res2 && res2.targetInfo) {
+            try { const np = await res2.page(); if (np) page = np; } catch {}
+          }
+        }
+      } catch {}
     }
     await snap(page, 'P1-write-page');
 
@@ -150,6 +174,10 @@ async function loginAndPublish(job) {
 
     // 10) Publish — handle logged-in modal (title/visibility)
     const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+    const newTargetPub = page.browser().waitForTarget(
+      t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
+      { timeout: 25000 }
+    ).catch(() => null);
     await page.click('.publish button, .publish > button').catch(async () => {
       await page.evaluate(() => { const b = document.querySelector('.publish button, .publish > button'); if (b && typeof b.dispatchEvent === 'function') b.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     });
@@ -174,17 +202,25 @@ async function loginAndPublish(job) {
         }, { timeout: 20000 }).catch(() => null);
         await snap(page, 'P3-modal-filled');
         const navSubmit = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+        const newTargetSubmit = page.browser().waitForTarget(
+          t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
+          { timeout: 25000 }
+        ).catch(() => null);
         await page.click('.publishMenu .finish p, .publishMenu .finish').catch(async () => {
           await page.evaluate(() => {
             const el = document.querySelector('.publishMenu .finish p') || document.querySelector('.publishMenu .finish');
             if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
           });
         });
-        await Promise.race([
+        const after = await Promise.race([
           navSubmit,
+          newTargetSubmit,
           page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 15000 }).catch(() => null),
           sleep(1200)
         ]);
+        if (after && after.targetInfo) {
+          try { const np = await after.page(); if (np) page = np; } catch {}
+        }
         await snap(page, 'P4-after-submit');
       } else {
         // Unexpected: signup modal visible after login
