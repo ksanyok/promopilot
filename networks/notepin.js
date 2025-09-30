@@ -79,7 +79,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     await page.waitForSelector(publishBtnSelector, { timeout: 30000 });
 
     // Click publish; either navigate directly or show blog creation modal
-    const navPrimary = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
+  const navPrimary = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => null);
     await page.click(publishBtnSelector);
     await navPrimary;
     await waitForTimeoutSafe(page, 200);
@@ -132,6 +132,38 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         // As a fallback, wait for dashboard posts list to appear
         try { await page.waitForSelector('.posts a[href^="write?id="]', { timeout: 30000 }); } catch(_) {}
         await waitForTimeoutSafe(page, 400);
+
+        // Open the first draft/editor link and publish the post explicitly
+        try {
+          const opened = await page.evaluate(() => {
+            const a = document.querySelector('.posts a[href^="write?id="]');
+            if (a && a.href) { (a instanceof HTMLElement) && a.click(); return true; }
+            return false;
+          });
+          if (opened) {
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
+            // Ensure editor is ready, then (re)fill to be safe
+            const editorSelector = '.pad .elements .element.medium-editor-element[contenteditable="true"]';
+            try { await page.waitForSelector(editorSelector, { timeout: 20000 }); } catch(_) {}
+            await page.evaluate((html) => {
+              const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
+              if (el) {
+                el.innerHTML = String(html || '').trim() || '<p></p>';
+                try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch(_) { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {} }
+              }
+            }, htmlContent);
+            await waitForTimeoutSafe(page, 200);
+            // Click publish on editor
+            try {
+              const navPost = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
+              const sel = '.publish button, .publish > button';
+              await page.waitForSelector(sel, { timeout: 15000 }).catch(() => {});
+              try { await page.click(sel); } catch(_) {}
+              await navPost;
+              await waitForTimeoutSafe(page, 300);
+            } catch(_) {}
+          }
+        } catch(_) {}
       }
     }
 
