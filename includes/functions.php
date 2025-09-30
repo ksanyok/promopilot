@@ -1,4 +1,7 @@
 <?php
+// Bootstrap and module loader for PromoPilot helpers
+
+// Language (default ru)
 $current_lang = $_SESSION['lang'] ?? 'ru';
 
 // Ensure root path constant exists for reliable includes
@@ -6,60 +9,21 @@ if (!defined('PP_ROOT_PATH')) {
     define('PP_ROOT_PATH', realpath(__DIR__ . '/..'));
 }
 
+// Load modular helpers
+// These files are guarded via function_exists checks and can be included repeatedly.
+require_once __DIR__ . '/runtime.php';         // Node/Chrome and runner helpers
+require_once __DIR__ . '/network_check.php';   // Network diagnostics helpers
+require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base url, small utils)
+require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
+require_once __DIR__ . '/networks.php';        // Networks registry and utilities
+require_once __DIR__ . '/page_meta.php';       // Page meta + URL analysis helpers
+require_once __DIR__ . '/publication_queue.php'; // Publication queue processing
+require_once __DIR__ . '/update.php';          // Version and update checks
+
+// Load translations when not RU
 if ($current_lang != 'ru') {
     $langFile = PP_ROOT_PATH . '/lang/' . basename($current_lang) . '.php';
-    if (file_exists($langFile)) {
-        include $langFile;
-    }
-}
-
-// Общие функции для PromoPilot
-
-function connect_db() {
-    $configPath = PP_ROOT_PATH . '/config/config.php';
-    if (!file_exists($configPath)) {
-        // Graceful redirect to installer if no config
-        $installer = (defined('PP_BASE_URL') ? pp_url('installer.php') : '/installer.php');
-        if (!headers_sent()) {
-            header('Location: ' . $installer, true, 302);
-        }
-        exit('Config file not found. Please run the installer: <a href="' . htmlspecialchars($installer) . '">installer</a>');
-    }
-
-    // Ensure mysqli extension is available
-    if (!class_exists('mysqli')) {
-        exit('PHP mysqli extension is not available. Please enable it to continue.');
-    }
-
-    include $configPath;
-    if (!isset($db_host, $db_user, $db_pass, $db_name)) {
-        exit('Database configuration variables are not set. Please check config/config.php');
-    }
-    $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
-    if ($conn->connect_error) {
-        exit("Ошибка подключения к БД: " . $conn->connect_error);
-    }
-    // Ensure proper charset
-    if (method_exists($conn, 'set_charset')) {
-        @$conn->set_charset('utf8mb4');
-    }
-    return $conn;
-}
-
-// Add a small helper to check index existence for older MySQL versions (no IF NOT EXISTS support)
-if (!function_exists('pp_mysql_index_exists')) {
-    function pp_mysql_index_exists(mysqli $conn, string $table, string $index): bool {
-        $table = preg_replace('~[^a-zA-Z0-9_]+~', '', $table);
-        $index = preg_replace('~[^a-zA-Z0-9_]+~', '', $index);
-        $sql = "SHOW INDEX FROM `{$table}` WHERE Key_name = '{$index}'";
-        $res = @$conn->query($sql);
-        if ($res instanceof mysqli_result) {
-            $exists = $res->num_rows > 0;
-            $res->close();
-            return $exists;
-        }
-        return false;
-    }
+    if (file_exists($langFile)) { include $langFile; }
 }
 
 // Ensure DB schema has required columns/tables
@@ -551,628 +515,24 @@ function ensure_schema(): void {
 
     @$conn->close();
 
-    try {
-        pp_refresh_networks(false);
-    } catch (Throwable $e) {
-        // ignore auto refresh errors during bootstrap
-    }
+    try { pp_refresh_networks(false); } catch (Throwable $e) { /* ignore */ }
 }
 
-if (!function_exists('pp_network_check_log')) {
-    function pp_network_check_log(string $message, array $context = []): void {
-        try {
-            $dir = PP_ROOT_PATH . '/logs';
-            if (!is_dir($dir)) {
-                @mkdir($dir, 0775, true);
-            }
-            $file = $dir . '/network_check.log';
-            $timestamp = date('Y-m-d H:i:s');
-            $line = '[' . $timestamp . '] ' . $message;
-            if (!empty($context)) {
-                $encoded = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-                if ($encoded !== false && $encoded !== null) {
-                    $line .= ' ' . $encoded;
-                }
-            }
-            $line .= "\n";
-            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
-        } catch (Throwable $e) {
-            // Swallow logging errors silently
-        }
-    }
-}
-
-if (!function_exists('pp_network_check_update_network_row')) {
-    function pp_network_check_update_network_row(mysqli $conn, string $slug, array $fields): void {
-        $allowed = [
-            'last_check_status' => 'string',
-            'last_check_run_id' => 'int',
-            'last_check_started_at' => 'datetime',
-            'last_check_finished_at' => 'datetime',
-            'last_check_url' => 'string',
-            'last_check_error' => 'string',
-        ];
-        $assignments = [];
-        foreach ($fields as $key => $value) {
-            if (!isset($allowed[$key])) { continue; }
-            if ($value === null) {
-                $assignments[] = "`{$key}` = NULL";
-            } elseif ($allowed[$key] === 'int') {
-                $assignments[] = "`{$key}` = " . (int)$value;
-            } else {
-                $assignments[] = "`{$key}` = '" . $conn->real_escape_string((string)$value) . "'";
-            }
-        }
-        $assignments[] = "`last_check_updated_at` = CURRENT_TIMESTAMP";
-        $slugEsc = $conn->real_escape_string($slug);
-        $sql = "UPDATE networks SET " . implode(', ', $assignments) . " WHERE slug = '{$slugEsc}' LIMIT 1";
-        @$conn->query($sql);
-    }
-}
-
-if (!function_exists('pp_network_check_wait_for_worker_start')) {
-    function pp_network_check_wait_for_worker_start(int $runId, float $timeoutSeconds = 3.0): bool {
-        $deadline = microtime(true) + max(0.5, $timeoutSeconds);
-        while (microtime(true) < $deadline) {
-            try {
-                $conn = @connect_db();
-            } catch (Throwable $e) {
-                pp_network_check_log('Worker start check failed: DB connection', ['runId' => $runId, 'error' => $e->getMessage()]);
-                return false;
-            }
-            if (!$conn) { return false; }
-            $runRow = null;
-            if ($stmt = $conn->prepare("SELECT status, started_at FROM network_check_runs WHERE id = ? LIMIT 1")) {
-                $stmt->bind_param('i', $runId);
-                if ($stmt->execute()) {
-                    $runRow = $stmt->get_result()->fetch_assoc();
-                }
-                $stmt->close();
-            }
-            $conn->close();
-            if ($runRow) {
-                $status = (string)($runRow['status'] ?? '');
-                $startedAt = (string)($runRow['started_at'] ?? '');
-                if ($status !== 'queued' || ($startedAt !== '' && $startedAt !== '0000-00-00 00:00:00')) {
-                    return true;
-                }
-            } else {
-                return false;
-            }
-            usleep(200000);
-        }
-        return false;
-    }
-}
-
-// ---- Version and update helpers ----
-if (!function_exists('get_version')) {
-    function get_version(): string {
-        static $v = null;
-        if ($v !== null) return $v;
-        $v = '0.0.0';
-        $file = PP_ROOT_PATH . '/config/version.php';
-        if (is_file($file) && is_readable($file)) {
-            try {
-                $version = null; // defined in included file
-                /** @noinspection PhpIncludeInspection */
-                include $file;
-                if (isset($version) && is_string($version) && $version !== '') {
-                    $v = trim($version);
-                }
-            } catch (Throwable $e) { /* ignore */ }
-        }
-        return $v;
-    }
-}
-
-if (!function_exists('get_update_status')) {
-    function get_update_status(): array {
-        $current = get_version();
-        $cacheDir = PP_ROOT_PATH . '/.cache';
-        if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0775, true); }
-        $cacheFile = $cacheDir . '/update_status.json';
-        $now = time();
-        $cacheTtl = 6 * 3600; // 6 hours
-
-        // Read cache
-        $cached = null;
-        if (is_file($cacheFile) && is_readable($cacheFile)) {
-            $raw = @file_get_contents($cacheFile);
-            $data = $raw ? json_decode($raw, true) : null;
-            if (is_array($data) && isset($data['fetched_at']) && ($now - (int)$data['fetched_at'] < $cacheTtl)) {
-                $cached = $data;
-            }
-        }
-        if ($cached) {
-            $latest = (string)($cached['latest'] ?? $current);
-            $publishedAt = (string)($cached['published_at'] ?? '');
-            $isNew = version_compare($latest, $current, '>');
-            return [
-                'current' => $current,
-                'latest' => $latest,
-                'published_at' => $publishedAt,
-                'is_new' => $isNew,
-                'source' => 'cache',
-            ];
-        }
-
-        // Fetch from GitHub releases API (latest)
-        $latest = $current;
-        $publishedAt = '';
-        $ok = false; $err = ''; $source = '';
-        $url = 'https://api.github.com/repos/ksanyok/promopilot/releases/latest';
-        $ua = 'PromoPilot/UpdateChecker (+https://github.com/ksanyok/promopilot)';
-        $resp = '';
-        if (function_exists('curl_init')) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_MAXREDIRS => 3,
-                CURLOPT_TIMEOUT => 8,
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_USERAGENT => $ua,
-                CURLOPT_HTTPHEADER => [
-                    'Accept: application/vnd.github+json',
-                ],
-            ]);
-            $resp = (string)curl_exec($ch);
-            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            if ($resp !== '' && $code >= 200 && $code < 300) { $ok = true; }
-            else { $err = 'HTTP ' . $code; }
-            curl_close($ch);
-        } else {
-            $ctx = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'timeout' => 8,
-                    'ignore_errors' => true,
-                    'header' => [
-                        'User-Agent: ' . $ua,
-                        'Accept: application/vnd.github+json',
-                    ],
-                ],
-                'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-            ]);
-            $resp = @file_get_contents($url, false, $ctx);
-            $ok = $resp !== false && $resp !== '';
-        }
-        if ($ok) {
-            $json = json_decode($resp, true);
-            if (is_array($json)) {
-                $tag = (string)($json['tag_name'] ?? '');
-                $name = (string)($json['name'] ?? '');
-                $publishedAt = (string)($json['published_at'] ?? '');
-                $tag = ltrim($tag, 'vV');
-                $name = ltrim($name, 'vV');
-                $candidate = $tag ?: $name;
-                if ($candidate !== '') { $latest = $candidate; $source = 'releases'; }
-            }
-        }
-
-        // Fallback: read version directly from main branch if releases are missing or not newer
-        if (!$ok || !version_compare($latest, $current, '>')) {
-            $rawUrl = 'https://raw.githubusercontent.com/ksanyok/promopilot/main/config/version.php';
-            $rawResp = '';
-            $rawOk = false; $rawErr = '';
-            if (function_exists('curl_init')) {
-                $ch = curl_init($rawUrl);
-                curl_setopt_array($ch, [
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_MAXREDIRS => 3,
-                    CURLOPT_TIMEOUT => 8,
-                    CURLOPT_SSL_VERIFYPEER => true,
-                    CURLOPT_SSL_VERIFYHOST => 2,
-                    CURLOPT_USERAGENT => $ua,
-                    CURLOPT_HTTPHEADER => [
-                        'Accept: text/plain',
-                    ],
-                ]);
-                $rawResp = (string)curl_exec($ch);
-                $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-                if ($rawResp !== '' && $code >= 200 && $code < 300) { $rawOk = true; }
-                else { $rawErr = 'HTTP ' . $code; }
-                curl_close($ch);
-            } else {
-                $ctx = stream_context_create([
-                    'http' => [
-                        'method' => 'GET',
-                        'timeout' => 8,
-                        'ignore_errors' => true,
-                        'header' => [
-                            'User-Agent: ' . $ua,
-                            'Accept: text/plain',
-                        ],
-                    ],
-                    'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-                ]);
-                $rawResp = @file_get_contents($rawUrl, false, $ctx);
-                $rawOk = $rawResp !== false && $rawResp !== '';
-            }
-            if ($rawOk) {
-                if (preg_match('~\$version\s*=\s*([\'\"])([^\'\"]+)\1\s*;~', (string)$rawResp, $m)) {
-                    $remoteVer = trim($m[2]);
-                    if ($remoteVer !== '' && version_compare($remoteVer, $latest, '>')) {
-                        $latest = $remoteVer;
-                        $source = 'raw';
-                    }
-                }
-            } else {
-                if ($err === '' && $rawErr !== '') { $err = $rawErr; }
-            }
-        }
-
-        // Persist cache (best-effort)
-        $payload = [
-            'fetched_at' => $now,
-            'latest' => $latest,
-            'published_at' => $publishedAt,
-            'ok' => ($latest !== $current),
-            'error' => ($latest !== $current) ? '' : $err,
-            'source' => $source ?: 'remote',
-        ];
-        @file_put_contents($cacheFile, json_encode($payload, JSON_UNESCAPED_UNICODE), LOCK_EX);
-
-        return [
-            'current' => $current,
-            'latest' => $latest,
-            'published_at' => $publishedAt,
-            'is_new' => version_compare($latest, $current, '>'),
-            'source' => $source ?: 'remote',
-        ];
-    }
-}
-
-// Функция перевода
-function __($key) {
-    global $current_lang;
-    if ($current_lang == 'ru') {
-        return $key;
-    }
-    global $lang;
-    return $lang[$key] ?? $key;
-}
-
-function pp_session_regenerate() {
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        session_regenerate_id(true);
-    }
-}
-
-function get_csrf_token(): string {
-    if (empty($_SESSION['csrf_token'])) {
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-    }
-    return $_SESSION['csrf_token'];
-}
-
-function verify_csrf(): bool {
-    // Allow non-POST methods without CSRF
-    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-    if ($method !== 'POST') return true;
-    // Validate token from POST against session
-    $token = (string)($_POST['csrf_token'] ?? '');
-    if ($token === '') return false;
-    $sessionToken = (string)($_SESSION['csrf_token'] ?? '');
-    if ($sessionToken === '') return false;
-    return hash_equals($sessionToken, $token);
-}
-
-function csrf_field(): string {
-    $token = htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    return '<input type="hidden" name="csrf_token" value="' . $token . '">';
-}
-
-// Auth helpers
-if (!function_exists('is_logged_in')) {
-    function is_logged_in(): bool {
-        return !empty($_SESSION['user_id']);
-    }
-}
-if (!function_exists('is_admin')) {
-    function is_admin(): bool {
-        return is_logged_in() && (($_SESSION['role'] ?? '') === 'admin');
-    }
-}
-if (!function_exists('redirect')) {
-    function redirect(string $path): void {
-        $url = preg_match('~^https?://~i', $path) ? $path : pp_url($path);
-        if (!headers_sent()) {
-            header('Location: ' . $url, true, 302);
-        }
-        exit;
-    }
-}
-
-function get_action_secret(): string {
-    if (empty($_SESSION['action_secret'])) {
-        $_SESSION['action_secret'] = bin2hex(random_bytes(32));
-    }
-    return $_SESSION['action_secret'];
-}
-
-function action_token(string $action, string $data = ''): string {
-    return hash_hmac('sha256', $action . '|' . $data, get_action_secret());
-}
-
-function verify_action_token(string $token, string $action, string $data = ''): bool {
-    if (!$token) return false;
-    $calc = action_token($action, $data);
-    return hash_equals($calc, $token);
-}
-
-function get_user_balance(int $userId): ?float {
-    $conn = @connect_db();
-    if (!$conn) return null;
-    $stmt = $conn->prepare("SELECT balance FROM users WHERE id = ?");
-    if (!$stmt) { $conn->close(); return null; }
-    $stmt->bind_param('i', $userId);
-    $stmt->execute();
-    $stmt->bind_result($balance);
-    if ($stmt->fetch()) {
-        $stmt->close();
-        $conn->close();
-        return (float)$balance;
-    }
-    $stmt->close();
-    $conn->close();
-    return null;
-}
-
-function get_current_user_balance(): ?float {
-    if (!is_logged_in()) return null;
-    return get_user_balance((int)$_SESSION['user_id']);
-}
-
-// Settings helpers
-function get_setting(string $key, $default = null) {
-    static $cache = null;
-    if ($cache === null) {
-        // Load all settings once; fail gracefully if table not found
-        $cache = [];
-        try {
-            $conn = @connect_db();
-            if ($conn) {
-                $res = @$conn->query("SELECT k, v FROM settings");
-                if ($res) {
-                    while ($row = $res->fetch_assoc()) { $cache[$row['k']] = $row['v']; }
-                }
-                $conn->close();
-            }
-        } catch (Throwable $e) {
-            // ignore
-        }
-        $GLOBALS['pp_settings_cache'] = &$cache;
-    }
-    return $cache[$key] ?? $default;
-}
-
-function set_setting(string $key, $value): bool {
-    return set_settings([$key => $value]);
-}
-
-function set_settings(array $pairs): bool {
-    if (empty($pairs)) { return true; }
-    try {
-        $conn = @connect_db();
-    } catch (Throwable $e) {
-        return false;
-    }
-    if (!$conn) { return false; }
-    $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
-    if (!$stmt) { $conn->close(); return false; }
-    foreach ($pairs as $k => $v) {
-        $ks = (string)$k;
-        $vs = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
-        $stmt->bind_param('ss', $ks, $vs);
-        $stmt->execute();
-    }
-    $stmt->close();
-    $conn->close();
-
-    if (isset($GLOBALS['pp_settings_cache']) && is_array($GLOBALS['pp_settings_cache'])) {
-        foreach ($pairs as $k => $v) {
-            $GLOBALS['pp_settings_cache'][(string)$k] = is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE);
-        }
-    }
-    return true;
-}
-
-function get_currency_code(): string {
-    $cur = strtoupper((string)get_setting('currency', 'RUB'));
-    $allowed = ['RUB','USD','EUR','GBP','UAH'];
-    if (!in_array($cur, $allowed, true)) { $cur = 'RUB'; }
-    return $cur;
-}
-
-function format_currency($amount): string {
-    $code = get_currency_code();
-    $num = is_numeric($amount) ? number_format((float)$amount, 2, '.', ' ') : (string)$amount;
-    // Keep it neutral (CODE). If you prefer symbols, switch mapping below.
-    return $num . ' ' . $code;
-    /* Symbol example:
-    $map = ['RUB' => '₽','USD' => '$','EUR' => '€','GBP' => '£','UAH' => '₴'];
-    $sym = $map[$code] ?? $code;
-    return $sym . $num;
-    */
-}
-
-// Save a remote avatar image locally and return relative path (uploads/avatars/u{ID}.ext)
-// Returns null on failure
-function pp_save_remote_avatar(string $url, int $userId): ?string {
-    $url = trim($url);
-    if ($url === '') return null;
-    $pu = @parse_url($url);
-    if (!$pu || !in_array(strtolower($pu['scheme'] ?? ''), ['http','https'], true)) return null;
-
-    $dir = PP_ROOT_PATH . '/uploads/avatars';
-    if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
-    if (!is_dir($dir) || !is_writable($dir)) return null;
-
-    $data = null; $ctype = '';
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 10,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_USERAGENT => 'PromoPilot/1.0',
-            CURLOPT_MAXREDIRS => 5,
-            CURLOPT_HEADER => true,
-        ]);
-        $resp = curl_exec($ch);
-        if ($resp !== false) {
-            $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-            $headers = substr($resp, 0, $headerSize);
-            $data = substr($resp, $headerSize);
-            if (preg_match('~^Content-Type:\s*([^\r\n]+)~im', (string)$headers, $m)) {
-                $ctype = trim($m[1]);
-            }
-        }
-        curl_close($ch);
-    }
-    if ($data === null) {
-        $ctx = stream_context_create([
-            'http' => ['timeout' => 10, 'ignore_errors' => true, 'header' => "User-Agent: PromoPilot/1.0\r\n"],
-            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-        ]);
-        $data = @file_get_contents($url, false, $ctx);
-        // Cannot easily get content-type with stream wrapper; leave empty
-    }
-
-    if (!$data || strlen($data) < 128) return null; // too small to be real avatar
-    if (strlen($data) > 5 * 1024 * 1024) return null; // limit 5MB
-
-    // Detect mime
-    if (function_exists('finfo_buffer')) {
-        $f = new finfo(FILEINFO_MIME_TYPE);
-        $det = $f->buffer($data) ?: '';
-        if ($det) { $ctype = $det; }
-    }
-    $ext = 'jpg';
-    if (stripos($ctype, 'png') !== false) $ext = 'png';
-    elseif (stripos($ctype, 'webp') !== false) $ext = 'webp';
-    elseif (stripos($ctype, 'jpeg') !== false) $ext = 'jpg';
-
-    $file = $dir . '/u' . $userId . '.' . $ext;
-    $ok = @file_put_contents($file, $data) !== false;
-    if (!$ok) return null;
-    @chmod($file, 0664);
-    $rel = 'uploads/avatars/' . basename($file);
-    return $rel;
-}
-
-function rmdir_recursive($dir) {
-    if (!is_dir($dir)) return;
-    $files = array_diff(scandir($dir), ['.', '..']);
-    foreach ($files as $file) {
-        $path = $dir . '/' . $file;
-        if (is_dir($path)) {
-            rmdir_recursive($path);
-        } else {
-            unlink($path);
-        }
-    }
-    rmdir($dir);
-}
+// The rest of the file keeps ensure_schema and domain-specific models.
 
 // ---------- Publication networks helpers ----------
 
-function pp_networks_dir(): string {
-    $dir = PP_ROOT_PATH . '/networks';
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
-    }
-    return $dir;
-}
+// Networks helpers moved to includes/networks.php
 
 // New: aggregate networks taxonomy (regions/topics)
-function pp_get_network_taxonomy(bool $onlyEnabled = true): array {
-    $nets = pp_get_networks($onlyEnabled, true);
-    $regions = [];
-    $topics = [];
-    $canon = function(string $s): string { return trim((string)$s); };
-    foreach ($nets as $n) {
-        $meta = $n['meta'] ?? [];
-        // regions
-        $rs = $meta['regions'] ?? [];
-        if (is_string($rs)) { $rs = [$rs]; }
-        if (is_array($rs)) {
-            foreach ($rs as $r) {
-                $r = $canon((string)$r);
-                if ($r !== '') { $regions[$r] = true; }
-            }
-        }
-        // topics
-        $ts = $meta['topics'] ?? [];
-        if (is_string($ts)) { $ts = [$ts]; }
-        if (is_array($ts)) {
-            foreach ($ts as $t) {
-                $t = $canon((string)$t);
-                if ($t !== '') { $topics[$t] = true; }
-            }
-        }
-    }
-    $rList = array_keys($regions); sort($rList, SORT_NATURAL | SORT_FLAG_CASE);
-    $tList = array_keys($topics); sort($tList, SORT_NATURAL | SORT_FLAG_CASE);
-    return ['regions' => $rList, 'topics' => $tList];
-}
+// See includes/networks.php
 
-function pp_normalize_slug(string $slug): string {
-    $slug = strtolower(trim($slug));
-    $slug = preg_replace('~[^a-z0-9_\-]+~', '-', $slug);
-    return trim($slug, '-_');
-}
+// See includes/networks.php
 
-function pp_path_to_relative(string $path): string {
-    $path = str_replace(['\\', '\\'], '/', $path);
-    $root = str_replace(['\\', '\\'], '/', PP_ROOT_PATH);
-    if (strpos($path, $root) === 0) {
-        $rel = ltrim(substr($path, strlen($root)), '/');
-        return $rel === '' ? '.' : $rel;
-    }
-    return $path;
-}
+// See includes/networks.php
 
-function pp_network_descriptor_from_file(string $file): ?array {
-    if (!is_file($file)) { return null; }
-    try {
-        /** @noinspection PhpIncludeInspection */
-        $descriptor = @include $file;
-    } catch (Throwable $e) {
-        return null;
-    }
-    if (!is_array($descriptor)) { return null; }
-    $descriptor['slug'] = pp_normalize_slug((string)($descriptor['slug'] ?? ''));
-    if ($descriptor['slug'] === '') { return null; }
-    $descriptor['title'] = trim((string)($descriptor['title'] ?? ucfirst($descriptor['slug'])));
-    $descriptor['description'] = trim((string)($descriptor['description'] ?? ''));
-    $descriptor['handler'] = trim((string)($descriptor['handler'] ?? ''));
-    if ($descriptor['handler'] === '') { return null; }
-
-    // Resolve handler path
-    $handler = $descriptor['handler'];
-    $isAbsolute = preg_match('~^([a-zA-Z]:[\\/]|/)~', $handler) === 1;
-    if (!$isAbsolute) {
-        $handler = realpath(dirname($file) . '/' . $handler) ?: (dirname($file) . '/' . $handler);
-    }
-    $handlerAbs = realpath($handler) ?: $handler;
-
-    $descriptor['handler_type'] = strtolower(trim((string)($descriptor['handler_type'] ?? 'node')));
-    $descriptor['enabled'] = isset($descriptor['enabled']) ? (bool)$descriptor['enabled'] : true;
-    $descriptor['meta'] = is_array($descriptor['meta'] ?? null) ? $descriptor['meta'] : [];
-    $descriptor['source_file'] = $file;
-    $descriptor['handler_abs'] = $handlerAbs;
-    $descriptor['handler_rel'] = pp_path_to_relative($handlerAbs);
-
-    return $descriptor;
-}
-
+// See includes/networks.php
+if (!function_exists('pp_refresh_networks')) {
 function pp_refresh_networks(bool $force = false): array {
     if (!$force) {
         $last = (int)get_setting('networks_last_refresh', 0);
@@ -1230,40 +590,21 @@ function pp_refresh_networks(bool $force = false): array {
                 $priority = (int)$existing[$slug]['priority'];
                 $level = (string)$existing[$slug]['level'];
                 $notes = (string)$existing[$slug]['notes'];
-            } else {
-                $priority = $defaultPrioritySetting;
-                $level = $defaultLevelsSetting;
-            }
+            } else { $priority = $defaultPrioritySetting; $level = $defaultLevelsSetting; }
             if ($priority < 0) { $priority = 0; }
             if ($priority > 999) { $priority = 999; }
             $level = pp_normalize_network_levels($level);
-            if ($notes !== '') {
-                if (function_exists('mb_substr')) {
-                    $notes = mb_substr($notes, 0, 2000, 'UTF-8');
-                } else {
-                    $notes = substr($notes, 0, 2000);
-                }
-            }
+            if ($notes !== '') { $notes = function_exists('mb_substr') ? mb_substr($notes, 0, 2000, 'UTF-8') : substr($notes, 0, 2000); }
             $metaJson = json_encode($descriptor['meta'], JSON_UNESCAPED_UNICODE);
             $regionsArr = [];
             $topicsArr = [];
             $meta = $descriptor['meta'] ?? [];
             $rawRegions = $meta['regions'] ?? [];
             if (is_string($rawRegions)) { $rawRegions = [$rawRegions]; }
-            if (is_array($rawRegions)) {
-                foreach ($rawRegions as $reg) {
-                    $val = trim((string)$reg);
-                    if ($val !== '') { $regionsArr[$val] = $val; }
-                }
-            }
+            if (is_array($rawRegions)) { foreach ($rawRegions as $reg) { $val = trim((string)$reg); if ($val !== '') { $regionsArr[$val] = $val; } } }
             $rawTopics = $meta['topics'] ?? [];
             if (is_string($rawTopics)) { $rawTopics = [$rawTopics]; }
-            if (is_array($rawTopics)) {
-                foreach ($rawTopics as $topic) {
-                    $val = trim((string)$topic);
-                    if ($val !== '') { $topicsArr[$val] = $val; }
-                }
-            }
+            if (is_array($rawTopics)) { foreach ($rawTopics as $topic) { $val = trim((string)$topic); if ($val !== '') { $topicsArr[$val] = $val; } } }
             $regionsStr = implode(', ', array_values($regionsArr));
             $topicsStr = implode(', ', array_values($topicsArr));
             $stmt->bind_param(
@@ -1290,12 +631,7 @@ function pp_refresh_networks(bool $force = false): array {
     if (!empty($knownSlugs)) {
         $placeholders = implode(',', array_fill(0, count($knownSlugs), '?'));
         $query = $conn->prepare("UPDATE networks SET is_missing = 1, enabled = 0 WHERE slug NOT IN ($placeholders)");
-        if ($query) {
-            $types = str_repeat('s', count($knownSlugs));
-            $query->bind_param($types, ...$knownSlugs);
-            $query->execute();
-            $query->close();
-        }
+        if ($query) { $types = str_repeat('s', count($knownSlugs)); $query->bind_param($types, ...$knownSlugs); $query->execute(); $query->close(); }
     } else {
         @$conn->query("UPDATE networks SET is_missing = 1, enabled = 0");
     }
@@ -1304,8 +640,9 @@ function pp_refresh_networks(bool $force = false): array {
     set_setting('networks_last_refresh', (string)time());
 
     return array_values($descriptors);
-}
+}}
 
+if (!function_exists('pp_get_networks')) {
 function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false): array {
     try {
         $conn = @connect_db();
@@ -1323,845 +660,42 @@ function pp_get_networks(bool $onlyEnabled = false, bool $includeMissing = false
     $rows = [];
     if ($res = @$conn->query($sql)) {
         while ($row = $res->fetch_assoc()) {
-            $rel = (string)$row['handler'];
-            $isAbsolute = preg_match('~^([a-zA-Z]:[\\/]|/)~', $rel) === 1;
-            if ($rel === '.') {
-                $abs = PP_ROOT_PATH;
-            } elseif ($isAbsolute) {
-                $abs = $rel;
-            } else {
-                $abs = PP_ROOT_PATH . '/' . ltrim($rel, '/');
-            }
-            $absReal = realpath($abs);
-            if ($absReal) { $abs = $absReal; }
-            $regionsRaw = (string)($row['regions'] ?? '');
-            $topicsRaw = (string)($row['topics'] ?? '');
-            $regionsList = array_values(array_filter(array_map(function($item){
-                return trim((string)$item);
-            }, preg_split('~[,;\n]+~', $regionsRaw) ?: [])));
-            $topicsList = array_values(array_filter(array_map(function($item){
-                return trim((string)$item);
-            }, preg_split('~[,;\n]+~', $topicsRaw) ?: [])));
-            $rows[] = [
-                'slug' => (string)$row['slug'],
-                'title' => (string)$row['title'],
-                'description' => (string)$row['description'],
-                'handler' => $rel,
-                'handler_abs' => $abs,
-                'handler_type' => (string)$row['handler_type'],
-                'meta' => json_decode((string)($row['meta'] ?? ''), true) ?: [],
-                'regions_raw' => $regionsRaw,
-                'topics_raw' => $topicsRaw,
-                'regions' => $regionsList,
-                'topics' => $topicsList,
-                'enabled' => (bool)$row['enabled'],
-                'priority' => (int)($row['priority'] ?? 0),
-                'level' => trim((string)($row['level'] ?? '')),
-                'notes' => (string)($row['notes'] ?? ''),
-                'is_missing' => (bool)$row['is_missing'],
-                'last_check_status' => $row['last_check_status'] !== null ? (string)$row['last_check_status'] : null,
-                'last_check_run_id' => $row['last_check_run_id'] !== null ? (int)$row['last_check_run_id'] : null,
-                'last_check_started_at' => $row['last_check_started_at'],
-                'last_check_finished_at' => $row['last_check_finished_at'],
-                'last_check_url' => (string)($row['last_check_url'] ?? ''),
-                'last_check_error' => (string)($row['last_check_error'] ?? ''),
-                'last_check_updated_at' => $row['last_check_updated_at'],
-                'created_at' => $row['created_at'],
-                'updated_at' => $row['updated_at'],
-            ];
+            $rel = (string)$row['handler']; $isAbsolute = preg_match('~^([a-zA-Z]:[\\/]|/)~', $rel) === 1;
+            if ($rel === '.') { $abs = PP_ROOT_PATH; } elseif ($isAbsolute) { $abs = $rel; } else { $abs = PP_ROOT_PATH . '/' . ltrim($rel, '/'); }
+            $absReal = realpath($abs); if ($absReal) { $abs = $absReal; }
+            $regionsRaw = (string)($row['regions'] ?? ''); $topicsRaw = (string)($row['topics'] ?? '');
+            $regionsList = array_values(array_filter(array_map(function($item){ return trim((string)$item); }, preg_split('~[,;\n]+~', $regionsRaw) ?: [])));
+            $topicsList = array_values(array_filter(array_map(function($item){ return trim((string)$item); }, preg_split('~[,;\n]+~', $topicsRaw) ?: [])));
+            $rows[] = [ 'slug' => (string)$row['slug'], 'title' => (string)$row['title'], 'description' => (string)$row['description'], 'handler' => $rel, 'handler_abs' => $abs, 'handler_type' => (string)$row['handler_type'], 'meta' => json_decode((string)($row['meta'] ?? ''), true) ?: [], 'regions_raw' => $regionsRaw, 'topics_raw' => $topicsRaw, 'regions' => $regionsList, 'topics' => $topicsList, 'enabled' => (bool)$row['enabled'], 'priority' => (int)($row['priority'] ?? 0), 'level' => trim((string)($row['level'] ?? ''),), 'notes' => (string)($row['notes'] ?? ''), 'is_missing' => (bool)$row['is_missing'], 'last_check_status' => $row['last_check_status'] !== null ? (string)$row['last_check_status'] : null, 'last_check_run_id' => $row['last_check_run_id'] !== null ? (int)$row['last_check_run_id'] : null, 'last_check_started_at' => $row['last_check_started_at'], 'last_check_finished_at' => $row['last_check_finished_at'], 'last_check_url' => (string)($row['last_check_url'] ?? ''), 'last_check_error' => (string)($row['last_check_error'] ?? ''), 'last_check_updated_at' => $row['last_check_updated_at'], 'created_at' => $row['created_at'], 'updated_at' => $row['updated_at'], ];
         }
         $res->free();
     }
 
     $conn->close();
     return $rows;
-}
+}}
 
-function pp_get_network(string $slug): ?array {
-    $slug = pp_normalize_slug($slug);
-    $all = pp_get_networks(false, true);
-    foreach ($all as $network) {
-        if ($network['slug'] === $slug) { return $network; }
-    }
-    return null;
-}
+if (!function_exists('pp_get_network')) { function pp_get_network(string $slug): ?array { $slug = pp_normalize_slug($slug); $all = pp_get_networks(false, true); foreach ($all as $network) { if ($network['slug'] === $slug) { return $network; } } return null; } }
 
-function pp_pick_network_for(?string $region, ?string $topic): ?array {
-    $nets = pp_get_networks(true, false);
-    if (empty($nets)) return null;
-    $region = trim((string)$region);
-    $topic  = trim((string)$topic);
+// See includes/networks.php
 
-    // Normalize strings for comparison
-    $norm = function(string $s): string {
-        return preg_replace('~\s+~', ' ', strtolower(trim($s)));
-    };
-    $projectRegion = $norm($region);
-    $projectTopic  = $norm($topic);
+// See includes/networks.php
 
-    $scored = [];
-    foreach ($nets as $n) {
-        $meta = $n['meta'] ?? [];
-        $regions = $meta['regions'] ?? [];
-        $topics  = $meta['topics'] ?? [];
-        if (is_string($regions)) { $regions = [$regions]; }
-        if (is_string($topics)) { $topics = [$topics]; }
-        $regions = array_map($norm, is_array($regions) ? $regions : []);
-        $topics  = array_map($norm, is_array($topics) ? $topics : []);
+// See includes/networks.php
 
-        // Region score
-        $rScore = 0;
-        if ($projectRegion === '') {
-            $rScore = 1; // no preference
-        } else {
-            if (in_array($projectRegion, $regions, true)) { $rScore = 2; }
-            elseif (in_array('global', $regions, true)) { $rScore = 1; }
-            else { $rScore = 0; }
-        }
-        // Topic score
-        $tScore = 0;
-        if ($projectTopic === '') {
-            $tScore = 1;
-        } else {
-            if (in_array($projectTopic, $topics, true)) { $tScore = 2; }
-            elseif (in_array('general', $topics, true)) { $tScore = 1; }
-            else { $tScore = 0; }
-        }
-    $priority = (int)($n['priority'] ?? 0);
-    $score = ($priority * 1000) + ($rScore * 10) + $tScore; // prioritize higher priority, then region
-        $scored[] = ['score' => $score, 'net' => $n, 'title' => (string)($n['title'] ?? $n['slug'])];
-    }
+// See includes/networks.php
 
-    if (empty($scored)) return null;
-    usort($scored, function($a, $b) {
-        if ($a['score'] === $b['score']) { return strnatcasecmp($a['title'], $b['title']); }
-        return $a['score'] < $b['score'] ? 1 : -1;
-    });
+// See includes/networks.php
 
-    $best = $scored[0];
-    if ((int)$best['score'] <= 0) {
-        // no match found; return first enabled network as fallback
-        return $nets[0];
-    }
-    return $best['net'];
-}
+// See includes/networks.php
 
-function pp_pick_network(): ?array {
-    $nets = pp_get_networks(true, false);
-    if (empty($nets)) {
-        return null;
-    }
-
-    $weights = [];
-    $total = 0;
-    foreach ($nets as $net) {
-        $priority = (int)($net['priority'] ?? 0);
-        $weight = $priority > 0 ? $priority : 1;
-        $weights[] = $weight;
-        $total += $weight;
-    }
-
-    if ($total <= 0) {
-        return $nets[array_rand($nets)];
-    }
-
-    try {
-        $target = random_int(1, $total);
-    } catch (Throwable $e) {
-        $target = mt_rand(1, max(1, $total));
-    }
-
-    foreach ($nets as $idx => $net) {
-        $target -= $weights[$idx];
-        if ($target <= 0) {
-            return $net;
-        }
-    }
-
-    return $nets[array_rand($nets)];
-}
-
-function pp_normalize_network_levels($value): string {
-    $rawList = [];
-    if (is_array($value)) {
-        $rawList = $value;
-    } else {
-        $str = (string)$value;
-        if ($str !== '') {
-            $rawList = preg_split('~[\s,;/]+~u', $str) ?: [];
-        }
-    }
-    $levels = [];
-    foreach ($rawList as $item) {
-        if (!is_scalar($item)) { continue; }
-        $token = trim((string)$item);
-        if ($token === '') { continue; }
-        if (preg_match('~([1-3])~', $token, $m)) {
-            $lvl = $m[1];
-            $levels[$lvl] = $lvl;
-        }
-    }
-    if (empty($levels)) { return ''; }
-    ksort($levels, SORT_NUMERIC);
-    return implode(',', array_values($levels));
-}
-
-function pp_set_networks_enabled(array $slugsToEnable, array $priorityMap = [], array $levelMap = []): bool {
-    $enabledMap = [];
-    foreach ($slugsToEnable as $slug) {
-        $norm = pp_normalize_slug((string)$slug);
-        if ($norm !== '') { $enabledMap[$norm] = true; }
-    }
-
-    $priorityNorm = [];
-    foreach ($priorityMap as $slug => $value) {
-        $norm = pp_normalize_slug((string)$slug);
-        if ($norm === '') { continue; }
-        $priorityNorm[$norm] = max(0, (int)$value);
-    }
-
-    $levelNorm = [];
-    foreach ($levelMap as $slug => $value) {
-        $norm = pp_normalize_slug((string)$slug);
-        if ($norm === '') { continue; }
-        $str = pp_normalize_network_levels($value);
-        if ($str !== '') {
-            if (function_exists('mb_strlen')) {
-                if (mb_strlen($str, 'UTF-8') > 50) {
-                    $str = mb_substr($str, 0, 50, 'UTF-8');
-                }
-            } elseif (strlen($str) > 50) {
-                $str = substr($str, 0, 50);
-            }
-        }
-        $levelNorm[$norm] = $str;
-    }
-
-    try {
-        $conn = @connect_db();
-    } catch (Throwable $e) {
-        return false;
-    }
-    if (!$conn) { return false; }
-
-    $stmt = $conn->prepare("UPDATE networks SET enabled = ?, priority = ?, level = ? WHERE slug = ?");
-    if (!$stmt) { $conn->close(); return false; }
-
-    $slugs = [];
-    if ($res = @$conn->query("SELECT slug FROM networks")) {
-        while ($row = $res->fetch_assoc()) { $slugs[] = (string)$row['slug']; }
-        $res->free();
-    }
-
-    foreach ($slugs as $slug) {
-        $enabled = isset($enabledMap[$slug]) ? 1 : 0;
-        $priority = $priorityNorm[$slug] ?? 0;
-        $level = $levelNorm[$slug] ?? '';
-        $stmt->bind_param('iiss', $enabled, $priority, $level, $slug);
-        $stmt->execute();
-    }
-
-    $stmt->close();
-    $conn->close();
-    return true;
-}
-
-function pp_set_network_note(string $slug, string $note): bool {
-    $slug = pp_normalize_slug($slug);
-    if ($slug === '') { return false; }
-    $note = trim($note);
-    if ($note !== '') {
-        if (function_exists('mb_substr')) {
-            $note = mb_substr($note, 0, 2000, 'UTF-8');
-        } else {
-            $note = substr($note, 0, 2000);
-        }
-    }
-    try {
-        $conn = @connect_db();
-    } catch (Throwable $e) {
-        return false;
-    }
-    if (!$conn) { return false; }
-    $ok = false;
-    if ($stmt = $conn->prepare('UPDATE networks SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ? LIMIT 1')) {
-        $stmt->bind_param('ss', $note, $slug);
-        if ($stmt->execute()) {
-            $ok = $stmt->affected_rows >= 0;
-        }
-        $stmt->close();
-    }
-    $conn->close();
-    return $ok;
-}
-
-function pp_delete_network(string $slug): bool {
-    $slug = pp_normalize_slug($slug);
-    if ($slug === '') { return false; }
-    try {
-        $conn = @connect_db();
-    } catch (Throwable $e) {
-        return false;
-    }
-    if (!$conn) { return false; }
-
-    $isMissing = 0;
-    if ($stmt = $conn->prepare('SELECT is_missing FROM networks WHERE slug = ? LIMIT 1')) {
-        $stmt->bind_param('s', $slug);
-        if ($stmt->execute()) {
-            $stmt->bind_result($missingFlag);
-            if ($stmt->fetch()) {
-                $isMissing = (int)$missingFlag;
-            } else {
-                $stmt->close();
-                $conn->close();
-                return false;
-            }
-        }
-        $stmt->close();
-    } else {
-        $conn->close();
-        return false;
-    }
-
-    if ($isMissing !== 1) {
-        $conn->close();
-        return false;
-    }
-
-    $deleted = false;
-    if ($del = $conn->prepare('DELETE FROM networks WHERE slug = ? LIMIT 1')) {
-        $del->bind_param('s', $slug);
-        $del->execute();
-        $deleted = $del->affected_rows > 0;
-        $del->close();
-    }
-
-    if ($deleted) {
-        if ($clean = $conn->prepare('DELETE FROM network_check_results WHERE network_slug = ?')) {
-            $clean->bind_param('s', $slug);
-            $clean->execute();
-            $clean->close();
-        }
-    }
-
-    $conn->close();
-    return $deleted;
-}
-
-function pp_check_node_binary(string $bin, int $timeoutSeconds = 3): array {
-    $descriptor = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
-    $cmd = escapeshellarg($bin) . ' -v';
-    $proc = @proc_open($cmd, $descriptor, $pipes);
-    if (!is_resource($proc)) { return ['ok'=>false, 'error'=>'PROC_OPEN_FAILED']; }
-    if (isset($pipes[0]) && is_resource($pipes[0])) { @fclose($pipes[0]); }
-    $stdout = '';
-    $stderr = '';
-    $start = time();
-    if (isset($pipes[1]) && is_resource($pipes[1])) { @stream_set_blocking($pipes[1], false); }
-    if (isset($pipes[2]) && is_resource($pipes[2])) { @stream_set_blocking($pipes[2], false); }
-    while (true) {
-        $status = @proc_get_status($proc);
-        if (!$status || !$status['running']) { break; }
-        if ((time() - $start) >= $timeoutSeconds) { @proc_terminate($proc, 9); break; }
-        usleep(100000);
-    }
-    if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); @fclose($pipes[1]); }
-    if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); @fclose($pipes[2]); }
-    $exit = @proc_close($proc);
-    $ver = trim($stdout);
-    $ok = ($exit === 0) && preg_match('~^v?(\d+\.\d+\.\d+)~', $ver);
-    return ['ok' => (bool)$ok, 'version' => $ver, 'exit_code' => $exit, 'stderr' => trim($stderr)];
-}
-
-function pp_collect_node_candidates(): array {
-    $candidates = [];
-    $setting = trim((string)get_setting('node_binary', ''));
-    if ($setting !== '') { $candidates[] = $setting; }
-    $env = getenv('NODE_BINARY');
-    if ($env && trim($env) !== '') { $candidates[] = trim($env); }
-
-    if (function_exists('shell_exec')) {
-        $whichNode = trim((string)@shell_exec('command -v node 2>/dev/null'));
-        if ($whichNode !== '') { $candidates[] = $whichNode; }
-        $whichNodeJs = trim((string)@shell_exec('command -v nodejs 2>/dev/null'));
-        if ($whichNodeJs !== '') { $candidates[] = $whichNodeJs; }
-
-        $bashPaths = [
-            "/bin/bash -lc 'command -v node' 2>/dev/null",
-            "/bin/bash -lc 'which node' 2>/dev/null",
-            "/bin/bash -lc 'command -v nodejs' 2>/dev/null",
-            "/bin/bash -lc 'which nodejs' 2>/dev/null",
-            "/bin/bash -lc 'whereis -b node' 2>/dev/null",
-        ];
-        foreach ($bashPaths as $cmd) {
-            $out = trim((string)@shell_exec($cmd));
-            if ($out === '') { continue; }
-            $parts = preg_split('~[\s]+~', $out);
-            foreach ($parts as $part) {
-                $part = trim($part);
-                if ($part === '' || strpos($part, '/') === false) { continue; }
-                $candidates[] = $part;
-            }
-        }
-
-        $bashLists = [
-            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/bin/node 2>/dev/null'",
-            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/usr/bin/node 2>/dev/null'",
-            "/bin/bash -lc 'ls -1 /opt/alt/nodejs*/root/usr/bin/node 2>/dev/null'",
-            "/bin/bash -lc 'ls -1 /opt/nodejs*/bin/node 2>/dev/null'",
-            "/bin/bash -lc 'ls -1 \$HOME/.nodebrew/current/bin/node 2>/dev/null'",
-            "/bin/bash -lc 'ls -1 \$HOME/.nvm/versions/node/*/bin/node 2>/dev/null'",
-        ];
-        foreach ($bashLists as $cmd) {
-            $out = trim((string)@shell_exec($cmd));
-            if ($out !== '') {
-                foreach (preg_split('~[\r\n]+~', $out) as $line) {
-                    $line = trim($line);
-                    if ($line !== '') { $candidates[] = $line; }
-                }
-            }
-        }
-    }
-
-    $pathEnv = (string)($_SERVER['PATH'] ?? getenv('PATH') ?? '');
-    if ($pathEnv !== '') {
-        $parts = preg_split('~' . preg_quote(PATH_SEPARATOR, '~') . '~', $pathEnv);
-        foreach ($parts as $dir) {
-            $dir = trim($dir);
-            if ($dir === '') { continue; }
-            $dir = rtrim($dir, '/\\');
-            $candidates[] = $dir . '/node';
-            $candidates[] = $dir . '/nodejs';
-        }
-    }
-
-    $home = getenv('HOME') ?: ((isset($_SERVER['HOME']) && $_SERVER['HOME']) ? $_SERVER['HOME'] : '');
-    if ($home) {
-        $home = rtrim($home, '/');
-        $candidates[] = $home . '/.local/bin/node';
-        $candidates[] = $home . '/bin/node';
-        foreach (@glob($home . '/.nvm/versions/node/*/bin/node') ?: [] as $path) { $candidates[] = $path; }
-        foreach (@glob($home . '/.asdf/installs/nodejs/*/bin/node') ?: [] as $path) { $candidates[] = $path; }
-    }
-
-    $globPaths = [
-        '/usr/local/bin/node',
-        '/usr/bin/node',
-        '/bin/node',
-        '/usr/local/node/bin/node',
-        '/usr/local/share/node/bin/node',
-        '/opt/homebrew/bin/node',
-        '/opt/local/bin/node',
-        '/snap/bin/node',
-    ];
-    foreach (['/opt/node*/bin/node','/opt/nodejs*/bin/node','/opt/alt/*/bin/node','/opt/alt/*/usr/bin/node','/opt/alt/*/root/usr/bin/node'] as $pattern) {
-        foreach (@glob($pattern) ?: [] as $path) { $globPaths[] = $path; }
-    }
-    foreach ($globPaths as $path) { $candidates[] = $path; }
-
-    $candidates[] = 'node';
-    $candidates[] = 'nodejs';
-
-    $result = [];
-    foreach ($candidates as $cand) {
-        $cand = trim((string)$cand);
-        if ($cand === '') { continue; }
-        if (!isset($result[$cand])) { $result[$cand] = $cand; }
-    }
-    return array_values($result);
-}
-
-function pp_resolve_node_binary(int $timeoutSeconds = 3, bool $persist = true): ?array {
-    $candidates = pp_collect_node_candidates();
-    foreach ($candidates as $cand) {
-        $check = pp_check_node_binary($cand, $timeoutSeconds);
-        if ($check['ok']) {
-            if ($persist) {
-                $current = trim((string)get_setting('node_binary', ''));
-                if ($current !== $cand) {
-                    set_setting('node_binary', $cand);
-                }
-            }
-            return ['path' => $cand, 'version' => $check['version'], 'diagnostics' => $check];
-        }
-    }
-    return null;
-}
-
-function pp_get_node_binary(): string {
-    $resolved = pp_resolve_node_binary(3, true);
-    if ($resolved) { return $resolved['path']; }
-    return 'node';
-}
-
-function pp_run_node_script(string $script, array $job, int $timeoutSeconds = 480): array {
-    if (!is_file($script) || !is_readable($script)) {
-        return ['ok' => false, 'error' => 'SCRIPT_NOT_FOUND'];
-    }
-    $resolved = pp_resolve_node_binary(3, true);
-    $nodeCandidates = pp_collect_node_candidates();
-    if (!$resolved) {
-        return [
-            'ok' => false,
-            'error' => 'NODE_BINARY_NOT_FOUND',
-            'details' => 'Node.js is not available for the PHP process. Настройте путь в админке или переменную NODE_BINARY.',
-            'candidates' => $nodeCandidates,
-        ];
-    }
-    $node = $resolved['path'];
-    $nodeVer = $resolved['version'] ?? '';
-
-    $descriptorSpec = [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w'],
-    ];
-
-    // Prepare writable paths for logs and caches
-    $logDir = PP_ROOT_PATH . '/logs';
-    if (!is_dir($logDir)) { @mkdir($logDir, 0775, true); }
-    if (!is_writable($logDir)) { @chmod($logDir, 0775); }
-    $homeDir = PP_ROOT_PATH . '/.cache';
-    if (!is_dir($homeDir)) { @mkdir($homeDir, 0775, true); }
-
-    // Optional puppeteer settings from app settings
-    $puppeteerExec = trim((string)get_setting('puppeteer_executable_path', ''));
-    if ($puppeteerExec === '') {
-        $autoChrome = pp_resolve_chrome_path();
-        if ($autoChrome) { $puppeteerExec = $autoChrome; }
-    }
-    $puppeteerArgs = trim((string)get_setting('puppeteer_args', ''));
-
-    $env = array_merge($_ENV, $_SERVER, [
-        'PP_JOB' => json_encode($job, JSON_UNESCAPED_UNICODE),
-        'NODE_NO_WARNINGS' => '1',
-        'PP_LOG_DIR' => $logDir,
-        'PP_LOG_FILE' => $logDir . '/network-' . basename($script, '.js') . '-' . date('Ymd-His') . '-' . getmypid() . '.log',
-        'HOME' => $homeDir,
-    ]);
-    if ($puppeteerExec !== '') {
-        $env['PUPPETEER_EXECUTABLE_PATH'] = $puppeteerExec;
-        $env['PP_CHROME_PATH'] = $puppeteerExec;
-        $env['GOOGLE_CHROME_BIN'] = $puppeteerExec;
-        $env['CHROME_PATH'] = $puppeteerExec;
-        $env['CHROME_BIN'] = $puppeteerExec;
-    }
-    if ($puppeteerArgs !== '') { $env['PUPPETEER_ARGS'] = $puppeteerArgs; }
-
-    $cmd = $node . ' ' . escapeshellarg($script);
-    $process = @proc_open($cmd, $descriptorSpec, $pipes, PP_ROOT_PATH, $env);
-    if (!is_resource($process)) {
-        return ['ok' => false, 'error' => 'PROC_OPEN_FAILED'];
-    }
-
-    // Close STDIN of the child if exists to avoid hanging
-    if (isset($pipes[0]) && is_resource($pipes[0])) { @fclose($pipes[0]); $pipes[0] = null; }
-    if (isset($pipes[1]) && is_resource($pipes[1])) { @stream_set_blocking($pipes[1], false); }
-    if (isset($pipes[2]) && is_resource($pipes[2])) { @stream_set_blocking($pipes[2], false); }
-
-    $stdout = '';
-    $stderr = '';
-    $start = time();
-
-    // Persist child PID for potential cancellation (best-effort)
-    $stInfo = @proc_get_status($process);
-    $childPid = is_array($stInfo) && !empty($stInfo['pid']) ? (int)$stInfo['pid'] : 0;
-    if ($childPid > 0 && isset($job['pubId'])) {
-        try { $c = @connect_db(); if ($c) { $st = $c->prepare('UPDATE publications SET pid = ? WHERE id = ? LIMIT 1'); if ($st) { $st->bind_param('ii', $childPid, $job['pubId']); @$st->execute(); $st->close(); } $c->close(); } } catch (Throwable $e) { }
-    }
-
-    while (true) {
-        $status = @proc_get_status($process);
-        if (!$status || !$status['running']) {
-            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
-            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
-            break;
-        }
-        $read = [];
-        if (isset($pipes[1]) && is_resource($pipes[1]) && !@feof($pipes[1])) { $read[] = $pipes[1]; }
-        if (isset($pipes[2]) && is_resource($pipes[2]) && !@feof($pipes[2])) { $read[] = $pipes[2]; }
-        if (!$read) { break; }
-        // Poll IO with short wait to allow cancellation checks
-        $write = null; $except = null;
-        $ready = @stream_select($read, $write, $except, 0, 200000); // 200ms
-        if ($ready === false) { break; }
-        // ready === 0 just means no IO in this tick — continue loop
-        foreach ($read as $stream) {
-            if (is_resource($stream)) {
-                $chunk = @stream_get_contents($stream);
-                if ($stream === ($pipes[1] ?? null)) { $stdout .= (string)$chunk; }
-                else { $stderr .= (string)$chunk; }
-            }
-        }
-        // timeout check
-        if ((time() - $start) >= $timeoutSeconds) {
-            @proc_terminate($process, 9);
-            if (isset($pipes[1]) && is_resource($pipes[1])) { $stdout .= (string)@stream_get_contents($pipes[1]); }
-            if (isset($pipes[2]) && is_resource($pipes[2])) { $stderr .= (string)@stream_get_contents($pipes[2]); }
-            if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
-            @proc_close($process);
-            return ['ok' => false, 'error' => 'NODE_TIMEOUT', 'stderr' => trim($stderr)];
-        }
-        // cancellation check
-        if (isset($job['pubId'])) {
-            try { $c = @connect_db(); if ($c) { $q = $c->prepare('SELECT cancel_requested FROM publications WHERE id = ?'); if ($q) { $q->bind_param('i', $job['pubId']); $q->execute(); $q->bind_result($cr); if ($q->fetch() && (int)$cr === 1) { @proc_terminate($process, 9); $q->close(); $c->close(); break; } $q->close(); } $c->close(); } } catch (Throwable $e) { }
-        }
-    }
-
-    if (isset($pipes) && is_array($pipes)) { foreach ($pipes as &$p) { if (is_resource($p)) { @fclose($p); } $p = null; } unset($p); }
-    $exitCode = @proc_close($process);
-
-    $response = ['ok' => false, 'error' => 'NODE_RETURN_EMPTY'];
-    $stdoutTrim = trim($stdout);
-    if ($stdoutTrim !== '') {
-        $pos = strrpos($stdoutTrim, "\n");
-        $lastLine = trim($pos === false ? $stdoutTrim : substr($stdoutTrim, $pos + 1));
-        $decoded = json_decode($lastLine, true);
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            $response = $decoded;
-        } else {
-            $response = ['ok' => false, 'error' => 'INVALID_JSON', 'raw' => $stdoutTrim];
-        }
-    }
-    if (strlen($stderr) > 0) { $response['stderr'] = trim($stderr); }
-    $response['exit_code'] = $exitCode;
-    // Hint if nothing returned and exit 127 (command not found)
-    if (($response['error'] ?? '') === 'NODE_RETURN_EMPTY' && (int)$exitCode === 127) {
-        $response['error'] = 'NODE_BINARY_NOT_FOUND';
-        $response['details'] = 'Node.js command not found by PHP. Set settings.node_binary or NODE_BINARY env to full path (e.g. /opt/homebrew/bin/node).';
-    }
-    // Attach detected node version if we had it
-    if (!empty($nodeVer)) { $response['node_version'] = $nodeVer; }
-    return $response;
-}
-
-function pp_publish_via_network(array $network, array $job, int $timeoutSeconds = 480): array {
-    $type = strtolower((string)($network['handler_type'] ?? ''));
-    if ($type !== 'node') {
-        return ['ok' => false, 'error' => 'UNSUPPORTED_HANDLER'];
-    }
-    return pp_run_node_script($network['handler_abs'], $job, $timeoutSeconds);
-}
-
-function pp_collect_chrome_candidates(): array {
-    $candidates = [];
-
-    // 1) From settings and env
-    $setting = trim((string)get_setting('puppeteer_executable_path', ''));
-    if ($setting !== '') { $candidates[] = $setting; }
-    $envVars = ['PUPPETEER_EXECUTABLE_PATH','PP_CHROME_PATH','GOOGLE_CHROME_BIN','CHROME_PATH','CHROME_BIN'];
-    foreach ($envVars as $k) {
-        $v = getenv($k);
-        if ($v && trim($v) !== '') { $candidates[] = trim($v); }
-    }
-
-    // 2) Common system locations
-    $common = [
-        '/usr/local/bin/google-chrome',
-        '/usr/local/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/bin/google-chrome',
-        '/bin/chromium',
-        '/opt/google/chrome/google-chrome',
-        '/opt/google/chrome/chrome',
-        '/opt/chrome/chrome',
-        '/snap/bin/chromium',
-        // macOS common locations
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-        '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ];
-    foreach ($common as $p) { $candidates[] = $p; }
-
-    // macOS per-user Applications folder
-    $home = getenv('HOME') ?: ((isset($_SERVER['HOME']) && $_SERVER['HOME']) ? $_SERVER['HOME'] : '');
-    if ($home) {
-        foreach ([
-            $home . '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            $home . '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-            $home . '/Applications/Chromium.app/Contents/MacOS/Chromium',
-            $home . '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-            $home . '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-        ] as $p) { $candidates[] = $p; }
-    }
-
-    // 3) Project-local portable Chrome
-    $base = rtrim(PP_ROOT_PATH, '/');
-    $projectLocal = [
-        $base . '/node_runtime/chrome/chrome',
-        $base . '/node_runtime/chrome/chrome-linux64/chrome',
-    ];
-    foreach ($projectLocal as $p) { $candidates[] = $p; }
-
-    // 4) Glob project-local versions (e.g., linux-xxx)
-    foreach (@glob($base . '/node_runtime/chrome/*/chrome-linux64/chrome') ?: [] as $p) { $candidates[] = $p; }
-
-    // 5) PATH lookups via shell, if available
-    if (function_exists('shell_exec')) {
-        $cmds = [
-            "command -v google-chrome 2>/dev/null",
-            "command -v google-chrome-stable 2>/dev/null",
-            "command -v chromium 2>/dev/null",
-            "command -v chromium-browser 2>/dev/null",
-        ];
-        foreach ($cmds as $cmd) {
-            $out = trim((string)@shell_exec($cmd));
-            if ($out !== '' && strpos($out, '/') !== false) { $candidates[] = $out; }
-        }
-        // macOS Spotlight bundle searches (best-effort)
-        $mdfinds = [
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.google.Chrome' 2>/dev/null",
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.google.Chrome.canary' 2>/dev/null",
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==org.chromium.Chromium' 2>/dev/null",
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.microsoft.edgemac' 2>/dev/null",
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.microsoft.Edgemac' 2>/dev/null",
-            "/usr/bin/mdfind 'kMDItemCFBundleIdentifier==com.brave.Browser' 2>/dev/null",
-        ];
-        foreach ($mdfinds as $cmd) {
-            $out = trim((string)@shell_exec($cmd));
-            if ($out !== '') {
-                foreach (preg_split('~[\r\n]+~', $out) as $appPath) {
-                    $appPath = trim($appPath);
-                    if ($appPath === '' || strpos($appPath, '.app') === false) continue;
-                    // Derive binary path inside bundle
-                    $bin = $appPath . '/Contents/MacOS/'
-                        . (stripos($appPath, 'Edge') !== false ? 'Microsoft Edge'
-                        : (stripos($appPath, 'Chromium') !== false ? 'Chromium'
-                        : (stripos($appPath, 'Canary') !== false ? 'Google Chrome Canary'
-                        : (stripos($appPath, 'Brave') !== false ? 'Brave Browser'
-                        : 'Google Chrome'))));
-                    $candidates[] = $bin;
-                }
-            }
-        }
-    }
-
-    // Deduplicate
-    $map = [];
-    foreach ($candidates as $cand) {
-        $cand = trim((string)$cand);
-        if ($cand === '') continue;
-        if (!isset($map[$cand])) $map[$cand] = $cand;
-    }
-    return array_values($map);
-}
-
-function pp_resolve_chrome_path(): ?string {
-    $cands = pp_collect_chrome_candidates();
-    foreach ($cands as $cand) {
-        if (@is_file($cand) && @is_executable($cand)) {
-            return $cand;
-        }
-    }
-    return null;
-}
-
-function pp_guess_base_url(): string {
-    if (defined('PP_BASE_URL') && PP_BASE_URL) return rtrim(PP_BASE_URL, '/');
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
-    $scheme = $https ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-    $script = $_SERVER['SCRIPT_NAME'] ?? '/';
-    $dir = rtrim(str_replace(['\\','//'], '/', dirname($script)), '/');
-    // Project root is one level up from current script for admin/public/auth pages
-    $base = $scheme . '://' . $host . ($dir ? $dir : '');
-    // If ends with /admin or /public or /auth, strip it
-    $base = preg_replace('~/(admin|public|auth)$~', '', $base);
-    return rtrim($base, '/');
-}
-
-function pp_google_redirect_url(): string {
-    $base = pp_guess_base_url();
-    return $base . '/public/google_oauth_callback.php';
-}
+// Base URL helpers moved to includes/core.php
 
 // Helpers for page metadata
-if (!function_exists('pp_url_hash')) {
-    function pp_url_hash(string $url): string {
-        return hash('sha256', strtolower(trim($url)));
-    }
-}
-if (!function_exists('pp_save_page_meta')) {
-    function pp_save_page_meta(int $projectId, string $pageUrl, array $data): bool {
-        try { $conn = @connect_db(); } catch (Throwable $e) { return false; }
-        if (!$conn) return false;
-
-        $urlHash = pp_url_hash($pageUrl);
-        $finalUrl = (string)($data['final_url'] ?? '');
-        $lang = (string)($data['lang'] ?? '');
-        $region = (string)($data['region'] ?? '');
-        $title = (string)($data['title'] ?? '');
-        $description = (string)($data['description'] ?? '');
-        $canonical = (string)($data['canonical'] ?? '');
-        $published = (string)($data['published_time'] ?? '');
-        $modified = (string)($data['modified_time'] ?? '');
-        $hreflang = $data['hreflang'] ?? null;
-        $hreflangJson = is_string($hreflang) ? $hreflang : json_encode($hreflang, JSON_UNESCAPED_UNICODE);
-
-        $sql = "INSERT INTO page_meta (project_id, url_hash, page_url, final_url, lang, region, title, description, canonical, published_time, modified_time, hreflang_json, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON DUPLICATE KEY UPDATE final_url=VALUES(final_url), lang=VALUES(lang), region=VALUES(region), title=VALUES(title), description=VALUES(description), canonical=VALUES(canonical), published_time=VALUES(published_time), modified_time=VALUES(modified_time), hreflang_json=VALUES(hreflang_json), updated_at=CURRENT_TIMESTAMP";
-        $stmt = $conn->prepare($sql);
-        if (!$stmt) { $conn->close(); return false; }
-        $stmt->bind_param(
-            'isssssssssss',
-            $projectId,
-            $urlHash,
-            $pageUrl,
-            $finalUrl,
-            $lang,
-            $region,
-            $title,
-            $description,
-            $canonical,
-            $published,
-            $modified,
-            $hreflangJson
-        );
-        $ok = $stmt->execute();
-        $stmt->close();
-        $conn->close();
-        return (bool)$ok;
-    }
-}
-if (!function_exists('pp_get_page_meta')) {
-    function pp_get_page_meta(int $projectId, string $pageUrl): ?array {
-        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
-        if (!$conn) return null;
-        $hash = pp_url_hash($pageUrl);
-        $stmt = $conn->prepare("SELECT page_url, final_url, lang, region, title, description, canonical, published_time, modified_time, hreflang_json FROM page_meta WHERE project_id = ? AND url_hash = ? LIMIT 1");
-        if (!$stmt) { $conn->close(); return null; }
-        $stmt->bind_param('is', $projectId, $hash);
-        $stmt->execute();
-        $stmt->bind_result($page_url, $final_url, $lang, $region, $title, $description, $canonical, $published, $modified, $hreflang_json);
-        $data = null;
-        if ($stmt->fetch()) {
-            $data = [
-                'page_url' => (string)$page_url,
-                'final_url' => (string)$final_url,
-                'lang' => (string)$lang,
-                'region' => (string)$region,
-                'title' => (string)$title,
-                'description' => (string)$description,
-                'canonical' => (string)$canonical,
-                'published_time' => (string)$published,
-                'modified_time' => (string)$modified,
-                'hreflang' => json_decode((string)$hreflang_json, true) ?: [],
-            ];
-        }
-        $stmt->close();
-        $conn->close();
-        return $data;
-    }
-}
+// Page meta utilities moved to includes/page_meta.php
 
 // -------- URL analysis utilities (microdata/meta extraction) --------
+if (!function_exists('pp_http_fetch')) {
 function pp_http_fetch(string $url, int $timeout = 12): array {
     $headers = [];
     $status = 0; $body = ''; $finalUrl = $url;
@@ -2235,8 +769,9 @@ function pp_http_fetch(string $url, int $timeout = 12): array {
         }
     }
     return ['status' => $status, 'headers' => $headers, 'body' => $body, 'final_url' => $finalUrl];
-}
+}}
 
+if (!function_exists('pp_html_dom')) {
 function pp_html_dom(string $html): ?DOMDocument {
     if ($html === '') return null;
     $doc = new DOMDocument();
@@ -2248,12 +783,13 @@ function pp_html_dom(string $html): ?DOMDocument {
     libxml_clear_errors();
     if (!$loaded) return null;
     return $doc;
-}
+}}
 
-function pp_xpath(DOMDocument $doc): DOMXPath { return new DOMXPath($doc); }
-function pp_text(?DOMNode $n): string { return trim($n ? $n->textContent : ''); }
-function pp_attr(?DOMElement $n, string $name): string { return trim($n ? (string)$n->getAttribute($name) : ''); }
+if (!function_exists('pp_xpath')) { function pp_xpath(DOMDocument $doc): DOMXPath { return new DOMXPath($doc); } }
+if (!function_exists('pp_text')) { function pp_text(?DOMNode $n): string { return trim($n ? $n->textContent : ''); } }
+if (!function_exists('pp_attr')) { function pp_attr(?DOMElement $n, string $name): string { return trim($n ? (string)$n->getAttribute($name) : ''); } }
 
+if (!function_exists('pp_abs_url')) {
 function pp_abs_url(string $href, string $base): string {
     if ($href === '') return '';
     if (preg_match('~^https?://~i', $href)) return $href;
@@ -2274,8 +810,9 @@ function pp_abs_url(string $href, string $base): string {
         $segments[] = $seg;
     }
     return $scheme . '://' . $host . $port . '/' . implode('/', $segments);
-}
+}}
 
+if (!function_exists('pp_normalize_text_content')) {
 function pp_normalize_text_content(string $text): string {
     $decoded = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $decoded = preg_replace('~\s+~u', ' ', $decoded);
@@ -2285,8 +822,9 @@ function pp_normalize_text_content(string $text): string {
         return mb_strtolower($decoded, 'UTF-8');
     }
     return strtolower($decoded);
-}
+}}
 
+if (!function_exists('pp_plain_text_from_html')) {
 function pp_plain_text_from_html(string $html): string {
     $doc = pp_html_dom($html);
     if ($doc) {
@@ -2295,8 +833,9 @@ function pp_plain_text_from_html(string $html): string {
         $text = strip_tags($html);
     }
     return pp_normalize_text_content($text);
-}
+}}
 
+if (!function_exists('pp_normalize_url_compare')) {
 function pp_normalize_url_compare(string $url): string {
     $url = trim((string)$url);
     if ($url === '') { return ''; }
@@ -2313,8 +852,9 @@ function pp_normalize_url_compare(string $url): string {
     if ($path === '') { $path = '/'; }
     $query = isset($parts['query']) && $parts['query'] !== '' ? ('?' . $parts['query']) : '';
     return $scheme . '://' . $host . $path . $query;
-}
+}}
 
+if (!function_exists('pp_verify_published_content')) {
 function pp_verify_published_content(string $publishedUrl, ?array $verification, ?array $job = null): array {
     $publishedUrl = trim($publishedUrl);
     $verification = is_array($verification) ? $verification : [];
@@ -2486,8 +1026,9 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
     }
 
     return $result;
-}
+}}
 
+if (!function_exists('pp_analyze_url_data')) {
 function pp_analyze_url_data(string $url): ?array {
     $fetch = pp_http_fetch($url, 12);
     if (($fetch['status'] ?? 0) >= 400 || ($fetch['body'] ?? '') === '') {
@@ -2602,326 +1143,12 @@ function pp_analyze_url_data(string $url): ?array {
         'modified_time' => $modified,
         'hreflang' => $hreflangs,
     ];
-}
+}}
 
-// -------- Publication queue (background jobs) --------
-// Concurrency: simple DB-driven guard. For real scale, move to cron/CLI worker.
-if (!function_exists('pp_get_max_concurrent_jobs')) {
-    function pp_get_max_concurrent_jobs(): int {
-        $n = (int) get_setting('max_concurrent_jobs', 1);
-        if ($n < 1) $n = 1; if ($n > 5) $n = 5; // safety bounds
-        return $n;
-    }
-}
-
-// Optional: minimal scheduler delay between jobs to reduce contention (ms)
-if (!function_exists('pp_get_min_job_spacing_ms')) {
-    function pp_get_min_job_spacing_ms(): int {
-        $ms = (int) get_setting('min_job_spacing_ms', 0);
-        if ($ms < 0) $ms = 0; if ($ms > 60000) $ms = 60000; // cap 60s
-        return $ms;
-    }
-}
-
-if (!function_exists('pp_count_running_jobs')) {
-    function pp_count_running_jobs(): int {
-        try { $conn = @connect_db(); } catch (Throwable $e) { return 0; }
-        if (!$conn) return 0;
-        $cnt = 0;
-        if ($res = @$conn->query("SELECT COUNT(*) AS c FROM publications WHERE status = 'running'")) {
-            if ($row = $res->fetch_assoc()) { $cnt = (int) $row['c']; }
-            $res->free();
-        }
-        $conn->close();
-        return $cnt;
-    }
-}
-
-if (!function_exists('pp_claim_next_publication_job')) {
-    function pp_claim_next_publication_job(): ?int {
-        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
-        if (!$conn) return null;
-        $jobId = null;
-    // Select a queued job, respect schedule (NULL or due)
-        $id = null;
-    if ($res = @$conn->query("SELECT id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 1")) {
-            if ($row = $res->fetch_assoc()) { $id = (int) $row['id']; }
-            $res->free();
-        }
-        if ($id) {
-            $stmt = $conn->prepare("UPDATE publications SET status = 'running', started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ? AND status = 'queued' LIMIT 1");
-            if ($stmt) {
-                $stmt->bind_param('i', $id);
-                $stmt->execute();
-                if ($stmt->affected_rows === 1) { $jobId = $id; }
-                $stmt->close();
-            }
-            if ($jobId) {
-                // Reflect running state in mirror queue
-                @$conn->query("UPDATE publication_queue SET status='running' WHERE publication_id = " . (int)$jobId);
-            }
-        }
-        $conn->close();
-        return $jobId;
-    }
-}
-
-if (!function_exists('pp_process_publication_job')) {
-    function pp_process_publication_job(int $pubId): void {
-        // Release session lock early to avoid blocking concurrent requests
-        if (function_exists('session_write_close')) { @session_write_close(); }
-        // Re-read job
-        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
-        if (!$conn) return;
-        $stmt = $conn->prepare("SELECT p.id, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish
-                                 FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1");
-        if (!$stmt) { $conn->close(); return; }
-        $stmt->bind_param('i', $pubId);
-        $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-        if (!$row) { $conn->close(); return; }
-        if (!in_array($row['status'], ['queued','running'], true)) { $conn->close(); return; }
-
-        $projectId = (int)$row['project_id'];
-        $url = (string)$row['page_url'];
-        $anchor = trim((string)$row['anchor'] ?? '');
-        $networkSlug = trim((string)$row['network'] ?? '');
-        $projectLanguage = trim((string)($row['project_language'] ?? 'ru')) ?: 'ru';
-        $projectWish = trim((string)($row['project_wish'] ?? ''));
-        $projectName = trim((string)($row['project_name'] ?? ''));
-
-        // Resolve link-specific language/wish from project_links if available
-        $linkLanguage = $projectLanguage; $linkWish = $projectWish;
-        if ($pl = $conn->prepare('SELECT anchor, language, wish FROM project_links WHERE project_id = ? AND url = ? LIMIT 1')) {
-            $pl->bind_param('is', $projectId, $url);
-            if ($pl->execute()) {
-                $r = $pl->get_result()->fetch_assoc();
-                if ($r) {
-                    $a = trim((string)($r['anchor'] ?? ''));
-                    $l = trim((string)($r['language'] ?? ''));
-                    $w = trim((string)($r['wish'] ?? ''));
-                    if ($a !== '') { $anchor = $anchor !== '' ? $anchor : $a; }
-                    if ($l !== '') { $linkLanguage = $l; }
-                    if ($w !== '') { $linkWish = $w; }
-                }
-            }
-            $pl->close();
-        }
-
-    // Resolve network descriptor
-        $network = $networkSlug !== '' ? pp_get_network($networkSlug) : pp_pick_network();
-        if (!$network) {
-            // Mark failed: no network
-            $err = 'NO_ENABLED_NETWORKS';
-            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
-            if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); }
-            $conn->close();
-            return;
-        }
-
-        // Prepare AI settings
-        $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
-        $openaiKey = trim((string)get_setting('openai_api_key', ''));
-        $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
-        if ($aiProvider === 'openai' && $openaiKey === '') {
-            $err = 'MISSING_OPENAI_KEY';
-            $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1");
-            if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); }
-            $conn->close();
-            return;
-        }
-
-        // Fetch page_meta for better AI prompts (best-effort)
-        $pageMeta = null;
-        if ($pm = $conn->prepare('SELECT lang, region, title, description FROM page_meta WHERE project_id = ? AND (page_url = ? OR final_url = ?) ORDER BY updated_at DESC, id DESC LIMIT 1')) {
-            $pm->bind_param('iss', $projectId, $url, $url);
-            if ($pm->execute()) {
-                $m = $pm->get_result()->fetch_assoc();
-                if ($m) { $pageMeta = [
-                    'lang' => (string)($m['lang'] ?? ''),
-                    'region' => (string)($m['region'] ?? ''),
-                    'title' => (string)($m['title'] ?? ''),
-                    'description' => (string)($m['description'] ?? ''),
-                ]; }
-            }
-            $pm->close();
-        }
-
-        $job = [
-            'url' => $url,
-            'anchor' => $anchor,
-            'language' => $linkLanguage,
-            'wish' => $linkWish,
-            'projectId' => $projectId,
-            'projectName' => $projectName,
-            'openaiApiKey' => $openaiKey,
-            'openaiModel' => $openaiModel,
-            'aiProvider' => $aiProvider,
-            'waitBetweenCallsMs' => 5000,
-            'pubId' => $pubId,
-            'page_meta' => $pageMeta,
-            // Anti-captcha settings
-            'captcha' => [
-                'provider' => (string)get_setting('captcha_provider', 'none'),
-                'apiKey' => (string)get_setting('captcha_api_key', ''),
-            ],
-        ];
-
-        // Run network handler
-        $result = pp_publish_via_network($network, $job, 480);
-        if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
-            $errText = 'NETWORK_ERROR';
-            $details = '';
-            if (is_array($result)) {
-                $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? '')));
-            }
-            $msg = trim($errText . ($details !== '' ? (': ' . $details) : ''));
-            // mark failed or cancelled
-            $up = $conn->prepare("UPDATE publications SET status=IF(cancel_requested=1,'cancelled','failed'), finished_at=CURRENT_TIMESTAMP, error=?, pid=NULL WHERE id = ? LIMIT 1");
-            if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
-            // Reflect in mirror queue and remove finished/cancelled/failed if desired
-            @$conn->query("UPDATE publication_queue SET status=IF((SELECT cancel_requested FROM publications WHERE id=".(int)$pubId.")=1,'cancelled','failed') WHERE publication_id = " . (int)$pubId);
-            // Remove entry to free queue position (optional behavior)
-            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
-            $conn->close();
-            return;
-        }
-
-        $publishedUrl = trim((string)$result['publishedUrl']);
-        $publishedBy = 'system';
-        // Try to set to current user if session exists
-        $uid = (int)($_SESSION['user_id'] ?? 0);
-        if ($uid > 0) {
-            $userStmt = $conn->prepare("SELECT username FROM users WHERE id = ? LIMIT 1");
-            if ($userStmt) {
-                $userStmt->bind_param('i', $uid);
-                $userStmt->execute();
-                $userStmt->bind_result($uName);
-                if ($userStmt->fetch()) { $publishedBy = (string)$uName; }
-                $userStmt->close();
-            }
-        }
-
-        $netSlug = (string)($network['slug'] ?? $networkSlug);
-        $verificationPayload = is_array($result['verification'] ?? null) ? $result['verification'] : [];
-        $verificationResult = pp_verify_published_content($publishedUrl, $verificationPayload, $job);
-        $verificationStatus = (string)($verificationResult['status'] ?? 'skipped');
-        $expectedLink = trim((string)($verificationPayload['linkUrl'] ?? $job['url'] ?? ''));
-        $expectedSampleRaw = (string)($verificationPayload['textSample'] ?? '');
-        if ($expectedSampleRaw !== '') {
-            $expectedSample = function_exists('mb_substr')
-                ? mb_substr($expectedSampleRaw, 0, 320, 'UTF-8')
-                : substr($expectedSampleRaw, 0, 320);
-        } else {
-            $expectedSample = '';
-        }
-        $verificationStore = [
-            'result' => $verificationResult,
-            'expected' => [
-                'link' => $expectedLink,
-                'anchor' => $verificationPayload['anchorText'] ?? $job['anchor'] ?? '',
-                'supports_link' => $verificationResult['supports_link'] ?? ($verificationPayload['supportsLinkCheck'] ?? true),
-                'supports_text' => $verificationResult['supports_text'] ?? ($verificationPayload['supportsTextCheck'] ?? ($expectedSample !== '')),
-                'text_sample' => $expectedSample,
-            ],
-            'checked_at' => gmdate('c'),
-        ];
-        $verificationJson = json_encode($verificationStore, JSON_UNESCAPED_UNICODE);
-        if ($verificationJson === false) { $verificationJson = '{}'; }
-
-        $finalStatus = 'success';
-        $errorMsg = null;
-        switch ($verificationStatus) {
-            case 'success':
-                $finalStatus = 'success';
-                break;
-            case 'partial':
-                $finalStatus = 'partial';
-                break;
-            case 'failed':
-            case 'error':
-                $finalStatus = 'failed';
-                $reasonCode = strtoupper((string)($verificationResult['reason'] ?? 'FAILED'));
-                $errorMsg = 'VERIFICATION_' . $reasonCode;
-                break;
-            case 'skipped':
-            default:
-                $finalStatus = 'success';
-                break;
-        }
-
-        $up = $conn->prepare("UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1");
-        if ($up) {
-            $statusParam = $finalStatus;
-            $errorParam = $errorMsg;
-            $verificationStatusParam = $verificationStatus;
-            $detailsParam = $verificationJson;
-            $up->bind_param('sssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $verificationStatusParam, $detailsParam, $pubId);
-            $up->execute();
-            $up->close();
-        }
-
-        if ($finalStatus === 'failed') {
-            @$conn->query("UPDATE publication_queue SET status='failed' WHERE publication_id = " . (int)$pubId);
-            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
-        } else {
-            $queueStatus = ($finalStatus === 'partial') ? 'partial' : 'success';
-            @$conn->query("UPDATE publication_queue SET status='" . $queueStatus . "' WHERE publication_id = " . (int)$pubId);
-            @$conn->query("DELETE FROM publication_queue WHERE publication_id = " . (int)$pubId);
-        }
-        $conn->close();
-    }
-}
-
-if (!function_exists('pp_run_queue_worker')) {
-    function pp_run_queue_worker(int $maxJobs = 1): void {
-        // Detach from client if called within HTTP context
-        if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
-        else {
-            if (function_exists('session_write_close')) { @session_write_close(); }
-            @ignore_user_abort(true);
-        }
-        $maxJobs = max(1, $maxJobs);
-        $processed = 0;
-        $spacingMs = function_exists('pp_get_min_job_spacing_ms') ? pp_get_min_job_spacing_ms() : 0;
-        while ($processed < $maxJobs) {
-            // Concurrency guard
-            $running = pp_count_running_jobs();
-            if ($running >= pp_get_max_concurrent_jobs()) { break; }
-            $jobId = pp_claim_next_publication_job();
-            if (!$jobId) { break; }
-            pp_process_publication_job($jobId);
-            $processed++;
-            if ($spacingMs > 0) { @usleep($spacingMs * 1000); }
-        }
-    }
-}
+// Publication queue helpers moved to includes/publication_queue.php
 
 // -------- Network diagnostics (batch publishing check) --------
-if (!function_exists('pp_network_check_launch_worker')) {
-    function pp_network_check_launch_worker(int $runId): bool {
-        $script = PP_ROOT_PATH . '/scripts/network_check_worker.php';
-        if (!is_file($script)) { return false; }
-        $phpBinary = PHP_BINARY ?: 'php';
-        $runId = max(1, $runId);
-        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
-        if ($isWindows) {
-            $cmd = 'start /B "" ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId;
-            $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) { @pclose($handle); return true; }
-            return false;
-        }
-        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        pp_network_check_log('Launching network check worker', ['runId' => $runId, 'command' => $cmd, 'phpBinary' => $phpBinary]);
-        if (function_exists('popen')) {
-            $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) { @pclose($handle); return true; }
-        }
-        @exec($cmd);
-        return true;
-    }
-}
+// Worker launcher is defined in includes/network_check.php
 
 if (!function_exists('pp_network_check_start')) {
     function pp_network_check_start(?int $userId = null, ?string $mode = 'bulk', ?string $targetSlug = null, ?array $targetSlugs = null): array {
