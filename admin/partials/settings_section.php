@@ -90,6 +90,7 @@
                             <option value="none" <?php echo ($cp==='none'?'selected':''); ?>><?php echo __('Выключено'); ?></option>
                             <option value="2captcha" <?php echo ($cp==='2captcha'?'selected':''); ?>>2Captcha</option>
                             <option value="anti-captcha" <?php echo ($cp==='anti-captcha'?'selected':''); ?>>Anti-Captcha</option>
+                            <option value="capsolver" <?php echo ($cp==='capsolver'?'selected':''); ?>>CapSolver</option>
                         </select>
                     </div>
                     <div class="col-md-6">
@@ -97,6 +98,22 @@
                     </div>
                 </div>
                 <div class="form-text"><?php echo __('Будет использоваться для автоматического решения reCAPTCHA/hCaptcha при публикации (например, JustPaste.it).'); ?></div>
+
+                <div class="row g-2 mt-2">
+                    <div class="col-md-6">
+                        <select name="captcha_fallback_provider" class="form-select form-control">
+                            <?php $cfp = $settings['captcha_fallback_provider'] ?? 'none'; ?>
+                            <option value="none" <?php echo ($cfp==='none'?'selected':''); ?>><?php echo __('Резервный: выключено'); ?></option>
+                            <option value="2captcha" <?php echo ($cfp==='2captcha'?'selected':''); ?>>2Captcha</option>
+                            <option value="anti-captcha" <?php echo ($cfp==='anti-captcha'?'selected':''); ?>>Anti-Captcha</option>
+                            <option value="capsolver" <?php echo ($cfp==='capsolver'?'selected':''); ?>>CapSolver</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <input type="text" name="captcha_fallback_api_key" class="form-control" value="<?php echo htmlspecialchars($settings['captcha_fallback_api_key'] ?? ''); ?>" placeholder="<?php echo __('Резервный API key (необязательно)'); ?>">
+                    </div>
+                </div>
+                <div class="form-text"><?php echo __('Если основной провайдер не справится или будет недоступен, будет выполнена попытка через резервного.'); ?></div>
             </div>
 
             <div class="col-md-6">

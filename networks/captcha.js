@@ -42,14 +42,18 @@ function ensureAntiCaptchaClient(apiKey, logger) {
 function readConfig() {
   let provider = String(process.env.PP_CAPTCHA_PROVIDER || '').toLowerCase();
   let apiKey = String(process.env.PP_CAPTCHA_API_KEY || '').trim();
+  let fallbackProvider = String(process.env.PP_CAPTCHA_FALLBACK_PROVIDER || '').toLowerCase();
+  let fallbackApiKey = String(process.env.PP_CAPTCHA_FALLBACK_API_KEY || '').trim();
   try {
     const job = JSON.parse(process.env.PP_JOB || '{}');
     if (job && job.captcha) {
       if (job.captcha.provider) provider = String(job.captcha.provider).toLowerCase();
       if (job.captcha.apiKey) apiKey = String(job.captcha.apiKey);
+      if (job.captcha.fallback && job.captcha.fallback.provider) fallbackProvider = String(job.captcha.fallback.provider).toLowerCase();
+      if (job.captcha.fallback && job.captcha.fallback.apiKey) fallbackApiKey = String(job.captcha.fallback.apiKey);
     }
   } catch (_) {}
-  return { provider: provider || 'none', apiKey };
+  return { provider: provider || 'none', apiKey, fallbackProvider: fallbackProvider || '', fallbackApiKey };
 }
 
 async function detectCaptcha(page) {
@@ -85,7 +89,18 @@ async function detectCaptcha(page) {
             }
           };
         }
-        if (found('iframe[src*="recaptcha"], div.g-recaptcha, div#recaptcha, .grecaptcha-badge')) return { found: true, type: 'recaptcha' };
+        // reCAPTCHA detection nuances: distinguish v2 widget/challenge vs v3 script/badge.
+  const hasAnchor = !!document.querySelector('iframe[src*="/recaptcha/api2/anchor"], div.g-recaptcha[data-sitekey], div#recaptcha[data-sitekey]');
+  const hasBframe = !!document.querySelector('iframe[src*="/recaptcha/api2/bframe"], iframe[src*="/recaptcha/enterprise/anchor/frame"], iframe[src*="/recaptcha/enterprise/bframe"]');
+        const hasBadge = !!document.querySelector('.grecaptcha-badge');
+        const hasV3Script = Array.from(document.scripts || []).some(s => (s.src||'').includes('recaptcha/api.js') && (s.src||'').includes('render='));
+        if (hasBframe) return { found: true, type: 'recaptcha-challenge' };
+        if (hasAnchor && !hasBframe) return { found: true, type: 'recaptcha-anchor' };
+        if (hasV3Script && !hasAnchor && !hasBframe) return { found: true, type: 'recaptcha-v3' };
+        if (hasBadge && !hasAnchor && !hasBframe) {
+          // Badge alone is typical for reCAPTCHA v3 or invisible v2; avoid forcing solve until challenge appears.
+          return { found: true, type: 'recaptcha-v3' };
+        }
         if (found('iframe[src*="hcaptcha"], .h-captcha')) return { found: true, type: 'hcaptcha' };
         if (hasText('captcha') || hasText('verify you are human') || found('#cf-challenge-running')) return { found: true, type: 'generic' };
         return {
@@ -116,8 +131,17 @@ async function detectCaptcha(page) {
   for (const frame of frames) {
     let frameUrl = '';
     try { frameUrl = frame.url(); } catch (_) { frameUrl = ''; }
-    if (frameUrl && /recaptcha|google\.com\/recaptcha|hcaptcha\.com/i.test(frameUrl)) {
-      return { found: true, type: frameUrl.includes('hcaptcha') ? 'hcaptcha' : 'recaptcha', context: 'frame-url', frameUrl };
+    if (frameUrl && /hcaptcha\.com/i.test(frameUrl)) {
+      return { found: true, type: 'hcaptcha', context: 'frame-url', frameUrl };
+    }
+    if (frameUrl && /google\.com\/recaptcha/i.test(frameUrl)) {
+      if (/api2\/bframe|enterprise\/bframe/i.test(frameUrl)) {
+        return { found: true, type: 'recaptcha-challenge', context: 'frame-url', frameUrl };
+      }
+      if (/api2\/anchor|enterprise\/anchor/i.test(frameUrl)) {
+        // anchor alone is not a challenge
+        return { found: true, type: 'recaptcha-anchor', context: 'frame-url', frameUrl };
+      }
     }
     const frameRes = await detectInContext(frame);
     if (frameRes && frameRes.found) {
@@ -182,6 +206,41 @@ async function getSiteKeys(page) {
       return out;
     });
   } catch { return { recaptcha: '', hcaptcha: '' }; }
+}
+
+async function getRecaptchaContext(page) {
+  try {
+    return await page.evaluate(() => {
+      const findParam = (src, key) => {
+        try { const u = new URL(src, location.href); return u.searchParams.get(key) || ''; }
+        catch { return ''; }
+      };
+      const frames = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]'));
+      let sitekey = '';
+      let isEnterprise = false;
+      let s = '';
+      for (const f of frames) {
+        const src = f.getAttribute('src') || '';
+        if (!src) continue;
+        if (/recaptcha\/enterprise/i.test(src)) isEnterprise = true;
+        const k = findParam(src, 'k') || findParam(src, 'sitekey');
+        if (k) sitekey = sitekey || k;
+        const ds = findParam(src, 's');
+        if (ds) s = s || ds;
+      }
+      if (!sitekey) {
+        const r1 = document.querySelector('div.g-recaptcha[data-sitekey], div#recaptcha[data-sitekey]');
+        if (r1) sitekey = r1.getAttribute('data-sitekey') || '';
+      }
+      // Fallback: inspect scripts for enterprise
+      if (!isEnterprise) {
+        isEnterprise = Array.from(document.scripts || []).some(scp => (scp.src||'').includes('/recaptcha/enterprise'));
+      }
+      return { sitekey, isEnterprise, sToken: s };
+    });
+  } catch {
+    return { sitekey: '', isEnterprise: false, sToken: '' };
+  }
 }
 
 async function solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot) {
@@ -401,14 +460,18 @@ async function solveGrid2Captcha(page, apiKey, logger, takeScreenshot) {
 async function solveTokenCaptcha(page, type, provider, apiKey, pageUrl, logger) {
   try {
     const keys = await getSiteKeys(page);
-    const sitekey = type === 'hcaptcha' ? keys.hcaptcha : keys.recaptcha;
+    const rCtx = type === 'hcaptcha' ? { sitekey: keys.hcaptcha, isEnterprise: false, sToken: '' } : await getRecaptchaContext(page);
+    const sitekey = type === 'hcaptcha' ? keys.hcaptcha : rCtx.sitekey;
     if (!sitekey) return false;
     const targetUrl = pageUrl || (await page.url());
+    logger && logger('Captcha solving context', { type, provider, sitekeyPresent: Boolean(sitekey), isEnterprise: rCtx.isEnterprise, sToken: rCtx.sToken ? 'present' : 'absent', pageUrl: targetUrl });
     let token = '';
     if (provider === 'anti-captcha') {
-      token = await solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, targetUrl, logger);
+      token = await solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, targetUrl, logger, rCtx.isEnterprise, rCtx.sToken);
     } else if (provider === '2captcha') {
-      token = await solveTokenCaptcha2Captcha(apiKey, type, sitekey, targetUrl, logger);
+      token = await solveTokenCaptcha2Captcha(apiKey, type, sitekey, targetUrl, logger, rCtx.isEnterprise, rCtx.sToken);
+    } else if (provider === 'capsolver') {
+      token = await solveTokenCaptchaCapSolver(apiKey, type, sitekey, targetUrl, logger, rCtx.isEnterprise, rCtx.sToken);
     } else {
       return false;
     }
@@ -419,7 +482,7 @@ async function solveTokenCaptcha(page, type, provider, apiKey, pageUrl, logger) 
   } catch { return false; }
 }
 
-async function solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, pageUrl, logger) {
+async function solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, pageUrl, logger, isEnterprise = false, sToken = '') {
   if (!apiKey) return '';
   let token = '';
   const client = ensureAntiCaptchaClient(apiKey, logger);
@@ -427,7 +490,10 @@ async function solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, pageUrl, logg
     try {
       if (type === 'hcaptcha' && typeof client.solveHCaptchaProxyless === 'function') {
         token = await client.solveHCaptchaProxyless(sitekey, pageUrl);
-      } else if (type === 'recaptcha' && typeof client.solveRecaptchaV2Proxyless === 'function') {
+      } else if ((type === 'recaptcha' || type === 'recaptcha-challenge') && isEnterprise) {
+        // Try enterprise via HTTP (SDK method may be unavailable)
+        token = '';
+      } else if ((type === 'recaptcha' || type === 'recaptcha-challenge') && typeof client.solveRecaptchaV2Proxyless === 'function') {
         token = await client.solveRecaptchaV2Proxyless(sitekey, pageUrl);
       }
       if (token && typeof token === 'object') {
@@ -440,23 +506,36 @@ async function solveTokenCaptchaAntiCaptcha(apiKey, type, sitekey, pageUrl, logg
     }
   }
   if (!token || typeof token !== 'string') {
-    token = await solveTokenCaptchaAntiCaptchaHttp(apiKey, type, sitekey, pageUrl, logger);
+    token = await solveTokenCaptchaAntiCaptchaHttp(apiKey, type, sitekey, pageUrl, logger, isEnterprise, sToken);
   }
   return typeof token === 'string' ? token : '';
 }
 
-async function solveTokenCaptchaAntiCaptchaHttp(apiKey, type, sitekey, pageUrl, logger) {
+async function solveTokenCaptchaAntiCaptchaHttp(apiKey, type, sitekey, pageUrl, logger, isEnterprise = false, sToken = '') {
   try {
     const create = await fetch('https://api.anti-captcha.com/createTask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         clientKey: apiKey,
-        task: {
-          type: type === 'hcaptcha' ? 'HCaptchaTaskProxyless' : 'NoCaptchaTaskProxyless',
-          websiteURL: pageUrl,
-          websiteKey: sitekey
-        }
+        task: (
+          type === 'hcaptcha' ? {
+            type: 'HCaptchaTaskProxyless',
+            websiteURL: pageUrl,
+            websiteKey: sitekey
+          } : (
+            isEnterprise ? {
+              type: 'RecaptchaV2EnterpriseTaskProxyless',
+              websiteURL: pageUrl,
+              websiteKey: sitekey,
+              enterprisePayload: sToken ? { s: sToken } : {}
+            } : {
+              type: 'NoCaptchaTaskProxyless',
+              websiteURL: pageUrl,
+              websiteKey: sitekey
+            }
+          )
+        )
       })
     });
     const data = await create.json().catch(() => ({ errorId: 1 }));
@@ -490,7 +569,56 @@ async function solveTokenCaptchaAntiCaptchaHttp(apiKey, type, sitekey, pageUrl, 
   return '';
 }
 
-async function solveTokenCaptcha2Captcha(apiKey, type, sitekey, pageUrl, logger) {
+async function solveTokenCaptchaCapSolver(apiKey, type, sitekey, pageUrl, logger, isEnterprise = false, sToken = '') {
+  // https://api.capsolver.com/createTask / getTaskResult
+  try {
+    const task = (type === 'hcaptcha')
+      ? { type: 'HCaptchaTaskProxyless', websiteURL: pageUrl, websiteKey: sitekey }
+      : (isEnterprise ? {
+          type: 'ReCaptchaV2EnterpriseTaskProxyless',
+          websiteURL: pageUrl,
+          websiteKey: sitekey,
+          enterprisePayload: sToken ? { s: sToken } : {}
+        } : {
+          type: 'ReCaptchaV2TaskProxyless',
+          websiteURL: pageUrl,
+          websiteKey: sitekey
+        });
+    const createResp = await fetch('https://api.capsolver.com/createTask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientKey: apiKey, task })
+    });
+    const createData = await createResp.json().catch(() => ({ errorId: 1 }));
+    if (!createData || createData.errorId) {
+      logger && logger('CapSolver create error', { stage: 'token', errorId: createData && createData.errorId, details: createData });
+      return '';
+    }
+    const taskId = createData.taskId;
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 5000));
+      const res = await fetch('https://api.capsolver.com/getTaskResult', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey: apiKey, taskId })
+      });
+      const data = await res.json().catch(() => ({ errorId: 1 }));
+      if (data && !data.errorId && data.status === 'ready') {
+        const sol = data.solution || {};
+        return sol.gRecaptchaResponse || sol.token || '';
+      }
+      if (data && data.errorId) {
+        logger && logger('CapSolver result error', { stage: 'token', errorId: data.errorId, details: data });
+        return '';
+      }
+    }
+    logger && logger('CapSolver timeout', { stage: 'token', taskId });
+  } catch (e) {
+    logger && logger('CapSolver exception', { stage: 'token', error: String(e && e.message || e) });
+  }
+  return '';
+}
+
+async function solveTokenCaptcha2Captcha(apiKey, type, sitekey, pageUrl, logger, isEnterprise = false, sToken = '') {
   try {
     const params = new URLSearchParams();
     params.set('key', apiKey);
@@ -498,6 +626,8 @@ async function solveTokenCaptcha2Captcha(apiKey, type, sitekey, pageUrl, logger)
     params.set('method', type === 'hcaptcha' ? 'hcaptcha' : 'userrecaptcha');
     params.set(type === 'hcaptcha' ? 'sitekey' : 'googlekey', sitekey);
     params.set('pageurl', pageUrl);
+    if (type !== 'hcaptcha' && isEnterprise) params.set('enterprise', '1');
+    if (type !== 'hcaptcha' && sToken) params.set('data-s', sToken);
     const resp = await fetch('https://2captcha.com/in.php?' + params.toString());
     const data = await resp.json().catch(() => ({ status: 0 }));
     if (!data || data.status !== 1) {
@@ -552,10 +682,6 @@ async function injectCaptchaToken(page, type, token) {
       const names = captType === 'hcaptcha' ? ['h-captcha-response'] : ['g-recaptcha-response'];
       let ok = false;
       names.forEach(name => { if (ensureField(name)) ok = true; });
-      const form = document.querySelector('form'); if (form) { try { form.submit(); } catch (_) {} }
-      const btn = Array.from(document.querySelectorAll('button, input[type="submit"], a'))
-        .find(el => /continue|verify|submit|продолжить|подтвердить/i.test(el.textContent || el.value || ''));
-      if (btn) { try { btn.click(); } catch (_) {} }
       return ok;
     }, type, token);
   } catch {
@@ -564,7 +690,7 @@ async function injectCaptchaToken(page, type, token) {
 }
 
 async function solveIfCaptcha(page, logger, takeScreenshot) {
-  const { provider, apiKey } = readConfig();
+  const { provider, apiKey, fallbackProvider, fallbackApiKey } = readConfig();
   const log = typeof logger === 'function' ? logger : null;
   log && log('Captcha solver init', { provider, apiKeyPresent: Boolean(apiKey) });
   if (!apiKey || provider === 'none') {
@@ -578,7 +704,11 @@ async function solveIfCaptcha(page, logger, takeScreenshot) {
   }
   log && log('Captcha detection', { provider, found: true, type: det.type, details: det });
   let result = false;
-  if (det.type === 'grid') {
+  if (det.type === 'recaptcha-v3' || det.type === 'recaptcha-anchor') {
+    // reCAPTCHA v3 should not be proactively solved; wait until site actually presents a challenge.
+    log && log('Captcha solve skipped', { reason: 'recaptcha_badge_or_anchor_only' });
+    return false;
+  } else if (det.type === 'grid') {
     if (provider === 'anti-captcha') {
       result = await solveGridAntiCaptcha(page, apiKey, logger, takeScreenshot);
     } else if (provider === '2captcha') {
@@ -587,11 +717,36 @@ async function solveIfCaptcha(page, logger, takeScreenshot) {
       log && log('Captcha solve result', { provider, type: det.type, success: false, reason: 'unsupported_provider' });
       return false;
     }
-  } else if (det.type === 'recaptcha' || det.type === 'hcaptcha') {
+  } else if (det.type === 'recaptcha' || det.type === 'recaptcha-challenge' || det.type === 'hcaptcha') {
     result = await solveTokenCaptcha(page, det.type, provider, apiKey, await page.url(), logger);
   }
   const success = Boolean(result && (result === true || result.solved));
   log && log('Captcha solve result', { provider, type: det.type, success });
+  if (!success && fallbackProvider && fallbackApiKey && fallbackProvider !== provider) {
+    log && log('Captcha fallback attempt', { from: provider, to: fallbackProvider });
+    // Quick swap: temporarily override env for nested call
+    const original = { PP_CAPTCHA_PROVIDER: process.env.PP_CAPTCHA_PROVIDER, PP_CAPTCHA_API_KEY: process.env.PP_CAPTCHA_API_KEY };
+    try {
+      process.env.PP_CAPTCHA_PROVIDER = fallbackProvider;
+      process.env.PP_CAPTCHA_API_KEY = fallbackApiKey;
+      const det2 = await detectCaptcha(page);
+      if (det2 && det2.found) {
+        let result2 = false;
+        if (det2.type === 'grid') {
+          if (fallbackProvider === 'anti-captcha') result2 = await solveGridAntiCaptcha(page, fallbackApiKey, logger, takeScreenshot);
+          else if (fallbackProvider === '2captcha') result2 = await solveGrid2Captcha(page, fallbackApiKey, logger, takeScreenshot);
+        } else if (det2.type === 'recaptcha' || det2.type === 'recaptcha-challenge' || det2.type === 'hcaptcha') {
+          result2 = await solveTokenCaptcha(page, det2.type, fallbackProvider, fallbackApiKey, await page.url(), logger);
+        }
+        const ok2 = Boolean(result2 && (result2 === true || result2.solved));
+        log && log('Captcha fallback result', { provider: fallbackProvider, type: det2.type, success: ok2 });
+        if (ok2) return result2;
+      }
+    } finally {
+      process.env.PP_CAPTCHA_PROVIDER = original.PP_CAPTCHA_PROVIDER || '';
+      process.env.PP_CAPTCHA_API_KEY = original.PP_CAPTCHA_API_KEY || '';
+    }
+  }
   return result;
 }
 

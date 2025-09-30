@@ -23,8 +23,10 @@ $settingsKeys = array_merge($settingsKeys, [
     'google_client_id',
     'google_client_secret',
     // Anti-captcha settings
-    'captcha_provider',         // none | 2captcha | anti-captcha
+    'captcha_provider',         // none | 2captcha | anti-captcha | capsolver
     'captcha_api_key',
+    'captcha_fallback_provider', // none | 2captcha | anti-captcha | capsolver
+    'captcha_fallback_api_key',
 ]);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -58,8 +60,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['google_client_id', $googleClientId],
                 ['google_client_secret', $googleClientSecret],
                 // Anti-captcha
-                ['captcha_provider', in_array(($_POST['captcha_provider'] ?? 'none'), ['none','2captcha','anti-captcha'], true) ? $_POST['captcha_provider'] : 'none'],
+                ['captcha_provider', in_array(($_POST['captcha_provider'] ?? 'none'), ['none','2captcha','anti-captcha','capsolver'], true) ? $_POST['captcha_provider'] : 'none'],
                 ['captcha_api_key', trim((string)($_POST['captcha_api_key'] ?? ''))],
+                ['captcha_fallback_provider', in_array(($_POST['captcha_fallback_provider'] ?? 'none'), ['none','2captcha','anti-captcha','capsolver'], true) ? $_POST['captcha_fallback_provider'] : 'none'],
+                ['captcha_fallback_api_key', trim((string)($_POST['captcha_fallback_api_key'] ?? ''))],
             ];
             $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
             if ($stmt) {
@@ -194,6 +198,8 @@ $settings += [
     // Anti-captcha defaults
     'captcha_provider' => $settings['captcha_provider'] ?? 'none',
     'captcha_api_key' => $settings['captcha_api_key'] ?? '',
+    'captcha_fallback_provider' => $settings['captcha_fallback_provider'] ?? 'none',
+    'captcha_fallback_api_key' => $settings['captcha_fallback_api_key'] ?? '',
 ];
 $in = "'" . implode("','", array_map([$conn, 'real_escape_string'], $settingsKeys)) . "'";
 $res = $conn->query("SELECT k, v FROM settings WHERE k IN ($in)");

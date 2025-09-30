@@ -60,6 +60,29 @@ async function mssgRegister({ language = 'uk' } = {}){
   page.setDefaultTimeout(300000);
   page.setDefaultNavigationTimeout(300000);
 
+  // Stealth-ish evasion: user agent, language, timezone, webdriver, plugins
+  try {
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    await page.setUserAgent(ua);
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'uk-UA,uk;q=0.9,ru-RU;q=0.8,ru;q=0.7,en-US;q=0.6,en;q=0.5' });
+    const context = browser.defaultBrowserContext();
+    try { await context.overridePermissions('https://next.mssg.me', ['clipboard-read','clipboard-write']); } catch(_) {}
+    await page.evaluateOnNewDocument(() => {
+      try { Object.defineProperty(navigator, 'webdriver', { get: () => false }); } catch(_) {}
+      try { window.chrome = window.chrome || { runtime: {} }; } catch(_) {}
+      try { Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] }); } catch(_) {}
+      try { Object.defineProperty(navigator, 'languages', { get: () => ['uk-UA','uk','ru-RU','ru','en-US','en'] }); } catch(_) {}
+      try {
+        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+        if (originalQuery) {
+          window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications')
+            ? Promise.resolve({ state: Notification.permission }) : originalQuery(parameters);
+        }
+      } catch(_) {}
+    });
+  } catch(_) {}
+
   try {
     const ctaUrl = `https://next.mssg.me/auth/signup?utm_source=website&utm_medium=sign_up_click&utm_campaign=mssgme_website&lang=${encodeURIComponent(language || 'uk')}`;
     logLine('Goto signup CTA', { ctaUrl });
@@ -68,6 +91,26 @@ async function mssgRegister({ language = 'uk' } = {}){
     logLine('Goto signup error', { error: String(e && e.message || e) });
   }
   screenshots.signup_open = await takeScreenshot('signup-open', page);
+
+  // Try to accept cookies/consent if present
+  try {
+    await page.evaluate(() => {
+      const clickIfVisible = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width > 2 && r.height > 2) { try { el.click(); return true; } catch(_) {} }
+        return false;
+      };
+      const texts = ['Прийняти','Принять','Accept','I agree','Згоден'];
+      const btn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find(b => {
+        const t = (b.innerText || b.textContent || '').trim();
+        return t && texts.some(x => t.toLowerCase().includes(x.toLowerCase()));
+      });
+      if (btn) { try { btn.click(); } catch(_) {} }
+      clickIfVisible('#onetrust-accept-btn-handler');
+    });
+  } catch(_) {}
 
   // Detect captcha presence early (for logging)
   try { const det = await detectCaptcha(page); if (det && det.found) logLine('Captcha detected early', det); } catch(_) {}
@@ -96,6 +139,24 @@ async function mssgRegister({ language = 'uk' } = {}){
   }
   screenshots.signup_filled = await takeScreenshot('signup-filled', page);
 
+  // Tick required consent/terms checkboxes if present (language-agnostic)
+  try {
+    await page.evaluate(() => {
+      const isVisible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 2 && r.height > 2 && cs.display !== 'none' && cs.visibility !== 'hidden';
+      };
+      const candidates = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+        .filter(cb => {
+          const name = (cb.name || cb.id || '').toLowerCase();
+          return /agree|term|policy|privacy|gdpr|rules/.test(name) && isVisible(cb);
+        });
+      candidates.forEach(cb => { if (!cb.checked) cb.click(); });
+    });
+  } catch(_) {}
+
   // Enable submit button if disabled
   try {
     await page.evaluate(() => {
@@ -107,54 +168,87 @@ async function mssgRegister({ language = 'uk' } = {}){
     });
   } catch(_) {}
 
-  // Attempt to solve captcha if present
-  try {
-    const res = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label, page));
-    if (res && (res === true || res.solved)) {
-      logLine('Captcha solved before submit');
-    }
-  } catch(_) {}
+  // Do NOT try to pre-solve captcha: many sites trigger invisible captcha only on submit
 
-  // Submit form
+  // Submit form (deterministic: by id, then form submit)
   let submitClicked = false;
   try {
-    const sel = ['button#button-signup-email', 'button[type="submit"]', 'form button'];
-    const info = await findVisibleHandle(page, sel);
-    if (info && info.handle) {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(()=>null),
-        info.handle.click().catch(()=>{})
-      ]);
-      submitClicked = true;
-      try { await info.handle.dispose(); } catch(_) {}
-    } else {
-      // fallback enter
-      await page.keyboard.press('Enter').catch(()=>{});
-    }
+    await page.evaluate(() => {
+      const btn = document.getElementById('button-signup-email') || document.querySelector('button#button-signup-email');
+      if (btn) {
+        btn.removeAttribute('disabled');
+        btn.disabled = false;
+        btn.click();
+        return 'clicked-button';
+      }
+      const form = document.querySelector('form');
+      if (form) {
+        if (typeof form.requestSubmit === 'function') form.requestSubmit(); else form.submit();
+        return 'submitted-form';
+      }
+      return 'no-form';
+    }).then(tag => logLine('Submit action', { method: tag })).catch(() => {});
+    submitClicked = true;
   } catch (e) {
     logLine('Submit click error', { error: String(e && e.message || e) });
   }
-  screenshots.after_submit = await takeScreenshot('after-submit', page);
+  if (!(typeof page.isClosed === 'function' && page.isClosed())) {
+    screenshots.after_submit = await takeScreenshot('after-submit', page);
+  }
 
   // If captcha challenged after submit, try solving and resubmit once
+  // Poll for SPA redirect or captcha and handle accordingly
   try {
-    const det = await detectCaptcha(page);
-    if (det && det.found) {
-      logLine('Captcha after submit', det);
-      const solved = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label, page));
-      if (solved) {
-        await waitForTimeoutSafe(page, 1200);
-        try {
-          await page.evaluate(() => {
-            const btn = document.querySelector('button#button-signup-email, button[type="submit"]');
-            if (btn) btn.click();
-          });
-        } catch(_) {}
-        await Promise.race([
-          page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(()=>null),
-          waitForTimeoutSafe(page, 3000)
-        ]);
+    const deadline = Date.now() + 90000; // up to 90s
+    let captchaSolveAttempts = 0;
+    while (Date.now() < deadline) {
+      // Success check
+      let href = '';
+      try { href = await page.evaluate(() => location.href); } catch(_) {}
+      if (href && /\/pages(\/?|$)/i.test(href)) {
+        logLine('Registration success detected', { href });
+        break;
       }
+      // Captcha check
+      let det = null;
+      try { det = await detectCaptcha(page); } catch(_) { det = null; }
+      if (det && det.found) {
+        if (det.type === 'recaptcha-v3' || det.type === 'recaptcha-anchor') {
+          logLine('Captcha badge/script detected (v3) - waiting for visible challenge');
+        } else {
+          if (captchaSolveAttempts >= 2) {
+            logLine('Captcha attempts limit reached', { attempts: captchaSolveAttempts });
+            break;
+          }
+          logLine('Captcha challenge detected', det);
+          const solved = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label, page));
+          captchaSolveAttempts += 1;
+          if (solved) {
+            // Ensure fields still contain values (some flows clear password)
+            try {
+              await page.evaluate((emailVal, passVal) => {
+                const em = document.querySelector('input#email, input[name="email"], input[type="email"]');
+                const pw = document.querySelector('input#password, input[name="password"], input[type="password"]');
+                if (em && !em.value) em.value = emailVal;
+                if (pw && !pw.value) pw.value = passVal;
+              }, email, password);
+            } catch(_) {}
+            logLine('Captcha solved, re-submitting');
+            await waitForTimeoutSafe(page, 800);
+            try {
+              await page.evaluate(() => {
+                const btn = document.getElementById('button-signup-email') || document.querySelector('button#button-signup-email, button[type="submit"]');
+                if (btn) btn.click(); else {
+                  const f = document.querySelector('form'); if (f) { if (typeof f.requestSubmit==='function') f.requestSubmit(); else f.submit(); }
+                }
+              });
+            } catch(_) {}
+            await waitForTimeoutSafe(page, 1500);
+            try { const href2 = await page.evaluate(() => location.href); logLine('Post-captcha href', { href: href2 }); } catch(_) {}
+          }
+        }
+      }
+      await waitForTimeoutSafe(page, 1000);
     }
   } catch(_) {}
 
@@ -178,7 +272,10 @@ async function mssgRegister({ language = 'uk' } = {}){
       }
     } catch(_) {}
   }
-  screenshots.final = await takeScreenshot('final', page);
+  // Final screenshot only if page still open
+  if (!(typeof page.isClosed === 'function' && page.isClosed())) {
+    screenshots.final = await takeScreenshot('final', page);
+  }
 
   await browser.close();
   logLine('Browser closed');
@@ -186,7 +283,183 @@ async function mssgRegister({ language = 'uk' } = {}){
   return { ok: status === 'registered', network: 'mssgme', step: 'register', status, url: currentUrl, email, password, logFile: LOG_FILE, screenshots };
 }
 
-module.exports = { register: mssgRegister };
+async function mssgLogin({ email, password, language = 'uk' } = {}) {
+  const { LOG_DIR, LOG_FILE, logLine } = createLogger('mssgme');
+  ensureDirSync(LOG_DIR);
+  const screenshots = {};
+
+  const takeScreenshot = async (label, page) => {
+    try {
+      const fname = `mssgme-${label}-${Date.now()}.png`;
+      const fpath = path.join(LOG_DIR, fname);
+      await page.screenshot({ path: fpath, fullPage: true });
+      logLine('Screenshot', { label, path: fpath });
+      return fpath;
+    } catch (e) {
+      logLine('Screenshot error', { label, error: String(e && e.message || e) });
+      return '';
+    }
+  };
+
+  if (!email || !password) {
+    const msg = 'LOGIN_MISSING_CREDENTIALS';
+    logLine('Login input error', { emailPresent: Boolean(email), passwordPresent: Boolean(password) });
+    return { ok: false, network: 'mssgme', step: 'login', status: msg, url: '', email: email || '', logFile: LOG_FILE, screenshots };
+  }
+
+  // Launch
+  const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
+  if (process.env.PUPPETEER_ARGS) launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
+  const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
+  if (execPath) launchOpts.executablePath = execPath;
+  logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
+  const browser = await puppeteer.launch(launchOpts);
+  const page = await browser.newPage();
+  page.setDefaultTimeout(300000); page.setDefaultNavigationTimeout(300000);
+
+  // Stealth setup
+  try {
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    await page.setUserAgent(ua);
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'uk-UA,uk;q=0.9,ru-RU;q=0.8,ru;q=0.7,en-US;q=0.6,en;q=0.5' });
+    const context = browser.defaultBrowserContext();
+    try { await context.overridePermissions('https://next.mssg.me', ['clipboard-read','clipboard-write']); } catch(_) {}
+    await page.evaluateOnNewDocument(() => {
+      try { Object.defineProperty(navigator, 'webdriver', { get: () => false }); } catch(_) {}
+      try { window.chrome = window.chrome || { runtime: {} }; } catch(_) {}
+      try { Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] }); } catch(_) {}
+      try { Object.defineProperty(navigator, 'languages', { get: () => ['uk-UA','uk','ru-RU','ru','en-US','en'] }); } catch(_) {}
+      try {
+        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+        if (originalQuery) {
+          window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications')
+            ? Promise.resolve({ state: Notification.permission }) : originalQuery(parameters);
+        }
+      } catch(_) {}
+    });
+  } catch(_) {}
+
+  // Navigate to login, try several candidates until inputs visible
+  const candidates = [
+    `https://next.mssg.me/auth/signin?lang=${encodeURIComponent(language||'uk')}`,
+    `https://next.mssg.me/auth/login?lang=${encodeURIComponent(language||'uk')}`,
+    `https://next.mssg.me/auth?lang=${encodeURIComponent(language||'uk')}`
+  ];
+  let atLogin = false;
+  for (const url of candidates) {
+    try {
+      logLine('Goto login', { url });
+      await page.goto(url, { waitUntil: 'networkidle2' });
+      screenshots.login_open = await takeScreenshot('login-open', page);
+      const emailInfo = await findVisibleHandle(page, ['input#email', 'input[name="email"]', 'input[type="email"]']);
+      const passInfo = await findVisibleHandle(page, ['input#password', 'input[name="password"]', 'input[type="password"]']);
+      if (emailInfo && emailInfo.handle && passInfo && passInfo.handle) {
+        try { await emailInfo.handle.dispose(); await passInfo.handle.dispose(); } catch(_) {}
+        atLogin = true; break;
+      }
+    } catch(_) {}
+  }
+  if (!atLogin) {
+    // fallback to signup page login tab if present
+    try {
+      const fallback = `https://next.mssg.me/auth/signup?lang=${encodeURIComponent(language||'uk')}`;
+      logLine('Goto fallback (signup)', { url: fallback });
+      await page.goto(fallback, { waitUntil: 'networkidle2' });
+      screenshots.login_open = await takeScreenshot('login-open', page);
+    } catch(_) {}
+  }
+
+  // Accept cookies if any
+  try {
+    await page.evaluate(() => {
+      const texts = ['Прийняти','Принять','Accept','I agree','Згоден'];
+      const btn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find(b => {
+        const t = (b.innerText || b.textContent || '').trim();
+        return t && texts.some(x => t.toLowerCase().includes(x.toLowerCase()));
+      });
+      if (btn) { try { btn.click(); } catch(_) {} }
+      const one = document.querySelector('#onetrust-accept-btn-handler');
+      if (one) { try { one.click(); } catch(_) {} }
+    });
+  } catch(_) {}
+
+  // Fill credentials
+  try {
+    const emailInfo = await findVisibleHandle(page, ['input#email', 'input[name="email"]', 'input[type="email"]']);
+    const passInfo = await findVisibleHandle(page, ['input#password', 'input[name="password"]', 'input[type="password"]']);
+    if (!emailInfo || !emailInfo.handle || !passInfo || !passInfo.handle) throw new Error('LOGIN_INPUTS_NOT_FOUND');
+    await emailInfo.handle.click({ clickCount: 3 }).catch(()=>{});
+    await emailInfo.handle.type(email, { delay: 20 });
+    await passInfo.handle.click({ clickCount: 3 }).catch(()=>{});
+    await passInfo.handle.type(password, { delay: 20 });
+    try { await emailInfo.handle.dispose(); await passInfo.handle.dispose(); } catch(_) {}
+  } catch (e) {
+    logLine('Login fill error', { error: String(e && e.message || e) });
+  }
+  screenshots.login_filled = await takeScreenshot('login-filled', page);
+
+  // Submit
+  try {
+    await page.evaluate(() => {
+      const btn = document.querySelector('#button-login-email, #button-signin-email, button#button-login-email, button#button-signin-email, button[type="submit"], form button');
+      if (btn) { (btn).removeAttribute('disabled'); (btn).disabled = false; (btn).click(); return 'clicked'; }
+      const form = document.querySelector('form'); if (form) { if (typeof form.requestSubmit==='function') form.requestSubmit(); else form.submit(); return 'form-submit'; }
+      return 'no-submit';
+    }).then(tag => logLine('Login submit', { method: tag })).catch(()=>{});
+  } catch (e) {
+    logLine('Login submit error', { error: String(e && e.message || e) });
+  }
+
+  // Poll for success or captcha
+  let status = 'unknown';
+  try {
+    const deadline = Date.now() + 90000;
+    let captchaAttempts = 0;
+    while (Date.now() < deadline) {
+      let href = '';
+      try { href = await page.evaluate(() => location.href); } catch(_) {}
+      if (href && (/\/pages(\/?|$)/i.test(href) || /\/dashboard(\/?|$)/i.test(href))) { status = 'logged_in'; break; }
+
+      let det = null;
+      try { det = await detectCaptcha(page); } catch(_) { det = null; }
+      if (det && det.found) {
+        if (det.type === 'recaptcha-v3' || det.type === 'recaptcha-anchor') {
+          logLine('Login captcha badge/anchor detected - waiting');
+        } else {
+          if (captchaAttempts >= 2) { logLine('Login captcha attempts limit reached', { attempts: captchaAttempts }); break; }
+          logLine('Login captcha challenge detected', det);
+          const solved = await solveIfCaptcha(page, logLine, async (label) => await takeScreenshot(label, page));
+          captchaAttempts += 1;
+          if (solved) {
+            await waitForTimeoutSafe(page, 800);
+            try {
+              await page.evaluate(() => {
+                const btn = document.querySelector('#button-login-email, #button-signin-email, button#button-login-email, button#button-signin-email, button[type="submit"], form button');
+                if (btn) btn.click(); else { const f = document.querySelector('form'); if (f) { if (typeof f.requestSubmit==='function') f.requestSubmit(); else f.submit(); } }
+              });
+            } catch(_) {}
+            await waitForTimeoutSafe(page, 1500);
+          }
+        }
+      }
+      await waitForTimeoutSafe(page, 1000);
+    }
+  } catch(_) {}
+
+  let currentUrl = '';
+  try { currentUrl = page.url(); } catch(_) {}
+  if (!(typeof page.isClosed === 'function' && page.isClosed())) {
+    screenshots.login_final = await takeScreenshot('login-final', page);
+  }
+  await browser.close();
+  logLine('Browser closed');
+
+  return { ok: status === 'logged_in', network: 'mssgme', step: 'login', status, url: currentUrl, email, logFile: LOG_FILE, screenshots };
+}
+
+module.exports = { register: mssgRegister, login: mssgLogin };
 
 // CLI: we keep same contract as other handlers, but for now only registration
 if (require.main === module) {
@@ -196,7 +469,15 @@ if (require.main === module) {
       const raw = process.env.PP_JOB || '{}';
       const job = JSON.parse(raw);
       const language = job.language || 'uk';
-      const res = await mssgRegister({ language });
+      const step = job.step || job.action || 'register';
+      let res;
+      if (String(step).toLowerCase() === 'login') {
+        const email = job.email || (job.credentials && job.credentials.email) || '';
+        const password = job.password || (job.credentials && job.credentials.password) || '';
+        res = await mssgLogin({ email, password, language });
+      } else {
+        res = await mssgRegister({ language });
+      }
       logLine('Result', res);
       console.log(JSON.stringify(res));
       process.exit(res.ok ? 0 : 1);

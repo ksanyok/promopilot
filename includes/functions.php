@@ -1721,6 +1721,10 @@ if (!function_exists('pp_process_network_check_run')) {
                 'captcha' => [
                     'provider' => (string)get_setting('captcha_provider', 'none'),
                     'apiKey' => (string)get_setting('captcha_api_key', ''),
+                    'fallback' => [
+                        'provider' => (string)get_setting('captcha_fallback_provider', 'none'),
+                        'apiKey' => (string)get_setting('captcha_fallback_api_key', ''),
+                    ],
                 ],
             ];
 
