@@ -101,16 +101,66 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
 
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase();
   logLine('start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
-  // Optional login inputs/mode for diagnostics
-  const loginUser = (
-    jobOptions.username || jobOptions.loginUsername || process.env.PP_NOTEPIN_USERNAME || (jobOptions.testMode ? 'pphr9sc56f4j4s' : '')
+
+  // Minimal login-only mode for diagnostics
+  let loginUser = (
+    jobOptions.username || jobOptions.loginUsername || process.env.PP_NOTEPIN_USERNAME || ''
   ).toString().trim();
-  const loginPass = (
-    jobOptions.password || jobOptions.loginPassword || process.env.PP_NOTEPIN_PASSWORD || (jobOptions.testMode ? 'swxqsk27nmA!9' : '')
+  let loginPass = (
+    jobOptions.password || jobOptions.loginPassword || process.env.PP_NOTEPIN_PASSWORD || ''
   ).toString().trim();
   const loginOnly = !!(
-    jobOptions.action === 'login' || jobOptions.loginOnly === true || String(process.env.PP_NOTEPIN_LOGIN_ONLY || '0').match(/^(1|true|yes)$/i)
+    jobOptions.action === 'login' || jobOptions.loginOnly === true || /^(1|true|yes)$/i.test(String(process.env.PP_NOTEPIN_LOGIN_ONLY || ''))
   );
+
+  if (loginOnly) {
+    // Launch browser just for login flow
+    const argsLO = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'];
+    if (process.env.PUPPETEER_ARGS) argsLO.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
+    const execPathLO = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+    const headlessLO = String(process.env.PP_HEADLESS || 'true').toLowerCase() !== 'false';
+    const browserLO = await puppeteer.launch({ headless: headlessLO, args: Array.from(new Set(argsLO)), executablePath: execPathLO || undefined });
+    const pageLO = await browserLO.newPage();
+    await applyStealth(pageLO);
+    pageLO.setDefaultTimeout(Number(process.env.PP_TIMEOUT_MS || 90000));
+    pageLO.setDefaultNavigationTimeout(Number(process.env.PP_NAV_TIMEOUT_MS || 90000));
+    try {
+      await pageLO.goto('https://notepin.co/', { waitUntil: 'domcontentloaded' });
+      await snap(pageLO, 'L1-home');
+      // Click the sign in trigger in header menu
+      await pageLO.evaluate(() => {
+        const el = document.querySelector('.menu .log, p.log');
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      await pageLO.waitForSelector('.login', { timeout: 15000 });
+      // Fill modal fields exactly as provided
+      await pageLO.waitForSelector('.login input[name="blog"]', { timeout: 15000 });
+      await pageLO.waitForSelector('.login input[name="pass"]', { timeout: 15000 });
+      if (loginUser) { await pageLO.type('.login input[name="blog"]', loginUser, { delay: 25 }); }
+      if (loginPass) { await pageLO.type('.login input[name="pass"]', loginPass, { delay: 25 }); }
+      await snap(pageLO, 'L2-login-modal');
+      // Submit via finish button
+      const navLO = pageLO.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+      await pageLO.click('.login .finish p, .login .finish').catch(async () => {
+        await pageLO.evaluate(() => {
+          const el = document.querySelector('.login .finish p') || document.querySelector('.login .finish');
+          if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+      });
+      await Promise.race([navLO, sleep(1200)]);
+      await snap(pageLO, 'L3-after-login');
+      const finalUrl = safeUrl(pageLO);
+      const res = { ok: true, network: 'notepin', mode: 'login-only', username: loginUser, finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
+      await browserLO.close();
+      return res;
+    } catch (e) {
+      const res = { ok: false, network: 'notepin', mode: 'login-only', error: 'LOGIN_FAILED', details: String((e && e.message) || e), username: loginUser, logFile: LOG_FILE };
+      try { await browserLO.close(); } catch {}
+      return res;
+    }
+  }
+  // Optional login inputs/mode for diagnostics
+  // (loginUser/loginPass/loginOnly already defined earlier if login-only branch not taken)
 
   // Build/gather article
   const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider: provider, wish, meta: pageMeta, testMode: !!jobOptions.testMode };
