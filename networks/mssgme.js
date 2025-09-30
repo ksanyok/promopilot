@@ -231,20 +231,34 @@ async function mssgRegister({ language = 'uk' } = {}){
                 const pw = document.querySelector('input#password, input[name="password"], input[type="password"]');
                 if (em && !em.value) em.value = emailVal;
                 if (pw && !pw.value) pw.value = passVal;
+                // focus password for Enter
+                if (pw) { try { pw.focus(); } catch(_) {} }
               }, email, password);
             } catch(_) {}
-            logLine('Captcha solved, re-submitting');
-            await waitForTimeoutSafe(page, 800);
+            logLine('Captcha solved, re-submitting (enter+click)');
+            await waitForTimeoutSafe(page, 600);
             try {
+              // 1) Press Enter on focused field
               await page.evaluate(() => {
-                const btn = document.getElementById('button-signup-email') || document.querySelector('button#button-signup-email, button[type="submit"]');
-                if (btn) btn.click(); else {
-                  const f = document.querySelector('form'); if (f) { if (typeof f.requestSubmit==='function') f.requestSubmit(); else f.submit(); }
-                }
+                const active = document.activeElement || document.body;
+                const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                active.dispatchEvent(ev);
               });
             } catch(_) {}
-            await waitForTimeoutSafe(page, 1500);
+            await waitForTimeoutSafe(page, 300);
+            try {
+              // 2) Click the specific signup button by id
+              const method = await page.evaluate(() => {
+                const btn = document.getElementById('button-signup-email') || document.querySelector('button#button-signup-email');
+                if (btn) { try { btn.removeAttribute('disabled'); btn.disabled = false; } catch(_) {} btn.click(); return 'clicked-button-signup'; }
+                return 'button-not-found';
+              });
+              logLine('Submit action', { method });
+            } catch(_) {}
+            await waitForTimeoutSafe(page, 4000);
             try { const href2 = await page.evaluate(() => location.href); logLine('Post-captcha href', { href: href2 }); } catch(_) {}
+            // Single attempt only to keep flow simple
+            break;
           }
         }
       }
@@ -311,12 +325,19 @@ async function mssgLogin({ email, password, language = 'uk' } = {}) {
   const launchArgs = ['--no-sandbox','--disable-setuid-sandbox'];
   if (process.env.PUPPETEER_ARGS) launchArgs.push(...String(process.env.PUPPETEER_ARGS).split(/\s+/).filter(Boolean));
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
-  const launchOpts = { headless: true, args: Array.from(new Set(launchArgs)) };
+  const headlessEnv = String(process.env.PP_HEADLESS || '').toLowerCase();
+  const headless = !(headlessEnv === 'false' || headlessEnv === '0' || headlessEnv === 'no');
+  const launchOpts = { headless, args: Array.from(new Set(launchArgs)) };
   if (execPath) launchOpts.executablePath = execPath;
   logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
   const browser = await puppeteer.launch(launchOpts);
   const page = await browser.newPage();
   page.setDefaultTimeout(300000); page.setDefaultNavigationTimeout(300000);
+  try {
+    const proxyUser = process.env.PROXY_USERNAME || '';
+    const proxyPass = process.env.PROXY_PASSWORD || '';
+    if (proxyUser || proxyPass) { await page.authenticate({ username: proxyUser, password: proxyPass }); }
+  } catch(_) {}
 
   // Stealth setup
   try {

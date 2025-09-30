@@ -664,7 +664,9 @@ async function injectCaptchaToken(page, type, token) {
   if (!token) return false;
   try {
     return await page.evaluate((captType, tok) => {
-      const names = captType === 'hcaptcha' ? ['h-captcha-response'] : ['g-recaptcha-response'];
+      const names = captType === 'hcaptcha'
+        ? ['h-captcha-response']
+        : ['g-recaptcha-response','g-recaptcha-response-100000'];
 
       const createHidden = (container, name) => {
         try {
@@ -710,6 +712,30 @@ async function injectCaptchaToken(page, type, token) {
 
       // Provide an escape hatch for SPA listeners
       try { window.__pp_grecaptcha_token = tok; } catch(_) {}
+
+      // Monkey-patch grecaptcha APIs so app-level calls can pick our token
+      try {
+        if (window.grecaptcha) {
+          // Patch non-enterprise getResponse
+          try {
+            if (typeof window.grecaptcha.getResponse === 'function') {
+              const orig = window.grecaptcha.getResponse.bind(window.grecaptcha);
+              window.grecaptcha.getResponse = function(...args) {
+                try { return tok || orig(...args); } catch(_) { return tok; }
+              };
+            }
+          } catch(_) {}
+          // Patch enterprise getToken to resolve our token
+          try {
+            if (window.grecaptcha.enterprise && typeof window.grecaptcha.enterprise.getToken === 'function') {
+              const origEnt = window.grecaptcha.enterprise.getToken.bind(window.grecaptcha.enterprise);
+              window.grecaptcha.enterprise.getToken = function(...args) {
+                return Promise.resolve(tok);
+              };
+            }
+          } catch(_) {}
+        }
+      } catch(_) {}
 
       return placed;
     }, type, token);
