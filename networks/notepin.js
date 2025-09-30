@@ -101,6 +101,16 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
 
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase();
   logLine('start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
+  // Optional login inputs/mode for diagnostics
+  const loginUser = (
+    jobOptions.username || jobOptions.loginUsername || process.env.PP_NOTEPIN_USERNAME || (jobOptions.testMode ? 'pphr9sc56f4j4s' : '')
+  ).toString().trim();
+  const loginPass = (
+    jobOptions.password || jobOptions.loginPassword || process.env.PP_NOTEPIN_PASSWORD || (jobOptions.testMode ? 'swxqsk27nmA!9' : '')
+  ).toString().trim();
+  const loginOnly = !!(
+    jobOptions.action === 'login' || jobOptions.loginOnly === true || String(process.env.PP_NOTEPIN_LOGIN_ONLY || '0').match(/^(1|true|yes)$/i)
+  );
 
   // Build/gather article
   const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider: provider, wish, meta: pageMeta, testMode: !!jobOptions.testMode };
@@ -143,6 +153,62 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
 
   let createdBlog = '';
   try {
+    // 0) Login flow (optional)
+    if ((loginUser && loginPass) || loginOnly) {
+      try {
+        await page.goto('https://notepin.co/', { waitUntil: 'domcontentloaded' });
+        await snap(page, 'L1-home');
+        // Try to click a Login link/button; if not found, go directly
+        const clicked = await page.evaluate(() => {
+          const byHref = Array.from(document.querySelectorAll('a[href]')).find(a => /login/i.test(a.getAttribute('href') || ''));
+          if (byHref) { byHref.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+          const byText = Array.from(document.querySelectorAll('a,button')).find(el => /login/i.test((el.textContent || '').trim()));
+          if (byText) { byText.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+          return false;
+        });
+        if (!clicked) {
+          await page.goto('https://notepin.co/login', { waitUntil: 'domcontentloaded' });
+        } else {
+          await sleep(500);
+        }
+        // Wait inputs and fill
+        await page.waitForSelector('form', { timeout: 15000 }).catch(() => {});
+        const filled = await page.evaluate((u, p) => {
+          const root = document.querySelector('form') || document;
+          const uInput = root.querySelector('input[name="username"], input[name="user"], input[name="login"], input[type="text"], input[placeholder*="user" i], input[placeholder*="login" i]');
+          const pInput = root.querySelector('input[type="password"], input[name="password"], input[placeholder*="password" i]');
+          if (uInput) { uInput.focus(); uInput.value = u; uInput.dispatchEvent(new Event('input', { bubbles: true })); }
+          if (pInput) { pInput.focus(); pInput.value = p; pInput.dispatchEvent(new Event('input', { bubbles: true })); }
+          return !!(uInput && pInput);
+        }, loginUser, loginPass);
+        await snap(page, 'L2-login-form');
+        // Submit
+        const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
+        const submitted = await page.evaluate(() => {
+          const form = document.querySelector('form');
+          const btn = (form && (form.querySelector('button[type="submit"]') || form.querySelector('input[type="submit"]')))
+            || document.querySelector('button[type="submit"], input[type="submit"]');
+          if (btn) { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+          if (form) { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); return true; }
+          return false;
+        });
+        await Promise.race([nav, sleep(1200)]);
+        await snap(page, 'L3-after-login');
+        logLine('login', { username: loginUser || '(none)', submitted, url: safeUrl(page) });
+        if (loginOnly) {
+          const res = { ok: true, network: 'notepin', mode: 'login-only', username: loginUser || '', finalUrl: safeUrl(page), logFile: LOG_FILE, logDir: LOG_DIR };
+          await browser.close();
+          return res;
+        }
+      } catch (e) {
+        logLine('login-failed', { error: String((e && e.message) || e) });
+        if (loginOnly) {
+          const res = { ok: false, network: 'notepin', mode: 'login-only', error: 'LOGIN_FAILED', details: String((e && e.message) || e), username: loginUser || '', logFile: LOG_FILE };
+          try { await browser.close(); } catch {}
+          return res;
+        }
+      }
+    }
     // 1) Open editor and fill content
     await page.goto('https://notepin.co/write', { waitUntil: 'domcontentloaded' });
     await sleep(600 + Math.floor(Math.random() * 400));
