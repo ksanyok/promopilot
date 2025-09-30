@@ -30,6 +30,8 @@ function safeUrl(p) { try { return p.url(); } catch { return ''; } }
 function ensureDirSync(filePath) {
   try { const d = path.dirname(filePath); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); } catch {}
 }
+// Puppeteer-agnostic sleep (older versions may not have page.waitForTimeout)
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
 
 async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
@@ -113,7 +115,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       if (target && target.status === 'fulfilled' && target.value) {
         try { const newPage = await target.value.page(); if (newPage) page = newPage; } catch {}
       }
-      await page.waitForTimeout(300);
+  await sleep(300);
       await snap(page, '05-after-modal-submit');
 
       // If still on /write, try click Publish again fast
@@ -123,7 +125,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         await fastNav; await snap(page, '05b-second-publish');
       }
     } else {
-      await page.waitForTimeout(300);
+      await sleep(300);
     }
 
     const afterUrl = safeUrl(page); logLine('after-flow', { url: afterUrl });
@@ -154,7 +156,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     if (!publishedUrl) publishedUrl = blogUrl || afterUrl;
     if (!/^https?:\/\//i.test(publishedUrl)) throw new Error('FAILED_TO_RESOLVE_URL');
 
-    await snap(page, '99-final');
+  await snap(page, '99-final');
     logLine('success', { publishedUrl });
     await browser.close();
 
