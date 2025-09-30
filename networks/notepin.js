@@ -145,73 +145,175 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         await waitForTimeoutSafe(page, 200);
   await snap(page, '03-modal-filled');
 
+        // Trigger validation (blur inputs) so username uniqueness check runs
+        try {
+          await page.evaluate(() => {
+            const u = document.querySelector('.publishMenu input[name="blog"]');
+            const p = document.querySelector('.publishMenu input[name="pass"]');
+            if (u instanceof HTMLElement) u.blur();
+            if (p instanceof HTMLElement) p.blur();
+          });
+          await waitForTimeoutSafe(page, 200);
+        } catch(_) {}
+
+        // Ensure username is accepted (remove invalid). Retry a couple times by tweaking username.
+        try {
+          for (let i = 0; i < 3; i++) {
+            const invalid = await page.evaluate(() => {
+              const el = document.querySelector('.publishMenu input[name="blog"]');
+              return !!(el && el.classList && el.classList.contains('invalid'));
+            });
+            if (!invalid) break;
+            const suffix = Math.random().toString(36).slice(2, 5);
+            await page.evaluate((suf) => {
+              const el = document.querySelector('.publishMenu input[name="blog"]');
+              if (el) {
+                el.value = `${el.value || ''}${suf}`;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                (el instanceof HTMLElement) && el.blur();
+              }
+            }, suffix);
+            await waitForTimeoutSafe(page, 500);
+          }
+          const finalInvalid = await page.evaluate(() => {
+            const el = document.querySelector('.publishMenu input[name="blog"]');
+            return !!(el && el.classList && el.classList.contains('invalid'));
+          });
+          logLine('Modal: username validation', { invalid: finalInvalid });
+        } catch(_) {}
+
         // Wait for Cloudflare Turnstile token (if present) to be ready to reduce anti-bot flakiness
         try {
           await page.waitForFunction(() => {
-            const el = document.querySelector('.publishMenu input[name="cf-turnstile-response"]');
+            const el = document.querySelector('input[name="cf-turnstile-response"]');
             return !!(el && el.value && el.value.length > 20);
-          }, { timeout: 15000 });
+          }, { timeout: 25000 });
           logLine('Modal: Turnstile token ready');
         } catch(_) {
           logLine('Modal: Turnstile token not detected or not ready in time — proceeding');
         }
 
-        // Click "Publish My Blog" and handle either same-tab navigation or a popup/new tab
-        logLine('Modal: click finish and wait for navigation/new tab');
-        const targetPromise = (async () => {
+        // Click "Publish My Blog" and handle either same-tab navigation or a popup/new tab.
+        // We'll try up to 2 attempts in case the first click is ignored by anti-bot.
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          logLine('Modal: click finish and wait for navigation/new tab', { attempt });
+          try { await page.waitForSelector('.publishMenu .finish p, .publishMenu .finish', { visible: true, timeout: 20000 }); } catch(_) {}
+          // Scroll into view
+          try { await page.evaluate(() => { const el = document.querySelector('.publishMenu .finish p') || document.querySelector('.publishMenu .finish'); if (el) el.scrollIntoView({ block: 'center' }); }); } catch(_) {}
+          const targetPromise = (async () => {
+            try {
+              return await browser.waitForTarget(t => t.type() === 'page' && /notepin\.co/i.test(t.url()), { timeout: 60000 });
+            } catch { return null; }
+          })();
+          const navAfterModal = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
+          let clicked = false;
+          // Try real mouse click at center to avoid event blockers
           try {
-            return await browser.waitForTarget(t => t.type() === 'page' && /notepin\.co/i.test(t.url()), { timeout: 60000 });
-          } catch { return null; }
-        })();
-        const navAfterModal = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
-        const clickedFinish = await page.evaluate(() => {
-          const container = document.querySelector('.publishMenu .finish');
-          if (container && container instanceof HTMLElement) { container.click(); return true; }
-          const btn = document.querySelector('.publishMenu .finish p');
-          if (btn && btn instanceof HTMLElement) { btn.click(); return true; }
-          return false;
-        });
-        if (!clickedFinish) {
-          // fallback: press Enter on password
-          try { await page.focus('.publishMenu input[name="pass"]'); await page.keyboard.press('Enter'); } catch(_) {}
-        }
-        // Wait for either navigation or popup
-        const target = await targetPromise;
-        await navAfterModal;
-
-        // Adopt new page if popup opened or original closed
-        let adopted = false;
-        if (target && typeof target.page === 'function') {
-          try {
-            const newPg = await target.page();
-            if (newPg) {
-              if (page && typeof page.isClosed === 'function' && !page.isClosed() && newPg !== page) {
-                // Prefer newer page if original is still on /write
-                let curUrl = '';
-                try { curUrl = page.url(); } catch(_) {}
-                if (/\/write\b/i.test(curUrl)) {
-                  page = newPg; adopted = true;
-                }
-              } else {
-                page = newPg; adopted = true;
+            const handle = await page.$('.publishMenu .finish p') || await page.$('.publishMenu .finish');
+            if (handle) {
+              const box = await handle.boundingBox();
+              if (box) {
+                await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+                await waitForTimeoutSafe(page, 50);
+                await page.mouse.down();
+                await waitForTimeoutSafe(page, 30);
+                await page.mouse.up();
+                clicked = true;
               }
             }
           } catch(_) {}
-        }
-        if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-          // Original page was closed; pick another open notepin page
+          // Fallback to page.click if bounding box failed
+          if (!clicked) { try { await page.click('.publishMenu .finish p', { delay: 40 }); clicked = true; } catch(_) {} }
+          if (!clicked) { try { await page.click('.publishMenu .finish', { delay: 40 }); clicked = true; } catch(_) {} }
+          // As a last resort, dispatch DOM click
+          if (!clicked) {
+            try {
+              await page.evaluate(() => {
+                const el = document.querySelector('.publishMenu .finish p') || document.querySelector('.publishMenu .finish');
+                if (el) {
+                  const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                  el.dispatchEvent(evt);
+                }
+              });
+              clicked = true;
+            } catch(_) {}
+          }
+          if (!clicked) {
+            // fallback: press Enter on password
+            try { await page.focus('.publishMenu input[name="pass"]'); await page.keyboard.press('Enter'); clicked = true; } catch(_) {}
+          }
+
+          // Wait for either navigation or popup
+          const target = await targetPromise;
+          await navAfterModal;
+
+          // Adopt new page if popup opened or original closed
+          let adopted = false;
+          if (target && typeof target.page === 'function') {
+            try {
+              const newPg = await target.page();
+              if (newPg) {
+                if (page && typeof page.isClosed === 'function' && !page.isClosed() && newPg !== page) {
+                  let curUrl = '';
+                  try { curUrl = page.url(); } catch(_) {}
+                  if (/\/write\b/i.test(curUrl)) {
+                    page = newPg; adopted = true;
+                  }
+                } else {
+                  page = newPg; adopted = true;
+                }
+              }
+            } catch(_) {}
+          }
+          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+            // Original page was closed; pick another open notepin page
+            try {
+              const pages = await browser.pages();
+              const cand = pages.reverse().find(p => { try { return /notepin\.co/i.test(p.url()); } catch(_) { return false; } });
+              if (cand) { page = cand; adopted = true; }
+            } catch(_) {}
+          }
+          await waitForTimeoutSafe(page, 400);
+          let afterFinishUrl = '';
+          try { afterFinishUrl = page.url(); } catch(_) {}
+          // Check if modal is gone
+          let modalStillVisible = true;
           try {
-            const pages = await browser.pages();
-            const cand = pages.reverse().find(p => { try { return /notepin\.co/i.test(p.url()); } catch(_) { return false; } });
-            if (cand) { page = cand; adopted = true; }
-          } catch(_) {}
+            await page.waitForFunction(() => {
+              const el = document.querySelector('.publishMenu');
+              if (!el) return true;
+              const styleNone = getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden' || el.classList.contains('bringUp');
+              return styleNone;
+            }, { timeout: 8000 });
+            modalStillVisible = false;
+          } catch(_) {
+            try {
+              modalStillVisible = await page.$eval('.publishMenu', el => !!el && (getComputedStyle(el).display !== 'none') && !el.classList.contains('bringUp'));
+            } catch { modalStillVisible = false; }
+          }
+          logLine('After finish click', { attempt, url: afterFinishUrl, adoptedNewPage: adopted, modalStillVisible });
+          await snap(page, '04-after-modal-submit');
+          if (!modalStillVisible) break;
         }
-        // Short settle and snapshot
-        await waitForTimeoutSafe(page, 400);
-        let afterFinishUrl = '';
-        try { afterFinishUrl = page.url(); } catch(_) {}
-        logLine('After finish click', { url: afterFinishUrl, adoptedNewPage: adopted });
-        await snap(page, '04-after-modal-submit');
+
+        // If modal is gone but we remained on /write (common pattern), try to click publish again to publish the post
+        try {
+          let nowUrl = '';
+          try { nowUrl = page.url(); } catch(_) {}
+          if (/\/write\b/i.test(nowUrl)) {
+            logLine('Still on /write after modal — clicking Publish again');
+            const sel = '.publish button, .publish > button';
+            await page.waitForSelector(sel, { timeout: 15000 }).catch(() => {});
+            const navPost = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
+            try { await page.click(sel); } catch(_) {}
+            await navPost;
+            let afterSecondPublish = '';
+            try { afterSecondPublish = page.url(); } catch(_) {}
+            logLine('After second publish click', { url: afterSecondPublish });
+            await snap(page, '05b-after-second-publish');
+          }
+        } catch(_) {}
 
         // Open the first draft/editor link and publish the post explicitly
         try {
