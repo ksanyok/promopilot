@@ -1,6 +1,24 @@
 'use strict';
 
-const puppeteer = require('puppeteer');
+// Global safety nets to avoid NODE_RETURN_EMPTY
+try {
+  process.on('uncaughtException', (e) => {
+    try { console.log(JSON.stringify({ ok: false, network: 'notepin', error: String(e && e.message || e) })); } catch {}
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (e) => {
+    try { console.log(JSON.stringify({ ok: false, network: 'notepin', error: String(e && e.message || e) })); } catch {}
+    process.exit(1);
+  });
+} catch {}
+
+let puppeteer;
+try {
+  puppeteer = require('puppeteer');
+} catch (e) {
+  try { console.log(JSON.stringify({ ok: false, network: 'notepin', error: 'DEPENDENCY_MISSING: puppeteer' })); } catch {}
+  process.exit(1);
+}
 const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('./lib/logger');
@@ -46,7 +64,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
           } catch {}
         };
 
-        const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+        const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase();
         logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
         const job = { pageUrl, anchorText, language, openaiApiKey, aiProvider: provider, wish, meta: pageMeta, testMode: !!jobOptions.testMode };
@@ -74,6 +92,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         try {
           // Open editor
           await page.goto('https://notepin.co/write', { waitUntil: 'domcontentloaded' });
+          await snap(page, '01-00-open-write');
           await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
           await page.evaluate((html) => {
             const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
@@ -82,10 +101,11 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}
             }
           }, htmlContent);
-          await snap(page, 'open-write');
+          await snap(page, '02-01-editor-filled');
 
           // Click Publish (opens modal on first run)
           await page.click('.publish button, .publish > button');
+          await snap(page, '03-02-after-publish-click');
           // Wait either for modal to appear or navigation
           const modalAppeared = await page.waitForSelector('.publishMenu', { timeout: 10000 }).then(() => true).catch(() => false);
 
@@ -95,8 +115,9 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
             const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
             createdBlog = blog;
             logLine('Notepin credentials', { blog, pass });
-            await page.type('.publishMenu input[name="blog"]', blog, { delay: 10 }).catch(() => {});
-            await page.type('.publishMenu input[name="pass"]', pass, { delay: 10 }).catch(() => {});
+        await page.type('.publishMenu input[name="blog"]', blog, { delay: 10 }).catch(() => {});
+        await page.type('.publishMenu input[name="pass"]', pass, { delay: 10 }).catch(() => {});
+        await snap(page, '04-03-modal-filled');
             // Blur to trigger validation and try a short turnstile wait
             try { await page.focus('body'); } catch {}
             await page.waitForFunction(() => {
@@ -127,7 +148,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
             // Short settle and log where we landed
             await page.waitForTimeout(300);
             const landedUrl = safeUrl(page);
-            await snap(page, 'after-modal-finish');
+            await snap(page, '05-04-after-modal-submit');
             logLine('Landed after modal', { url: landedUrl });
 
             // If still on /write, click Publish once more (fast)
@@ -135,6 +156,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               const fastNav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null);
               await page.click('.publish button, .publish > button').catch(() => {});
               await fastNav; logLine('After second publish', { url: safeUrl(page) });
+              await snap(page, '05b-after-second-publish');
             }
           } else {
             // No modal (already has a blog?) — wait a blink for any nav
@@ -153,7 +175,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               const view = await browser.newPage();
               view.setDefaultTimeout(30000); view.setDefaultNavigationTimeout(30000);
               await view.goto(blogUrl, { waitUntil: 'domcontentloaded' });
-              await snap(view, 'blog-home');
+        await snap(view, '07-blog-home');
               const postUrl = await view.evaluate((base) => {
                 const pick = () => document.querySelector('.posts a[href*="/p/"]')
                   || document.querySelector('.posts a[href]')
@@ -173,7 +195,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
           if (!publishedUrl) publishedUrl = blogUrl || afterFlowUrl;
           if (!/^https?:\/\//i.test(publishedUrl)) throw new Error('FAILED_TO_RESOLVE_URL');
 
-          await snap(page, 'final');
+        await snap(page, '99-final');
           logLine('Publish success', { publishedUrl });
           await browser.close();
 
@@ -200,11 +222,11 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
             const job = JSON.parse(raw);
             logLine('PP_JOB parsed', { keys: Object.keys(job || {}) });
 
-            const pageUrl = job.url || job.pageUrl || '';
+        const pageUrl = job.url || job.pageUrl || job.jobUrl || '';
             const anchor = job.anchor || pageUrl;
             const language = job.language || 'ru';
             const apiKey = job.openaiApiKey || process.env.OPENAI_API_KEY || '';
-            const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+        const provider = (job.aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase();
             const wish = job.wish || '';
             const model = job.openaiModel || process.env.OPENAI_MODEL || '';
             if (model) process.env.OPENAI_MODEL = String(model);
