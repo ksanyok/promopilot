@@ -124,7 +124,22 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
   });
   let page = await browser.newPage();
   await applyStealth(page);
-  page.setDefaultTimeout(90000); page.setDefaultNavigationTimeout(90000);
+  // Allow overriding timeouts via env or job options
+  const DEF_TIMEOUT = Number(process.env.PP_TIMEOUT_MS || (jobOptions && jobOptions.timeoutMs) || 90000);
+  const NAV_TIMEOUT = Number(process.env.PP_NAV_TIMEOUT_MS || (jobOptions && jobOptions.navTimeoutMs) || DEF_TIMEOUT);
+  page.setDefaultTimeout(DEF_TIMEOUT);
+  page.setDefaultNavigationTimeout(NAV_TIMEOUT);
+
+  // Log browser fingerprint basics (UA, languages, webdriver) for debugging
+  try {
+    const fp = await page.evaluate(() => ({
+      ua: navigator.userAgent,
+      languages: navigator.languages,
+      webdriver: navigator.webdriver,
+      plugins: (navigator.plugins && navigator.plugins.length) || 0
+    }));
+    logLine('fingerprint', fp);
+  } catch {}
 
   let createdBlog = '';
   try {
@@ -147,16 +162,36 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     const modal = await page.waitForSelector('.publishMenu', { timeout: 10000 }).then(() => true).catch(() => false);
     if (modal) {
       // Fill modal
-      const blog = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3));
+      // Blog prefix configurable
+      const prefix = (process.env.PP_NOTEPIN_PREFIX || 'pp').replace(/[^\w-]+/g, '').slice(0, 6) || 'pp';
+      const blog = (prefix + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3));
       const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
       createdBlog = blog; logLine('credentials', { blog, pass });
       // Fill fields with human-like typing + ensure blur/validation fired
-      const blogSel = '.publishMenu input[name="blog"]';
-      const passSel = '.publishMenu input[name="pass"]';
+      // Notepin may use name="username" instead of "blog" — resolve dynamically
+      const blogSelCandidates = [
+        '.publishMenu input[name="blog"]',
+        '.publishMenu input[name="username"]',
+        '.publishMenu .username input',
+        '.publishMenu input[type="text"]'
+      ];
+      let blogSel = blogSelCandidates[0];
+      for (const s of blogSelCandidates) {
+        if (await page.$(s)) { blogSel = s; break; }
+      }
+      const passSelCandidates = [
+        '.publishMenu input[name="pass"]',
+        '.publishMenu input[type="password"]'
+      ];
+      let passSel = passSelCandidates[0];
+      for (const s of passSelCandidates) {
+        if (await page.$(s)) { passSel = s; break; }
+      }
+      logLine('selectors', { blogSel, passSel });
 
       // Ensure inputs exist
-      await page.waitForSelector(blogSel, { timeout: 15000 });
-      await page.waitForSelector(passSel, { timeout: 15000 });
+      await page.waitForSelector(blogSel, { timeout: Math.min(15000, DEF_TIMEOUT) });
+      await page.waitForSelector(passSel, { timeout: Math.min(15000, DEF_TIMEOUT) });
 
       // Clear + type blog (trigger keyup/blur for availability ajax)
       await page.click(blogSel, { clickCount: 3 }).catch(() => {});
@@ -173,7 +208,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         return !invalid;
       }, blogSel).catch(() => true);
       if (!blogIsValid) {
-        const second = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
+        const second = (prefix + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
         createdBlog = second; logLine('credentials-regenerated', { blog: second });
         await page.click(blogSel, { clickCount: 3 }).catch(() => {});
         await page.keyboard.type(second, { delay: 45 });
@@ -188,18 +223,21 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       await sleep(200);
 
       await snap(page, '04-modal-filled');
+      logLine('turnstile-wait', { start: Date.now() });
 
       // Wait for Cloudflare Turnstile token (invisible)
       await page.waitForFunction(() => {
         const el = document.querySelector('input[name="cf-turnstile-response"]');
         return !!(el && el.value && el.value.length > 20);
-      }, { timeout: 15000 }).catch(() => {});
+      }, { timeout: Math.min(12000, NAV_TIMEOUT) }).then(() => {
+        try { logLine('turnstile-token', { ok: true }); } catch {}
+      }).catch(() => { try { logLine('turnstile-token', { ok: false }); } catch {} });
 
       // Prepare for nav/new tab
-      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(25000, NAV_TIMEOUT) }).catch(() => null);
       const newTarget = page.browser().waitForTarget(
         t => t.type() === 'page' && t.opener() && t.opener() === page.target(),
-        { timeout: 25000 }
+        { timeout: Math.min(25000, NAV_TIMEOUT) }
       ).catch(() => null);
 
       // Click the actual submit button (works both for button and clickable div)
@@ -217,7 +255,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       if (target && target.status === 'fulfilled' && target.value) {
         try { const newPage = await target.value.page(); if (newPage) page = newPage; } catch {}
       }
-  await sleep(300);
+      await sleep(300);
       await snap(page, '05-after-modal-submit');
 
       // If the modal is still open and username shows validation error, retry once
@@ -231,9 +269,9 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
 
         if (usernameInvalid) {
           // Regenerate username, retype and re-click
-          const retryBlog = ('pp' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
+          const retryBlog = (prefix + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4));
           try {
-            const blogSel = '.publishMenu input[name="blog"]';
+            // blogSel variable already defined above
             await page.click(blogSel, { clickCount: 3 });
             await page.keyboard.type(retryBlog, { delay: 45 });
             await page.keyboard.press('Tab');
@@ -293,7 +331,17 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     const verification = createVerificationPayload({ pageUrl, anchorText, article, variants: { plain, html: htmlContent } });
     verification.supportsLinkCheck = false; // disable automated checks to avoid false negatives
     verification.supportsTextCheck = false;
-    return { ok: true, network: 'notepin', title, publishedUrl, logFile: LOG_FILE, logDir: LOG_DIR, verification };
+    return {
+      ok: true,
+      network: 'notepin',
+      title,
+      publishedUrl,
+      username: createdBlog || '',
+      userAgent: (await page.evaluate(() => navigator.userAgent).catch(() => '')) || '',
+      logFile: LOG_FILE,
+      logDir: LOG_DIR,
+      verification
+    };
   } catch (error) {
     try { await browser.close(); } catch {}
     return { ok: false, network: 'notepin', error: String((error && error.message) || error), logFile: LOG_FILE };
