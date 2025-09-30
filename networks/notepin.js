@@ -148,9 +148,11 @@ async function loginAndPublish(job) {
       page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 8000 }).catch(() => null),
       sleep(1200)
     ]);
-    await snap(page, 'P3-after-publish');
+  await snap(page, 'P3-after-publish');
+  await sleep(500);
+  await snap(page, 'P4-final');
 
-    const finalUrl = safeUrl(page);
+  const finalUrl = safeUrl(page);
     await browser.close();
     return { ok: true, network: 'notepin', mode: 'publish', username: username || '', publishedUrl: finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
   } catch (error) {
