@@ -16,6 +16,12 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
   const snapPrefix = LOG_FILE.replace(/\.log$/i, '');
   const snap = async (pg, name) => {
     try {
+      if (typeof pg.isClosed === 'function' && pg.isClosed()) {
+        let closedUrl = '';
+        try { closedUrl = pg.url(); } catch(_) {}
+        logLine('Screenshot skipped - page closed', { name, url: closedUrl });
+        return;
+      }
       snapStep += 1;
       const idx = String(snapStep).padStart(2, '0');
       const safe = String(name || 'step').replace(/[^a-z0-9_-]+/gi, '-');
@@ -139,35 +145,100 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         await waitForTimeoutSafe(page, 200);
   await snap(page, '03-modal-filled');
 
-        // Click "Publish My Blog"
+        // Wait for Cloudflare Turnstile token (if present) to be ready to reduce anti-bot flakiness
+        try {
+          await page.waitForFunction(() => {
+            const el = document.querySelector('.publishMenu input[name="cf-turnstile-response"]');
+            return !!(el && el.value && el.value.length > 20);
+          }, { timeout: 15000 });
+          logLine('Modal: Turnstile token ready');
+        } catch(_) {
+          logLine('Modal: Turnstile token not detected or not ready in time — proceeding');
+        }
+
+        // Click "Publish My Blog" and handle either same-tab navigation or a popup/new tab
+        logLine('Modal: click finish and wait for navigation/new tab');
+        const targetPromise = (async () => {
+          try {
+            return await browser.waitForTarget(t => t.type() === 'page' && /notepin\.co/i.test(t.url()), { timeout: 60000 });
+          } catch { return null; }
+        })();
         const navAfterModal = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null);
         const clickedFinish = await page.evaluate(() => {
+          const container = document.querySelector('.publishMenu .finish');
+          if (container && container instanceof HTMLElement) { container.click(); return true; }
           const btn = document.querySelector('.publishMenu .finish p');
-          if (btn) { (btn instanceof HTMLElement) && btn.click(); return true; }
-          const alt = document.querySelector('.publishMenu .finish');
-          if (alt) { (alt instanceof HTMLElement) && alt.click(); return true; }
+          if (btn && btn instanceof HTMLElement) { btn.click(); return true; }
           return false;
         });
         if (!clickedFinish) {
           // fallback: press Enter on password
           try { await page.focus('.publishMenu input[name="pass"]'); await page.keyboard.press('Enter'); } catch(_) {}
         }
+        // Wait for either navigation or popup
+        const target = await targetPromise;
         await navAfterModal;
-        // As a fallback, wait for dashboard posts list to appear
-        try { await page.waitForSelector('.posts a[href^="write?id="]', { timeout: 30000 }); } catch(_) {}
+
+        // Adopt new page if popup opened or original closed
+        let adopted = false;
+        if (target && typeof target.page === 'function') {
+          try {
+            const newPg = await target.page();
+            if (newPg) {
+              if (page && typeof page.isClosed === 'function' && !page.isClosed() && newPg !== page) {
+                // Prefer newer page if original is still on /write
+                let curUrl = '';
+                try { curUrl = page.url(); } catch(_) {}
+                if (/\/write\b/i.test(curUrl)) {
+                  page = newPg; adopted = true;
+                }
+              } else {
+                page = newPg; adopted = true;
+              }
+            }
+          } catch(_) {}
+        }
+        if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+          // Original page was closed; pick another open notepin page
+          try {
+            const pages = await browser.pages();
+            const cand = pages.reverse().find(p => { try { return /notepin\.co/i.test(p.url()); } catch(_) { return false; } });
+            if (cand) { page = cand; adopted = true; }
+          } catch(_) {}
+        }
+        // Short settle and snapshot
         await waitForTimeoutSafe(page, 400);
-  await snap(page, '04-after-modal-submit');
+        let afterFinishUrl = '';
+        try { afterFinishUrl = page.url(); } catch(_) {}
+        logLine('After finish click', { url: afterFinishUrl, adoptedNewPage: adopted });
+        await snap(page, '04-after-modal-submit');
 
         // Open the first draft/editor link and publish the post explicitly
         try {
+          let dashUrl = '';
+          try { dashUrl = page.url(); } catch(_) {}
+          logLine('Dashboard ready, looking for draft link', { url: dashUrl });
           const opened = await page.evaluate(() => {
-            const a = document.querySelector('.posts a[href^="write?id="]');
-            if (a && a.href) { (a instanceof HTMLElement) && a.click(); return true; }
+            const a = document.querySelector('.posts a[href*="write?id="]');
+            if (a && a instanceof HTMLElement) { a.click(); return true; }
             return false;
           });
           if (opened) {
+            const draftTarget = (async () => {
+              try { return await window.__pp_noop__, null; } catch(_) { return null; }
+            })();
+            // Handle potential same-tab nav
             await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
+            // If a new tab opened for editor, adopt it
+            try {
+              const pages = await browser.pages();
+              const cand = pages.reverse().find(p => { try { return /notepin\.co\/.+write\?id=/i.test(p.url()); } catch(_) { return false; } });
+              if (cand) page = cand;
+            } catch(_) {}
             // Ensure editor is ready, then (re)fill to be safe
+            let draftUrl = '';
+            try { draftUrl = page.url(); } catch(_) {}
+            logLine('Draft/editor opened', { url: draftUrl });
             const editorSelector = '.pad .elements .element.medium-editor-element[contenteditable="true"]';
             try { await page.waitForSelector(editorSelector, { timeout: 20000 }); } catch(_) {}
             await page.evaluate((html) => {
@@ -181,11 +252,17 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
             await snap(page, '05-draft-editor');
             // Click publish on editor
             try {
+              let beforePostPublishUrl = '';
+              try { beforePostPublishUrl = page.url(); } catch(_) {}
+              logLine('About to publish post (editor)', { url: beforePostPublishUrl });
               const navPost = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
               const sel = '.publish button, .publish > button';
               await page.waitForSelector(sel, { timeout: 15000 }).catch(() => {});
               try { await page.click(sel); } catch(_) {}
               await navPost;
+              let afterPostPublishUrl = '';
+              try { afterPostPublishUrl = page.url(); } catch(_) {}
+              logLine('Post publish navigation complete', { url: afterPostPublishUrl });
               await waitForTimeoutSafe(page, 300);
               await snap(page, '06-post-publish-clicked');
             } catch(_) {}
@@ -216,7 +293,21 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     // If we only have blog homepage, try to open it and extract first post URL
     if (blogUrl && /^https?:\/\//i.test(blogUrl) && (!publishedUrl || publishedUrl.replace(/\/?$/, '/') === blogUrl.replace(/\/?$/, '/'))) {
       try {
-        logLine('Open blog homepage to resolve post URL', { blogUrl });
+  let pageClosed = false; try { pageClosed = page.isClosed(); } catch(_) {}
+  logLine('Open blog homepage to resolve post URL', { blogUrl, pageClosed });
+        // Ensure page context is alive; if closed, pick any notepin page or open a new one
+        if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+          try {
+            const pages = await browser.pages();
+            const cand = pages.reverse().find(p => { try { return /notepin\.co/i.test(p.url()); } catch(_) { return false; } });
+            if (cand) { page = cand; }
+          } catch(_) {}
+          if (!page || (typeof page.isClosed === 'function' && page.isClosed())) {
+            page = await browser.newPage();
+            page.setDefaultTimeout(300000);
+            page.setDefaultNavigationTimeout(300000);
+          }
+        }
         await page.goto(blogUrl, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.posts a', { timeout: 20000 }).catch(() => {});
         await snap(page, '07-blog-home');
