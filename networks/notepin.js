@@ -22,6 +22,7 @@ try {
 const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('./lib/logger');
+const { generateArticle } = require('./lib/articleGenerator');
 
 function safeUrl(p) { try { return p.url(); } catch { return ''; } }
 function ensureDirSync(filePath) {
@@ -29,8 +30,10 @@ function ensureDirSync(filePath) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
 
-async function loginNotepin(username, password) {
+async function loginAndPublish(job) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
+  const username = job.username || job.loginUsername || process.env.PP_NOTEPIN_USERNAME || '';
+  const password = job.password || job.loginPassword || process.env.PP_NOTEPIN_PASSWORD || '';
 
   // Screenshot helper
   let snapStep = 0; const snapPrefix = LOG_FILE.replace(/\.log$/i, '');
@@ -88,17 +91,76 @@ async function loginNotepin(username, password) {
     await Promise.race([nav, hostChange, sleep(1200)]);
     await snap(page, 'L3-after-login');
 
+    // 5) If job requests login-only, exit here
+    if (job.loginOnly || /^(1|true|yes)$/i.test(String(process.env.PP_NOTEPIN_LOGIN_ONLY || ''))) {
+      const finalUrl = safeUrl(page);
+      await browser.close();
+      return { ok: true, network: 'notepin', mode: 'login-only', username: username || '', finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
+    }
+
+    // 6) Click "new post" to go to the write page
+    const origin = new URL(safeUrl(page) || 'https://notepin.co').origin;
+    const navWrite = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
+    const clicked = await page.evaluate(() => {
+      const el = document.querySelector('a[href="write"] .newPost, p.newPost, a[href="write"], a[href$="/write"]');
+      if (el && typeof el.dispatchEvent === 'function') { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+      return false;
+    }).catch(() => false);
+    if (!clicked) {
+      await page.goto(`${origin}/write`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    } else {
+      await Promise.race([navWrite, sleep(1000)]);
+    }
+    await snap(page, 'P1-write-page');
+
+    // 7) Generate or use provided article
+    const genJob = {
+      pageUrl: job.url || job.pageUrl || job.jobUrl || '',
+      anchorText: job.anchor || 'PromoPilot link',
+      language: job.language || 'ru',
+      aiProvider: (job.aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase(),
+      openaiApiKey: job.openaiApiKey || process.env.OPENAI_API_KEY || '',
+      wish: job.wish || '',
+      meta: job.page_meta || job.meta || null,
+      testMode: !!job.testMode
+    };
+    const article = (job.preparedArticle && job.preparedArticle.htmlContent)
+      ? { ...job.preparedArticle }
+      : await generateArticle(genJob, logLine);
+    const htmlContent = String(article.htmlContent || '<p></p>');
+
+    // 8) Fill editor content
+    await page.waitForSelector('.pad .elements .element.medium-editor-element[contenteditable="true"]', { timeout: 15000 });
+    await page.evaluate((html) => {
+      const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
+      if (el) { el.innerHTML = String(html); try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {} }
+    }, htmlContent).catch(() => {});
+    await snap(page, 'P2-editor-filled');
+
+    // 9) Publish
+    const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+    await page.click('.publish button, .publish > button').catch(async () => {
+      await page.evaluate(() => { const b = document.querySelector('.publish button, .publish > button'); if (b && typeof b.dispatchEvent === 'function') b.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    });
+    // If no nav, wait briefly for URL change to a post page
+    await Promise.race([
+      navPub,
+      page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 8000 }).catch(() => null),
+      sleep(1200)
+    ]);
+    await snap(page, 'P3-after-publish');
+
     const finalUrl = safeUrl(page);
     await browser.close();
-    return { ok: true, network: 'notepin', mode: 'login-only', username: username || '', finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
+    return { ok: true, network: 'notepin', mode: 'publish', username: username || '', publishedUrl: finalUrl, logFile: LOG_FILE, logDir: LOG_DIR };
   } catch (error) {
     try { await snap(page, 'Lx-error'); } catch {}
     try { await browser.close(); } catch {}
-    return { ok: false, network: 'notepin', mode: 'login-only', error: String((error && error.message) || error) };
+    return { ok: false, network: 'notepin', mode: 'publish', error: String((error && error.message) || error) };
   }
 }
 
-module.exports = { publish: loginNotepin };
+module.exports = { publish: loginAndPublish };
 
 // CLI entrypoint (login-only by default)
 if (require.main === module) {
@@ -110,10 +172,7 @@ if (require.main === module) {
       const job = JSON.parse(raw || '{}');
       logLine('PP_JOB parsed', { keys: Object.keys(job || {}) });
 
-      const username = job.username || job.loginUsername || process.env.PP_NOTEPIN_USERNAME || 'pphr9sc56f4j4s';
-      const password = job.password || job.loginPassword || process.env.PP_NOTEPIN_PASSWORD || 'swxqsk27nmA!9';
-
-      const res = await loginNotepin(username, password);
+      const res = await loginAndPublish(job);
       logLine('result', res); console.log(JSON.stringify(res)); process.exit(res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String((e && e.message) || e), network: 'notepin' };
