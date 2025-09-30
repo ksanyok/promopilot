@@ -46,6 +46,7 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
   logLine('Launching browser', { executablePath: execPath || 'default', args: launchOpts.args });
   const browser = await puppeteer.launch(launchOpts);
   let page = null;
+  let createdBlog = '';
   try {
     page = await browser.newPage();
     page.setDefaultTimeout(300000);
@@ -92,9 +93,10 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       if (menu) {
         // Generate unique blog login and password
         const randId = () => 'pp' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-        const blog = randId();
+  const blog = randId();
         const pass = Math.random().toString(36).slice(2, 12) + 'A!9';
         logLine('Notepin credentials', { blog, pass });
+  createdBlog = blog;
 
         // Fill inputs and trigger input events
         await page.evaluate(({ blog, pass }) => {
@@ -127,12 +129,20 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
           try { await page.focus('.publishMenu input[name="pass"]'); await page.keyboard.press('Enter'); } catch(_) {}
         }
         await navAfterModal;
+        // As a fallback, wait for dashboard posts list to appear
+        try { await page.waitForSelector('.posts a[href^="write?id="]', { timeout: 30000 }); } catch(_) {}
         await waitForTimeoutSafe(page, 400);
       }
     }
 
-  let publishedUrl = '';
-  try { publishedUrl = page.url(); } catch (_) { publishedUrl = ''; }
+    let publishedUrl = '';
+    try { publishedUrl = page.url(); } catch (_) { publishedUrl = ''; }
+    // If we are on dashboard or editor, prefer public blog URL fallback
+    let blogUrl = '';
+    if (createdBlog) { blogUrl = `https://${createdBlog}.notepin.co/`; }
+    if ((!publishedUrl || /\/write\b/i.test(publishedUrl) || /\/dash\b/i.test(publishedUrl)) && blogUrl) {
+      publishedUrl = blogUrl;
+    }
     if (!publishedUrl || !/^https?:\/\//i.test(publishedUrl)) {
       // Fallback: try to read any visible URL
       try {
@@ -142,6 +152,31 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
         });
         if (maybe && /^https?:\/\//i.test(maybe)) { publishedUrl = maybe; }
       } catch (_) {}
+    }
+
+    // If we only have blog homepage, try to open it and extract first post URL
+    if (blogUrl && /^https?:\/\//i.test(blogUrl) && (!publishedUrl || publishedUrl.replace(/\/?$/, '/') === blogUrl.replace(/\/?$/, '/'))) {
+      try {
+        logLine('Open blog homepage to resolve post URL', { blogUrl });
+        await page.goto(blogUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.posts a', { timeout: 20000 }).catch(() => {});
+        const firstPost = await page.evaluate((base) => {
+          const a = document.querySelector('.posts a[href]');
+          if (!a) return '';
+          const href = (a.getAttribute('href') || '').trim();
+          if (!href) return '';
+          if (/^https?:\/\//i.test(href)) return href;
+          try { const u = new URL(href, base); return u.toString(); } catch(_) { return ''; }
+        }, blogUrl);
+        if (firstPost && /^https?:\/\//i.test(firstPost)) {
+          publishedUrl = firstPost;
+          logLine('Resolved post URL', { publishedUrl });
+        } else {
+          logLine('Blog page has no post link, keeping blog URL');
+        }
+      } catch (e) {
+        logLine('Failed to resolve post URL from blog', { error: String(e && e.message || e) });
+      }
     }
 
     if (!publishedUrl || /\/write\b/i.test(publishedUrl)) {
