@@ -107,7 +107,10 @@ function createGenericPastePublisher(config) {
 
       const goToUrl = config.getStartUrl ? await config.getStartUrl({ job, article, variants }) : config.baseUrl;
       logLine('Goto start', { url: goToUrl });
-      await page.goto(goToUrl, { waitUntil: config.waitUntil || 'networkidle2' });
+  await page.goto(goToUrl, { waitUntil: config.waitUntil || 'networkidle2' });
+  // Stabilize after navigation to avoid using a stale frame on very dynamic sites
+  try { await sleep(300); } catch (_) {}
+  try { await page.waitForSelector('body', { timeout: 5000 }); } catch (_) {}
 
       if (config.afterGoto) {
         await config.afterGoto({ page, job, article, variants, logLine, logDebug, browser });

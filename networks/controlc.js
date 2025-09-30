@@ -2,7 +2,7 @@
 'use strict';
 
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
-const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
+const { waitForTimeoutSafe, clickSubmit } = require('./lib/puppeteerUtils');
 const { solveIfCaptcha, detectCaptcha } = require('./captcha');
 
 const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]+$/i;
@@ -191,6 +191,8 @@ async function ensureRecaptchaSolved(page, logLine, { attempts = 3, label = 'bef
       if (!det || !det.found) {
         logLine('ControlC captcha no longer detected', { stage: label, attempt });
         if (await isRecaptchaSolved(page)) return true;
+        // If no captcha is detected anymore, allow caller to proceed and handle later.
+        return false;
       }
     } catch (_) {}
   }
@@ -202,7 +204,8 @@ async function ensureRecaptchaSolved(page, logLine, { attempts = 3, label = 'bef
 const config = {
   slug: 'controlc',
   baseUrl: 'https://controlc.com/',
-  contentFormat: 'markdown',
+  contentFormat: 'text',
+  waitUntil: 'domcontentloaded',
   waitForSelector: 'form textarea',
   submitSelectors: [
     'button[type="submit"]',
@@ -216,11 +219,83 @@ const config = {
   ],
   titleSelectors: ['input#paste_title', 'input[name="title"]'],
   resultTimeoutMs: RESULT_TIMEOUT_MS,
+  // Register a new account before publishing to keep sessions durable
+  beforeGoto: async ({ page, logLine, job }) => {
+    function randInt(min, max){ return Math.floor(Math.random()*(max-min+1))+min; }
+    function randomString(len){ const s='abcdefghijklmnopqrstuvwxyz0123456789'; let out=''; for(let i=0;i<len;i++) out+=s[randInt(0,s.length-1)]; return out; }
+    function randomUser(){ return randomString(randInt(8,12)); }
+    function randomEmail(){ const domains=['gmail.com','outlook.com','yahoo.com','proton.me','me.com']; return `${randomString(randInt(9,14))}@${domains[randInt(0,domains.length-1)]}`; }
+    function randomPassword(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZ'; const b='abcdefghjkmnpqrstuvwxyz'; const c='23456789'; const d='!@#$%^&*?'; const pick=(p,n)=>Array.from({length:n},()=>p[randInt(0,p.length-1)]).join(''); const base=pick(a,2)+pick(b,4)+pick(c,3)+pick(d,1)+randomString(randInt(2,4)); return base.split('').sort(()=>Math.random()-0.5).join(''); }
+
+    // Quick check: if already logged in (presence of Logout link)
+    try {
+      await page.goto('https://controlc.com/', { waitUntil: 'domcontentloaded' });
+      const already = await page.evaluate(() => !!Array.from(document.querySelectorAll('a')).find(a=>/logout/i.test(a.textContent||'')));
+      if (already) { logLine('ControlC already logged in'); return; }
+    } catch(_) {}
+
+    // Start registration
+  const username = randomUser();
+  const email = randomEmail();
+  const password = randomPassword();
+  // Temporarily log full password for debugging purposes
+  logLine('ControlC register credentials', { username, email, password });
+    try {
+  await page.goto('https://controlc.com/register/', { waitUntil: 'domcontentloaded' });
+      await waitForTimeoutSafe(page, 500);
+      await page.type('input[name="login"]', username, { delay: 20 }).catch(()=>{});
+      await page.type('input[name="email"]', email, { delay: 20 }).catch(()=>{});
+      await page.type('input[name="password"]', password, { delay: 20 }).catch(()=>{});
+      await page.type('input[name="password2"]', password, { delay: 20 }).catch(()=>{});
+      // Agree TOS
+      await page.evaluate(() => { const cb = document.querySelector('input#tosagree, input[name="agreed"]'); if (cb && !cb.checked) cb.click(); });
+      // Solve captcha
+      const det = await detectCaptcha(page); if (det && det.found) { await ensureRecaptchaSolved(page, logLine, { attempts: 3, label: 'register' }); }
+      // Submit
+      await page.evaluate(() => { const btn = document.querySelector('input[type="submit"].submit, input[type="submit"][value="Register"], input[type="submit"]'); if (btn) btn.click(); });
+      await Promise.race([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(()=>null),
+        waitForTimeoutSafe(page, 2500)
+      ]);
+      logLine('ControlC registration submitted');
+    } catch (e) {
+      logLine('ControlC registration error', { error: String(e && e.message || e) });
+    }
+  },
+  afterGoto: async ({ page, logLine }) => {
+    // Small stabilization pause to avoid race with dynamic widgets causing frame detach
+    try { await waitForTimeoutSafe(page, 500); } catch (_) {}
+    try { await page.waitForSelector('body', { timeout: 5000 }); } catch (_) {}
+    logLine('ControlC afterGoto stabilized');
+  },
+  // Pre-fill paste options (enable code highlighting to improve formatting of markdown-like text)
+  preFill: async ({ page, logLine }) => {
+    try {
+      await page.evaluate(() => {
+        const sel = document.querySelector('select[name="code"]');
+        // Disable code highlighting to avoid rendering markdown markers as code
+        if (sel) { sel.value = '0'; try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch(_) {} }
+      });
+      logLine('ControlC preFill: code highlighting disabled');
+    } catch (e) {
+      logLine('ControlC preFill error', { error: String(e && e.message || e) });
+    }
+  },
   beforeSubmit: async ({ page, logLine }) => {
     try {
       const solved = await ensureRecaptchaSolved(page, logLine, { attempts: 3, label: 'beforeSubmit' });
       if (!solved) {
-        throw new Error('CAPTCHA_UNSOLVED');
+        // If captcha is no longer detected or is a non-blocking variant (v3/anchor), proceed and handle in afterSubmit.
+        try {
+          const det = await detectCaptcha(page);
+          if (!det || !det.found || det.type === 'recaptcha-v3' || det.type === 'recaptcha-anchor') {
+            logLine('ControlC captcha not blocking before submit, proceeding', { detected: det && det.type ? det.type : 'none' });
+          } else {
+            logLine('ControlC captcha not solved before submit, will proceed and handle afterSubmit', { type: det.type });
+          }
+        } catch (_) {
+          // ignore detection errors and proceed
+        }
       }
       await page.evaluate(() => {
         try {
@@ -231,22 +306,30 @@ const config = {
       });
     } catch (error) {
       logLine('ControlC captcha solve error', { stage: 'beforeSubmit', error: String(error && error.message || error) });
-      throw error;
+      // Do not block submission here; afterSubmit will try to resolve captcha again if needed.
     }
   },
   afterSubmit: async ({ page, logLine }) => {
     try {
       await Promise.race([
-        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => null),
-        waitForTimeoutSafe(page, 2000)
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null),
+        waitForTimeoutSafe(page, 2500)
       ]);
 
       const sameUrl = await page.url();
       if (sameUrl && /^https?:\/\/controlc\.com\/?$/i.test(sameUrl) && !(await isRecaptchaSolved(page))) {
-        const det = await detectCaptcha(page);
-        if (det && det.found) {
-          logLine('ControlC captcha re-challenge detected', { stage: 'afterSubmit', type: det.type });
-          await ensureRecaptchaSolved(page, logLine, { attempts: 2, label: 'afterSubmit' });
+        // Give the page a moment to surface a challenge
+        await waitForTimeoutSafe(page, 1500);
+        for (let i = 0; i < 2; i += 1) {
+          const det = await detectCaptcha(page);
+          if (det && det.found && det.type !== 'recaptcha-v3' && det.type !== 'recaptcha-anchor') {
+            logLine('ControlC captcha re-challenge detected', { stage: 'afterSubmit', type: det.type, attempt: i + 1 });
+            const ok = await ensureRecaptchaSolved(page, logLine, { attempts: 2, label: 'afterSubmit' });
+            if (ok) break;
+          } else if (!det || !det.found) {
+            break;
+          }
+          await waitForTimeoutSafe(page, 1200);
         }
       }
     } catch (error) {
@@ -257,6 +340,7 @@ const config = {
     const target = popupPage || page;
     const seen = new Set();
     const deadline = Date.now() + RESULT_TIMEOUT_MS;
+    let lastRetryTs = 0;
 
     while (Date.now() < deadline) {
       const { urls } = await collectCandidates(target);
@@ -266,6 +350,34 @@ const config = {
       if (picked) {
         return picked.trim();
       }
+
+      // If we're still on the homepage without candidates, try to gently re-submit and solve captcha again
+      try {
+        const cur = await target.url();
+        const now = Date.now();
+        if (/^https?:\/\/controlc\.com\/?$/i.test(cur) && (now - lastRetryTs > 5000)) {
+          lastRetryTs = now;
+          // Attempt a quick captcha solve and re-click submit
+          try {
+            await ensureRecaptchaSolved(target, logLine, { attempts: 1, label: 'resolve' });
+          } catch (_) {}
+          try {
+            await clickSubmit(target, {
+              submitSelectors: [
+                'button[type="submit"]',
+                '#submit',
+                '#submitbutton',
+                '#submit_button',
+                'button#submitbutton',
+                'button[name="Submit"]',
+                'input[type="submit"]',
+                'input[name="submit"]'
+              ]
+            });
+          } catch (_) {}
+          await waitForTimeoutSafe(target, 1500);
+        }
+      } catch (_) {}
 
       if (Date.now() + RESULT_POLL_INTERVAL >= deadline) {
         break;

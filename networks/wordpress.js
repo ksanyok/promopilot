@@ -12,10 +12,14 @@ function ensureDirSync(dir){ try { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { 
 function randInt(min, max){ return Math.floor(Math.random() * (max - min + 1)) + min; }
 function randomString(len){ const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'; let s = ''; for (let i=0;i<len;i++) s += alphabet[randInt(0, alphabet.length-1)]; return s; }
 function randomEmail(){
-  const user = randomString(randInt(8, 12));
-  const domains = ['gmail.com','outlook.com','yahoo.com','proton.me','mail.com','gmx.com','zoho.com'];
+  // Local-part must be only letters and digits
+  const lettersDigits = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const len = randInt(9, 14);
+  let local = '';
+  for (let i = 0; i < len; i++) local += lettersDigits[randInt(0, lettersDigits.length - 1)];
+  const domains = ['gmail.com','outlook.com','yahoo.com','proton.me','me.com'];
   const domain = domains[randInt(0, domains.length-1)];
-  return `${user}+pp${Date.now().toString(36)}@${domain}`;
+  return `${local}@${domain}`;
 }
 function randomPassword(){
   const sets = [
@@ -87,140 +91,107 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.6,en;q=0.5' });
   } catch (_) {}
 
-  // Step 1: Register
+  // Step 1: Onboarding as described
   const email = randomEmail();
-  const password = randomPassword();
-  const username = `pp${randomString(6)}`; // used for site slug too
-  logLine('Credentials', { email, username, passwordPreview: password.slice(0,3) + '***' });
+  const username = `pp${randomString(8)}`;
+  logLine('Credentials', { email, username });
 
   try {
-    await page.goto('https://wordpress.com/start/account/user', { waitUntil: 'networkidle2' });
-    await shot('wp-start', page);
-  } catch (e) { logLine('Goto signup error', { error: String(e && e.message || e) }); }
+    await page.goto('https://wordpress.com/setup/onboarding/user/ru?ref=logged-out-homepage-lp', { waitUntil: 'networkidle2' });
+    await shot('wp-onboarding-open', page);
+  } catch (e) { logLine('Goto onboarding error', { error: String(e && e.message || e) }); }
 
-  // Fill email & username & password (WP flows may vary)
+  // Click the email registration button ("Чтобы продолжить, введите адрес эл. почты")
   try {
-    const emailInfo = await findVisibleHandle(page, [
-      'input#email', 'input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]'
-    ]);
+    const clicked = await page.evaluate(() => {
+      const list = Array.from(document.querySelectorAll('button.components-button, button, [role="button"]'));
+      const btn = list.find(b => /введите адрес эл\. почты/i.test((b.innerText||'').trim()));
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+    logLine('Click email option', { clicked });
+    await waitForTimeoutSafe(page, 800);
+    await shot('wp-email-option', page);
+  } catch (e) { logLine('Click email option error', { error: String(e && e.message || e) }); }
+
+  // Fill the email in form (#signup-email) and submit
+  try {
+    await page.waitForSelector('#signup-email', { timeout: 20000 }).catch(()=>{});
+    const emailInfo = await findVisibleHandle(page, ['#signup-email', 'input.signup-form__passwordless-email', 'input[name="email"]', 'input[type="email"]']);
     if (emailInfo && emailInfo.handle) { await emailInfo.handle.type(email, { delay: 15 }); try { await emailInfo.handle.dispose(); } catch(_) {} }
-    const userInfo = await findVisibleHandle(page, [
-      'input#username', 'input[name="username"]'
-    ]);
-    if (userInfo && userInfo.handle) { await userInfo.handle.type(username, { delay: 15 }); try { await userInfo.handle.dispose(); } catch(_) {} }
-    const passInfo = await findVisibleHandle(page, [
-      'input#password', 'input[name="password"]', 'input[type="password"]'
-    ]);
-    if (passInfo && passInfo.handle) { await passInfo.handle.type(password, { delay: 15 }); try { await passInfo.handle.dispose(); } catch(_) {} }
-  } catch (e) { logLine('Fill signup error', { error: String(e && e.message || e) }); }
-
-  // Accept cookies if present
-  try { await page.evaluate(() => { const b = Array.from(document.querySelectorAll('button, [role="button"], a')).find(x => /accept|agree|consent/i.test(x.innerText||'')); if (b) b.click(); }); } catch(_) {}
-
-  // Submit signup
-  try {
+    await shot('wp-email-form', page);
     await page.evaluate(() => {
-      const btn = document.querySelector('button[type="submit"], button.signup__submit, button.is-primary');
+      const btn = document.querySelector('button.signup-form__submit, form .components-button[type="submit"]');
       if (btn) btn.click();
     });
-  } catch (_) {}
+  } catch (e) { logLine('Email submit error', { error: String(e && e.message || e) }); }
   await waitForTimeoutSafe(page, 1500);
-  await shot('wp-after-signup', page);
+  await shot('wp-email-submitted', page);
 
-  // Captcha handling if appears
+  // Captcha if any
   try { const det = await detectCaptcha(page); if (det && det.found) { await solveIfCaptcha(page, logLine, (label) => shot(label, page)); } } catch(_) {}
 
-  // Step 2: Create free site
-  // Navigate to site creation wizard if not already
+  // Step 2: Domain search page (as in provided HTML)
+  // Wait for search input and submit button
   try {
-    if (!/wordpress\.com\/(home|setup|start)/i.test(page.url())) {
-      await page.goto('https://wordpress.com/start/site-style', { waitUntil: 'networkidle2' });
-    }
+    await page.waitForSelector('input[type="search"], #components-search-control-0', { timeout: 30000 }).catch(()=>{});
   } catch(_) {}
-  await shot('wp-wizard', page);
+  await shot('wp-domain-search-open', page);
 
-  // Pick free domain variant
-  const siteSlug = `${username}-${Date.now().toString(36)}`;
+  // Generate domain base name (letters+digits) and search
+  const domainBase = `${username}${randomString(4)}`;
   try {
-    // Bypass many questions by going directly to domain search
-    await page.goto('https://wordpress.com/start/domain', { waitUntil: 'networkidle2' });
-    await waitForTimeoutSafe(page, 1000);
-    const domainInput = await findVisibleHandle(page, ['input[type="search"]', 'input#domain-search-input', 'input[name="domain"]']);
-    if (domainInput && domainInput.handle) {
-      await domainInput.handle.type(siteSlug, { delay: 20 });
-      try { await domainInput.handle.dispose(); } catch(_) {}
+    const searchInfo = await findVisibleHandle(page, ['#components-search-control-0', 'input[type="search"]']);
+    if (searchInfo && searchInfo.handle) { await searchInfo.handle.click().catch(()=>{}); await searchInfo.handle.type(domainBase, { delay: 15 }); try { await searchInfo.handle.dispose(); } catch(_) {} }
+    await waitForTimeoutSafe(page, 500);
+    await page.evaluate(() => {
+      const btn = document.querySelector('button.domain-search-controls__submit');
+      if (btn) btn.click();
+    });
+  } catch (e) { logLine('Domain search error', { error: String(e && e.message || e) }); }
+  await waitForTimeoutSafe(page, 2500);
+  await shot('wp-domain-search-results', page);
+
+  // Step 3: Choose free wordpress.com subdomain: click "Пропустить покупку"
+  let siteSlug = '';
+  try {
+    const clickedSkip = await page.evaluate(() => {
+      const cards = Array.from(document.querySelectorAll('.domain-search-skip-suggestion'));
+      let btn = null;
+      if (cards.length) {
+        btn = cards[0].querySelector('button.domain-search-skip-suggestion__btn');
+      }
+      if (!btn) {
+        btn = Array.from(document.querySelectorAll('button, [role="button"]')).find(b => /пропустить покупку/i.test((b.innerText||'').toLowerCase()));
+      }
+      if (btn) { btn.click(); return btn.getAttribute('aria-label') || 'clicked'; }
+      return '';
+    });
+    logLine('Skip purchase clicked', { aria: clickedSkip });
+    // Parse slug from aria-label if present
+    if (clickedSkip && typeof clickedSkip === 'string') {
+      const m = clickedSkip.match(/\b([a-z0-9-]+)\.wordpress\.com\b/i);
+      if (m) siteSlug = m[1].toLowerCase();
     }
-    await waitForTimeoutSafe(page, 800);
-    // Click on free suggestion *.wordpress.com
-    await page.evaluate(() => {
-      const cands = Array.from(document.querySelectorAll('button, .domain-suggestion, [role="button"]'));
-      const btn = cands.find(el => /wordpress\.com/i.test(el.innerText||'') && /free/i.test(el.innerText||''));
-      if (btn) btn.click();
-    });
-    await waitForTimeoutSafe(page, 1500);
-    await shot('wp-domain-picked', page);
-  } catch (e) { logLine('Domain pick error', { error: String(e && e.message || e) }); }
+  } catch (e) { logLine('Skip purchase error', { error: String(e && e.message || e) }); }
+  await waitForTimeoutSafe(page, 2500);
+  await shot('wp-skip-purchase', page);
 
-  // Confirm free plan
-  try {
-    await page.goto('https://wordpress.com/plan/selection', { waitUntil: 'networkidle2' });
-    await waitForTimeoutSafe(page, 800);
-    await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button, [role="button"]')).find(x => /start with free|free/i.test((x.innerText||'').toLowerCase()));
-      if (btn) btn.click();
-    });
-  } catch(_) {}
-  await waitForTimeoutSafe(page, 2000);
-  await shot('wp-free-plan', page);
-
-  // Step 3: Create a post and publish
-  let publishedUrl = '';
-  try {
-    await page.goto('https://wordpress.com/post', { waitUntil: 'networkidle2' });
-    await shot('wp-post-editor-open', page);
-    // Title
+  // Resolve site URL (best effort)
+  let siteUrl = '';
+  if (siteSlug) siteUrl = `https://${siteSlug}.wordpress.com/`;
+  if (!siteUrl) {
     try {
-      const titleH = await findVisibleHandle(page, ['textarea[placeholder*="Add title" i]', 'textarea.editor-post-title__input', 'h1[role="textbox"]']);
-      if (titleH && titleH.handle) { await titleH.handle.click({ clickCount: 3 }).catch(()=>{}); await titleH.handle.type(title, { delay: 15 }); try { await titleH.handle.dispose(); } catch(_) {} }
-    } catch(_) {}
-    // Body: use slash command to add Paragraph block and paste HTML as quotes or paragraphs
-    await waitForTimeoutSafe(page, 400);
-    await page.keyboard.press('Tab').catch(()=>{});
-    await page.keyboard.type(article.plainText || ' ', { delay: 1 }).catch(()=>{});
-    // Open publish panel and publish
-    await waitForTimeoutSafe(page, 600);
-    await page.evaluate(() => {
-      const clickByText = (txt) => {
-        const el = Array.from(document.querySelectorAll('button, [role="button"], .components-button')).find(b => (b.innerText||'').toLowerCase().includes(txt));
-        if (el) { el.click(); return true; }
-        return false;
-      };
-      return clickByText('publish');
-    });
-    await waitForTimeoutSafe(page, 1000);
-    await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button, [role="button"], .components-button')).find(b => /publish/i.test(b.innerText||''));
-      if (btn) btn.click();
-    });
-    await waitForTimeoutSafe(page, 3000);
-    await shot('wp-post-published', page);
-    try {
-      publishedUrl = await page.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a')).map(a => a.href).find(h => /https?:\/\/.*\.wordpress\.com\//i.test(h));
-        return link || '';
+      siteUrl = await page.evaluate(() => {
+        const a = Array.from(document.querySelectorAll('a')).map(x => x.href).find(h => /https?:\/\/[a-z0-9-]+\.wordpress\.com(\/|$)/i.test(h));
+        return a || '';
       });
     } catch(_) {}
-  } catch (e) {
-    logLine('Post publish error', { error: String(e && e.message || e) });
-  }
-
-  if (!publishedUrl) {
-    try { publishedUrl = page.url(); } catch(_) { publishedUrl = ''; }
   }
 
   await browser.close();
-  logLine('Done', { publishedUrl });
-  return { ok: !!publishedUrl, network: 'wordpress', publishedUrl, title, email, username, password, logFile: LOG_FILE, screenshots };
+  logLine('Done', { siteUrl, email, username });
+  return { ok: !!siteUrl, network: 'wordpress', siteUrl, email, username, logFile: LOG_FILE, screenshots };
 }
 
 // CLI entry for PromoPilot runner
