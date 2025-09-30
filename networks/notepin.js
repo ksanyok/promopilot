@@ -30,6 +30,61 @@ function ensureDirSync(filePath) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
 
+// Minimal stealth: UA, headers, viewport, and navigator patches to reduce bot detection
+async function applyStealth(page) {
+  try { await page.setUserAgent(process.env.PUPPETEER_UA || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'); } catch {}
+  try { await page.setExtraHTTPHeaders({ 'Accept-Language': 'ru,uk;q=0.9,en-US;q=0.8,en;q=0.7' }); } catch {}
+  try { await page.setViewport({ width: 1360, height: 900, deviceScaleFactor: 1 }); } catch {}
+  try {
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      window.chrome = window.chrome || { runtime: {} };
+      Object.defineProperty(navigator, 'languages', { get: () => ['ru', 'uk', 'en-US', 'en'] });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+    });
+  } catch {}
+}
+
+async function waitForVisible(page, selector, timeout = 15000) {
+  await page.waitForSelector(selector, { timeout }).catch(() => {});
+  const ok = await page.waitForFunction((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return st && st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity || '1') > 0.1 && r.width > 0 && r.height > 0;
+  }, { timeout }, selector).then(() => true).catch(() => false);
+  return ok;
+}
+
+async function clickAny(page, selectors) {
+  for (const sel of selectors) {
+    const el = await page.$(sel).catch(() => null);
+    if (!el) continue;
+    try { await el.click({ delay: 10 }); return true; } catch {}
+    try { await page.evaluate((s) => { const e = document.querySelector(s); if (e) e.dispatchEvent(new MouseEvent('click', { bubbles: true })); }, sel); return true; } catch {}
+  }
+  return false;
+}
+
+async function pickVisibleSelector(page, candidates, timeout = 15000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    for (const sel of candidates) {
+      const ok = await waitForVisible(page, sel, 300).catch(() => false);
+      if (ok) {
+        const disabled = await page.evaluate((s) => {
+          const el = document.querySelector(s);
+          return !!(el && el instanceof HTMLInputElement && el.disabled);
+        }, sel).catch(() => false);
+        if (!disabled) return sel;
+      }
+    }
+    await sleep(100);
+  }
+  return null;
+}
+
 async function loginAndPublish(job) {
   const { LOG_FILE, LOG_DIR, logLine } = createLogger('notepin');
   const username = job.username || job.loginUsername || process.env.PP_NOTEPIN_USERNAME || '';
@@ -54,42 +109,91 @@ async function loginAndPublish(job) {
   const headless = String(process.env.PP_HEADLESS || 'true').toLowerCase() !== 'false';
   const browser = await puppeteer.launch({ headless, args: Array.from(new Set(args)), executablePath: execPath || undefined });
   let page = await browser.newPage();
+  await applyStealth(page);
   page.setDefaultTimeout(Number(process.env.PP_TIMEOUT_MS || 90000));
   page.setDefaultNavigationTimeout(Number(process.env.PP_NAV_TIMEOUT_MS || 90000));
 
   try {
     // 1) Open homepage
     await page.goto('https://notepin.co/', { waitUntil: 'domcontentloaded' });
+    await sleep(600);
     await snap(page, 'L1-home');
 
     // 2) Open login modal
-    await page.evaluate(() => {
-      const el = document.querySelector('.menu .log, p.log');
-      if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    await page.waitForSelector('.login', { timeout: 15000 });
-    await page.waitForSelector('.login input[name="blog"]', { timeout: 15000 });
-    await page.waitForSelector('.login input[name="pass"]', { timeout: 15000 });
+    await waitForVisible(page, '.menu .log, p.log', 15000);
+    await clickAny(page, ['.menu .log', 'p.log']);
+    await waitForVisible(page, '.login', 15000);
+    // Let animations finish a tick
+    await sleep(350);
+    // Pick robust selectors (support both blog/username naming)
+    const userSel = await pickVisibleSelector(page, [
+      '.login input[name="blog"]',
+      '.login input[name="username"]',
+      '.login .username input',
+      '.login input[type="text"]'
+    ], 4000);
+    const passSel = await pickVisibleSelector(page, [
+      '.login input[name="pass"]',
+      '.login input[type="password"]'
+    ], 4000);
+    logLine('login-selectors', { userSel, passSel });
+    await snap(page, 'L2a-login-ready');
 
-    // 3) Fill credentials
-    if (username) { await page.type('.login input[name="blog"]', String(username), { delay: 20 }); }
-    if (password) { await page.type('.login input[name="pass"]', String(password), { delay: 20 }); }
+    // 3) Fill credentials with real typing after focusing fields
+    if (userSel && username) {
+      await page.click(userSel, { clickCount: 3 }).catch(() => {});
+      await page.type(userSel, String(username), { delay: 25 }).catch(() => {});
+    }
+    if (passSel && password) {
+      await page.click(passSel, { clickCount: 3 }).catch(() => {});
+      await page.type(passSel, String(password), { delay: 25 }).catch(() => {});
+    }
+    // Confirm values
+    const confirmed = await page.evaluate(({ uSel, pSel }) => {
+      const uEl = uSel ? document.querySelector(uSel) : null;
+      const pEl = pSel ? document.querySelector(pSel) : null;
+      const uVal = (uEl && 'value' in uEl) ? (uEl).value : '';
+      const pVal = (pEl && 'value' in pEl) ? (pEl).value : '';
+      return { uVal: String(uVal || ''), pLen: String(pVal || '').length };
+    }, { uSel: userSel, pSel: passSel }).catch(() => ({ uVal: '', pLen: 0 }));
+    logLine('login-confirm-typed', confirmed);
+    // Fallback: force-set values if typing didn't stick
+    if ((confirmed.uVal || '') !== String(username || '') || (confirmed.pLen || 0) < 1) {
+      await page.evaluate(({ uSel, pSel, u, p }) => {
+        const uEl = uSel ? document.querySelector(uSel) : null;
+        const pEl = pSel ? document.querySelector(pSel) : null;
+        if (uEl && 'value' in uEl) { uEl.value = u; uEl.dispatchEvent(new Event('input', { bubbles: true })); }
+        if (pEl && 'value' in pEl) { pEl.value = p; pEl.dispatchEvent(new Event('input', { bubbles: true })); }
+      }, { uSel: userSel, pSel: passSel, u: String(username || ''), p: String(password || '') }).catch(() => {});
+    }
+    const confirmed2 = await page.evaluate(({ uSel, pSel }) => {
+      const uEl = uSel ? document.querySelector(uSel) : null;
+      const pEl = pSel ? document.querySelector(pSel) : null;
+      const uVal = (uEl && 'value' in uEl) ? (uEl).value : '';
+      const pVal = (pEl && 'value' in pEl) ? (pEl).value : '';
+      return { uVal: String(uVal || ''), pLen: String(pVal || '').length };
+    }, { uSel: userSel, pSel: passSel }).catch(() => ({ uVal: '', pLen: 0 }));
+    logLine('login-confirm-forced', confirmed2);
+    if ((confirmed2.uVal || '') !== String(username || '') || (confirmed2.pLen || 0) < 1) {
+      await snap(page, 'L2c-fill-failed');
+      return { ok: false, network: 'notepin', error: 'CANNOT_FILL_LOGIN_FORM', details: { userSel, passSel, confirmed: confirmed2 } };
+    }
     // Unmask password only for the screenshot so it's visible in diagnostics, then revert
-    try { await page.evaluate(() => { const p = document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'text'); }); } catch {}
-    await snap(page, 'L2-login-modal');
-    try { await page.evaluate(() => { const p = document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'password'); }); } catch {}
+  try { await page.evaluate((sel) => { const p = document.querySelector(sel) || document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'text'); }, passSel || '.login input[name="pass"]'); } catch {}
+  await snap(page, 'L2b-login-filled');
+  try { await page.evaluate((sel) => { const p = document.querySelector(sel) || document.querySelector('.login input[name="pass"]'); if (p) p.setAttribute('type', 'password'); }, passSel || '.login input[name="pass"]'); } catch {}
 
     // 4) Submit
     const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
     const hostChange = page.waitForFunction(() => /\.notepin\.co$/i.test(location.hostname) && location.hostname !== 'notepin.co', { timeout: 25000 }).catch(() => null);
-    await page.click('.login .finish p, .login .finish').catch(async () => {
-      await page.evaluate(() => {
-        const el = document.querySelector('.login .finish p') || document.querySelector('.login .finish');
-        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-    });
-    await Promise.race([nav, hostChange, sleep(1200)]);
-    await snap(page, 'L3-after-login');
+    await clickAny(page, ['.login .finish p', '.login .finish']);
+    const dashWait = page.waitForFunction(() => /\/dash\b/.test(location.pathname), { timeout: 25000 }).catch(() => null);
+    await Promise.race([nav, hostChange, dashWait, sleep(1500)]);
+    if (!/\/dash\b/i.test(safeUrl(page) || '')) {
+      await snap(page, 'L3-no-dash');
+      return { ok: false, network: 'notepin', error: 'NO_DASH_REDIRECT' };
+    }
+    await snap(page, 'L3-dash');
 
     // 5) If job requests login-only, exit here
     if (job.loginOnly || /^(1|true|yes)$/i.test(String(process.env.PP_NOTEPIN_LOGIN_ONLY || ''))) {
@@ -116,7 +220,7 @@ async function loginAndPublish(job) {
       await page.goto(`${origin}/write`, { waitUntil: 'domcontentloaded' }).catch(() => {});
     } else {
       const res = await Promise.race([navWrite, newTarget, sleep(1200)]);
-      if (res && res.targetInfo) {
+      if (res && typeof res.page === 'function') {
         try { const np = await res.page(); if (np) page = np; } catch {}
       }
     }
@@ -139,7 +243,7 @@ async function loginAndPublish(job) {
           await page.goto(`https://${username}.notepin.co/write`, { waitUntil: 'domcontentloaded' }).catch(() => {});
         } else {
           const res2 = await Promise.race([navWrite, newTarget, sleep(1200)]);
-          if (res2 && res2.targetInfo) {
+          if (res2 && typeof res2.page === 'function') {
             try { const np = await res2.page(); if (np) page = np; } catch {}
           }
         }
@@ -218,7 +322,7 @@ async function loginAndPublish(job) {
           page.waitForFunction(() => /\/p\//.test(location.pathname), { timeout: 15000 }).catch(() => null),
           sleep(1200)
         ]);
-        if (after && after.targetInfo) {
+        if (after && typeof after.page === 'function') {
           try { const np = await after.page(); if (np) page = np; } catch {}
         }
         await snap(page, 'P4-after-submit');
