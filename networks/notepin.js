@@ -78,6 +78,41 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
     page.setDefaultTimeout(300000);
     page.setDefaultNavigationTimeout(300000);
 
+    // Helpers for Publish button state
+    const readPublishBtnState = async () => {
+      try {
+        return await page.evaluate(() => {
+          const btn = document.querySelector('.publish button, .publish > button');
+          if (!btn) return { exists: false, text: '', disabled: false };
+          const text = (btn.textContent || '').trim();
+          const disabled = !!(btn instanceof HTMLButtonElement && btn.disabled);
+          return { exists: true, text, disabled };
+        });
+      } catch (_) {
+        return { exists: false, text: '', disabled: false };
+      }
+    };
+    const waitForPublishLoadingToSettle = async (label, timeoutMs = 120000) => {
+      const start = Date.now();
+      let last = await readPublishBtnState();
+      logLine('Publish button state (start)', { label, ...last });
+      while (Date.now() - start < timeoutMs) {
+        const st = await readPublishBtnState();
+        if (st.exists && !st.disabled && !/loading/i.test(st.text)) {
+          logLine('Publish button ready', { label, ...st });
+          return true;
+        }
+        if (JSON.stringify(st) !== JSON.stringify(last)) {
+          logLine('Publish button state (change)', { label, ...st });
+          last = st;
+        }
+        await waitForTimeoutSafe(page, 800);
+      }
+      const final = await readPublishBtnState();
+      logLine('Publish button wait timed out', { label, ...final });
+      return false;
+    };
+
     logLine('Goto Notepin', { url: 'https://notepin.co/write' });
     await page.goto('https://notepin.co/write', { waitUntil: 'networkidle2' });
   await snap(page, '00-open-write');
@@ -308,6 +343,8 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
             const navPost = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
             try { await page.click(sel); } catch(_) {}
             await navPost;
+            // Wait for Loading.. to finish if button exists
+            await waitForPublishLoadingToSettle('after-second-publish-from-write', 90000);
             let afterSecondPublish = '';
             try { afterSecondPublish = page.url(); } catch(_) {}
             logLine('After second publish click', { url: afterSecondPublish });
@@ -362,6 +399,8 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
               await page.waitForSelector(sel, { timeout: 15000 }).catch(() => {});
               try { await page.click(sel); } catch(_) {}
               await navPost;
+              // Wait for Loading.. to finish if button exists
+              await waitForPublishLoadingToSettle('post-editor-publish', 120000);
               let afterPostPublishUrl = '';
               try { afterPostPublishUrl = page.url(); } catch(_) {}
               logLine('Post publish navigation complete', { url: afterPostPublishUrl });
@@ -392,35 +431,33 @@ async function publishToNotepin(pageUrl, anchorText, language, openaiApiKey, aiP
       } catch (_) {}
     }
 
-    // If we only have blog homepage, try to open it and extract first post URL
+    // If we only have blog homepage, try to open it in a fresh page and extract first post URL
     if (blogUrl && /^https?:\/\//i.test(blogUrl) && (!publishedUrl || publishedUrl.replace(/\/?$/, '/') === blogUrl.replace(/\/?$/, '/'))) {
       try {
-  let pageClosed = false; try { pageClosed = page.isClosed(); } catch(_) {}
-  logLine('Open blog homepage to resolve post URL', { blogUrl, pageClosed });
-        // Ensure page context is alive; if closed, pick any notepin page or open a new one
-        if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-          try {
-            const pages = await browser.pages();
-            const cand = pages.reverse().find(p => { try { return /notepin\.co/i.test(p.url()); } catch(_) { return false; } });
-            if (cand) { page = cand; }
-          } catch(_) {}
-          if (!page || (typeof page.isClosed === 'function' && page.isClosed())) {
-            page = await browser.newPage();
-            page.setDefaultTimeout(300000);
-            page.setDefaultNavigationTimeout(300000);
-          }
-        }
-        await page.goto(blogUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.posts a', { timeout: 20000 }).catch(() => {});
-        await snap(page, '07-blog-home');
-        const firstPost = await page.evaluate((base) => {
-          const a = document.querySelector('.posts a[href]');
+        let pageClosed = false; try { pageClosed = page.isClosed(); } catch(_) {}
+        logLine('Open blog homepage to resolve post URL', { blogUrl, pageClosed });
+        const viewPage = await browser.newPage();
+        viewPage.setDefaultTimeout(300000);
+        viewPage.setDefaultNavigationTimeout(300000);
+        await viewPage.goto(blogUrl, { waitUntil: 'networkidle2' });
+        // Wait for any likely post link
+        try { await viewPage.waitForSelector('.posts a, article a, a[href*="/p/"], a[href]', { timeout: 25000 }); } catch(_) {}
+        await snap(viewPage, '07-blog-home');
+        const firstPost = await viewPage.evaluate((base) => {
+          const pick = () => {
+            return document.querySelector('.posts a[href]')
+                || document.querySelector('article a[href]')
+                || Array.from(document.querySelectorAll('a[href]')).find(a => /\/(post|p)\//i.test(a.getAttribute('href')||''))
+                || document.querySelector('a[href]');
+          };
+          const a = pick();
           if (!a) return '';
           const href = (a.getAttribute('href') || '').trim();
           if (!href) return '';
           if (/^https?:\/\//i.test(href)) return href;
           try { const u = new URL(href, base); return u.toString(); } catch(_) { return ''; }
         }, blogUrl);
+        try { await viewPage.close(); } catch(_) {}
         if (firstPost && /^https?:\/\//i.test(firstPost)) {
           publishedUrl = firstPost;
           logLine('Resolved post URL', { publishedUrl });
