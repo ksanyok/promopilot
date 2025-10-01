@@ -878,6 +878,60 @@ if (!function_exists('pp_crowd_links_process_run')) {
 
 if (!function_exists('pp_crowd_links_process_tasks')) {
     function pp_crowd_links_process_tasks(array $tasks, string $testMessage, string $testUrl, int $timeout, int $concurrency): array {
+        // If browser-based posting is enabled, process sequentially with Puppeteer for higher accuracy
+        $useBrowser = (string)get_setting('crowd_use_browser', '0') === '1';
+        if ($useBrowser) {
+            $results = [];
+            foreach ($tasks as $t) {
+                $job = [
+                    'url' => $t['url'],
+                    'message' => $testMessage,
+                    'targetUrl' => $testUrl,
+                    // Simple identity
+                    'name' => get_setting('crowd_identity_name', 'Promo QA'),
+                    'email' => get_setting('crowd_identity_email', 'qa+' . substr(sha1($t['url']),0,6) . '@example.com'),
+                    'timeoutSec' => $timeout,
+                ];
+                $script = PP_ROOT_PATH . '/networks/crowd_poster.js';
+                $resp = pp_run_node_script($script, $job, max(30, $timeout+20));
+                $status = 'failed';
+                $http = $resp['httpStatus'] ?? null;
+                $followType = $resp['followType'] ?? 'unknown';
+                $indexStatus = $resp['indexStatus'] ?? 'unknown';
+                $language = $resp['language'] ?? '';
+                $region = $resp['region'] ?? '';
+                $messageFound = !empty($resp['messageFound']);
+                $linkFound = !empty($resp['linkFound']);
+                $error = '';
+                if (!empty($resp['ok'])) {
+                    $status = 'success';
+                } else if (!empty($resp['error'])) {
+                    $status = 'needs_review';
+                    $error = (string)$resp['error'];
+                } else if ($messageFound || $linkFound) {
+                    $status = 'needs_review';
+                    $error = __('Найден контент, требует проверки.');
+                } else {
+                    $status = 'failed';
+                    $error = $resp['details'] ?? '';
+                }
+                $results[] = [
+                    'result_id' => $t['result_id'],
+                    'link_id' => $t['link_id'],
+                    'status' => $status,
+                    'http_status' => $http,
+                    'follow_type' => $followType,
+                    'index_status' => $indexStatus,
+                    'language' => $language,
+                    'region' => $region,
+                    'message_found' => $messageFound,
+                    'link_found' => $linkFound,
+                    'error' => $error,
+                    'response_url' => $resp['finalUrl'] ?? $t['url'],
+                ];
+            }
+            return $results;
+        }
         $results = [];
         if (empty($tasks)) {
             return $results;

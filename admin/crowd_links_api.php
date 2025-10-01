@@ -125,6 +125,27 @@ function pp_crowd_api_render_rows(array $links): string {
 }
 
 switch ($action) {
+    case 'dedupe': {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
+        }
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        if (!$conn) { pp_crowd_api_response(['ok' => false, 'error' => 'DB']); }
+        $deleted = 0;
+        // Remove exact duplicates by keeping lowest id for each url_hash
+        $sql = "DELETE l1 FROM crowd_links l1 JOIN crowd_links l2 ON l1.url_hash = l2.url_hash AND l1.id > l2.id";
+        if ($conn->query($sql)) { $deleted = $conn->affected_rows; }
+        $total = 0;
+        if ($res = $conn->query('SELECT COUNT(*) AS c FROM crowd_links')) { if ($row = $res->fetch_assoc()) { $total = (int)$row['c']; } $res->free(); }
+        $conn->close();
+        pp_crowd_api_response(['ok' => true, 'deleted' => $deleted, 'total' => $total]);
+    }
+    case 'count': {
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        $total = 0;
+        if ($conn) { if ($res = $conn->query('SELECT COUNT(*) AS c FROM crowd_links')) { if ($row = $res->fetch_assoc()) { $total = (int)$row['c']; } $res->free(); $conn->close(); } }
+        pp_crowd_api_response(['ok' => true, 'total' => $total]);
+    }
     case 'status': {
         $filters = pp_crowd_api_filters_from_query();
         $page = pp_crowd_api_page_from_query();

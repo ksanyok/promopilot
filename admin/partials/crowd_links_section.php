@@ -110,6 +110,16 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         </div>
     </form>
 
+    <div class="card p-3 mb-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div class="fw-semibold"><?php echo __('Инструменты'); ?></div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-warning" id="crowdDedupeBtn"><i class="bi bi-magic me-1"></i><?php echo __('Удалить дубликаты'); ?></button>
+            </div>
+        </div>
+        <div class="small text-muted mt-2"><?php echo __('Быстрая очистка по url_hash. Оставляем самый старый, удаляем повторяющиеся.'); ?></div>
+    </div>
+
     <form method="post" enctype="multipart/form-data" class="card p-3 mb-3" autocomplete="off">
         <?php echo csrf_field(); ?>
         <div class="row g-3 align-items-end">
@@ -131,6 +141,20 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 <label class="form-label" for="crowdTestMessage"><?php echo __('Тестовое сообщение'); ?></label>
                 <textarea class="form-control" id="crowdTestMessage" name="crowd_test_message" rows="3" placeholder="<?php echo htmlspecialchars(__('Текст, который будет опубликован на площадках.')); ?>"><?php echo htmlspecialchars($crowdDefaultMessage); ?></textarea>
                 <div class="form-text"><?php echo __('Сообщение применяется ко всем новым проверкам. Включите ссылку, которую нужно отследить.'); ?></div>
+                <div class="form-check mt-3">
+                    <input class="form-check-input" type="checkbox" id="crowdUseBrowser" name="crowd_use_browser" value="1" <?php echo !empty($crowdUseBrowser) ? 'checked' : ''; ?>>
+                    <label class="form-check-label" for="crowdUseBrowser"><?php echo __('Использовать браузер (Puppeteer) для публикации'); ?></label>
+                </div>
+                <div class="row g-2 mt-1">
+                    <div class="col-sm-6">
+                        <label class="form-label" for="crowdIdentityName"><?php echo __('Имя автора'); ?></label>
+                        <input type="text" class="form-control" id="crowdIdentityName" name="crowd_identity_name" value="<?php echo htmlspecialchars($crowdIdentityName); ?>" placeholder="John Doe">
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="crowdIdentityEmail"><?php echo __('E-mail'); ?></label>
+                        <input type="email" class="form-control" id="crowdIdentityEmail" name="crowd_identity_email" value="<?php echo htmlspecialchars($crowdIdentityEmail); ?>" placeholder="qa@example.com">
+                    </div>
+                </div>
             </div>
             <div class="col-md-6">
                 <label class="form-label" for="crowdTestUrl"><?php echo __('Тестовая ссылка (если не указана в сообщении)'); ?></label>
@@ -567,6 +591,21 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         if (event.detail && event.detail.section === 'crowd-links') {
             refreshStatus(true);
         }
+    });
+
+    const dedupeBtn = document.getElementById('crowdDedupeBtn');
+    dedupeBtn?.addEventListener('click', () => {
+        setRunMessage('<?php echo addslashes(__('Удаляем дубликаты...')); ?>', 'info');
+        apiRequest('dedupe', 'POST', {}).then(data => {
+            if (!data || !data.ok) {
+                setRunMessage('<?php echo addslashes(__('Не удалось выполнить очистку.')); ?>', 'danger');
+                return;
+            }
+            const msg = '<?php echo addslashes(__('Удалено дублей:')); ?> ' + (data.deleted||0) + '. <?php echo addslashes(__('Всего ссылок:')); ?> ' + (data.total||0) + '.';
+            setRunMessage(msg, 'success');
+            refreshStatus(true);
+            refreshList();
+        });
     });
 })();
 </script>
