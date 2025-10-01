@@ -97,6 +97,16 @@ function pp_crowd_api_page_from_query(): int {
             $lastCheck = $formatTs($link['last_checked_at'] ?? null);
             $statusDetail = trim((string)($link['status_detail'] ?? ''));
             $tooltip = $statusDetail !== '' ? htmlspecialchars($statusDetail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : htmlspecialchars(__('Подробности отсутствуют'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $badgeText = $statusLabel;
+            if ($status === 'failed' && $http !== null && $http > 0) {
+                if ($http >= 500) {
+                    $badgeText = sprintf(__('HTTP %d'), $http);
+                } elseif ($http >= 400) {
+                    $badgeText = sprintf(__('HTTP %d'), $http);
+                } elseif ($http >= 300) {
+                    $badgeText = sprintf(__('Редирект %d'), $http);
+                }
+            }
             ?>
             <tr data-link-id="<?php echo $linkId; ?>" data-status="<?php echo htmlspecialchars($status, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                 <td class="text-center">
@@ -109,7 +119,7 @@ function pp_crowd_api_page_from_query(): int {
                         <?php echo htmlspecialchars(mb_strimwidth((string)$link['url'], 0, 90, '…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                     </a>
                 </td>
-                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="<?php echo $tooltip; ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
+                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="<?php echo $tooltip; ?>"><?php echo htmlspecialchars($badgeText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
                 <td class="text-center" data-region><?php echo !empty($link['region']) ? htmlspecialchars((string)$link['region'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-language><?php echo !empty($link['language']) ? htmlspecialchars((string)$link['language'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-follow><?php echo htmlspecialchars($followLabels[$follow] ?? __('Неизвестно'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></td>
@@ -147,6 +157,71 @@ switch ($action) {
         $total = 0;
         if ($conn) { if ($res = $conn->query('SELECT COUNT(*) AS c FROM crowd_links')) { if ($row = $res->fetch_assoc()) { $total = (int)$row['c']; } $res->free(); $conn->close(); } }
         pp_crowd_api_response(['ok' => true, 'total' => $total]);
+    }
+    case 'delete': {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
+        }
+        $mode = isset($_POST['mode']) ? strtolower(trim((string)$_POST['mode'])) : '';
+        if (!in_array($mode, ['all', 'selected', 'http'], true)) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'BAD_MODE']);
+        }
+    try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+    if (!$conn) { pp_crowd_api_response(['ok' => false, 'error' => 'DB']); }
+        $deletedLinks = 0;
+        $deletedResults = 0;
+        if ($mode === 'all') {
+            $count = 0;
+            if ($res = $conn->query('SELECT COUNT(*) AS c FROM crowd_links')) {
+                if ($row = $res->fetch_assoc()) { $count = (int)$row['c']; }
+                $res->free();
+            }
+            if ($conn->query('DELETE FROM crowd_check_results')) {
+                $deletedResults = $conn->affected_rows;
+            }
+            if ($count > 0 && $conn->query('DELETE FROM crowd_links')) {
+                $deletedLinks = $conn->affected_rows;
+            }
+        } elseif ($mode === 'selected') {
+            $ids = [];
+            if (isset($_POST['ids']) && is_array($_POST['ids'])) {
+                foreach ($_POST['ids'] as $value) {
+                    $id = (int)$value;
+                    if ($id > 0) { $ids[$id] = $id; }
+                }
+            }
+            if (empty($ids)) {
+                $conn->close();
+                pp_crowd_api_response(['ok' => false, 'error' => 'NO_IDS']);
+            }
+            $idsList = implode(',', $ids);
+            if ($idsList !== '') {
+                if ($conn->query("DELETE FROM crowd_check_results WHERE link_id IN ({$idsList})")) {
+                    $deletedResults = $conn->affected_rows;
+                }
+                if ($conn->query("DELETE FROM crowd_links WHERE id IN ({$idsList})")) {
+                    $deletedLinks = $conn->affected_rows;
+                }
+            }
+        } elseif ($mode === 'http') {
+            $where = "(http_status IN (301,302,303,307,308,404) OR (http_status BETWEEN 500 AND 599))";
+            $count = 0;
+            if ($res = $conn->query("SELECT COUNT(*) AS c FROM crowd_links WHERE {$where}")) {
+                if ($row = $res->fetch_assoc()) { $count = (int)$row['c']; }
+                $res->free();
+            }
+            if ($count > 0) {
+                if ($conn->query("DELETE r FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE {$where}")) {
+                    $deletedResults = $conn->affected_rows;
+                }
+                if ($conn->query("DELETE FROM crowd_links WHERE {$where}")) {
+                    $deletedLinks = $conn->affected_rows;
+                }
+            }
+        }
+        $conn->close();
+        $stats = pp_crowd_links_get_stats();
+        pp_crowd_api_response(['ok' => true, 'deleted' => $deletedLinks, 'results' => $deletedResults, 'stats' => $stats]);
     }
     case 'status': {
         $filters = pp_crowd_api_filters_from_query();
