@@ -132,6 +132,11 @@ function pp_crowd_api_render_rows(array $links): string {
 
 switch ($action) {
     case 'status': {
+        // Advance a small chunk cooperatively so progress continues even if background process cannot spawn
+        if (function_exists('pp_crowd_links_tick')) {
+            // Process up to a small batch per poll to keep UI responsive
+            @pp_crowd_links_tick(null, 5);
+        }
         $filters = pp_crowd_api_filters_from_query();
         $page = pp_crowd_api_page_from_query();
         $perPage = 25;
@@ -213,8 +218,17 @@ switch ($action) {
         if ($mode === 'errors') {
             $where = "WHERE status IN ('failed','cancelled')";
         }
+        if ($mode === 'all') {
+            // Stop active run, if any
+            try { if (function_exists('pp_crowd_links_cancel')) { @pp_crowd_links_cancel(null, true); } } catch (Throwable $e) { /* ignore */ }
+        }
         try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
         if (!$conn) { pp_crowd_api_response(['ok' => false, 'error' => 'DB_CONNECTION']); }
+        // Clean dependent rows (results and runs) when fully clearing
+        if ($mode === 'all') {
+            @$conn->query("DELETE FROM crowd_check_results");
+            @$conn->query("DELETE FROM crowd_check_runs");
+        }
         $sql = "DELETE FROM crowd_links $where";
         $ok = $conn->query($sql);
         $affected = $conn->affected_rows ?? 0;
