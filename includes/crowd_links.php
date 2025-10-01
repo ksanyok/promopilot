@@ -303,7 +303,8 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
         if (!is_file($script)) {
             return false;
         }
-        $phpBinary = PHP_BINARY ?: 'php';
+        // Prefer true PHP CLI over lsphp/fpm wrappers
+        $phpBinary = function_exists('pp_get_php_cli') ? pp_get_php_cli() : (PHP_BINARY ?: 'php');
         $runId = max(1, $runId);
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         if ($isWindows) {
@@ -316,7 +317,14 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
             return false;
         }
         $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        pp_crowd_links_log('Launching crowd links worker', ['runId' => $runId, 'command' => $cmd]);
+        pp_crowd_links_log('Launching crowd links worker', [
+            'runId' => $runId,
+            'command' => $cmd,
+            'phpBinary' => $phpBinary,
+            'phpSapi' => PHP_SAPI,
+            'cwd' => getcwd(),
+            'root' => PP_ROOT_PATH,
+        ]);
         if (function_exists('popen')) {
             $handle = @popen($cmd, 'r');
             if (is_resource($handle)) {
@@ -324,8 +332,19 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
                 return true;
             }
         }
-        @exec($cmd);
-        return true;
+        // Try exec as secondary option
+        if (function_exists('exec')) { @exec($cmd); return true; }
+        // Fallback: best-effort proc_open without waiting
+        $descriptor = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
+        $proc = @proc_open(escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId, $descriptor, $pipes, PP_ROOT_PATH);
+        if (is_resource($proc)) {
+            foreach ($pipes as $p) { if (is_resource($p)) { @fclose($p); } }
+            // Do not wait; assume started
+            @proc_close($proc);
+            pp_crowd_links_log('Worker started via proc_open fallback', ['runId' => $runId, 'phpBinary' => $phpBinary]);
+            return true;
+        }
+        return false;
     }
 }
 
@@ -498,13 +517,10 @@ if (!function_exists('pp_crowd_links_start_run')) {
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
 
-        if (!pp_crowd_links_wait_for_worker_start($runId, 3.5)) {
-            try {
-                pp_crowd_links_process_run($runId);
-            } catch (Throwable $e) {
-                pp_crowd_links_log('Inline crowd links processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
-            }
-        }
+        // Do not fallback to inline processing; return immediately and let background worker handle the run.
+        // This avoids locking the PHP session on the request thread and keeps the admin UI responsive.
+        // We still do a short best-effort wait to detect that the worker transitioned out of "queued".
+        pp_crowd_links_wait_for_worker_start($runId, 2.0);
 
         return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
     }

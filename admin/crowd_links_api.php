@@ -14,6 +14,11 @@ if ($action === '') {
     exit;
 }
 
+// For read-only requests, release session lock early to allow concurrent requests
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && session_status() === PHP_SESSION_ACTIVE) {
+    @session_write_close();
+}
+
 function pp_crowd_api_response(array $payload): void {
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
     exit;
@@ -137,12 +142,39 @@ switch ($action) {
             pp_crowd_api_response(['ok' => false, 'error' => $status['error'] ?? 'UNKNOWN']);
         }
         $tableHtml = pp_crowd_api_render_rows($list['rows'] ?? []);
+        // Enrich with in-flight metrics
+        $inflight = [
+            'runningNow' => 0,
+            'queuedNow' => 0,
+        ];
+        $nowUrls = [];
+        try {
+            $conn = @connect_db();
+            if ($conn) {
+                if ($res = $conn->query("SELECT status, COUNT(*) as cnt FROM crowd_check_results r JOIN crowd_check_runs cr ON cr.id=r.run_id WHERE cr.status='running' AND r.status IN ('queued','running') GROUP BY status")) {
+                    while ($row = $res->fetch_assoc()) {
+                        if ((string)$row['status'] === 'running') { $inflight['runningNow'] += (int)$row['cnt']; }
+                        if ((string)$row['status'] === 'queued') { $inflight['queuedNow'] += (int)$row['cnt']; }
+                    }
+                    $res->free();
+                }
+                if ($res2 = $conn->query("SELECT l.url FROM crowd_check_results r JOIN crowd_links l ON l.id=r.link_id JOIN crowd_check_runs cr ON cr.id=r.run_id WHERE cr.status='running' AND r.status='running' ORDER BY r.id ASC LIMIT 5")) {
+                    while ($row = $res2->fetch_assoc()) {
+                        $nowUrls[] = (string)$row['url'];
+                    }
+                    $res2->free();
+                }
+                $conn->close();
+            }
+        } catch (Throwable $e) { /* ignore */ }
         pp_crowd_api_response([
             'ok' => true,
             'run' => $status['run'] ?? null,
             'results' => $status['results'] ?? [],
             'stats' => $stats,
             'tableHtml' => $tableHtml,
+            'inflight' => $inflight,
+            'nowUrls' => $nowUrls,
             'page' => $page,
             'total' => (int)($list['total'] ?? 0),
             'totalPages' => max(1, (int)ceil(((int)($list['total'] ?? 0)) / $perPage)),
@@ -152,6 +184,7 @@ switch ($action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
             pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
         }
+        if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
         $ids = isset($_POST['ids']) && is_array($_POST['ids']) ? array_values(array_filter(array_map('intval', $_POST['ids']))) : [];
         if (empty($ids)) {
             pp_crowd_api_response(['ok' => false, 'error' => 'EMPTY']);
@@ -174,6 +207,7 @@ switch ($action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
             pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
         }
+        if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
         $mode = isset($_POST['mode']) ? trim((string)$_POST['mode']) : 'all';
         $where = '';
         if ($mode === 'errors') {
@@ -210,6 +244,10 @@ switch ($action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
             pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
         }
+        // Release session lock early to prevent blocking concurrent polling/navigation
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
         $mode = isset($_POST['mode']) ? strtolower(trim((string)$_POST['mode'])) : 'all';
         $ids = [];
         if (isset($_POST['ids']) && is_array($_POST['ids'])) {
@@ -231,12 +269,14 @@ switch ($action) {
         $options = [
             'filters' => $filters,
         ];
+        // Session was closed, but we still can read the cached superglobal value safely
         $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
         $result = pp_crowd_links_start_run($userId, $mode, $ids, $linkId, $options);
         if (!$result['ok']) {
             pp_crowd_api_response(['ok' => false, 'error' => $result['error'] ?? 'UNKNOWN']);
         }
-        $runStatus = pp_crowd_links_get_status($result['runId'] ?? null, 30);
+        // Return quickly; UI will poll status endpoint for live progress
+        $runStatus = pp_crowd_links_get_status($result['runId'] ?? null, 5);
         $stats = pp_crowd_links_get_stats();
         pp_crowd_api_response([
             'ok' => true,
@@ -250,6 +290,7 @@ switch ($action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
             pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
         }
+        if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
         $runId = isset($_POST['run_id']) ? (int)$_POST['run_id'] : null;
         $result = pp_crowd_links_cancel($runId); 
         if (!$result['ok']) {

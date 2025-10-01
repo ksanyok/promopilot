@@ -32,6 +32,10 @@ if (is_logged_in()) {
     <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
     <meta name="csrf-token" content="<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
     <script>window.CSRF_TOKEN = '<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8"); ?>';</script>
+    <script>
+        // Base URLs for client-side API calls
+        window.PP_CROWD_API = '<?php echo htmlspecialchars(pp_url('admin/crowd_links_api.php'), ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8"); ?>';
+    </script>
     <?php $ppBase = function_exists('pp_guess_base_url') ? pp_guess_base_url() : ''; ?>
     <link rel="stylesheet" href="<?php echo htmlspecialchars($ppBase . '/assets/css/admin.css'); ?>">
 </head>
@@ -54,6 +58,14 @@ if (is_logged_in()) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
+                        <?php endif; ?>
+                        <?php if (is_admin()): ?>
+                            <li class="nav-item d-none" id="crowdGlobalStatus" aria-live="polite">
+                                <a class="nav-link d-flex align-items-center gap-2" href="<?php echo pp_url('admin/admin.php'); ?>#crowd-links-section" title="<?php echo __('Статус проверки крауд ссылок'); ?>">
+                                    <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                                    <span class="crowd-text"><?php echo __('Проверка ссылок...'); ?></span>
+                                </a>
+                            </li>
                         <?php endif; ?>
                         <?php 
                             $dispName = '';

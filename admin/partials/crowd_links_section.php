@@ -424,6 +424,12 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 }
             });
         });
+        // re-init tooltips for shortened URLs
+        if (window.bootstrap) {
+            tbody.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+                try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
+            });
+        }
         updateSelectionState();
     }
 
@@ -480,6 +486,13 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
             }
             if (data.stats) {
                 updateStats(data.stats);
+            }
+            // Show current checking hint
+            if (runNoteEl) {
+                if (data.run && data.run.status === 'running' && Array.isArray(data.nowUrls) && data.nowUrls.length) {
+                    const sample = data.nowUrls.slice(0, 3).join(', ');
+                    runNoteEl.textContent = '<?php echo addslashes(__('Сейчас проверяется:')); ?> ' + sample + (data.nowUrls.length > 3 ? '…' : '');
+                }
             }
             if (data.run && data.run.status === 'running') {
                 schedulePoll();

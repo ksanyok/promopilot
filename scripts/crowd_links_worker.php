@@ -14,7 +14,13 @@ if ($runId <= 0) {
     exit(1);
 }
 
-pp_crowd_links_log('CLI worker invoked', ['runId' => $runId, 'argv' => $argv]);
+pp_crowd_links_log('CLI worker invoked', [
+    'runId' => $runId,
+    'argv' => $argv,
+    'phpBinary' => PHP_BINARY,
+    'phpSapi' => PHP_SAPI,
+    'cwd' => getcwd(),
+]);
 
 try {
     pp_crowd_links_process_run($runId);
