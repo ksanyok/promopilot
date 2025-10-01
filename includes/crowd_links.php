@@ -357,8 +357,8 @@ if (!function_exists('pp_crowd_links_finalize_stalled_run')) {
         $note = trim($note) !== '' ? trim($note) : __('Проверка остановлена.');
         $noteEsc = $conn->real_escape_string($note);
         $now = $conn->real_escape_string(date('Y-m-d H:i:s'));
-        $conn->query("UPDATE crowd_check_results SET status='failed', finished_at=COALESCE(finished_at, '{$now}'), status_detail='{$noteEsc}', error=IF(error IS NULL OR error='', '{$noteEsc}', error) WHERE run_id={$runId} AND status IN ('queued','running')");
-        $conn->query("UPDATE crowd_links l JOIN crowd_check_results r ON r.link_id = l.id SET l.status='failed', l.status_detail='{$noteEsc}', l.last_error='{$noteEsc}', l.last_checked_at=COALESCE(l.last_checked_at, '{$now}') WHERE r.run_id={$runId} AND r.status='failed'");
+    $conn->query("UPDATE crowd_check_results SET status='cancelled', finished_at=COALESCE(finished_at, '{$now}'), status_detail='{$noteEsc}', error=IF(error IS NULL OR error='', '{$noteEsc}', error) WHERE run_id={$runId} AND status IN ('queued','running')");
+    $conn->query("UPDATE crowd_links l JOIN crowd_check_results r ON r.link_id = l.id SET l.status='pending', l.status_detail='{$noteEsc}', l.last_error=NULL, l.last_run_id=NULL WHERE r.run_id={$runId} AND r.status='cancelled'");
         $counts = [
             'success' => 0,
             'failed' => 0,
@@ -1102,10 +1102,13 @@ if (!function_exists('pp_crowd_links_process_tick')) {
         $testMessage = (string)($runRow['test_message'] ?? '');
         $testUrl = (string)($runRow['test_url'] ?? '');
     $options = []; if (!empty($runRow['options'])) { $tmp = json_decode((string)$runRow['options'], true); if (is_array($tmp)) { $options = $tmp; } }
-    $batch = 1; // process minimal work per tick to avoid blocking UI
-    $concurrency = 1;
     $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : 25;
-    $effectiveTimeout = min($timeout, 12);
+    $chunkSize = isset($options['chunk_size']) ? max(1, min(200, (int)$options['chunk_size'])) : 10;
+    $configuredConcurrency = isset($options['concurrency']) ? max(1, min(20, (int)$options['concurrency'])) : 1;
+    $batch = max(1, min(8, max($configuredConcurrency, (int)ceil($chunkSize / 2))));
+    $concurrency = max(1, min($configuredConcurrency, $batch, 5));
+    $timeout = max(5, min(180, $timeout));
+    $effectiveTimeout = min($timeout, 18);
 
         // Pick a small batch of queued results
         $stmtChunk = $conn->prepare('SELECT r.id AS result_id, r.link_id, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? AND r.status = "queued" ORDER BY r.id ASC LIMIT ?');
@@ -1327,7 +1330,7 @@ if (!function_exists('pp_crowd_links_process_tasks')) {
             do {
                 $mrc = curl_multi_exec($mh, $active);
             } while ($mrc === CURLM_CALL_MULTI_PERFORM);
-            curl_multi_select($mh, 0.5);
+            curl_multi_select($mh, 0.2);
             while ($info = curl_multi_info_read($mh)) {
                 $ch = $info['handle'];
                 $key = (int)$ch;

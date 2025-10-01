@@ -308,10 +308,22 @@ document.addEventListener('DOMContentLoaded', function() {
         start();
     })();
 
-    // Initialize Bootstrap tooltips (добавлено)
-    if (window.bootstrap && document.querySelector('[data-bs-toggle="tooltip"]')) {
-        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
-            try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
+    function initTooltips(root) {
+        if (!window.bootstrap) { return; }
+        const scope = root || document;
+        scope.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+            try {
+                const existing = bootstrap.Tooltip.getInstance(el);
+                if (existing) {
+                    existing.setContent({ '.tooltip-inner': el.getAttribute('data-bs-title') || el.getAttribute('title') || '' });
+                } else {
+                    new bootstrap.Tooltip(el);
+                }
+            } catch (e) {
+                /* noop */
+            }
         });
     }
+    window.ppInitTooltips = initTooltips;
+    initTooltips(document);
 });

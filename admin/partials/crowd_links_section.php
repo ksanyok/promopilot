@@ -255,6 +255,8 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                         $index = (string)($link['is_indexed'] ?? 'unknown');
                         $http = $link['http_status'] !== null ? (int)$link['http_status'] : null;
                         $lastCheck = $formatTs($link['last_checked_at'] ?? null);
+                        $statusDetail = trim((string)($link['status_detail'] ?? ''));
+                        $tooltip = $statusDetail !== '' ? htmlspecialchars($statusDetail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : htmlspecialchars(__('Подробности отсутствуют'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                         ?>
                         <tr data-link-id="<?php echo $linkId; ?>" data-status="<?php echo htmlspecialchars($status); ?>">
                             <td class="text-center">
@@ -267,7 +269,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                                     <?php echo htmlspecialchars(mb_strimwidth($link['url'], 0, 90, '…')); ?>
                                 </a>
                             </td>
-                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label title="<?php echo htmlspecialchars((string)($link['status_detail'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
+                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="<?php echo $tooltip; ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
                             <td class="text-center" data-region><?php echo $link['region'] ? htmlspecialchars($link['region']) : '—'; ?></td>
                             <td class="text-center" data-language><?php echo $link['language'] ? htmlspecialchars($link['language']) : '—'; ?></td>
                             <td class="text-center" data-follow><?php echo htmlspecialchars($crowdFollowLabels[$follow] ?? __('Неизвестно')); ?></td>
@@ -445,6 +447,9 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 }
             });
         });
+        if (typeof window.ppInitTooltips === 'function') {
+            window.ppInitTooltips(tbody);
+        }
         updateSelectionState();
     }
 
@@ -607,5 +612,9 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
             refreshList();
         });
     });
+
+    if (typeof window.ppInitTooltips === 'function') {
+        window.ppInitTooltips(section);
+    }
 })();
 </script>

@@ -95,6 +95,8 @@ function pp_crowd_api_page_from_query(): int {
             $index = (string)($link['is_indexed'] ?? 'unknown');
             $http = isset($link['http_status']) && $link['http_status'] !== null ? (int)$link['http_status'] : null;
             $lastCheck = $formatTs($link['last_checked_at'] ?? null);
+            $statusDetail = trim((string)($link['status_detail'] ?? ''));
+            $tooltip = $statusDetail !== '' ? htmlspecialchars($statusDetail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : htmlspecialchars(__('Подробности отсутствуют'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             ?>
             <tr data-link-id="<?php echo $linkId; ?>" data-status="<?php echo htmlspecialchars($status, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                 <td class="text-center">
@@ -107,7 +109,7 @@ function pp_crowd_api_page_from_query(): int {
                         <?php echo htmlspecialchars(mb_strimwidth((string)$link['url'], 0, 90, '…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                     </a>
                 </td>
-                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label title="<?php echo htmlspecialchars((string)($link['status_detail'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
+                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="<?php echo $tooltip; ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
                 <td class="text-center" data-region><?php echo !empty($link['region']) ? htmlspecialchars((string)$link['region'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-language><?php echo !empty($link['language']) ? htmlspecialchars((string)$link['language'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-follow><?php echo htmlspecialchars($followLabels[$follow] ?? __('Неизвестно'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></td>
