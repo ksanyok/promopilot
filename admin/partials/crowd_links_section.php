@@ -508,7 +508,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
 
     function schedulePoll() {
         if (pollTimer) { clearTimeout(pollTimer); }
-        pollTimer = setTimeout(() => refreshStatus(true), 4000);
+        pollTimer = setTimeout(() => refreshStatus(true), 2000);
     }
 
     function startRun(mode, ids = []) {

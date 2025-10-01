@@ -150,9 +150,11 @@ switch ($action) {
         $filters = pp_crowd_api_filters_from_query();
         $page = pp_crowd_api_page_from_query();
         $perPage = 25;
+        // Trigger cooperative tick first so list reflects the latest state
+        $status = pp_crowd_links_get_status(null, 30);
+        // Now fetch the list after tick
         $list = pp_crowd_links_fetch_links($page, $perPage, $filters);
         $stats = pp_crowd_links_get_stats();
-        $status = pp_crowd_links_get_status(null, 30);
         if (!$status['ok']) {
             pp_crowd_api_response(['ok' => false, 'error' => $status['error'] ?? 'UNKNOWN']);
         }
