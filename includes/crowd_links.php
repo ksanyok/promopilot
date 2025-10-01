@@ -946,7 +946,45 @@ if (!function_exists('pp_crowd_links_process_tick')) {
         $tasks = [];
         while ($row = $res->fetch_assoc()) { $tasks[] = ['result_id' => (int)$row['result_id'], 'link_id' => (int)$row['link_id'], 'url' => (string)$row['url']]; }
         $stmtChunk->close();
-        if (empty($tasks)) { $conn->close(); return; }
+        if (empty($tasks)) {
+            // No queued tasks left. If nothing is running, finalize the run so UI reflects completion.
+            $runningCount = 0;
+            if ($resRunning = $conn->query('SELECT COUNT(1) AS c FROM crowd_check_results WHERE run_id=' . (int)$runId . " AND status='running'")) {
+                if ($rowRunning = $resRunning->fetch_assoc()) { $runningCount = (int)$rowRunning['c']; }
+                $resRunning->free();
+            }
+            if ($runningCount === 0) {
+                $counts = [
+                    'success' => 0,
+                    'failed' => 0,
+                    'needs_review' => 0,
+                    'cancelled' => 0,
+                ];
+                if ($resCounts = $conn->query('SELECT status, COUNT(*) AS cnt FROM crowd_check_results WHERE run_id=' . (int)$runId . ' GROUP BY status')) {
+                    while ($row = $resCounts->fetch_assoc()) {
+                        $st = (string)$row['status'];
+                        $cnt = (int)$row['cnt'];
+                        if (isset($counts[$st])) { $counts[$st] = $cnt; }
+                    }
+                    $resCounts->free();
+                }
+                $processed = $counts['success'] + $counts['failed'] + $counts['needs_review'] + $counts['cancelled'];
+                $cancelRequested = false;
+                if ($resCancel = $conn->query('SELECT cancel_requested FROM crowd_check_runs WHERE id=' . (int)$runId . ' LIMIT 1')) {
+                    if ($rowCancel = $resCancel->fetch_assoc()) { $cancelRequested = !empty($rowCancel['cancel_requested']); }
+                    $resCancel->free();
+                }
+                $finalStatus = $cancelRequested ? 'cancelled' : 'finished';
+                if ($stmtFinish = $conn->prepare('UPDATE crowd_check_runs SET status=?, processed_count=?, success_count=?, failure_count=?, needs_review_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id=?')) {
+                    $stmtFinish->bind_param('siiiii', $finalStatus, $processed, $counts['success'], $counts['failed'], $counts['needs_review'], $runId);
+                    $stmtFinish->execute();
+                    $stmtFinish->close();
+                }
+                pp_crowd_links_log('Tick finalize run', ['runId' => $runId, 'status' => $finalStatus, 'processed' => $processed, 'success' => $counts['success'], 'failed' => $counts['failed'], 'needs_review' => $counts['needs_review']]);
+            }
+            $conn->close();
+            return;
+        }
         $now = date('Y-m-d H:i:s');
         $conn->query('UPDATE crowd_check_runs SET status="running", started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=' . (int)$runId . ' LIMIT 1');
         // Mark batch running
@@ -1201,8 +1239,40 @@ if (!function_exists('pp_crowd_links_handle_single_task')) {
                 $status = 'needs_review';
                 $error = __('Найден текст, но ссылка требует проверки.');
             } else {
-                $status = 'needs_review';
-                $error = __('Текст или ссылка не найдены.');
+                // Try lightweight universal form submission once
+                $submitAttempted = false;
+                $submittedOk = false;
+                $cookieFile = isset($task['cookie']) ? (string)$task['cookie'] : '';
+                $baseUrl = (string)($info['url'] ?? $task['url']);
+                $formResult = pp_crowd_links_try_submit_form($baseUrl, $body, $cookieFile, $testMessage, $testUrl, $timeout);
+                if ($formResult !== null) {
+                    $submitAttempted = true;
+                    $httpStatus = $formResult['http_code'];
+                    $responseUrl = $formResult['final_url'];
+                    $headers2 = $formResult['headers'];
+                    $body2 = $formResult['body'];
+                    $indexStatus = pp_crowd_links_detect_index_status($headers2, $body2);
+                    // Re-evaluate presence
+                    $normBody2 = mb_strtolower(strip_tags($body2));
+                    if ($normMsg !== '' && strpos($normBody2, $normMsg) !== false) {
+                        $messageFound = true;
+                    } elseif ($testUrl !== '' && strpos($normBody2, $testUrl) !== false) {
+                        $messageFound = true;
+                        $linkFound = true;
+                    }
+                    if ($testUrl !== '') {
+                        $followType2 = pp_crowd_links_detect_follow_type($body2, $testUrl);
+                        if ($followType2 !== 'missing') { $followType = $followType2; $linkFound = true; }
+                    }
+                    $submittedOk = $messageFound || $linkFound;
+                }
+                if ($submittedOk) {
+                    $status = 'success';
+                    $error = '';
+                } else {
+                    $status = 'needs_review';
+                    $error = $submitAttempted ? __('Отправка формы не подтвердилась.') : __('Текст или ссылка не найдены.');
+                }
             }
         } else {
             $error = sprintf(__('HTTP статус: %d'), $httpStatus);
@@ -1224,6 +1294,199 @@ if (!function_exists('pp_crowd_links_handle_single_task')) {
         );
 
         return $result;
+    }
+}
+
+// Lightweight universal form submission helper (no browser). Returns null if no suitable form found.
+if (!function_exists('pp_crowd_links_try_submit_form')) {
+    function pp_crowd_links_try_submit_form(string $baseUrl, string $html, string $cookieFile, string $message, string $targetUrl, int $timeout): ?array {
+        if ($html === '') { return null; }
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $loaded = @$dom->loadHTML($html);
+        libxml_clear_errors();
+        if (!$loaded) { return null; }
+        $xpath = new DOMXPath($dom);
+        $forms = $xpath->query('//form');
+        if (!$forms || $forms->length === 0) { return null; }
+
+        // Choose the most likely guest-post/comment/contact form
+        $chosen = null;
+        foreach ($forms as $form) {
+            if (!($form instanceof DOMElement)) { continue; }
+            $formHtml = strtolower($dom->saveHTML($form) ?: '');
+            // Heuristics: form contains textarea or input named like comment/message/content/text
+            $hasText = (bool)$xpath->query('.//textarea', $form)->length
+                || preg_match('~name\s*=\s*"(comment|message|content|text|body)"~i', $formHtml);
+            // Avoid login-only forms
+            $hasLogin = preg_match('~type\s*=\s*"password"~i', $formHtml);
+            if ($hasText && !$hasLogin) { $chosen = $form; break; }
+        }
+        if (!$chosen) { return null; }
+
+        $method = strtolower($chosen->getAttribute('method') ?: 'post');
+        if ($method !== 'post' && $method !== 'get') { $method = 'post'; }
+        $actionAttr = $chosen->getAttribute('action') ?: '';
+        $action = pp_crowd_links_resolve_url($baseUrl, $actionAttr);
+        if ($action === null) { $action = $baseUrl; }
+
+        // Collect fields (hidden + text inputs + textarea)
+        $fields = [];
+        $inputs = $xpath->query('.//input', $chosen);
+        foreach ($inputs as $inp) {
+            if (!($inp instanceof DOMElement)) { continue; }
+            $name = $inp->getAttribute('name'); if ($name === '') { continue; }
+            $type = strtolower($inp->getAttribute('type') ?: 'text');
+            if ($type === 'submit' || $type === 'button' || $type === 'image' || $type === 'file') { continue; }
+            $value = $inp->getAttribute('value');
+            $fields[$name] = $value;
+        }
+        $textareas = $xpath->query('.//textarea', $chosen);
+        foreach ($textareas as $ta) {
+            if (!($ta instanceof DOMElement)) { continue; }
+            $name = $ta->getAttribute('name'); if ($name === '') { continue; }
+            $fields[$name] = $ta->textContent ?? '';
+        }
+
+        // Fill typical fields
+        $nameVal = (string)get_setting('crowd_identity_name', 'Promo QA');
+        $emailVal = (string)get_setting('crowd_identity_email', 'qa+' . substr(sha1($baseUrl),0,6) . '@example.com');
+        $candidates = [
+            'name' => $nameVal,
+            'fullname' => $nameVal,
+            'full_name' => $nameVal,
+            'author' => $nameVal,
+            'username' => $nameVal,
+            'nickname' => $nameVal,
+            'user' => $nameVal,
+            'email' => $emailVal,
+            'email_address' => $emailVal,
+            'mail' => $emailVal,
+            'from' => $emailVal,
+            'url' => $targetUrl ?: $baseUrl,
+            'website' => $targetUrl ?: $baseUrl,
+            'homepage' => $targetUrl ?: $baseUrl,
+            'site' => $targetUrl ?: $baseUrl,
+            'subject' => 'Test',
+            'title' => 'Test',
+            'message' => $message,
+            'comment' => $message,
+            'content' => $message,
+            'text' => $message,
+            'body' => $message,
+        ];
+        // Overlay candidates onto $fields without clobbering CSRF tokens etc.
+        foreach ($candidates as $key => $val) {
+            // Fill by exact name or by contains
+            $applied = false;
+            foreach ($fields as $fname => $fval) {
+                if (strcasecmp($fname, $key) === 0) { $fields[$fname] = $val; $applied = true; }
+            }
+            if (!$applied) {
+                // Try adding if field exists with partial match
+                foreach ($fields as $fname => $fval) {
+                    if (stripos($fname, $key) !== false) { $fields[$fname] = $val; $applied = true; }
+                }
+            }
+            if (!$applied) {
+                // If form has none of these, append the key (helps for simple endpoints)
+                if (in_array($key, ['message','comment','content','text','body'], true)) {
+                    $fields[$key] = $val;
+                }
+            }
+        }
+
+        // Prepare request
+        $ch = curl_init();
+        $ua = 'PromoPilotCrowdBot/1.0 (+https://promopilot.ai)';
+        $headers = [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.8,ru;q=0.7',
+        ];
+        $opts = [
+            CURLOPT_URL => $action,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_USERAGENT => $ua,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_REFERER => $baseUrl,
+            CURLOPT_COOKIEFILE => $cookieFile ?: tempnam(sys_get_temp_dir(), 'ppcrowd'),
+            CURLOPT_COOKIEJAR => $cookieFile ?: tempnam(sys_get_temp_dir(), 'ppcrowd'),
+            CURLOPT_HEADER => true,
+        ];
+        if ($method === 'post') {
+            $opts[CURLOPT_POST] = true;
+            $opts[CURLOPT_POSTFIELDS] = http_build_query($fields);
+        } else {
+            // GET: append query to action
+            $glue = (strpos($action, '?') === false) ? '?' : '&';
+            $opts[CURLOPT_URL] = $action . $glue . http_build_query($fields);
+        }
+        curl_setopt_array($ch, $opts);
+        $raw = curl_exec($ch);
+        if ($raw === false) {
+            curl_close($ch); return null;
+        }
+        $info2 = curl_getinfo($ch);
+        $headerSize = $info2['header_size'] ?? 0;
+        $headersRaw = substr($raw, 0, $headerSize);
+        $body2 = substr($raw, $headerSize);
+        curl_close($ch);
+        $hdrs = [];
+        if ($headersRaw) {
+            $lines = preg_split("/\r?\n/", $headersRaw, -1, PREG_SPLIT_NO_EMPTY);
+            foreach ($lines as $line) {
+                if (strpos($line, ':') !== false) {
+                    $parts = explode(':', $line, 2);
+                    $name = $parts[0];
+                    $value = $parts[1] ?? '';
+                    $hdrs[trim(strtolower($name))] = trim($value);
+                }
+            }
+        }
+        return [
+            'http_code' => (int)($info2['http_code'] ?? 0),
+            'final_url' => (string)($info2['url'] ?? $action),
+            'headers' => $hdrs,
+            'body' => (string)$body2,
+        ];
+    }
+}
+
+// Resolve relative action URL against base
+if (!function_exists('pp_crowd_links_resolve_url')) {
+    function pp_crowd_links_resolve_url(string $base, string $ref): ?string {
+        $ref = trim($ref);
+        if ($ref === '' || $ref === '#') { return $base; }
+        // If already absolute
+        if (preg_match('~^https?://~i', $ref)) { return $ref; }
+        // Parse base
+        $p = @parse_url($base);
+        if (!$p || empty($p['scheme']) || empty($p['host'])) { return null; }
+        $scheme = $p['scheme']; $host = $p['host']; $port = isset($p['port']) ? ':' . $p['port'] : '';
+        $path = isset($p['path']) ? $p['path'] : '/';
+        if ($ref[0] === '/') {
+            $newPath = $ref;
+        } else {
+            // relative to base path
+            $dir = preg_replace('~[^/]+$~', '', $path);
+            $newPath = $dir . $ref;
+        }
+        // Normalize // and /./ and /../ minimal
+        $newPath = preg_replace('~/{2,}~', '/', $newPath);
+        $segments = [];
+        foreach (explode('/', $newPath) as $seg) {
+            if ($seg === '' || $seg === '.') continue;
+            if ($seg === '..') { array_pop($segments); continue; }
+            $segments[] = $seg;
+        }
+        $finalPath = '/' . implode('/', $segments);
+        return $scheme . '://' . $host . $port . $finalPath;
     }
 }
 
