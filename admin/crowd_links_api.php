@@ -39,7 +39,7 @@ function pp_crowd_api_page_from_query(): int {
     return $page;
 }
 
-function pp_crowd_api_render_rows(array $links): string {
+    function pp_crowd_api_render_rows(array $links): string {
     $statusOptions = [
         'all' => __('Все'),
         'pending' => __('Не проверено'),
@@ -107,7 +107,7 @@ function pp_crowd_api_render_rows(array $links): string {
                         <?php echo htmlspecialchars(mb_strimwidth((string)$link['url'], 0, 90, '…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                     </a>
                 </td>
-                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
+                <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label title="<?php echo htmlspecialchars((string)($link['status_detail'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
                 <td class="text-center" data-region><?php echo !empty($link['region']) ? htmlspecialchars((string)$link['region'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-language><?php echo !empty($link['language']) ? htmlspecialchars((string)$link['language'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '—'; ?></td>
                 <td class="text-center" data-follow><?php echo htmlspecialchars($followLabels[$follow] ?? __('Неизвестно'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></td>

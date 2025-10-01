@@ -227,7 +227,7 @@ if (!function_exists('pp_crowd_links_fetch_links')) {
         if (!$conn) {
             return ['rows' => [], 'total' => 0];
         }
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, url, status, region, language, is_indexed, follow_type, http_status, last_checked_at, last_success_at, last_error, last_run_id FROM crowd_links {$whereSql} ORDER BY id DESC LIMIT ?, ?";
+    $sql = "SELECT SQL_CALC_FOUND_ROWS id, url, status, status_detail, region, language, is_indexed, follow_type, http_status, last_checked_at, last_success_at, last_error, last_run_id FROM crowd_links {$whereSql} ORDER BY id DESC LIMIT ?, ?";
         $stmt = $conn->prepare($sql);
         if (!$stmt) {
             $conn->close();
@@ -499,13 +499,7 @@ if (!function_exists('pp_crowd_links_start_run')) {
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
 
-        if (!pp_crowd_links_wait_for_worker_start($runId, 3.5)) {
-            try {
-                pp_crowd_links_process_run($runId);
-            } catch (Throwable $e) {
-                pp_crowd_links_log('Inline crowd links processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
-            }
-        }
+        // Do not process inline; return immediately and let the poller update UI
 
         return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
     }
@@ -564,7 +558,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
             return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
         }
         $results = [];
-        $stmtRes = $conn->prepare('SELECT r.id, r.link_id, r.status, r.http_status, r.follow_type, r.index_status, r.detected_language, r.detected_region, r.message_found, r.link_found, r.error, r.started_at, r.finished_at, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? ORDER BY r.id ASC LIMIT ?');
+    $stmtRes = $conn->prepare('SELECT r.id, r.link_id, r.status, r.http_status, r.follow_type, r.index_status, r.detected_language, r.detected_region, r.message_found, r.link_found, r.error, r.status_detail, r.started_at, r.finished_at, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? ORDER BY r.id ASC LIMIT ?');
         if ($stmtRes) {
             $stmtRes->bind_param('ii', $runId, $limit);
             $stmtRes->execute();
@@ -583,6 +577,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
                     'message_found' => !empty($row['message_found']),
                     'link_found' => !empty($row['link_found']),
                     'error' => (string)($row['error'] ?? ''),
+                    'status_detail' => (string)($row['status_detail'] ?? ''),
                     'started_at' => $row['started_at'],
                     'started_at_iso' => pp_crowd_links_format_ts($row['started_at'] ?? null),
                     'finished_at' => $row['finished_at'],
@@ -774,8 +769,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
 
             $results = pp_crowd_links_process_tasks($tasks, $testMessage, $testUrl, $timeout, $concurrency);
 
-            $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=? WHERE id=?');
-            $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=? WHERE id=?');
+            $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=?, status_detail=? WHERE id=?');
+            $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=?, status_detail=? WHERE id=?');
             if (!$stmtUpdateRes || !$stmtUpdateLink) {
                 if ($stmtUpdateRes) {
                     $stmtUpdateRes->close();
@@ -805,7 +800,15 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $linkFound = $entry['link_found'] ? 1 : 0;
                 $error = $entry['error'];
                 $responseUrl = $entry['response_url'];
-                $stmtUpdateRes->bind_param('ssisssssissi',
+                $detail = '';
+                if ($statusResult === 'success') {
+                    $detail = __('Публикация успешна, ссылка найдена.');
+                } elseif ($error !== '') {
+                    $detail = $error;
+                } elseif ($messageFound || $linkFound) {
+                    $detail = __('Найден контент, требует проверки.');
+                }
+                $stmtUpdateRes->bind_param('ssisssssissisi',
                     $statusResult,
                     $finishedAt,
                     $httpStatus,
@@ -817,6 +820,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $linkFound,
                     $error,
                     $responseUrl,
+                    $detail,
                     $entry['result_id']
                 );
                 $stmtUpdateRes->execute();
@@ -825,7 +829,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $nowTs = date('Y-m-d H:i:s');
                 $isSuccess = $statusResult === 'success' ? 1 : 0;
                 $lastSuccessAt = $isSuccess ? $nowTs : null;
-                $stmtUpdateLink->bind_param('sisssssssssi',
+                $stmtUpdateLink->bind_param('sissssssssssi',
                     $linkStatus,
                     $httpStatus,
                     $followType,
@@ -837,6 +841,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $lastSuccessAt,
                     $error,
                     $responseUrl,
+                    $detail,
                     $entry['link_id']
                 );
                 $stmtUpdateLink->execute();
@@ -984,7 +989,9 @@ if (!function_exists('pp_crowd_links_process_tasks')) {
                     $lines = preg_split("/\r?\n/", $headersRaw, -1, PREG_SPLIT_NO_EMPTY);
                     foreach ($lines as $line) {
                         if (strpos($line, ':') !== false) {
-                            [$name, $value] = explode(':', $line, 2);
+                            $parts = explode(':', $line, 2);
+                            $name = $parts[0];
+                            $value = $parts[1] ?? '';
                             $headers[trim(strtolower($name))] = trim($value);
                         }
                     }

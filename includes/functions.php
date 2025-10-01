@@ -446,6 +446,7 @@ function ensure_schema(): void {
         $maybeCrowdAdd('last_error', "`last_error` TEXT NULL AFTER `last_success_at`");
         $maybeCrowdAdd('last_run_id', "`last_run_id` INT NULL DEFAULT NULL AFTER `last_error`");
         $maybeCrowdAdd('last_detected_url', "`last_detected_url` TEXT NULL AFTER `last_run_id`");
+    $maybeCrowdAdd('status_detail', "`status_detail` VARCHAR(255) NULL AFTER `status`");
         $maybeCrowdAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `last_detected_url`");
         $maybeCrowdAdd('updated_at', "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
         if (pp_mysql_index_exists($conn, 'crowd_links', 'uniq_crowd_url_hash') === false && isset($crowdLinksCols['url_hash'])) {
@@ -529,6 +530,7 @@ function ensure_schema(): void {
             `link_found` TINYINT(1) NOT NULL DEFAULT 0,
             `response_url` TEXT NULL,
             `error` TEXT NULL,
+            `status_detail` VARCHAR(255) NULL,
             `started_at` TIMESTAMP NULL DEFAULT NULL,
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -556,6 +558,7 @@ function ensure_schema(): void {
         $maybeResAdd('link_found', "`link_found` TINYINT(1) NOT NULL DEFAULT 0 AFTER `message_found`");
         $maybeResAdd('response_url', "`response_url` TEXT NULL AFTER `link_found`");
         $maybeResAdd('error', "`error` TEXT NULL AFTER `response_url`");
+    $maybeResAdd('status_detail', "`status_detail` VARCHAR(255) NULL AFTER `error`");
         $maybeResAdd('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL AFTER `error`");
         $maybeResAdd('finished_at', "`finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
         $maybeResAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `finished_at`");

@@ -267,7 +267,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                                     <?php echo htmlspecialchars(mb_strimwidth($link['url'], 0, 90, '…')); ?>
                                 </a>
                             </td>
-                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label><?php echo htmlspecialchars($statusLabel); ?></span></td>
+                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label title="<?php echo htmlspecialchars((string)($link['status_detail'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
                             <td class="text-center" data-region><?php echo $link['region'] ? htmlspecialchars($link['region']) : '—'; ?></td>
                             <td class="text-center" data-language><?php echo $link['language'] ? htmlspecialchars($link['language']) : '—'; ?></td>
                             <td class="text-center" data-follow><?php echo htmlspecialchars($crowdFollowLabels[$follow] ?? __('Неизвестно')); ?></td>
