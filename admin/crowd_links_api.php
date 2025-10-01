@@ -103,8 +103,9 @@ function pp_crowd_api_render_rows(array $links): string {
                     </div>
                 </td>
                 <td>
-                    <a href="<?php echo htmlspecialchars((string)$link['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" target="_blank" rel="noopener" class="crowd-link-url">
-                        <?php echo htmlspecialchars(mb_strimwidth((string)$link['url'], 0, 90, '…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
+                    <?php $fullUrl = (string)$link['url']; $shortUrl = function_exists('mb_strimwidth') ? mb_strimwidth($fullUrl, 0, 35, '…') : (strlen($fullUrl) > 35 ? substr($fullUrl, 0, 35) . '…' : $fullUrl); ?>
+                    <a href="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" target="_blank" rel="noopener" class="crowd-link-url" title="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" data-bs-toggle="tooltip">
+                        <?php echo htmlspecialchars($shortUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
                     </a>
                 </td>
                 <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label><?php echo htmlspecialchars($statusLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></td>
@@ -146,6 +147,46 @@ switch ($action) {
             'total' => (int)($list['total'] ?? 0),
             'totalPages' => max(1, (int)ceil(((int)($list['total'] ?? 0)) / $perPage)),
         ]);
+    }
+    case 'delete': {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
+        }
+        $ids = isset($_POST['ids']) && is_array($_POST['ids']) ? array_values(array_filter(array_map('intval', $_POST['ids']))) : [];
+        if (empty($ids)) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'EMPTY']);
+        }
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        if (!$conn) { pp_crowd_api_response(['ok' => false, 'error' => 'DB_CONNECTION']); }
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $types = str_repeat('i', count($ids));
+        $stmt = $conn->prepare("DELETE FROM crowd_links WHERE id IN ($in)");
+        if (!$stmt) { $conn->close(); pp_crowd_api_response(['ok' => false, 'error' => 'DB_PREPARE']); }
+        $stmt->bind_param($types, ...$ids);
+        $ok = $stmt->execute();
+        $affected = $stmt->affected_rows ?? 0;
+        $stmt->close();
+        $conn->close();
+        if (!$ok) { pp_crowd_api_response(['ok' => false, 'error' => 'DB_WRITE']); }
+        pp_crowd_api_response(['ok' => true, 'deleted' => (int)$affected]);
+    }
+    case 'clear': {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
+            pp_crowd_api_response(['ok' => false, 'error' => 'CSRF']);
+        }
+        $mode = isset($_POST['mode']) ? trim((string)$_POST['mode']) : 'all';
+        $where = '';
+        if ($mode === 'errors') {
+            $where = "WHERE status IN ('failed','cancelled')";
+        }
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        if (!$conn) { pp_crowd_api_response(['ok' => false, 'error' => 'DB_CONNECTION']); }
+        $sql = "DELETE FROM crowd_links $where";
+        $ok = $conn->query($sql);
+        $affected = $conn->affected_rows ?? 0;
+        $conn->close();
+        if (!$ok) { pp_crowd_api_response(['ok' => false, 'error' => 'DB_WRITE']); }
+        pp_crowd_api_response(['ok' => true, 'cleared' => (int)$affected]);
     }
     case 'list': {
         $filters = pp_crowd_api_filters_from_query();

@@ -84,6 +84,7 @@ if (!function_exists('pp_crowd_links_insert_urls')) {
         $duplicates = 0;
         $invalid = 0;
         $normalizeCache = [];
+        $seenHashes = [];
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
@@ -109,18 +110,35 @@ if (!function_exists('pp_crowd_links_insert_urls')) {
                 continue;
             }
             $hash = pp_crowd_links_hash_url($normalized);
-            $stmt->bind_param('ss', $normalized, $hash);
-            if (!$stmt->execute()) {
-                if ($stmt->errno === 1062) {
-                    $duplicates++;
-                    continue;
-                }
-                // On other errors we simply log and treat as invalid
-                $invalid++;
-                pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => $stmt->errno, 'error' => $stmt->error]);
+            // Skip duplicates within the same batch to reduce DB errors/overhead
+            if (isset($seenHashes[$hash])) {
+                $duplicates++;
                 continue;
             }
-            $inserted++;
+            $seenHashes[$hash] = true;
+            $stmt->bind_param('ss', $normalized, $hash);
+            try {
+                $ok = $stmt->execute();
+                if ($ok) {
+                    $inserted++;
+                } else {
+                    if ((int)$stmt->errno === 1062) {
+                        $duplicates++;
+                    } else {
+                        $invalid++;
+                        pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => $stmt->errno, 'error' => $stmt->error]);
+                    }
+                }
+            } catch (Throwable $ex) {
+                // mysqli may be configured to throw exceptions (MYSQLI_REPORT_STRICT). Handle duplicate key and generic errors.
+                $code = (int)($ex->getCode() ?? 0);
+                if ($code === 1062) {
+                    $duplicates++;
+                } else {
+                    $invalid++;
+                    pp_crowd_links_log('Insert crowd link exception', ['url' => $normalized, 'code' => $code, 'message' => $ex->getMessage()]);
+                }
+            }
         }
         $stmt->close();
         $conn->close();
@@ -953,7 +971,8 @@ if (!function_exists('pp_crowd_links_handle_single_task')) {
         $language = '';
         $region = '';
         $responseUrl = $info['url'] ?? $task['url'];
-        if ($httpStatus >= 200 && $httpStatus < 400 && $body !== '') {
+        // Stage 1: only proceed for 2xx; treat 3xx/4xx/5xx as immediate error
+        if ($httpStatus >= 200 && $httpStatus < 300 && $body !== '') {
             $parsed = pp_crowd_links_parse_document($body);
             $language = $parsed['language'] ?? '';
             $region = $parsed['region'] ?? '';

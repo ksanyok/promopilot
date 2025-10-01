@@ -182,6 +182,18 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 <button type="button" class="btn btn-outline-info" id="crowdStartSelected" data-mode="selection" disabled><i class="bi bi-check2-circle me-1"></i><?php echo __('Проверить выбранные'); ?></button>
                 <button type="button" class="btn btn-outline-danger" id="crowdStopRun" style="display: <?php echo ($crowdCurrentRun && $crowdCurrentRun['status'] === 'running') ? 'inline-flex' : 'none'; ?>;"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></button>
                 <button type="button" class="btn btn-outline-secondary" id="crowdRefresh"><i class="bi bi-arrow-repeat me-1"></i><?php echo __('Обновить'); ?></button>
+                <div class="vr mx-1 d-none d-lg-inline"></div>
+                <button type="button" class="btn btn-outline-warning" id="crowdDeleteSelected" disabled><i class="bi bi-trash3 me-1"></i><?php echo __('Удалить выбранные'); ?></button>
+                <div class="btn-group">
+                    <button type="button" class="btn btn-outline-dark dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-broom me-1"></i><?php echo __('Очистить'); ?>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="#" data-crowd-clear="errors"><?php echo __('Только ошибки/отменённые'); ?></a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item text-danger" href="#" data-crowd-clear="all"><?php echo __('Полностью базу'); ?></a></li>
+                    </ul>
+                </div>
             </div>
         </div>
         <div class="small text-muted mt-2" data-crowd-run-note>
@@ -295,6 +307,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     const startAllBtn = document.getElementById('crowdStartAll');
     const startPendingBtn = document.getElementById('crowdStartPending');
     const startSelectedBtn = document.getElementById('crowdStartSelected');
+    const deleteSelectedBtn = document.getElementById('crowdDeleteSelected');
     const stopBtn = document.getElementById('crowdStopRun');
     const refreshBtn = document.getElementById('crowdRefresh');
     const runMessage = document.getElementById('crowdRunMessage');
@@ -345,8 +358,9 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     }
 
     function updateSelectionState() {
-        const ids = selectedIds();
-        startSelectedBtn.disabled = ids.length === 0;
+    const ids = selectedIds();
+    startSelectedBtn.disabled = ids.length === 0;
+    if (deleteSelectedBtn) deleteSelectedBtn.disabled = ids.length === 0;
         if (!selectAll) { return; }
         const rows = tbody.querySelectorAll('tr');
         let selectable = 0;
@@ -441,6 +455,22 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         return fetch(url, { method, headers, body, credentials: 'same-origin' })
             .then(res => res.json())
             .catch(() => ({ ok: false, error: 'NETWORK' }));
+    }
+
+    function deleteSelected() {
+        const ids = selectedIds();
+        if (!ids.length) return;
+        if (!confirm('<?php echo addslashes(__('Удалить выбранные ссылки? Это действие необратимо.')); ?>')) return;
+        const data = { };
+        ids.forEach((id, i) => data['ids['+i+']'] = id);
+        return apiRequest('delete', 'POST', data).then(() => { refreshStatus(); refreshList(); });
+    }
+
+    function clearBase(mode) {
+        if (mode === 'all') {
+            if (!confirm('<?php echo addslashes(__('Полностью очистить базу крауд ссылок? Это действие необратимо.')); ?>')) return;
+        }
+        return apiRequest('clear', 'POST', { mode }).then(() => { refreshStatus(); refreshList(); });
     }
 
     function refreshStatus(silent = false) {
@@ -557,10 +587,14 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         const ids = selectedIds();
         if (ids.length > 0) { startRun('selection', ids); }
     });
+    deleteSelectedBtn?.addEventListener('click', deleteSelected);
     stopBtn?.addEventListener('click', cancelRun);
     refreshBtn?.addEventListener('click', () => {
         refreshStatus();
         refreshList();
+    });
+    document.querySelectorAll('[data-crowd-clear]')?.forEach(el => {
+        el.addEventListener('click', (e) => { e.preventDefault(); const m = el.getAttribute('data-crowd-clear') || 'errors'; clearBase(m); });
     });
 
     document.addEventListener('pp-admin-section-changed', (event) => {
