@@ -337,16 +337,11 @@ if (!function_exists('pp_crowd_links_start_run')) {
         }
         $filters = $options['filters'] ?? [];
         $statusFilter = isset($filters['status']) ? strtolower((string)$filters['status']) : 'pending';
+        // Generate default message/link from core generators instead of settings
         $testMessage = isset($options['test_message']) ? trim((string)$options['test_message']) : '';
         $testUrl = isset($options['test_url']) ? trim((string)$options['test_url']) : '';
-        if ($testMessage === '') {
-            $defaultMessage = (string)get_setting('crowd_test_message', 'PromoPilot QA test message.');
-            $testMessage = $defaultMessage !== '' ? $defaultMessage : 'PromoPilot QA test message.';
-        }
-        if ($testUrl === '') {
-            $defaultUrl = (string)get_setting('crowd_test_url', 'https://example.com/');
-            $testUrl = $defaultUrl !== '' ? $defaultUrl : 'https://example.com/';
-        }
+        if ($testUrl === '') { $testUrl = pp_generate_website('https://example.com'); }
+        if ($testMessage === '') { $testMessage = pp_generate_message($testUrl, 'PromoPilot'); }
         if ($mode === 'pending') {
             $filters['status'] = 'pending';
             $statusFilter = 'pending';

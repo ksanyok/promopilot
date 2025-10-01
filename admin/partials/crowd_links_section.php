@@ -127,27 +127,15 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     <form method="post" class="card p-3 mb-3" autocomplete="off">
         <?php echo csrf_field(); ?>
         <div class="row g-3">
-            <div class="col-md-6">
-                <label class="form-label" for="crowdTestMessage"><?php echo __('Тестовое сообщение'); ?></label>
-                <textarea class="form-control" id="crowdTestMessage" name="crowd_test_message" rows="3" placeholder="<?php echo htmlspecialchars(__('Текст, который будет опубликован на площадках.')); ?>"><?php echo htmlspecialchars($crowdDefaultMessage); ?></textarea>
-                <div class="form-text"><?php echo __('Сообщение применяется ко всем новым проверкам. Включите ссылку, которую нужно отследить.'); ?></div>
+            <div class="col-sm-6">
+                <label class="form-label" for="crowdConcurrency"><?php echo __('Параллельные проверки'); ?></label>
+                <input type="number" class="form-control" id="crowdConcurrency" name="crowd_concurrency" min="1" max="20" value="<?php echo (int)$crowdDefaultConcurrency; ?>">
+                <div class="form-text"><?php echo __('Число одновременных запросов.'); ?></div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label" for="crowdTestUrl"><?php echo __('Тестовая ссылка (если не указана в сообщении)'); ?></label>
-                <input type="url" class="form-control" id="crowdTestUrl" name="crowd_test_url" value="<?php echo htmlspecialchars($crowdDefaultUrl); ?>" placeholder="https://example.com/landing">
-                <div class="form-text"><?php echo __('Используется, если URL не найден в тексте сообщения.'); ?></div>
-                <div class="row g-3 mt-1">
-                    <div class="col-sm-6">
-                        <label class="form-label" for="crowdConcurrency"><?php echo __('Параллельные проверки'); ?></label>
-                        <input type="number" class="form-control" id="crowdConcurrency" name="crowd_concurrency" min="1" max="20" value="<?php echo (int)$crowdDefaultConcurrency; ?>">
-                        <div class="form-text"><?php echo __('Число одновременных запросов.'); ?></div>
-                    </div>
-                    <div class="col-sm-6">
-                        <label class="form-label" for="crowdTimeout"><?php echo __('Таймаут запроса, сек.'); ?></label>
-                        <input type="number" class="form-control" id="crowdTimeout" name="crowd_timeout" min="5" max="180" value="<?php echo (int)$crowdDefaultTimeout; ?>">
-                        <div class="form-text"><?php echo __('Максимальное время ожидания ответа площадки.'); ?></div>
-                    </div>
-                </div>
+            <div class="col-sm-6">
+                <label class="form-label" for="crowdTimeout"><?php echo __('Таймаут запроса, сек.'); ?></label>
+                <input type="number" class="form-control" id="crowdTimeout" name="crowd_timeout" min="5" max="180" value="<?php echo (int)$crowdDefaultTimeout; ?>">
+                <div class="form-text"><?php echo __('Максимальное время ожидания ответа площадки.'); ?></div>
             </div>
         </div>
         <div class="text-end mt-3">
@@ -323,6 +311,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     const csrfToken = window.CSRF_TOKEN || '';
     let pollTimer = null;
     let currentRunId = null;
+    let visibilityTimer = null;
 
     function parseJsonScript(id) {
         try {
@@ -517,6 +506,13 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         pollTimer = setTimeout(() => refreshStatus(true), 4000);
     }
 
+    // Refresh when page becomes visible again (user returned to tab)
+    function onVisibilityChange() {
+        if (document.visibilityState === 'visible') {
+            refreshStatus(true);
+        }
+    }
+
     function startRun(mode, ids = []) {
         const payload = { mode };
         if (mode === 'selection' || mode === 'single') {
@@ -602,5 +598,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
             refreshStatus(true);
         }
     });
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
 })();
 </script>

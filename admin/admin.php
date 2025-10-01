@@ -253,25 +253,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!verify_csrf()) {
             $crowdSettingsMsg = __('Ошибка сохранения.') . ' (CSRF)';
         } else {
-            $testMessage = trim((string)($_POST['crowd_test_message'] ?? ''));
-            $testUrl = trim((string)($_POST['crowd_test_url'] ?? ''));
             $concurrency = (int)($_POST['crowd_concurrency'] ?? 5);
             $timeout = (int)($_POST['crowd_timeout'] ?? 25);
-            if ($testMessage === '') {
-                $crowdSettingsMsg = __('Введите текст тестового сообщения.');
-            } elseif ($testUrl !== '' && !filter_var($testUrl, FILTER_VALIDATE_URL)) {
-                $crowdSettingsMsg = __('Укажите корректный URL для тестовой ссылки.');
-            } else {
-                $concurrency = max(1, min(20, $concurrency));
-                $timeout = max(5, min(180, $timeout));
-                set_settings([
-                    'crowd_test_message' => $testMessage,
-                    'crowd_test_url' => $testUrl,
-                    'crowd_concurrency' => (string)$concurrency,
-                    'crowd_request_timeout' => (string)$timeout,
-                ]);
-                $crowdSettingsMsg = __('Настройки раздела сохранены.');
-            }
+            $concurrency = max(1, min(20, $concurrency));
+            $timeout = max(5, min(180, $timeout));
+            set_settings([
+                'crowd_concurrency' => (string)$concurrency,
+                'crowd_request_timeout' => (string)$timeout,
+            ]);
+            $crowdSettingsMsg = __('Настройки раздела сохранены.');
         }
     }
 }
@@ -390,8 +380,6 @@ $crowdLinks = $crowdList['rows'];
 $crowdTotalLinks = (int)($crowdList['total'] ?? 0);
 $crowdTotalPages = max(1, (int)ceil($crowdTotalLinks / $crowdPerPage));
 if ($crowdPage > $crowdTotalPages) { $crowdPage = $crowdTotalPages; }
-$crowdDefaultMessage = (string)get_setting('crowd_test_message', 'PromoPilot QA test message.');
-$crowdDefaultUrl = (string)get_setting('crowd_test_url', 'https://example.com/');
 $crowdDefaultConcurrency = (int)get_setting('crowd_concurrency', 5);
 if ($crowdDefaultConcurrency < 1) { $crowdDefaultConcurrency = 5; }
 $crowdDefaultTimeout = (int)get_setting('crowd_request_timeout', 25);
