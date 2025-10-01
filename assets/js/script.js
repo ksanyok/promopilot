@@ -105,8 +105,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Admin sections toggle (users, projects, settings, networks, diagnostics)
-    const sectionKeys = ['users','projects','settings','networks','diagnostics'];
+    // Admin sections toggle (users, projects, settings, crowd, networks, diagnostics)
+    const sectionKeys = ['users','projects','settings','crowd-links','networks','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);

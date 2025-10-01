@@ -493,7 +493,7 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
                     <?php echo __('Сканер локализации'); ?>
                 </a>
             </li>
-            <?php if ($updateStatus['is_new']): ?>
+            <?php if (!empty($updateStatus['is_new'])): ?>
             <li>
                 <a href="<?php echo pp_url('public/update.php'); ?>" class="menu-item">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
@@ -512,9 +512,9 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
 
 <div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
-<?php if ($updateStatus['is_new']): ?>
+<?php if (!empty($updateStatus['is_new'])): ?>
 <div class="alert alert-warning fade-in">
-    <strong><?php echo __('Доступно обновление'); ?>:</strong> <?php echo htmlspecialchars($updateStatus['latest']); ?> (опубликовано <?php echo htmlspecialchars($updateStatus['published_at']); ?>).
+    <strong><?php echo __('Доступно обновление'); ?>:</strong> <?php echo htmlspecialchars($updateStatus['latest']); ?>.
     <a href="<?php echo pp_url('public/update.php'); ?>" class="alert-link"><?php echo __('Перейти к обновлению'); ?></a>.
 </div>
 <?php endif; ?>
