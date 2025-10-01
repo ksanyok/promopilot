@@ -110,12 +110,26 @@ if (!function_exists('pp_crowd_links_insert_urls')) {
             }
             $hash = pp_crowd_links_hash_url($normalized);
             $stmt->bind_param('ss', $normalized, $hash);
-            if (!$stmt->execute()) {
+            $execOk = false;
+            try {
+                $execOk = $stmt->execute();
+            } catch (mysqli_sql_exception $ex) {
+                // Handle duplicate key gracefully in strict/exception mode
+                if ((int)$ex->getCode() === 1062) {
+                    $duplicates++;
+                    continue;
+                }
+                // For other errors, log and count as invalid
+                $invalid++;
+                pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => (int)$ex->getCode(), 'error' => $ex->getMessage()]);
+                continue;
+            }
+            if (!$execOk) {
+                // Non-strict mode path: check errno on statement
                 if ($stmt->errno === 1062) {
                     $duplicates++;
                     continue;
                 }
-                // On other errors we simply log and treat as invalid
                 $invalid++;
                 pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => $stmt->errno, 'error' => $stmt->error]);
                 continue;
