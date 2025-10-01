@@ -105,8 +105,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Admin sections toggle (users, projects, settings, networks, diagnostics)
-    const sectionKeys = ['users','projects','settings','networks','diagnostics'];
+    // Admin sections toggle (users, projects, settings, networks, crowd-links, diagnostics)
+    const sectionKeys = ['users','projects','settings','networks','crowd-links','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);
@@ -119,13 +119,32 @@ document.addEventListener('DOMContentLoaded', function() {
             if (storageAvailable) {
                 try { localStorage.setItem('pp-admin-section', sectionKey); } catch (_) { /* ignore */ }
             }
+            try {
+                // Notify listeners (e.g., crowd links panel) about section change
+                const evt = new CustomEvent('pp-admin-section-changed', { detail: { section: sectionKey } });
+                document.dispatchEvent(evt);
+            } catch (_) { /* no-op */ }
         }
         window.ppShowSection = show;
-        let initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
+        // Try to derive initial section from hash like #crowd-links-section
+        const keyFromHash = () => {
+            const h = (window.location.hash || '').replace(/^#/, '');
+            if (!h) return null;
+            return h.endsWith('-section') ? h.slice(0, -('-section'.length)) : null;
+        };
+        let initial = keyFromHash();
+        if (!initial || !sections[initial]) {
+            initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
+        }
         if (!initial || !sections[initial]) {
             initial = sections.users ? 'users' : (sections.projects ? 'projects' : (sections.settings ? 'settings' : (sections.networks ? 'networks' : Object.keys(sections).find(k => sections[k]))));
         }
         show(initial || 'users');
+        // Keep in sync with hash navigation
+        window.addEventListener('hashchange', () => {
+            const k = keyFromHash();
+            if (k && sections[k]) { show(k); }
+        });
     }
 
     // OpenAI key checker (admin settings)

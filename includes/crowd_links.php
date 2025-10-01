@@ -791,7 +791,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $linkFound = $entry['link_found'] ? 1 : 0;
                 $error = $entry['error'];
                 $responseUrl = $entry['response_url'];
-                $stmtUpdateRes->bind_param('ssisssssissi',
+                // status(s), finished_at(s), http_status(i), follow_type(s), index_status(s), detected_language(s), detected_region(s), message_found(i), link_found(i), error(s), response_url(s), id(i)
+                $stmtUpdateRes->bind_param('ssissssiissi',
                     $statusResult,
                     $finishedAt,
                     $httpStatus,
@@ -811,7 +812,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $nowTs = date('Y-m-d H:i:s');
                 $isSuccess = $statusResult === 'success' ? 1 : 0;
                 $lastSuccessAt = $isSuccess ? $nowTs : null;
-                $stmtUpdateLink->bind_param('sisssssssssi',
+                // status(s), http_status(i), follow_type(s), is_indexed(s), language(s), region(s), last_checked_at(s), is_success(i), last_success_at(s), last_error(s), last_detected_url(s), id(i)
+                $stmtUpdateLink->bind_param('sisssssisssi',
                     $linkStatus,
                     $httpStatus,
                     $followType,
