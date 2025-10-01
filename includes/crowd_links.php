@@ -110,26 +110,12 @@ if (!function_exists('pp_crowd_links_insert_urls')) {
             }
             $hash = pp_crowd_links_hash_url($normalized);
             $stmt->bind_param('ss', $normalized, $hash);
-            $execOk = false;
-            try {
-                $execOk = $stmt->execute();
-            } catch (mysqli_sql_exception $ex) {
-                // Handle duplicate key gracefully in strict/exception mode
-                if ((int)$ex->getCode() === 1062) {
-                    $duplicates++;
-                    continue;
-                }
-                // For other errors, log and count as invalid
-                $invalid++;
-                pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => (int)$ex->getCode(), 'error' => $ex->getMessage()]);
-                continue;
-            }
-            if (!$execOk) {
-                // Non-strict mode path: check errno on statement
+            if (!$stmt->execute()) {
                 if ($stmt->errno === 1062) {
                     $duplicates++;
                     continue;
                 }
+                // On other errors we simply log and treat as invalid
                 $invalid++;
                 pp_crowd_links_log('Insert crowd link failed', ['url' => $normalized, 'errno' => $stmt->errno, 'error' => $stmt->error]);
                 continue;
@@ -227,7 +213,7 @@ if (!function_exists('pp_crowd_links_fetch_links')) {
         if (!$conn) {
             return ['rows' => [], 'total' => 0];
         }
-    $sql = "SELECT SQL_CALC_FOUND_ROWS id, url, status, status_detail, region, language, is_indexed, follow_type, http_status, last_checked_at, last_success_at, last_error, last_run_id FROM crowd_links {$whereSql} ORDER BY id DESC LIMIT ?, ?";
+        $sql = "SELECT SQL_CALC_FOUND_ROWS id, url, status, region, language, is_indexed, follow_type, http_status, last_checked_at, last_success_at, last_error, last_run_id FROM crowd_links {$whereSql} ORDER BY id DESC LIMIT ?, ?";
         $stmt = $conn->prepare($sql);
         if (!$stmt) {
             $conn->close();
@@ -325,150 +311,6 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
     }
 }
 
-if (!function_exists('pp_crowd_links_release_orphan_links')) {
-    /**
-     * Reset links that are stuck in "checking" state while no active run exists.
-     *
-     * @param mixed $conn
-     */
-    function pp_crowd_links_release_orphan_links($conn): void {
-        if (!($conn instanceof mysqli)) {
-            return;
-        }
-        $sql = "UPDATE crowd_links cl SET cl.status='pending', cl.status_detail=NULL, cl.last_error=NULL, cl.last_run_id=NULL WHERE cl.status='checking' AND (cl.last_run_id IS NULL OR NOT EXISTS (SELECT 1 FROM crowd_check_runs r WHERE r.id = cl.last_run_id AND r.status IN ('queued','running')))";
-        @$conn->query($sql);
-    }
-}
-
-if (!function_exists('pp_crowd_links_finalize_stalled_run')) {
-    /**
-     * Mark a stalled run as failed and propagate error to related links/results.
-     *
-     * @param mixed $conn
-     */
-    function pp_crowd_links_finalize_stalled_run($conn, int $runId, string $note): void {
-        if (!($conn instanceof mysqli)) {
-            return;
-        }
-        $runId = max(0, $runId);
-        if ($runId <= 0) {
-            return;
-        }
-        $note = trim($note) !== '' ? trim($note) : __('Проверка остановлена.');
-        $noteEsc = $conn->real_escape_string($note);
-        $now = $conn->real_escape_string(date('Y-m-d H:i:s'));
-    $conn->query("UPDATE crowd_check_results SET status='cancelled', finished_at=COALESCE(finished_at, '{$now}'), status_detail='{$noteEsc}', error=IF(error IS NULL OR error='', '{$noteEsc}', error) WHERE run_id={$runId} AND status IN ('queued','running')");
-    $conn->query("UPDATE crowd_links l JOIN crowd_check_results r ON r.link_id = l.id SET l.status='pending', l.status_detail='{$noteEsc}', l.last_error=NULL, l.last_run_id=NULL WHERE r.run_id={$runId} AND r.status='cancelled'");
-        $counts = [
-            'success' => 0,
-            'failed' => 0,
-            'needs_review' => 0,
-            'cancelled' => 0,
-        ];
-        if ($resCounts = $conn->query("SELECT status, COUNT(*) AS cnt FROM crowd_check_results WHERE run_id={$runId} GROUP BY status")) {
-            while ($row = $resCounts->fetch_assoc()) {
-                $status = (string)($row['status'] ?? '');
-                if (array_key_exists($status, $counts)) {
-                    $counts[$status] = (int)$row['cnt'];
-                }
-            }
-            $resCounts->free();
-        }
-        $processed = $counts['success'] + $counts['failed'] + $counts['needs_review'] + $counts['cancelled'];
-        if ($stmtUpdate = $conn->prepare('UPDATE crowd_check_runs SET status=\'failed\', notes=?, processed_count=?, success_count=?, failure_count=?, needs_review_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1')) {
-            $stmtUpdate->bind_param('siiiii', $note, $processed, $counts['success'], $counts['failed'], $counts['needs_review'], $runId);
-            $stmtUpdate->execute();
-            $stmtUpdate->close();
-        } else {
-            $conn->query("UPDATE crowd_check_runs SET status='failed', notes='{$noteEsc}', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id={$runId} LIMIT 1");
-        }
-        pp_crowd_links_log('Run marked as failed due to inactivity', ['runId' => $runId, 'note' => $note]);
-    }
-}
-
-if (!function_exists('pp_crowd_links_supervise_run')) {
-    /**
-     * Ensure queued/running runs progress or are recovered if stalled.
-     *
-     * @param mixed $conn
-     */
-    function pp_crowd_links_supervise_run($conn, array $runRow): array {
-        if (!($conn instanceof mysqli)) {
-            return $runRow;
-        }
-        $runId = isset($runRow['id']) ? (int)$runRow['id'] : 0;
-        if ($runId <= 0) {
-            return $runRow;
-        }
-        $status = (string)($runRow['status'] ?? '');
-        $options = [];
-        if (!empty($runRow['options'])) {
-            $decoded = json_decode((string)$runRow['options'], true);
-            if (is_array($decoded)) {
-                $options = $decoded;
-            }
-        }
-        $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : (int)get_setting('crowd_request_timeout', 25);
-        if ($timeout < 5) {
-            $timeout = 25;
-        }
-        $stallSeconds = max(90, $timeout * 4);
-        $now = time();
-        $createdTs = !empty($runRow['created_at']) ? strtotime((string)$runRow['created_at']) : null;
-        $startedTs = !empty($runRow['started_at']) ? strtotime((string)$runRow['started_at']) : null;
-        $progressTs = !empty($runRow['last_progress_at']) ? strtotime((string)$runRow['last_progress_at']) : null;
-        $retries = isset($runRow['worker_retries']) ? max(0, (int)$runRow['worker_retries']) : 0;
-        $changed = false;
-
-        if ($status === 'queued') {
-            if ($createdTs && !$startedTs) {
-                $retryDelay = 8;
-                $maxRetries = 5;
-                if ($retries < $maxRetries) {
-                    $nextAttemptAt = $createdTs + (($retries + 1) * $retryDelay);
-                    if ($now >= $nextAttemptAt) {
-                        pp_crowd_links_log('Re-launching worker for queued run', ['runId' => $runId, 'retry' => $retries + 1]);
-                        pp_crowd_links_launch_worker($runId);
-                        $conn->query("UPDATE crowd_check_runs SET worker_retries = worker_retries + 1 WHERE id={$runId} LIMIT 1");
-                        $changed = true;
-                    }
-                }
-                $stalledQueued = ($now - $createdTs) > $stallSeconds;
-                if ($stalledQueued) {
-                    pp_crowd_links_finalize_stalled_run($conn, $runId, __('Не удалось запустить фоновую проверку.'));
-                    $changed = true;
-                }
-            } elseif ($startedTs && ($now - $startedTs) > $stallSeconds) {
-                pp_crowd_links_finalize_stalled_run($conn, $runId, __('Проверка не была запущена.'));
-                $changed = true;
-            }
-        } elseif ($status === 'running') {
-            $lastActivity = $progressTs ?: $startedTs;
-            if ($lastActivity && ($now - $lastActivity) > $stallSeconds) {
-                pp_crowd_links_finalize_stalled_run($conn, $runId, __('Проверка остановлена: нет активности.'));
-                $changed = true;
-            }
-        }
-
-        if ($changed) {
-            if ($stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1')) {
-                $stmt->bind_param('i', $runId);
-                if ($stmt->execute()) {
-                    $newRow = $stmt->get_result()->fetch_assoc();
-                    $stmt->close();
-                    if ($newRow) {
-                        return $newRow;
-                    }
-                } else {
-                    $stmt->close();
-                }
-            }
-        }
-
-        return $runRow;
-    }
-}
-
 if (!function_exists('pp_crowd_links_start_run')) {
     function pp_crowd_links_start_run(?int $userId, string $mode, array $linkIds = [], ?int $singleId = null, array $options = []): array {
         $mode = strtolower($mode);
@@ -513,8 +355,6 @@ if (!function_exists('pp_crowd_links_start_run')) {
         if (!$conn) {
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
-
-        pp_crowd_links_release_orphan_links($conn);
 
         $activeId = null;
         if ($res = $conn->query("SELECT id FROM crowd_check_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
@@ -624,7 +464,7 @@ if (!function_exists('pp_crowd_links_start_run')) {
         $stmtRes->close();
         $conn->close();
 
-    pp_crowd_links_log('Crowd links run created', ['runId' => $runId, 'mode' => $mode, 'total' => $total]);
+        pp_crowd_links_log('Crowd links run created', ['runId' => $runId, 'mode' => $mode, 'total' => $total]);
 
         if (!pp_crowd_links_launch_worker($runId)) {
             try {
@@ -642,11 +482,16 @@ if (!function_exists('pp_crowd_links_start_run')) {
             } catch (Throwable $e) {
                 // ignore
             }
-            pp_crowd_links_log('Worker launch failed', ['runId' => $runId]);
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
 
-        // Do not process inline; return immediately and let the poller update UI
+        if (!pp_crowd_links_wait_for_worker_start($runId, 3.5)) {
+            try {
+                pp_crowd_links_process_run($runId);
+            } catch (Throwable $e) {
+                pp_crowd_links_log('Inline crowd links processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
+            }
+        }
 
         return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
     }
@@ -670,7 +515,7 @@ if (!function_exists('pp_crowd_links_format_ts')) {
 }
 
 if (!function_exists('pp_crowd_links_get_status')) {
-    function pp_crowd_links_get_status(?int $runId = null, int $limit = 50, bool $allowTick = true, bool $supervise = true): array {
+    function pp_crowd_links_get_status(?int $runId = null, int $limit = 50): array {
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
@@ -691,7 +536,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
             $conn->close();
             return ['ok' => true, 'run' => null, 'results' => []];
         }
-        $stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1');
+        $stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at FROM crowd_check_runs WHERE id=? LIMIT 1');
         if (!$stmt) {
             $conn->close();
             return ['ok' => false, 'error' => 'DB_READ'];
@@ -704,36 +549,8 @@ if (!function_exists('pp_crowd_links_get_status')) {
             $conn->close();
             return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
         }
-
-        if ($supervise && in_array((string)$runRow['status'], ['queued', 'running'], true)) {
-            $runRow = pp_crowd_links_supervise_run($conn, $runRow);
-        }
-
-        // Cooperative tick: if worker cannot run, make a small progress step in this request
-        $statusNow = (string)$runRow['status'];
-        if ($allowTick && in_array($statusNow, ['queued','running'], true)) {
-            // Avoid long work: process a tiny chunk
-            try { pp_crowd_links_process_tick((int)$runRow['id']); } catch (Throwable $e) { /* ignore */ }
-            // Refresh row after tick
-            $stmt2 = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1');
-            if ($stmt2) {
-                $stmt2->bind_param('i', $runId);
-                if ($stmt2->execute()) {
-                    $runRow = $stmt2->get_result()->fetch_assoc();
-                }
-                $stmt2->close();
-            }
-            if ($runRow && $supervise) {
-                $runRow = pp_crowd_links_supervise_run($conn, $runRow);
-            }
-            $statusNow = (string)($runRow['status'] ?? $statusNow);
-        }
-
-        if (!in_array($statusNow, ['queued', 'running'], true)) {
-            pp_crowd_links_release_orphan_links($conn);
-        }
         $results = [];
-    $stmtRes = $conn->prepare('SELECT r.id, r.link_id, r.status, r.http_status, r.follow_type, r.index_status, r.detected_language, r.detected_region, r.message_found, r.link_found, r.error, r.status_detail, r.started_at, r.finished_at, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? ORDER BY r.id ASC LIMIT ?');
+        $stmtRes = $conn->prepare('SELECT r.id, r.link_id, r.status, r.http_status, r.follow_type, r.index_status, r.detected_language, r.detected_region, r.message_found, r.link_found, r.error, r.started_at, r.finished_at, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? ORDER BY r.id ASC LIMIT ?');
         if ($stmtRes) {
             $stmtRes->bind_param('ii', $runId, $limit);
             $stmtRes->execute();
@@ -752,7 +569,6 @@ if (!function_exists('pp_crowd_links_get_status')) {
                     'message_found' => !empty($row['message_found']),
                     'link_found' => !empty($row['link_found']),
                     'error' => (string)($row['error'] ?? ''),
-                    'status_detail' => (string)($row['status_detail'] ?? ''),
                     'started_at' => $row['started_at'],
                     'started_at_iso' => pp_crowd_links_format_ts($row['started_at'] ?? null),
                     'finished_at' => $row['finished_at'],
@@ -782,9 +598,6 @@ if (!function_exists('pp_crowd_links_get_status')) {
             'started_at_iso' => pp_crowd_links_format_ts($runRow['started_at'] ?? null),
             'finished_at' => $runRow['finished_at'],
             'finished_at_iso' => pp_crowd_links_format_ts($runRow['finished_at'] ?? null),
-            'last_progress_at' => $runRow['last_progress_at'] ?? null,
-            'last_progress_at_iso' => pp_crowd_links_format_ts($runRow['last_progress_at'] ?? null),
-            'worker_retries' => (int)($runRow['worker_retries'] ?? 0),
         ];
         return ['ok' => true, 'run' => $run, 'results' => $results];
     }
@@ -830,16 +643,11 @@ if (!function_exists('pp_crowd_links_cancel')) {
             $conn->close();
             return ['ok' => true, 'status' => $status, 'runId' => $runId, 'alreadyFinished' => true];
         }
-        // Mark cancel requested
         $conn->query("UPDATE crowd_check_runs SET cancel_requested=1 WHERE id=" . (int)$runId . " LIMIT 1");
-        // Perform immediate cancellation for queued or running runs
-        if ($status === 'queued' || $status === 'running' || $force) {
+        if ($force || $status === 'queued') {
             $conn->query("UPDATE crowd_check_results SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE run_id=" . (int)$runId . " AND status IN ('queued','running')");
             $conn->query("UPDATE crowd_links l JOIN crowd_check_results r ON r.link_id = l.id SET l.status='pending', l.last_error=NULL WHERE r.run_id=" . (int)$runId . " AND r.status='cancelled'");
             $conn->query("UPDATE crowd_check_runs SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE id=" . (int)$runId . " LIMIT 1");
-            pp_crowd_links_log('Run cancelled', ['runId' => $runId, 'force' => $force]);
-            $conn->close();
-            return ['ok' => true, 'status' => 'cancelled', 'runId' => $runId, 'cancelRequested' => true];
         }
         $conn->close();
         return ['ok' => true, 'status' => $status, 'runId' => $runId, 'cancelRequested' => true];
@@ -929,16 +737,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
             }
             $stmtChunk->close();
             if (empty($tasks)) {
-                pp_crowd_links_log('No more tasks in run', ['runId' => $runId]);
                 break;
             }
-
-            // Log chunk start (limit details to a few items to avoid huge logs)
-            $sample = [];
-            foreach (array_slice($tasks, 0, 3) as $t) {
-                $sample[] = ['result_id' => $t['result_id'], 'link_id' => $t['link_id'], 'url' => $t['url']];
-            }
-            pp_crowd_links_log('Processing chunk', ['runId' => $runId, 'count' => count($tasks), 'sample' => $sample]);
 
             $now = date('Y-m-d H:i:s');
             $stmtRunMark = $conn->prepare("UPDATE crowd_check_results SET status='running', started_at=? WHERE id=?");
@@ -960,8 +760,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
 
             $results = pp_crowd_links_process_tasks($tasks, $testMessage, $testUrl, $timeout, $concurrency);
 
-            $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=?, status_detail=? WHERE id=?');
-            $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=?, status_detail=? WHERE id=?');
+            $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=? WHERE id=?');
+            $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=? WHERE id=?');
             if (!$stmtUpdateRes || !$stmtUpdateLink) {
                 if ($stmtUpdateRes) {
                     $stmtUpdateRes->close();
@@ -981,21 +781,6 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 } elseif ($statusResult === 'failed') {
                     $failed++;
                 }
-                // Per-link log
-                pp_crowd_links_log('Result processed', [
-                    'runId' => $runId,
-                    'result_id' => $entry['result_id'],
-                    'link_id' => $entry['link_id'],
-                    'url' => $entry['url'] ?? null,
-                    'status' => $entry['status'],
-                    'http' => $entry['http_status'],
-                    'follow' => $entry['follow_type'],
-                    'index' => $entry['index_status'],
-                    'message_found' => $entry['message_found'],
-                    'link_found' => $entry['link_found'],
-                    'error' => $entry['error'],
-                    'response_url' => $entry['response_url'] ?? null,
-                ]);
                 $finishedAt = date('Y-m-d H:i:s');
                 $httpStatus = $entry['http_status'];
                 $followType = $entry['follow_type'];
@@ -1006,15 +791,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $linkFound = $entry['link_found'] ? 1 : 0;
                 $error = $entry['error'];
                 $responseUrl = $entry['response_url'];
-                $detail = '';
-                if ($statusResult === 'success') {
-                    $detail = __('Публикация успешна, ссылка найдена.');
-                } elseif ($error !== '') {
-                    $detail = $error;
-                } elseif ($messageFound || $linkFound) {
-                    $detail = __('Найден контент, требует проверки.');
-                }
-                $stmtUpdateRes->bind_param('ssisssssissisi',
+                $stmtUpdateRes->bind_param('ssisssssissi',
                     $statusResult,
                     $finishedAt,
                     $httpStatus,
@@ -1026,7 +803,6 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $linkFound,
                     $error,
                     $responseUrl,
-                    $detail,
                     $entry['result_id']
                 );
                 $stmtUpdateRes->execute();
@@ -1035,7 +811,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $nowTs = date('Y-m-d H:i:s');
                 $isSuccess = $statusResult === 'success' ? 1 : 0;
                 $lastSuccessAt = $isSuccess ? $nowTs : null;
-                $stmtUpdateLink->bind_param('sissssssssssi',
+                $stmtUpdateLink->bind_param('sisssssssssi',
                     $linkStatus,
                     $httpStatus,
                     $followType,
@@ -1047,7 +823,6 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $lastSuccessAt,
                     $error,
                     $responseUrl,
-                    $detail,
                     $entry['link_id']
                 );
                 $stmtUpdateLink->execute();
@@ -1061,10 +836,9 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $stmtTotals->execute();
                 $stmtTotals->close();
             }
-            pp_crowd_links_log('Chunk done', ['runId' => $runId, 'processed' => $processed, 'success' => $success, 'failed' => $failed, 'needs_review' => $needsReview]);
         } while (true);
 
-    $finalStatus = 'finished';
+        $finalStatus = 'finished';
         if ($conn->connect_errno) {
             $finalStatus = 'failed';
         } else {
@@ -1084,214 +858,12 @@ if (!function_exists('pp_crowd_links_process_run')) {
             $stmtFinish->close();
         }
         $conn->close();
-        pp_crowd_links_log('Worker done', ['runId' => $runId, 'status' => $finalStatus, 'processed' => $processed, 'success' => $success, 'failed' => $failed, 'needs_review' => $needsReview]);
-    }
-}
-
-// Cooperative small-step processor used when background worker may be unavailable
-if (!function_exists('pp_crowd_links_process_tick')) {
-    function pp_crowd_links_process_tick(int $runId): void {
-        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
-        if (!$conn) return;
-        $stmt = $conn->prepare('SELECT status, test_message, test_url, options FROM crowd_check_runs WHERE id=? LIMIT 1');
-        if (!$stmt) { $conn->close(); return; }
-        $stmt->bind_param('i', $runId); $stmt->execute(); $runRow = $stmt->get_result()->fetch_assoc(); $stmt->close();
-        if (!$runRow) { $conn->close(); return; }
-        $status = (string)$runRow['status'];
-        if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
-        $testMessage = (string)($runRow['test_message'] ?? '');
-        $testUrl = (string)($runRow['test_url'] ?? '');
-    $options = []; if (!empty($runRow['options'])) { $tmp = json_decode((string)$runRow['options'], true); if (is_array($tmp)) { $options = $tmp; } }
-    $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : 25;
-    $chunkSize = isset($options['chunk_size']) ? max(1, min(200, (int)$options['chunk_size'])) : 10;
-    $configuredConcurrency = isset($options['concurrency']) ? max(1, min(20, (int)$options['concurrency'])) : 1;
-    $batch = max(1, min(8, max($configuredConcurrency, (int)ceil($chunkSize / 2))));
-    $concurrency = max(1, min($configuredConcurrency, $batch, 5));
-    $timeout = max(5, min(180, $timeout));
-    $effectiveTimeout = min($timeout, 18);
-
-        // Pick a small batch of queued results
-        $stmtChunk = $conn->prepare('SELECT r.id AS result_id, r.link_id, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? AND r.status = "queued" ORDER BY r.id ASC LIMIT ?');
-        if (!$stmtChunk) { $conn->close(); return; }
-        $stmtChunk->bind_param('ii', $runId, $batch); $stmtChunk->execute(); $res = $stmtChunk->get_result();
-        $tasks = [];
-        while ($row = $res->fetch_assoc()) { $tasks[] = ['result_id' => (int)$row['result_id'], 'link_id' => (int)$row['link_id'], 'url' => (string)$row['url']]; }
-        $stmtChunk->close();
-        if (empty($tasks)) {
-            // No queued tasks left. If nothing is running, finalize the run so UI reflects completion.
-            $runningCount = 0;
-            if ($resRunning = $conn->query('SELECT COUNT(1) AS c FROM crowd_check_results WHERE run_id=' . (int)$runId . " AND status='running'")) {
-                if ($rowRunning = $resRunning->fetch_assoc()) { $runningCount = (int)$rowRunning['c']; }
-                $resRunning->free();
-            }
-            if ($runningCount === 0) {
-                $counts = [
-                    'success' => 0,
-                    'failed' => 0,
-                    'needs_review' => 0,
-                    'cancelled' => 0,
-                ];
-                if ($resCounts = $conn->query('SELECT status, COUNT(*) AS cnt FROM crowd_check_results WHERE run_id=' . (int)$runId . ' GROUP BY status')) {
-                    while ($row = $resCounts->fetch_assoc()) {
-                        $st = (string)$row['status'];
-                        $cnt = (int)$row['cnt'];
-                        if (isset($counts[$st])) { $counts[$st] = $cnt; }
-                    }
-                    $resCounts->free();
-                }
-                $processed = $counts['success'] + $counts['failed'] + $counts['needs_review'] + $counts['cancelled'];
-                $cancelRequested = false;
-                if ($resCancel = $conn->query('SELECT cancel_requested FROM crowd_check_runs WHERE id=' . (int)$runId . ' LIMIT 1')) {
-                    if ($rowCancel = $resCancel->fetch_assoc()) { $cancelRequested = !empty($rowCancel['cancel_requested']); }
-                    $resCancel->free();
-                }
-                $finalStatus = $cancelRequested ? 'cancelled' : 'finished';
-                if ($stmtFinish = $conn->prepare('UPDATE crowd_check_runs SET status=?, processed_count=?, success_count=?, failure_count=?, needs_review_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id=?')) {
-                    $stmtFinish->bind_param('siiiii', $finalStatus, $processed, $counts['success'], $counts['failed'], $counts['needs_review'], $runId);
-                    $stmtFinish->execute();
-                    $stmtFinish->close();
-                }
-                pp_crowd_links_log('Tick finalize run', ['runId' => $runId, 'status' => $finalStatus, 'processed' => $processed, 'success' => $counts['success'], 'failed' => $counts['failed'], 'needs_review' => $counts['needs_review']]);
-            }
-            $conn->close();
-            return;
-        }
-        $now = date('Y-m-d H:i:s');
-        $conn->query('UPDATE crowd_check_runs SET status="running", started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=' . (int)$runId . ' LIMIT 1');
-        // Mark batch running
-        foreach ($tasks as $t) {
-            $conn->query('UPDATE crowd_check_results SET status="running", started_at=' . "'" . $conn->real_escape_string($now) . "'" . ' WHERE id=' . (int)$t['result_id']);
-            $conn->query('UPDATE crowd_links SET status="checking", last_run_id=' . (int)$runId . ' WHERE id=' . (int)$t['link_id']);
-        }
-
-        $results = pp_crowd_links_process_tasks($tasks, $testMessage, $testUrl, $effectiveTimeout, min($concurrency, count($tasks)) ?: 1);
-        if (empty($results)) {
-            foreach ($tasks as $task) {
-                $conn->query("UPDATE crowd_check_results SET status='queued', started_at=NULL WHERE id=" . (int)$task['result_id']);
-                $conn->query("UPDATE crowd_links SET status='pending', last_run_id=NULL WHERE id=" . (int)$task['link_id']);
-            }
-            $conn->close();
-            return;
-        }
-        $nowTs = date('Y-m-d H:i:s');
-        $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=?, status_detail=? WHERE id=?');
-        $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=?, status_detail=? WHERE id=?');
-        $incSuccess = 0; $incFailed = 0; $incReview = 0;
-        foreach ($results as $entry) {
-            pp_crowd_links_log('Tick processed', [
-                'runId' => $runId,
-                'result_id' => $entry['result_id'] ?? null,
-                'link_id' => $entry['link_id'] ?? null,
-                'url' => $entry['url'] ?? null,
-                'status' => $entry['status'] ?? null,
-                'http' => $entry['http_status'] ?? null,
-                'follow' => $entry['follow_type'] ?? null,
-                'index' => $entry['index_status'] ?? null,
-                'message_found' => $entry['message_found'] ?? null,
-                'link_found' => $entry['link_found'] ?? null,
-                'error' => $entry['error'] ?? null,
-                'response_url' => $entry['response_url'] ?? null,
-            ]);
-            $finishedAt = $nowTs;
-            $statusResult = $entry['status'];
-            $httpStatus = $entry['http_status'];
-            $followType = $entry['follow_type'];
-            $indexStatus = $entry['index_status'];
-            $language = $entry['language'];
-            $region = $entry['region'];
-            $messageFound = $entry['message_found'] ? 1 : 0;
-            $linkFound = $entry['link_found'] ? 1 : 0;
-            $error = $entry['error'];
-            $responseUrl = $entry['response_url'];
-            $detail = '';
-            if ($statusResult === 'success') { $detail = __('Публикация успешна, ссылка найдена.'); }
-            elseif ($error !== '') { $detail = $error; }
-            elseif ($messageFound || $linkFound) { $detail = __('Найден контент, требует проверки.'); }
-            if ($stmtUpdateRes) {
-                $stmtUpdateRes->bind_param('ssisssssissisi', $statusResult, $finishedAt, $httpStatus, $followType, $indexStatus, $language, $region, $messageFound, $linkFound, $error, $responseUrl, $detail, $entry['result_id']);
-                $stmtUpdateRes->execute();
-            }
-            $isSuccess = $statusResult === 'success' ? 1 : 0; $lastSuccessAt = $isSuccess ? $nowTs : null;
-            if ($stmtUpdateLink) {
-                $stmtUpdateLink->bind_param('sissssssssssi', $statusResult, $httpStatus, $followType, $indexStatus, $language, $region, $nowTs, $isSuccess, $lastSuccessAt, $error, $responseUrl, $detail, $entry['link_id']);
-                $stmtUpdateLink->execute();
-            }
-            if ($statusResult === 'success') { $incSuccess++; }
-            elseif ($statusResult === 'failed') { $incFailed++; }
-            elseif ($statusResult === 'needs_review') { $incReview++; }
-        }
-        if ($stmtUpdateRes) { $stmtUpdateRes->close(); }
-        if ($stmtUpdateLink) { $stmtUpdateLink->close(); }
-        $conn->query('UPDATE crowd_check_runs SET processed_count=processed_count+' . count($results) . ', success_count=success_count+' . $incSuccess . ', failure_count=failure_count+' . $incFailed . ', needs_review_count=needs_review_count+' . $incReview . ', last_progress_at=CURRENT_TIMESTAMP WHERE id=' . (int)$runId . ' LIMIT 1');
-
-        // If no queued left, finish the run
-        if ($resLeft = $conn->query('SELECT COUNT(1) AS c FROM crowd_check_results WHERE run_id=' . (int)$runId . " AND status='queued'")) {
-            $rowLeft = $resLeft->fetch_assoc(); $resLeft->free();
-            if ((int)$rowLeft['c'] === 0) {
-                $conn->query("UPDATE crowd_check_runs SET status='finished', finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . ' LIMIT 1');
-            }
-        }
-        $conn->close();
+        pp_crowd_links_log('Worker done', ['runId' => $runId, 'status' => $finalStatus, 'processed' => $processed]);
     }
 }
 
 if (!function_exists('pp_crowd_links_process_tasks')) {
     function pp_crowd_links_process_tasks(array $tasks, string $testMessage, string $testUrl, int $timeout, int $concurrency): array {
-        // If browser-based posting is enabled, process sequentially with Puppeteer for higher accuracy
-        $useBrowser = (string)get_setting('crowd_use_browser', '0') === '1';
-        if ($useBrowser) {
-            $results = [];
-            foreach ($tasks as $t) {
-                $job = [
-                    'url' => $t['url'],
-                    'message' => $testMessage,
-                    'targetUrl' => $testUrl,
-                    // Simple identity
-                    'name' => get_setting('crowd_identity_name', 'Promo QA'),
-                    'email' => get_setting('crowd_identity_email', 'qa+' . substr(sha1($t['url']),0,6) . '@example.com'),
-                    'timeoutSec' => $timeout,
-                ];
-                $script = PP_ROOT_PATH . '/networks/crowd_poster.js';
-                $resp = pp_run_node_script($script, $job, max(30, $timeout+20));
-                $status = 'failed';
-                $http = $resp['httpStatus'] ?? null;
-                $followType = $resp['followType'] ?? 'unknown';
-                $indexStatus = $resp['indexStatus'] ?? 'unknown';
-                $language = $resp['language'] ?? '';
-                $region = $resp['region'] ?? '';
-                $messageFound = !empty($resp['messageFound']);
-                $linkFound = !empty($resp['linkFound']);
-                $error = '';
-                if (!empty($resp['ok'])) {
-                    $status = 'success';
-                } else if (!empty($resp['error'])) {
-                    $status = 'needs_review';
-                    $error = (string)$resp['error'];
-                } else if ($messageFound || $linkFound) {
-                    $status = 'needs_review';
-                    $error = __('Найден контент, требует проверки.');
-                } else {
-                    $status = 'failed';
-                    $error = $resp['details'] ?? '';
-                }
-                $results[] = [
-                    'result_id' => $t['result_id'],
-                    'link_id' => $t['link_id'],
-                    'url' => $t['url'],
-                    'status' => $status,
-                    'http_status' => $http,
-                    'follow_type' => $followType,
-                    'index_status' => $indexStatus,
-                    'language' => $language,
-                    'region' => $region,
-                    'message_found' => $messageFound,
-                    'link_found' => $linkFound,
-                    'error' => $error,
-                    'response_url' => $resp['finalUrl'] ?? $t['url'],
-                ];
-            }
-            return $results;
-        }
         $results = [];
         if (empty($tasks)) {
             return $results;
@@ -1330,7 +902,7 @@ if (!function_exists('pp_crowd_links_process_tasks')) {
             do {
                 $mrc = curl_multi_exec($mh, $active);
             } while ($mrc === CURLM_CALL_MULTI_PERFORM);
-            curl_multi_select($mh, 0.2);
+            curl_multi_select($mh, 0.5);
             while ($info = curl_multi_info_read($mh)) {
                 $ch = $info['handle'];
                 $key = (int)$ch;
@@ -1344,17 +916,13 @@ if (!function_exists('pp_crowd_links_process_tasks')) {
                     $lines = preg_split("/\r?\n/", $headersRaw, -1, PREG_SPLIT_NO_EMPTY);
                     foreach ($lines as $line) {
                         if (strpos($line, ':') !== false) {
-                            $parts = explode(':', $line, 2);
-                            $name = $parts[0];
-                            $value = $parts[1] ?? '';
+                            [$name, $value] = explode(':', $line, 2);
                             $headers[trim(strtolower($name))] = trim($value);
                         }
                     }
                 }
                 $task = $taskData[$key];
                 $checkResult = pp_crowd_links_handle_single_task($task, $infoData, $headers, $body, $testMessage, $testUrl, $timeout);
-                // attach url for logging context
-                $checkResult['url'] = $task['url'];
                 $results[] = $checkResult;
                 curl_multi_remove_handle($mh, $ch);
                 curl_close($ch);
@@ -1417,40 +985,8 @@ if (!function_exists('pp_crowd_links_handle_single_task')) {
                 $status = 'needs_review';
                 $error = __('Найден текст, но ссылка требует проверки.');
             } else {
-                // Try lightweight universal form submission once
-                $submitAttempted = false;
-                $submittedOk = false;
-                $cookieFile = isset($task['cookie']) ? (string)$task['cookie'] : '';
-                $baseUrl = (string)($info['url'] ?? $task['url']);
-                $formResult = pp_crowd_links_try_submit_form($baseUrl, $body, $cookieFile, $testMessage, $testUrl, $timeout);
-                if ($formResult !== null) {
-                    $submitAttempted = true;
-                    $httpStatus = $formResult['http_code'];
-                    $responseUrl = $formResult['final_url'];
-                    $headers2 = $formResult['headers'];
-                    $body2 = $formResult['body'];
-                    $indexStatus = pp_crowd_links_detect_index_status($headers2, $body2);
-                    // Re-evaluate presence
-                    $normBody2 = mb_strtolower(strip_tags($body2));
-                    if ($normMsg !== '' && strpos($normBody2, $normMsg) !== false) {
-                        $messageFound = true;
-                    } elseif ($testUrl !== '' && strpos($normBody2, $testUrl) !== false) {
-                        $messageFound = true;
-                        $linkFound = true;
-                    }
-                    if ($testUrl !== '') {
-                        $followType2 = pp_crowd_links_detect_follow_type($body2, $testUrl);
-                        if ($followType2 !== 'missing') { $followType = $followType2; $linkFound = true; }
-                    }
-                    $submittedOk = $messageFound || $linkFound;
-                }
-                if ($submittedOk) {
-                    $status = 'success';
-                    $error = '';
-                } else {
-                    $status = 'needs_review';
-                    $error = $submitAttempted ? __('Отправка формы не подтвердилась.') : __('Текст или ссылка не найдены.');
-                }
+                $status = 'needs_review';
+                $error = __('Текст или ссылка не найдены.');
             }
         } else {
             $error = sprintf(__('HTTP статус: %d'), $httpStatus);
@@ -1472,199 +1008,6 @@ if (!function_exists('pp_crowd_links_handle_single_task')) {
         );
 
         return $result;
-    }
-}
-
-// Lightweight universal form submission helper (no browser). Returns null if no suitable form found.
-if (!function_exists('pp_crowd_links_try_submit_form')) {
-    function pp_crowd_links_try_submit_form(string $baseUrl, string $html, string $cookieFile, string $message, string $targetUrl, int $timeout): ?array {
-        if ($html === '') { return null; }
-        $dom = new DOMDocument();
-        libxml_use_internal_errors(true);
-        $loaded = @$dom->loadHTML($html);
-        libxml_clear_errors();
-        if (!$loaded) { return null; }
-        $xpath = new DOMXPath($dom);
-        $forms = $xpath->query('//form');
-        if (!$forms || $forms->length === 0) { return null; }
-
-        // Choose the most likely guest-post/comment/contact form
-        $chosen = null;
-        foreach ($forms as $form) {
-            if (!($form instanceof DOMElement)) { continue; }
-            $formHtml = strtolower($dom->saveHTML($form) ?: '');
-            // Heuristics: form contains textarea or input named like comment/message/content/text
-            $hasText = (bool)$xpath->query('.//textarea', $form)->length
-                || preg_match('~name\s*=\s*"(comment|message|content|text|body)"~i', $formHtml);
-            // Avoid login-only forms
-            $hasLogin = preg_match('~type\s*=\s*"password"~i', $formHtml);
-            if ($hasText && !$hasLogin) { $chosen = $form; break; }
-        }
-        if (!$chosen) { return null; }
-
-        $method = strtolower($chosen->getAttribute('method') ?: 'post');
-        if ($method !== 'post' && $method !== 'get') { $method = 'post'; }
-        $actionAttr = $chosen->getAttribute('action') ?: '';
-        $action = pp_crowd_links_resolve_url($baseUrl, $actionAttr);
-        if ($action === null) { $action = $baseUrl; }
-
-        // Collect fields (hidden + text inputs + textarea)
-        $fields = [];
-        $inputs = $xpath->query('.//input', $chosen);
-        foreach ($inputs as $inp) {
-            if (!($inp instanceof DOMElement)) { continue; }
-            $name = $inp->getAttribute('name'); if ($name === '') { continue; }
-            $type = strtolower($inp->getAttribute('type') ?: 'text');
-            if ($type === 'submit' || $type === 'button' || $type === 'image' || $type === 'file') { continue; }
-            $value = $inp->getAttribute('value');
-            $fields[$name] = $value;
-        }
-        $textareas = $xpath->query('.//textarea', $chosen);
-        foreach ($textareas as $ta) {
-            if (!($ta instanceof DOMElement)) { continue; }
-            $name = $ta->getAttribute('name'); if ($name === '') { continue; }
-            $fields[$name] = $ta->textContent ?? '';
-        }
-
-        // Fill typical fields
-        $nameVal = (string)get_setting('crowd_identity_name', 'Promo QA');
-        $emailVal = (string)get_setting('crowd_identity_email', 'qa+' . substr(sha1($baseUrl),0,6) . '@example.com');
-        $candidates = [
-            'name' => $nameVal,
-            'fullname' => $nameVal,
-            'full_name' => $nameVal,
-            'author' => $nameVal,
-            'username' => $nameVal,
-            'nickname' => $nameVal,
-            'user' => $nameVal,
-            'email' => $emailVal,
-            'email_address' => $emailVal,
-            'mail' => $emailVal,
-            'from' => $emailVal,
-            'url' => $targetUrl ?: $baseUrl,
-            'website' => $targetUrl ?: $baseUrl,
-            'homepage' => $targetUrl ?: $baseUrl,
-            'site' => $targetUrl ?: $baseUrl,
-            'subject' => 'Test',
-            'title' => 'Test',
-            'message' => $message,
-            'comment' => $message,
-            'content' => $message,
-            'text' => $message,
-            'body' => $message,
-        ];
-        // Overlay candidates onto $fields without clobbering CSRF tokens etc.
-        foreach ($candidates as $key => $val) {
-            // Fill by exact name or by contains
-            $applied = false;
-            foreach ($fields as $fname => $fval) {
-                if (strcasecmp($fname, $key) === 0) { $fields[$fname] = $val; $applied = true; }
-            }
-            if (!$applied) {
-                // Try adding if field exists with partial match
-                foreach ($fields as $fname => $fval) {
-                    if (stripos($fname, $key) !== false) { $fields[$fname] = $val; $applied = true; }
-                }
-            }
-            if (!$applied) {
-                // If form has none of these, append the key (helps for simple endpoints)
-                if (in_array($key, ['message','comment','content','text','body'], true)) {
-                    $fields[$key] = $val;
-                }
-            }
-        }
-
-        // Prepare request
-        $ch = curl_init();
-        $ua = 'PromoPilotCrowdBot/1.0 (+https://promopilot.ai)';
-        $headers = [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: en-US,en;q=0.8,ru;q=0.7',
-        ];
-        $opts = [
-            CURLOPT_URL => $action,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
-            CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
-            CURLOPT_TIMEOUT => $timeout,
-            CURLOPT_USERAGENT => $ua,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_REFERER => $baseUrl,
-            CURLOPT_COOKIEFILE => $cookieFile ?: tempnam(sys_get_temp_dir(), 'ppcrowd'),
-            CURLOPT_COOKIEJAR => $cookieFile ?: tempnam(sys_get_temp_dir(), 'ppcrowd'),
-            CURLOPT_HEADER => true,
-        ];
-        if ($method === 'post') {
-            $opts[CURLOPT_POST] = true;
-            $opts[CURLOPT_POSTFIELDS] = http_build_query($fields);
-        } else {
-            // GET: append query to action
-            $glue = (strpos($action, '?') === false) ? '?' : '&';
-            $opts[CURLOPT_URL] = $action . $glue . http_build_query($fields);
-        }
-        curl_setopt_array($ch, $opts);
-        $raw = curl_exec($ch);
-        if ($raw === false) {
-            curl_close($ch); return null;
-        }
-        $info2 = curl_getinfo($ch);
-        $headerSize = $info2['header_size'] ?? 0;
-        $headersRaw = substr($raw, 0, $headerSize);
-        $body2 = substr($raw, $headerSize);
-        curl_close($ch);
-        $hdrs = [];
-        if ($headersRaw) {
-            $lines = preg_split("/\r?\n/", $headersRaw, -1, PREG_SPLIT_NO_EMPTY);
-            foreach ($lines as $line) {
-                if (strpos($line, ':') !== false) {
-                    $parts = explode(':', $line, 2);
-                    $name = $parts[0];
-                    $value = $parts[1] ?? '';
-                    $hdrs[trim(strtolower($name))] = trim($value);
-                }
-            }
-        }
-        return [
-            'http_code' => (int)($info2['http_code'] ?? 0),
-            'final_url' => (string)($info2['url'] ?? $action),
-            'headers' => $hdrs,
-            'body' => (string)$body2,
-        ];
-    }
-}
-
-// Resolve relative action URL against base
-if (!function_exists('pp_crowd_links_resolve_url')) {
-    function pp_crowd_links_resolve_url(string $base, string $ref): ?string {
-        $ref = trim($ref);
-        if ($ref === '' || $ref === '#') { return $base; }
-        // If already absolute
-        if (preg_match('~^https?://~i', $ref)) { return $ref; }
-        // Parse base
-        $p = @parse_url($base);
-        if (!$p || empty($p['scheme']) || empty($p['host'])) { return null; }
-        $scheme = $p['scheme']; $host = $p['host']; $port = isset($p['port']) ? ':' . $p['port'] : '';
-        $path = isset($p['path']) ? $p['path'] : '/';
-        if ($ref[0] === '/') {
-            $newPath = $ref;
-        } else {
-            // relative to base path
-            $dir = preg_replace('~[^/]+$~', '', $path);
-            $newPath = $dir . $ref;
-        }
-        // Normalize // and /./ and /../ minimal
-        $newPath = preg_replace('~/{2,}~', '/', $newPath);
-        $segments = [];
-        foreach (explode('/', $newPath) as $seg) {
-            if ($seg === '' || $seg === '.') continue;
-            if ($seg === '..') { array_pop($segments); continue; }
-            $segments[] = $seg;
-        }
-        $finalPath = '/' . implode('/', $segments);
-        return $scheme . '://' . $host . $port . $finalPath;
     }
 }
 
@@ -1692,7 +1035,7 @@ if (!function_exists('pp_crowd_links_parse_document')) {
             $langAttr = trim(strtolower($htmlNode->getAttribute('lang')));
             if ($langAttr !== '') {
                 if (strpos($langAttr, '-') !== false) {
-                    list($langPart, $regionPart) = explode('-', $langAttr, 2);
+                    [$langPart, $regionPart] = explode('-', $langAttr, 2);
                     $result['language'] = $langPart;
                     $result['region'] = strtoupper($regionPart);
                 } else {
@@ -1706,7 +1049,7 @@ if (!function_exists('pp_crowd_links_parse_document')) {
             $hreflang = trim(strtolower($hreflangNode->getAttribute('hreflang')));
             if ($hreflang !== '') {
                 if (strpos($hreflang, '-') !== false) {
-                    list($langPart, $regionPart) = explode('-', $hreflang, 2);
+                    [$langPart, $regionPart] = explode('-', $hreflang, 2);
                     $result['hreflang'] = [
                         'value' => $hreflang,
                         'language' => $langPart,

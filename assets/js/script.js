@@ -105,8 +105,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Admin sections toggle (users, projects, settings, crowd, networks, diagnostics)
-    const sectionKeys = ['users','projects','settings','crowd-links','networks','diagnostics'];
+    // Admin sections toggle (users, projects, settings, networks, diagnostics)
+    const sectionKeys = ['users','projects','settings','networks','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);
@@ -308,22 +308,10 @@ document.addEventListener('DOMContentLoaded', function() {
         start();
     })();
 
-    function initTooltips(root) {
-        if (!window.bootstrap) { return; }
-        const scope = root || document;
-        scope.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
-            try {
-                const existing = bootstrap.Tooltip.getInstance(el);
-                if (existing) {
-                    existing.setContent({ '.tooltip-inner': el.getAttribute('data-bs-title') || el.getAttribute('title') || '' });
-                } else {
-                    new bootstrap.Tooltip(el);
-                }
-            } catch (e) {
-                /* noop */
-            }
+    // Initialize Bootstrap tooltips (добавлено)
+    if (window.bootstrap && document.querySelector('[data-bs-toggle="tooltip"]')) {
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+            try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
         });
     }
-    window.ppInitTooltips = initTooltips;
-    initTooltips(document);
 });

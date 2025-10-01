@@ -257,9 +257,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $testUrl = trim((string)($_POST['crowd_test_url'] ?? ''));
             $concurrency = (int)($_POST['crowd_concurrency'] ?? 5);
             $timeout = (int)($_POST['crowd_timeout'] ?? 25);
-            $useBrowser = isset($_POST['crowd_use_browser']) ? '1' : '0';
-            $identityName = trim((string)($_POST['crowd_identity_name'] ?? ''));
-            $identityEmail = trim((string)($_POST['crowd_identity_email'] ?? ''));
             if ($testMessage === '') {
                 $crowdSettingsMsg = __('Введите текст тестового сообщения.');
             } elseif ($testUrl !== '' && !filter_var($testUrl, FILTER_VALIDATE_URL)) {
@@ -272,9 +269,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'crowd_test_url' => $testUrl,
                     'crowd_concurrency' => (string)$concurrency,
                     'crowd_request_timeout' => (string)$timeout,
-                    'crowd_use_browser' => $useBrowser,
-                    'crowd_identity_name' => $identityName,
-                    'crowd_identity_email' => $identityEmail,
                 ]);
                 $crowdSettingsMsg = __('Настройки раздела сохранены.');
             }
@@ -402,10 +396,7 @@ $crowdDefaultConcurrency = (int)get_setting('crowd_concurrency', 5);
 if ($crowdDefaultConcurrency < 1) { $crowdDefaultConcurrency = 5; }
 $crowdDefaultTimeout = (int)get_setting('crowd_request_timeout', 25);
 if ($crowdDefaultTimeout < 5) { $crowdDefaultTimeout = 25; }
-$crowdUseBrowser = (string)get_setting('crowd_use_browser', '0') === '1';
-$crowdIdentityName = (string)get_setting('crowd_identity_name', 'Promo QA');
-$crowdIdentityEmail = (string)get_setting('crowd_identity_email', 'qa@example.com');
-$crowdStatusData = pp_crowd_links_get_status(null, 30, false);
+$crowdStatusData = pp_crowd_links_get_status(null, 30);
 $crowdCurrentRun = $crowdStatusData['ok'] ? ($crowdStatusData['run'] ?? null) : null;
 $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? []) : [];
 
@@ -502,7 +493,7 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
                     <?php echo __('Сканер локализации'); ?>
                 </a>
             </li>
-            <?php if (!empty($updateStatus['is_new'])): ?>
+            <?php if ($updateStatus['is_new']): ?>
             <li>
                 <a href="<?php echo pp_url('public/update.php'); ?>" class="menu-item">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
@@ -521,9 +512,9 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
 
 <div class="main-content">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
-<?php if (!empty($updateStatus['is_new'])): ?>
+<?php if ($updateStatus['is_new']): ?>
 <div class="alert alert-warning fade-in">
-    <strong><?php echo __('Доступно обновление'); ?>:</strong> <?php echo htmlspecialchars($updateStatus['latest']); ?>.
+    <strong><?php echo __('Доступно обновление'); ?>:</strong> <?php echo htmlspecialchars($updateStatus['latest']); ?> (опубликовано <?php echo htmlspecialchars($updateStatus['published_at']); ?>).
     <a href="<?php echo pp_url('public/update.php'); ?>" class="alert-link"><?php echo __('Перейти к обновлению'); ?></a>.
 </div>
 <?php endif; ?>

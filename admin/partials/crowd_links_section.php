@@ -110,19 +110,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         </div>
     </form>
 
-    <div class="card p-3 mb-3">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div class="fw-semibold"><?php echo __('Инструменты'); ?></div>
-            <div class="d-flex flex-wrap gap-2">
-                <button type="button" class="btn btn-outline-warning" id="crowdDedupeBtn"><i class="bi bi-magic me-1"></i><?php echo __('Удалить дубликаты'); ?></button>
-                <button type="button" class="btn btn-outline-danger" id="crowdDeleteErrors"><i class="bi bi-bug me-1"></i><?php echo __('Удалить HTTP ошибки'); ?></button>
-                <button type="button" class="btn btn-outline-danger" id="crowdDeleteSelected" disabled><i class="bi bi-trash me-1"></i><?php echo __('Удалить выбранные'); ?></button>
-                <button type="button" class="btn btn-danger" id="crowdDeleteAll"><i class="bi bi-trash3 me-1"></i><?php echo __('Очистить все'); ?></button>
-            </div>
-        </div>
-        <div class="small text-muted mt-2"><?php echo __('Быстрая очистка по url_hash. Оставляем самый старый, удаляем повторяющиеся.'); ?></div>
-    </div>
-
     <form method="post" enctype="multipart/form-data" class="card p-3 mb-3" autocomplete="off">
         <?php echo csrf_field(); ?>
         <div class="row g-3 align-items-end">
@@ -144,20 +131,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 <label class="form-label" for="crowdTestMessage"><?php echo __('Тестовое сообщение'); ?></label>
                 <textarea class="form-control" id="crowdTestMessage" name="crowd_test_message" rows="3" placeholder="<?php echo htmlspecialchars(__('Текст, который будет опубликован на площадках.')); ?>"><?php echo htmlspecialchars($crowdDefaultMessage); ?></textarea>
                 <div class="form-text"><?php echo __('Сообщение применяется ко всем новым проверкам. Включите ссылку, которую нужно отследить.'); ?></div>
-                <div class="form-check mt-3">
-                    <input class="form-check-input" type="checkbox" id="crowdUseBrowser" name="crowd_use_browser" value="1" <?php echo !empty($crowdUseBrowser) ? 'checked' : ''; ?>>
-                    <label class="form-check-label" for="crowdUseBrowser"><?php echo __('Использовать браузер (Puppeteer) для публикации'); ?></label>
-                </div>
-                <div class="row g-2 mt-1">
-                    <div class="col-sm-6">
-                        <label class="form-label" for="crowdIdentityName"><?php echo __('Имя автора'); ?></label>
-                        <input type="text" class="form-control" id="crowdIdentityName" name="crowd_identity_name" value="<?php echo htmlspecialchars($crowdIdentityName); ?>" placeholder="John Doe">
-                    </div>
-                    <div class="col-sm-6">
-                        <label class="form-label" for="crowdIdentityEmail"><?php echo __('E-mail'); ?></label>
-                        <input type="email" class="form-control" id="crowdIdentityEmail" name="crowd_identity_email" value="<?php echo htmlspecialchars($crowdIdentityEmail); ?>" placeholder="qa@example.com">
-                    </div>
-                </div>
             </div>
             <div class="col-md-6">
                 <label class="form-label" for="crowdTestUrl"><?php echo __('Тестовая ссылка (если не указана в сообщении)'); ?></label>
@@ -258,18 +231,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                         $index = (string)($link['is_indexed'] ?? 'unknown');
                         $http = $link['http_status'] !== null ? (int)$link['http_status'] : null;
                         $lastCheck = $formatTs($link['last_checked_at'] ?? null);
-                        $statusDetail = trim((string)($link['status_detail'] ?? ''));
-                        $tooltip = $statusDetail !== '' ? htmlspecialchars($statusDetail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : htmlspecialchars(__('Подробности отсутствуют'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-                        $badgeText = $statusLabel;
-                        if ($status === 'failed' && $http !== null && $http > 0) {
-                            if ($http >= 500) {
-                                $badgeText = sprintf(__('HTTP %d'), $http);
-                            } elseif ($http >= 400) {
-                                $badgeText = sprintf(__('HTTP %d'), $http);
-                            } elseif ($http >= 300) {
-                                $badgeText = sprintf(__('Редирект %d'), $http);
-                            }
-                        }
                         ?>
                         <tr data-link-id="<?php echo $linkId; ?>" data-status="<?php echo htmlspecialchars($status); ?>">
                             <td class="text-center">
@@ -282,7 +243,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                                     <?php echo htmlspecialchars(mb_strimwidth($link['url'], 0, 90, '…')); ?>
                                 </a>
                             </td>
-                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="<?php echo $tooltip; ?>"><?php echo htmlspecialchars($badgeText); ?></span></td>
+                            <td class="text-center"><span class="badge <?php echo $statusClass; ?>" data-status-label><?php echo htmlspecialchars($statusLabel); ?></span></td>
                             <td class="text-center" data-region><?php echo $link['region'] ? htmlspecialchars($link['region']) : '—'; ?></td>
                             <td class="text-center" data-language><?php echo $link['language'] ? htmlspecialchars($link['language']) : '—'; ?></td>
                             <td class="text-center" data-follow><?php echo htmlspecialchars($crowdFollowLabels[$follow] ?? __('Неизвестно')); ?></td>
@@ -336,9 +297,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     const startSelectedBtn = document.getElementById('crowdStartSelected');
     const stopBtn = document.getElementById('crowdStopRun');
     const refreshBtn = document.getElementById('crowdRefresh');
-    const deleteSelectedBtn = document.getElementById('crowdDeleteSelected');
-    const deleteErrorsBtn = document.getElementById('crowdDeleteErrors');
-    const deleteAllBtn = document.getElementById('crowdDeleteAll');
     const runMessage = document.getElementById('crowdRunMessage');
     const runStatusEl = section.querySelector('[data-crowd-run-status]');
     const runMetaEl = section.querySelector('[data-crowd-run-meta]');
@@ -388,12 +346,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
 
     function updateSelectionState() {
         const ids = selectedIds();
-        if (startSelectedBtn) {
-            startSelectedBtn.disabled = ids.length === 0;
-        }
-        if (deleteSelectedBtn) {
-            deleteSelectedBtn.disabled = ids.length === 0;
-        }
+        startSelectedBtn.disabled = ids.length === 0;
         if (!selectAll) { return; }
         const rows = tbody.querySelectorAll('tr');
         let selectable = 0;
@@ -468,9 +421,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
                 }
             });
         });
-        if (typeof window.ppInitTooltips === 'function') {
-            window.ppInitTooltips(tbody);
-        }
         updateSelectionState();
     }
 
@@ -534,7 +484,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
 
     function schedulePoll() {
         if (pollTimer) { clearTimeout(pollTimer); }
-        pollTimer = setTimeout(() => refreshStatus(true), 2000);
+        pollTimer = setTimeout(() => refreshStatus(true), 4000);
     }
 
     function startRun(mode, ids = []) {
@@ -562,33 +512,6 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
             }
             setRunMessage('');
             refreshStatus();
-        });
-    }
-
-    function deleteLinks(mode, ids = []) {
-        const payload = { mode };
-        if (mode === 'selected') {
-            if (!ids || ids.length === 0) {
-                setRunMessage('<?php echo addslashes(__('Выберите ссылки для удаления.')); ?>', 'warning');
-                return;
-            }
-            ids.forEach((id, index) => { payload['ids[' + index + ']'] = id; });
-        }
-        setRunMessage('<?php echo addslashes(__('Удаляем ссылки...')); ?>', 'info');
-        apiRequest('delete', 'POST', payload).then(data => {
-            if (!data || !data.ok) {
-                setRunMessage('<?php echo addslashes(__('Не удалось удалить ссылки.')); ?>', 'danger');
-                return;
-            }
-            const deleted = data.deleted || 0;
-            const results = data.results || 0;
-            let successMessage = '<?php echo addslashes(__('Удалено ссылок:')); ?> ' + deleted;
-            if (results) {
-                successMessage += '. <?php echo addslashes(__('Удалено записей проверок:')); ?> ' + results;
-            }
-            Promise.all([refreshStatus(true), refreshList()]).then(() => {
-                setRunMessage(successMessage, 'success');
-            });
         });
     }
 
@@ -640,46 +563,10 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         refreshList();
     });
 
-    deleteSelectedBtn?.addEventListener('click', () => {
-        const ids = selectedIds();
-        if (ids.length === 0) { return; }
-        if (!confirm('<?php echo addslashes(__('Удалить выбранные ссылки? Действие нельзя отменить.')); ?>')) { return; }
-        deleteLinks('selected', ids);
-    });
-
-    deleteErrorsBtn?.addEventListener('click', () => {
-        if (!confirm('<?php echo addslashes(__('Удалить все ссылки с ошибками HTTP (301, 404, 5xx)?')); ?>')) { return; }
-        deleteLinks('http');
-    });
-
-    deleteAllBtn?.addEventListener('click', () => {
-        if (!confirm('<?php echo addslashes(__('Полностью очистить базу крауд ссылок? Действие нельзя отменить.')); ?>')) { return; }
-        deleteLinks('all');
-    });
-
     document.addEventListener('pp-admin-section-changed', (event) => {
         if (event.detail && event.detail.section === 'crowd-links') {
             refreshStatus(true);
         }
     });
-
-    const dedupeBtn = document.getElementById('crowdDedupeBtn');
-    dedupeBtn?.addEventListener('click', () => {
-        setRunMessage('<?php echo addslashes(__('Удаляем дубликаты...')); ?>', 'info');
-        apiRequest('dedupe', 'POST', {}).then(data => {
-            if (!data || !data.ok) {
-                setRunMessage('<?php echo addslashes(__('Не удалось выполнить очистку.')); ?>', 'danger');
-                return;
-            }
-            const msg = '<?php echo addslashes(__('Удалено дублей:')); ?> ' + (data.deleted||0) + '. <?php echo addslashes(__('Всего ссылок:')); ?> ' + (data.total||0) + '.';
-            setRunMessage(msg, 'success');
-            refreshStatus(true);
-            refreshList();
-        });
-    });
-
-    if (typeof window.ppInitTooltips === 'function') {
-        window.ppInitTooltips(section);
-    }
 })();
 </script>
