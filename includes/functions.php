@@ -477,6 +477,7 @@ function ensure_schema(): void {
             `notes` TEXT NULL,
             `initiated_by` INT NULL,
             `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
+            `worker_retries` INT NOT NULL DEFAULT 0,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `started_at` TIMESTAMP NULL DEFAULT NULL,
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
@@ -502,6 +503,7 @@ function ensure_schema(): void {
         $maybeRunAdd('notes', "`notes` TEXT NULL AFTER `options`");
         $maybeRunAdd('initiated_by', "`initiated_by` INT NULL AFTER `notes`");
         $maybeRunAdd('cancel_requested', "`cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `initiated_by`");
+    $maybeRunAdd('worker_retries', "`worker_retries` INT NOT NULL DEFAULT 0 AFTER `cancel_requested`");
         $maybeRunAdd('created_at', "`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `cancel_requested`");
         $maybeRunAdd('started_at', "`started_at` TIMESTAMP NULL DEFAULT NULL AFTER `created_at`");
         $maybeRunAdd('finished_at', "`finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");

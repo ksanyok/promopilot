@@ -325,6 +325,150 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
     }
 }
 
+if (!function_exists('pp_crowd_links_release_orphan_links')) {
+    /**
+     * Reset links that are stuck in "checking" state while no active run exists.
+     *
+     * @param mixed $conn
+     */
+    function pp_crowd_links_release_orphan_links($conn): void {
+        if (!($conn instanceof mysqli)) {
+            return;
+        }
+        $sql = "UPDATE crowd_links cl SET cl.status='pending', cl.status_detail=NULL, cl.last_error=NULL, cl.last_run_id=NULL WHERE cl.status='checking' AND (cl.last_run_id IS NULL OR NOT EXISTS (SELECT 1 FROM crowd_check_runs r WHERE r.id = cl.last_run_id AND r.status IN ('queued','running')))";
+        @$conn->query($sql);
+    }
+}
+
+if (!function_exists('pp_crowd_links_finalize_stalled_run')) {
+    /**
+     * Mark a stalled run as failed and propagate error to related links/results.
+     *
+     * @param mixed $conn
+     */
+    function pp_crowd_links_finalize_stalled_run($conn, int $runId, string $note): void {
+        if (!($conn instanceof mysqli)) {
+            return;
+        }
+        $runId = max(0, $runId);
+        if ($runId <= 0) {
+            return;
+        }
+        $note = trim($note) !== '' ? trim($note) : __('Проверка остановлена.');
+        $noteEsc = $conn->real_escape_string($note);
+        $now = $conn->real_escape_string(date('Y-m-d H:i:s'));
+        $conn->query("UPDATE crowd_check_results SET status='failed', finished_at=COALESCE(finished_at, '{$now}'), status_detail='{$noteEsc}', error=IF(error IS NULL OR error='', '{$noteEsc}', error) WHERE run_id={$runId} AND status IN ('queued','running')");
+        $conn->query("UPDATE crowd_links l JOIN crowd_check_results r ON r.link_id = l.id SET l.status='failed', l.status_detail='{$noteEsc}', l.last_error='{$noteEsc}', l.last_checked_at=COALESCE(l.last_checked_at, '{$now}') WHERE r.run_id={$runId} AND r.status='failed'");
+        $counts = [
+            'success' => 0,
+            'failed' => 0,
+            'needs_review' => 0,
+            'cancelled' => 0,
+        ];
+        if ($resCounts = $conn->query("SELECT status, COUNT(*) AS cnt FROM crowd_check_results WHERE run_id={$runId} GROUP BY status")) {
+            while ($row = $resCounts->fetch_assoc()) {
+                $status = (string)($row['status'] ?? '');
+                if (array_key_exists($status, $counts)) {
+                    $counts[$status] = (int)$row['cnt'];
+                }
+            }
+            $resCounts->free();
+        }
+        $processed = $counts['success'] + $counts['failed'] + $counts['needs_review'] + $counts['cancelled'];
+        if ($stmtUpdate = $conn->prepare('UPDATE crowd_check_runs SET status=\'failed\', notes=?, processed_count=?, success_count=?, failure_count=?, needs_review_count=?, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1')) {
+            $stmtUpdate->bind_param('siiiii', $note, $processed, $counts['success'], $counts['failed'], $counts['needs_review'], $runId);
+            $stmtUpdate->execute();
+            $stmtUpdate->close();
+        } else {
+            $conn->query("UPDATE crowd_check_runs SET status='failed', notes='{$noteEsc}', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), last_progress_at=CURRENT_TIMESTAMP WHERE id={$runId} LIMIT 1");
+        }
+        pp_crowd_links_log('Run marked as failed due to inactivity', ['runId' => $runId, 'note' => $note]);
+    }
+}
+
+if (!function_exists('pp_crowd_links_supervise_run')) {
+    /**
+     * Ensure queued/running runs progress or are recovered if stalled.
+     *
+     * @param mixed $conn
+     */
+    function pp_crowd_links_supervise_run($conn, array $runRow): array {
+        if (!($conn instanceof mysqli)) {
+            return $runRow;
+        }
+        $runId = isset($runRow['id']) ? (int)$runRow['id'] : 0;
+        if ($runId <= 0) {
+            return $runRow;
+        }
+        $status = (string)($runRow['status'] ?? '');
+        $options = [];
+        if (!empty($runRow['options'])) {
+            $decoded = json_decode((string)$runRow['options'], true);
+            if (is_array($decoded)) {
+                $options = $decoded;
+            }
+        }
+        $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : (int)get_setting('crowd_request_timeout', 25);
+        if ($timeout < 5) {
+            $timeout = 25;
+        }
+        $stallSeconds = max(90, $timeout * 4);
+        $now = time();
+        $createdTs = !empty($runRow['created_at']) ? strtotime((string)$runRow['created_at']) : null;
+        $startedTs = !empty($runRow['started_at']) ? strtotime((string)$runRow['started_at']) : null;
+        $progressTs = !empty($runRow['last_progress_at']) ? strtotime((string)$runRow['last_progress_at']) : null;
+        $retries = isset($runRow['worker_retries']) ? max(0, (int)$runRow['worker_retries']) : 0;
+        $changed = false;
+
+        if ($status === 'queued') {
+            if ($createdTs && !$startedTs) {
+                $retryDelay = 8;
+                $maxRetries = 5;
+                if ($retries < $maxRetries) {
+                    $nextAttemptAt = $createdTs + (($retries + 1) * $retryDelay);
+                    if ($now >= $nextAttemptAt) {
+                        pp_crowd_links_log('Re-launching worker for queued run', ['runId' => $runId, 'retry' => $retries + 1]);
+                        pp_crowd_links_launch_worker($runId);
+                        $conn->query("UPDATE crowd_check_runs SET worker_retries = worker_retries + 1 WHERE id={$runId} LIMIT 1");
+                        $changed = true;
+                    }
+                }
+                $stalledQueued = ($now - $createdTs) > $stallSeconds;
+                if ($stalledQueued) {
+                    pp_crowd_links_finalize_stalled_run($conn, $runId, __('Не удалось запустить фоновую проверку.'));
+                    $changed = true;
+                }
+            } elseif ($startedTs && ($now - $startedTs) > $stallSeconds) {
+                pp_crowd_links_finalize_stalled_run($conn, $runId, __('Проверка не была запущена.'));
+                $changed = true;
+            }
+        } elseif ($status === 'running') {
+            $lastActivity = $progressTs ?: $startedTs;
+            if ($lastActivity && ($now - $lastActivity) > $stallSeconds) {
+                pp_crowd_links_finalize_stalled_run($conn, $runId, __('Проверка остановлена: нет активности.'));
+                $changed = true;
+            }
+        }
+
+        if ($changed) {
+            if ($stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1')) {
+                $stmt->bind_param('i', $runId);
+                if ($stmt->execute()) {
+                    $newRow = $stmt->get_result()->fetch_assoc();
+                    $stmt->close();
+                    if ($newRow) {
+                        return $newRow;
+                    }
+                } else {
+                    $stmt->close();
+                }
+            }
+        }
+
+        return $runRow;
+    }
+}
+
 if (!function_exists('pp_crowd_links_start_run')) {
     function pp_crowd_links_start_run(?int $userId, string $mode, array $linkIds = [], ?int $singleId = null, array $options = []): array {
         $mode = strtolower($mode);
@@ -369,6 +513,8 @@ if (!function_exists('pp_crowd_links_start_run')) {
         if (!$conn) {
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
+
+        pp_crowd_links_release_orphan_links($conn);
 
         $activeId = null;
         if ($res = $conn->query("SELECT id FROM crowd_check_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
@@ -524,7 +670,7 @@ if (!function_exists('pp_crowd_links_format_ts')) {
 }
 
 if (!function_exists('pp_crowd_links_get_status')) {
-    function pp_crowd_links_get_status(?int $runId = null, int $limit = 50): array {
+    function pp_crowd_links_get_status(?int $runId = null, int $limit = 50, bool $allowTick = true, bool $supervise = true): array {
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
@@ -545,7 +691,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
             $conn->close();
             return ['ok' => true, 'run' => null, 'results' => []];
         }
-        $stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at FROM crowd_check_runs WHERE id=? LIMIT 1');
+        $stmt = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1');
         if (!$stmt) {
             $conn->close();
             return ['ok' => false, 'error' => 'DB_READ'];
@@ -559,14 +705,32 @@ if (!function_exists('pp_crowd_links_get_status')) {
             return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
         }
 
+        if ($supervise && in_array((string)$runRow['status'], ['queued', 'running'], true)) {
+            $runRow = pp_crowd_links_supervise_run($conn, $runRow);
+        }
+
         // Cooperative tick: if worker cannot run, make a small progress step in this request
         $statusNow = (string)$runRow['status'];
-        if (in_array($statusNow, ['queued','running'], true)) {
+        if ($allowTick && in_array($statusNow, ['queued','running'], true)) {
             // Avoid long work: process a tiny chunk
             try { pp_crowd_links_process_tick((int)$runRow['id']); } catch (Throwable $e) { /* ignore */ }
             // Refresh row after tick
-            $stmt2 = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at FROM crowd_check_runs WHERE id=? LIMIT 1');
-            if ($stmt2) { $stmt2->bind_param('i', $runId); $stmt2->execute(); $runRow = $stmt2->get_result()->fetch_assoc(); $stmt2->close(); }
+            $stmt2 = $conn->prepare('SELECT id, status, run_mode, total_links, processed_count, success_count, failure_count, needs_review_count, cancel_requested, notes, initiated_by, test_message, test_url, created_at, started_at, finished_at, last_progress_at, options, worker_retries FROM crowd_check_runs WHERE id=? LIMIT 1');
+            if ($stmt2) {
+                $stmt2->bind_param('i', $runId);
+                if ($stmt2->execute()) {
+                    $runRow = $stmt2->get_result()->fetch_assoc();
+                }
+                $stmt2->close();
+            }
+            if ($runRow && $supervise) {
+                $runRow = pp_crowd_links_supervise_run($conn, $runRow);
+            }
+            $statusNow = (string)($runRow['status'] ?? $statusNow);
+        }
+
+        if (!in_array($statusNow, ['queued', 'running'], true)) {
+            pp_crowd_links_release_orphan_links($conn);
         }
         $results = [];
     $stmtRes = $conn->prepare('SELECT r.id, r.link_id, r.status, r.http_status, r.follow_type, r.index_status, r.detected_language, r.detected_region, r.message_found, r.link_found, r.error, r.status_detail, r.started_at, r.finished_at, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? ORDER BY r.id ASC LIMIT ?');
@@ -618,6 +782,9 @@ if (!function_exists('pp_crowd_links_get_status')) {
             'started_at_iso' => pp_crowd_links_format_ts($runRow['started_at'] ?? null),
             'finished_at' => $runRow['finished_at'],
             'finished_at_iso' => pp_crowd_links_format_ts($runRow['finished_at'] ?? null),
+            'last_progress_at' => $runRow['last_progress_at'] ?? null,
+            'last_progress_at_iso' => pp_crowd_links_format_ts($runRow['last_progress_at'] ?? null),
+            'worker_retries' => (int)($runRow['worker_retries'] ?? 0),
         ];
         return ['ok' => true, 'run' => $run, 'results' => $results];
     }
@@ -934,10 +1101,11 @@ if (!function_exists('pp_crowd_links_process_tick')) {
         if (!in_array($status, ['queued','running'], true)) { $conn->close(); return; }
         $testMessage = (string)($runRow['test_message'] ?? '');
         $testUrl = (string)($runRow['test_url'] ?? '');
-        $options = []; if (!empty($runRow['options'])) { $tmp = json_decode((string)$runRow['options'], true); if (is_array($tmp)) { $options = $tmp; } }
-        $batch = 3; // process up to 3 per tick
-        $concurrency = 3; // allow small parallelism in tick
-        $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : 25;
+    $options = []; if (!empty($runRow['options'])) { $tmp = json_decode((string)$runRow['options'], true); if (is_array($tmp)) { $options = $tmp; } }
+    $batch = 1; // process minimal work per tick to avoid blocking UI
+    $concurrency = 1;
+    $timeout = isset($options['timeout']) ? max(5, min(180, (int)$options['timeout'])) : 25;
+    $effectiveTimeout = min($timeout, 12);
 
         // Pick a small batch of queued results
         $stmtChunk = $conn->prepare('SELECT r.id AS result_id, r.link_id, l.url FROM crowd_check_results r JOIN crowd_links l ON l.id = r.link_id WHERE r.run_id = ? AND r.status = "queued" ORDER BY r.id ASC LIMIT ?');
@@ -993,8 +1161,15 @@ if (!function_exists('pp_crowd_links_process_tick')) {
             $conn->query('UPDATE crowd_links SET status="checking", last_run_id=' . (int)$runId . ' WHERE id=' . (int)$t['link_id']);
         }
 
-        $results = pp_crowd_links_process_tasks($tasks, $testMessage, $testUrl, $timeout, $concurrency);
-        if (empty($results)) { $conn->close(); return; }
+        $results = pp_crowd_links_process_tasks($tasks, $testMessage, $testUrl, $effectiveTimeout, min($concurrency, count($tasks)) ?: 1);
+        if (empty($results)) {
+            foreach ($tasks as $task) {
+                $conn->query("UPDATE crowd_check_results SET status='queued', started_at=NULL WHERE id=" . (int)$task['result_id']);
+                $conn->query("UPDATE crowd_links SET status='pending', last_run_id=NULL WHERE id=" . (int)$task['link_id']);
+            }
+            $conn->close();
+            return;
+        }
         $nowTs = date('Y-m-d H:i:s');
         $stmtUpdateRes = $conn->prepare('UPDATE crowd_check_results SET status=?, finished_at=?, http_status=?, follow_type=?, index_status=?, detected_language=?, detected_region=?, message_found=?, link_found=?, error=?, response_url=?, status_detail=? WHERE id=?');
         $stmtUpdateLink = $conn->prepare('UPDATE crowd_links SET status=?, http_status=?, follow_type=?, is_indexed=?, language=?, region=?, last_checked_at=?, last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END, last_error=?, last_detected_url=?, status_detail=? WHERE id=?');

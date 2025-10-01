@@ -405,7 +405,7 @@ if ($crowdDefaultTimeout < 5) { $crowdDefaultTimeout = 25; }
 $crowdUseBrowser = (string)get_setting('crowd_use_browser', '0') === '1';
 $crowdIdentityName = (string)get_setting('crowd_identity_name', 'Promo QA');
 $crowdIdentityEmail = (string)get_setting('crowd_identity_email', 'qa@example.com');
-$crowdStatusData = pp_crowd_links_get_status(null, 30);
+$crowdStatusData = pp_crowd_links_get_status(null, 30, false);
 $crowdCurrentRun = $crowdStatusData['ok'] ? ($crowdStatusData['run'] ?? null) : null;
 $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? []) : [];
 
