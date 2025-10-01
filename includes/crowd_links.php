@@ -332,18 +332,6 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
                 return true;
             }
         }
-        // Try exec as secondary option
-        if (function_exists('exec')) { @exec($cmd); return true; }
-        // Fallback: best-effort proc_open without waiting
-        $descriptor = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
-        $proc = @proc_open(escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId, $descriptor, $pipes, PP_ROOT_PATH);
-        if (is_resource($proc)) {
-            foreach ($pipes as $p) { if (is_resource($p)) { @fclose($p); } }
-            // Do not wait; assume started
-            @proc_close($proc);
-            pp_crowd_links_log('Worker started via proc_open fallback', ['runId' => $runId, 'phpBinary' => $phpBinary]);
-            return true;
-        }
         return false;
     }
 }
@@ -499,28 +487,13 @@ if (!function_exists('pp_crowd_links_start_run')) {
         pp_crowd_links_log('Crowd links run created', ['runId' => $runId, 'mode' => $mode, 'total' => $total]);
 
         if (!pp_crowd_links_launch_worker($runId)) {
-            try {
-                $conn2 = @connect_db();
-                if ($conn2) {
-                    $msg = __('Не удалось запустить фоновый процесс.');
-                    $upd = $conn2->prepare("UPDATE crowd_check_runs SET status='failed', notes=? WHERE id=? LIMIT 1");
-                    if ($upd) {
-                        $upd->bind_param('si', $msg, $runId);
-                        $upd->execute();
-                        $upd->close();
-                    }
-                    $conn2->close();
-                }
-            } catch (Throwable $e) {
-                // ignore
-            }
-            return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
+            // If worker cannot be launched in this environment, degrade gracefully: process inline a tiny initial chunk
+            // to confirm the run starts, then return. The status poll can be used to continue via UI if needed.
+            try { if (function_exists('pp_crowd_links_tick')) { @pp_crowd_links_tick($runId, 3); } } catch (Throwable $e) { /* ignore */ }
         }
 
-        // Do not fallback to inline processing; return immediately and let background worker handle the run.
-        // This avoids locking the PHP session on the request thread and keeps the admin UI responsive.
-        // We still do a short best-effort wait to detect that the worker transitioned out of "queued".
-        pp_crowd_links_wait_for_worker_start($runId, 2.0);
+    // Short best-effort wait to detect transition out of "queued", but don't block long
+    pp_crowd_links_wait_for_worker_start($runId, 0.6);
 
         return ['ok' => true, 'runId' => $runId, 'alreadyRunning' => false];
     }

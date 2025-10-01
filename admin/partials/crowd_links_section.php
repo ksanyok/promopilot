@@ -283,9 +283,14 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
 
 <script>
 (function(){
+    console.log('Crowd links script starting...');
     const section = document.getElementById('crowd-links-section');
-    if (!section) { return; }
+    if (!section) { console.error('Crowd links section not found'); return; }
+    console.log('Crowd links section found, initializing...');
+    console.log('Section display style:', section.style.display);
+    console.log('Section visibility:', section.offsetWidth > 0 && section.offsetHeight > 0);
     const apiUrl = section.querySelector('#crowdRunCard')?.dataset.api || '';
+    console.log('API URL:', apiUrl);
     const statusLabels = <?php echo json_encode($crowdStatusOptions, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
     const statusBadges = <?php echo json_encode($crowdStatusBadges, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
     const followLabels = <?php echo json_encode($crowdFollowLabels, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
@@ -298,6 +303,14 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     const deleteSelectedBtn = document.getElementById('crowdDeleteSelected');
     const stopBtn = document.getElementById('crowdStopRun');
     const refreshBtn = document.getElementById('crowdRefresh');
+    console.log('Buttons found:', {
+        startAllBtn: !!startAllBtn,
+        startPendingBtn: !!startPendingBtn,
+        startSelectedBtn: !!startSelectedBtn,
+        deleteSelectedBtn: !!deleteSelectedBtn,
+        stopBtn: !!stopBtn,
+        refreshBtn: !!refreshBtn
+    });
     const runMessage = document.getElementById('crowdRunMessage');
     const runStatusEl = section.querySelector('[data-crowd-run-status]');
     const runMetaEl = section.querySelector('[data-crowd-run-meta]');
@@ -308,7 +321,24 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         checked: section.querySelector('[data-crowd-stat="checked"]'),
         success: section.querySelector('[data-crowd-stat="success"]'),
     };
-    const csrfToken = window.CSRF_TOKEN || '';
+    function getCsrfToken() {
+        if (window.CSRF_TOKEN && typeof window.CSRF_TOKEN === 'string') {
+            console.log('CSRF token from window:', window.CSRF_TOKEN);
+            return window.CSRF_TOKEN;
+        }
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content) {
+            console.log('CSRF token from meta:', meta.content);
+            return meta.content;
+        }
+        const input = document.querySelector('input[name="csrf_token"]');
+        if (input && input.value) {
+            console.log('CSRF token from input:', input.value);
+            return input.value;
+        }
+        console.warn('No CSRF token found');
+        return '';
+    }
     let pollTimer = null;
     let currentRunId = null;
     let visibilityTimer = null;
@@ -434,6 +464,7 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     }
 
     function apiRequest(action, method = 'GET', payload = {}) {
+        console.log('apiRequest called:', action, method, payload);
         if (!apiUrl) { return Promise.reject(new Error('No API URL')); }
         const headers = {};
         let body = null;
@@ -444,12 +475,18 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
         } else {
             headers['Content-Type'] = 'application/x-www-form-urlencoded';
             const data = { ...payload };
-            if (csrfToken) { data.csrf_token = csrfToken; }
+            const csrf = getCsrfToken();
+            console.log('CSRF token:', csrf);
+            if (csrf) { data.csrf_token = csrf; }
             body = new URLSearchParams(data).toString();
         }
+        console.log('Making request to:', url);
         return fetch(url, { method, headers, body, credentials: 'same-origin' })
-            .then(res => res.json())
-            .catch(() => ({ ok: false, error: 'NETWORK' }));
+            .then(res => {
+                console.log('Response status:', res.status);
+                return res.json();
+            })
+            .catch((err) => { console.error('Crowd API request failed', action, err); return { ok: false, error: 'NETWORK' }; });
     }
 
     function deleteSelected() {
@@ -555,9 +592,13 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     }
 
     function cancelRun() {
-        if (!currentRunId) { return; }
+        console.log('cancelRun called, currentRunId:', currentRunId);
+        if (!currentRunId) { console.log('No currentRunId, returning'); return; }
         setRunMessage('<?php echo addslashes(__('Останавливаем проверку...')); ?>', 'info');
-        apiRequest('cancel', 'POST', { run_id: currentRunId }).then(() => refreshStatus());
+        apiRequest('cancel', 'POST', { run_id: currentRunId }).then((result) => {
+            console.log('Cancel API result:', result);
+            refreshStatus();
+        });
     }
 
     const initialRunData = parseJsonScript('crowdRunData');
@@ -590,24 +631,77 @@ $crowdApiUrl = pp_url('admin/crowd_links_api.php');
     });
     updateSelectionState();
 
-    startAllBtn?.addEventListener('click', () => startRun('all'));
-    startPendingBtn?.addEventListener('click', () => startRun('pending'));
-    startSelectedBtn?.addEventListener('click', () => {
+    // Define named event handlers
+    const startAllHandler = (e) => { console.log('Start all clicked', e); startRun('all'); };
+    const startPendingHandler = (e) => { console.log('Start pending clicked', e); startRun('pending'); };
+    const startSelectedHandler = (e) => {
         const ids = selectedIds();
+        console.log('Start selected clicked, ids:', ids, e);
         if (ids.length > 0) { startRun('selection', ids); }
-    });
-    deleteSelectedBtn?.addEventListener('click', deleteSelected);
-    stopBtn?.addEventListener('click', cancelRun);
-    refreshBtn?.addEventListener('click', () => {
-        refreshStatus();
-        refreshList();
-    });
+    };
+    const deleteSelectedHandler = (e) => { console.log('Delete selected clicked', e); deleteSelected(); };
+    const stopHandler = (e) => { console.log('Stop clicked', e); cancelRun(); };
+    const refreshHandler = (e) => { console.log('Refresh clicked', e); refreshStatus(); refreshList(); };
+
+    // Attach initial event listeners
+    startAllBtn?.addEventListener('click', startAllHandler);
+    startPendingBtn?.addEventListener('click', startPendingHandler);
+    startSelectedBtn?.addEventListener('click', startSelectedHandler);
+    deleteSelectedBtn?.addEventListener('click', deleteSelectedHandler);
+    stopBtn?.addEventListener('click', stopHandler);
+    refreshBtn?.addEventListener('click', refreshHandler);
     document.querySelectorAll('[data-crowd-clear]')?.forEach(el => {
         el.addEventListener('click', (e) => { e.preventDefault(); const m = el.getAttribute('data-crowd-clear') || 'errors'; clearBase(m); });
     });
 
     document.addEventListener('pp-admin-section-changed', (event) => {
+        console.log('Section changed event:', event.detail);
         if (event.detail && event.detail.section === 'crowd-links') {
+            console.log('Crowd links section activated');
+            // Check if section is visible
+            const section = document.getElementById('crowd-links-section');
+            console.log('Section display style:', section ? section.style.display : 'section not found');
+            
+            // Re-attach event listeners when section becomes active
+            setTimeout(() => {
+                console.log('Re-attaching event listeners after section activation');
+                const startAllBtn = document.getElementById('crowdStartAll');
+                const startPendingBtn = document.getElementById('crowdStartPending');
+                const startSelectedBtn = document.getElementById('crowdStartSelected');
+                const deleteSelectedBtn = document.getElementById('crowdDeleteSelected');
+                const stopBtn = document.getElementById('crowdStopRun');
+                const refreshBtn = document.getElementById('crowdRefresh');
+                console.log('Buttons after activation:', {
+                    startAllBtn: !!startAllBtn,
+                    startPendingBtn: !!startPendingBtn,
+                    startSelectedBtn: !!startSelectedBtn,
+                    deleteSelectedBtn: !!deleteSelectedBtn,
+                    stopBtn: !!stopBtn,
+                    refreshBtn: !!refreshBtn
+                });
+                
+                // Check button visibility
+                if (startAllBtn) console.log('startAllBtn display:', window.getComputedStyle(startAllBtn).display);
+                if (stopBtn) console.log('stopBtn display:', window.getComputedStyle(stopBtn).display);
+                
+                // Remove existing listeners first to avoid duplicates
+                startAllBtn?.removeEventListener('click', startAllHandler);
+                startPendingBtn?.removeEventListener('click', startPendingHandler);
+                startSelectedBtn?.removeEventListener('click', startSelectedHandler);
+                deleteSelectedBtn?.removeEventListener('click', deleteSelectedHandler);
+                stopBtn?.removeEventListener('click', stopHandler);
+                refreshBtn?.removeEventListener('click', refreshHandler);
+                
+                // Re-attach event listeners
+                startAllBtn?.addEventListener('click', startAllHandler);
+                startPendingBtn?.addEventListener('click', startPendingHandler);
+                startSelectedBtn?.addEventListener('click', startSelectedHandler);
+                deleteSelectedBtn?.addEventListener('click', deleteSelectedHandler);
+                stopBtn?.addEventListener('click', stopHandler);
+                refreshBtn?.addEventListener('click', refreshHandler);
+                
+                console.log('Event listeners re-attached');
+            }, 100);
             refreshStatus(true);
         }
     });

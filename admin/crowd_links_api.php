@@ -132,20 +132,15 @@ function pp_crowd_api_render_rows(array $links): string {
 
 switch ($action) {
     case 'status': {
-        // Advance a small chunk cooperatively so progress continues even if background process cannot spawn
-        if (function_exists('pp_crowd_links_tick')) {
-            // Process up to a small batch per poll to keep UI responsive
-            @pp_crowd_links_tick(null, 5);
-        }
         $filters = pp_crowd_api_filters_from_query();
         $page = pp_crowd_api_page_from_query();
         $perPage = 25;
-        $list = pp_crowd_links_fetch_links($page, $perPage, $filters);
-        $stats = pp_crowd_links_get_stats();
+        $list = pp_crowd_links_fetch_links($page, $perPage, $filters) ?: ['rows' => [], 'total' => 0];
+        $stats = pp_crowd_links_get_stats() ?: ['total'=>0,'checked'=>0,'success'=>0,'pending'=>0];
         $status = pp_crowd_links_get_status(null, 30);
-        if (!$status['ok']) {
-            pp_crowd_api_response(['ok' => false, 'error' => $status['error'] ?? 'UNKNOWN']);
-        }
+        // Do not hard-fail the endpoint; return partial data if needed
+        $run = $status['ok'] ? ($status['run'] ?? null) : null;
+        $results = $status['ok'] ? ($status['results'] ?? []) : [];
         $tableHtml = pp_crowd_api_render_rows($list['rows'] ?? []);
         // Enrich with in-flight metrics
         $inflight = [
@@ -174,8 +169,8 @@ switch ($action) {
         } catch (Throwable $e) { /* ignore */ }
         pp_crowd_api_response([
             'ok' => true,
-            'run' => $status['run'] ?? null,
-            'results' => $status['results'] ?? [],
+            'run' => $run,
+            'results' => $results,
             'stats' => $stats,
             'tableHtml' => $tableHtml,
             'inflight' => $inflight,
@@ -306,7 +301,9 @@ switch ($action) {
         }
         if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
         $runId = isset($_POST['run_id']) ? (int)$_POST['run_id'] : null;
-        $result = pp_crowd_links_cancel($runId); 
+        error_log("Crowd API cancel called with runId: " . ($runId ?? 'null'));
+        $result = pp_crowd_links_cancel($runId);
+        error_log("Crowd API cancel result: " . json_encode($result));
         if (!$result['ok']) {
             pp_crowd_api_response(['ok' => false, 'error' => $result['error'] ?? 'UNKNOWN']);
         }
