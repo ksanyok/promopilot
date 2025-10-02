@@ -39,6 +39,71 @@ if (!function_exists('pp_crowd_deep_is_error_status')) {
     }
 }
 
+if (!function_exists('pp_crowd_deep_debug_sanitize')) {
+    function pp_crowd_deep_debug_sanitize($value, int $depth = 0)
+    {
+        if ($depth > 4) {
+            if (is_scalar($value) || $value === null) {
+                return $value;
+            }
+            return '...';
+        }
+        if (is_array($value)) {
+            $sanitized = [];
+            $count = 0;
+            foreach ($value as $key => $item) {
+                if ($count++ >= 40) {
+                    $sanitized['__truncated__'] = true;
+                    break;
+                }
+                $sanitized[$key] = pp_crowd_deep_debug_sanitize($item, $depth + 1);
+            }
+            return $sanitized;
+        }
+        if (is_string($value)) {
+            if (function_exists('pp_crowd_deep_clip')) {
+                return pp_crowd_deep_clip($value, 600);
+            }
+            if (function_exists('mb_substr')) {
+                return mb_substr($value, 0, 600, 'UTF-8');
+            }
+            return substr($value, 0, 600);
+        }
+        if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+            return $value;
+        }
+        if (is_object($value)) {
+            return 'object:' . get_class($value);
+        }
+        return (string)$value;
+    }
+}
+
+if (!function_exists('pp_crowd_deep_debug_log')) {
+    function pp_crowd_deep_debug_log(string $message, array $context = []): void
+    {
+        try {
+            $dir = PP_ROOT_PATH . '/logs';
+            if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
+            if (!is_dir($dir) || !is_writable($dir)) { return; }
+            $file = $dir . '/crowd_deep_debug.log';
+            $timestamp = date('Y-m-d H:i:s');
+            $line = '[' . $timestamp . '] ' . $message;
+            if (!empty($context)) {
+                $sanitized = pp_crowd_deep_debug_sanitize($context);
+                $encoded = json_encode($sanitized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+                if ($encoded !== false && $encoded !== null) {
+                    $line .= ' ' . $encoded;
+                }
+            }
+            $line .= "\n";
+            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+}
+
 if (!function_exists('pp_crowd_deep_default_options')) {
     function pp_crowd_deep_default_options(): array {
         return [
@@ -231,6 +296,14 @@ if (!function_exists('pp_crowd_deep_start_check')) {
             return ['ok' => false, 'error' => 'INVALID_OPTIONS', 'messages' => $prepared['errors']];
         }
         $options = $prepared['options'];
+        pp_crowd_deep_debug_log('Deep run request', [
+            'userId' => $userId,
+            'scope' => $scope,
+            'selectedCount' => count($selectedIds),
+            'token_prefix' => $options['token_prefix'] ?? null,
+            'message_link' => $options['message_link'] ?? null,
+            'template_length' => isset($options['message_template']) ? (function_exists('mb_strlen') ? mb_strlen($options['message_template'], 'UTF-8') : strlen($options['message_template'])) : null,
+        ]);
         pp_crowd_links_log('Request to start deep crowd check', ['userId' => $userId, 'scope' => $scope, 'selected' => count($selectedIds)]);
         try {
             $conn = @connect_db();
@@ -670,6 +743,7 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
         static $captchaTokens = ['captcha', 'recaptcha', 'cptch', 'security code', 'verification code', 'antispam', 'anti-spam', 'botcheck', 'are you human', 'g-recaptcha'];
         static $termsTokens = ['privacy', 'policy', 'terms', 'consent', 'rgpd', 'gdpr', 'agree', 'accept', 'processing', 'compliance'];
         static $ratingTokens = ['rating', 'stars', 'vote', 'score', 'оцен'];
+        static $honeypotTokens = ['honeypot', 'hp_', 'trap', 'ak_hp', 'fakefield', 'antispam'];
 
         $tag = strtolower($field->tagName);
         $type = strtolower((string)$field->getAttribute('type'));
@@ -687,18 +761,18 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
             $required = true;
         }
         $role = 'generic';
+        $nameLower = strtolower((string)$field->getAttribute('name'));
+        if ($nameLower !== '' && preg_match('~(honeypot|_hp_|ak_hp|trapfield|spamtrap|no_bot)~i', $nameLower)) {
+            $role = 'honeypot';
+        } elseif (pp_crowd_deep_match_tokens($tokens, $honeypotTokens)) {
+            $role = 'honeypot';
+        }
         if ($type === 'hidden') {
             $role = 'hidden';
         } elseif ($type === 'textarea') {
-            $role = 'comment';
-        } elseif ($type === 'email' || pp_crowd_deep_match_tokens($tokens, $emailTokens)) {
-            $role = 'email';
-        } elseif ($type === 'url' || pp_crowd_deep_match_tokens($tokens, $urlTokens)) {
-            $role = 'url';
-        } elseif ($type === 'tel' || pp_crowd_deep_match_tokens($tokens, $phoneTokens)) {
-            $role = 'phone';
-        } elseif ($type === 'password') {
-            $role = 'password';
+            if ($role !== 'honeypot') {
+                $role = 'comment';
+            }
         } elseif ($type === 'checkbox') {
             $role = pp_crowd_deep_match_tokens($tokens, $termsTokens) ? 'accept' : 'checkbox';
         } elseif ($type === 'radio') {
@@ -709,10 +783,20 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
             }
         } elseif ($type === 'file') {
             $role = 'file';
+        } elseif ($type === 'email' || pp_crowd_deep_match_tokens($tokens, $emailTokens)) {
+            $role = 'email';
+        } elseif ($type === 'url' || pp_crowd_deep_match_tokens($tokens, $urlTokens)) {
+            $role = 'url';
+        } elseif ($type === 'tel' || pp_crowd_deep_match_tokens($tokens, $phoneTokens)) {
+            $role = 'phone';
+        } elseif ($type === 'password') {
+            $role = 'password';
         } elseif (pp_crowd_deep_match_tokens($tokens, $captchaTokens) || strtolower((string)$field->getAttribute('id')) === 'g-recaptcha-response') {
             $role = 'captcha';
         } elseif (pp_crowd_deep_match_tokens($tokens, $commentTokens)) {
-            $role = 'comment';
+            if ($role !== 'honeypot') {
+                $role = 'comment';
+            }
         } elseif (pp_crowd_deep_match_tokens($tokens, $nameTokens)) {
             $role = 'name';
         } elseif (pp_crowd_deep_match_tokens($tokens, $subjectTokens)) {
@@ -736,6 +820,7 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
             'tokens' => $tokens,
             'tag' => $tag,
             'type' => $type,
+            'name' => $nameLower,
         ];
     }
 }
@@ -747,6 +832,9 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
         $hasComment = false;
         $radioGroups = [];
         $commentFieldName = null;
+        $fieldMeta = [];
+        $acceptNames = [];
+        $checkboxNames = [];
         $nodeList = $xp->query('.//input | .//textarea | .//select', $form);
         $recaptchaPresent = false;
         if ($nodeList) {
@@ -754,6 +842,23 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                 if (!$node instanceof DOMElement) { continue; }
                 $info = pp_crowd_deep_classify_field($node, $xp);
                 $name = trim((string)$node->getAttribute('name'));
+                if ($name === '' && $info['role'] === 'comment') {
+                    $fallbackId = trim((string)$node->getAttribute('id'));
+                    if ($fallbackId !== '') {
+                        $name = $fallbackId;
+                    }
+                }
+                $metaEntry = [
+                    'role' => $info['role'],
+                    'required' => $info['required'],
+                    'tag' => strtolower($node->tagName),
+                    'type' => $node->tagName === 'input' ? strtolower((string)$node->getAttribute('type')) : '',
+                ];
+                if ($name !== '') {
+                    $fieldMeta[$name][] = $metaEntry;
+                } else {
+                    $fieldMeta['_unnamed'][] = $metaEntry;
+                }
                 if ($info['role'] === 'captcha') {
                     $recaptchaPresent = true;
                 }
@@ -765,6 +870,13 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                 }
                 if ($info['role'] === 'file') {
                     $issues['file'] = true;
+                    continue;
+                }
+                if ($info['role'] === 'honeypot') {
+                    if ($name !== '') {
+                        $fields[$name][] = '';
+                    }
+                    $issues['honeypot'] = true;
                     continue;
                 }
                 if ($name === '') {
@@ -804,6 +916,26 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                     case 'accept':
                     case 'checkbox':
                         $value = $node->hasAttribute('value') ? $node->getAttribute('value') : 'on';
+                        $nameLowerLocal = strtolower($name);
+                        if ($info['role'] === 'accept') {
+                            $acceptNames[] = $name;
+                            if ($node->hasAttribute('value') === false || $value === '' || strtolower($value) === 'on') {
+                                if (strpos($nameLowerLocal, 'consent') !== false || strpos($nameLowerLocal, 'agree') !== false) {
+                                    $value = 'yes';
+                                } elseif (strpos($nameLowerLocal, 'cookie') !== false) {
+                                    $value = 'yes';
+                                } else {
+                                    $value = '1';
+                                }
+                            }
+                        } else {
+                            $checkboxNames[] = $name;
+                        }
+                        if ($name !== '') {
+                            if ($nameLowerLocal === 'wp-comment-cookies-consent') {
+                                $value = 'yes';
+                            }
+                        }
                         break;
                     case 'rating':
                         $value = '5';
@@ -878,7 +1010,44 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
             'issues' => $issues,
             'has_comment' => $hasComment,
             'comment_field' => $commentFieldName,
+            'field_meta' => $fieldMeta,
+            'accept_fields' => array_values(array_unique(array_filter($acceptNames))),
+            'checkbox_fields' => array_values(array_unique(array_filter($checkboxNames))),
         ];
+    }
+}
+
+if (!function_exists('pp_crowd_deep_debug_field_meta')) {
+    function pp_crowd_deep_debug_field_meta(array $fieldMeta): array
+    {
+        $summary = [];
+        foreach ($fieldMeta as $name => $entries) {
+            if (!is_array($entries)) { continue; }
+            $roles = [];
+            $tags = [];
+            $types = [];
+            $required = false;
+            foreach ($entries as $entry) {
+                if (!is_array($entry)) { continue; }
+                $role = (string)($entry['role'] ?? '');
+                if ($role !== '') { $roles[] = $role; }
+                if (!empty($entry['required'])) { $required = true; }
+                $tag = (string)($entry['tag'] ?? '');
+                if ($tag !== '') { $tags[] = $tag; }
+                $type = (string)($entry['type'] ?? '');
+                if ($type !== '') { $types[] = $type; }
+            }
+            $summary[$name] = [
+                'roles' => array_values(array_unique($roles)),
+                'required' => $required,
+                'tags' => array_values(array_unique($tags)),
+            ];
+            $types = array_values(array_filter(array_unique($types)));
+            if (!empty($types)) {
+                $summary[$name]['types'] = $types;
+            }
+        }
+        return $summary;
     }
 }
 
@@ -890,17 +1059,33 @@ if (!function_exists('pp_crowd_deep_build_plan')) {
         $action = trim($form->getAttribute('action'));
         $action = $action !== '' ? pp_abs_url($action, $baseUrl) : $baseUrl;
         $plan = pp_crowd_deep_prepare_fields($form, $xp, $identity);
+        $issues = [];
+        foreach (($plan['issues'] ?? []) as $issueName => $flag) {
+            if ($flag) { $issues[] = $issueName; }
+        }
+        $debug = [
+            'method' => $method,
+            'action' => $action,
+            'issues' => $issues,
+            'has_comment' => !empty($plan['has_comment']),
+            'comment_field' => $plan['comment_field'] ?? null,
+            'field_count' => isset($plan['fields']) && is_array($plan['fields']) ? count($plan['fields']) : 0,
+            'accept_fields' => $plan['accept_fields'] ?? [],
+            'checkbox_fields' => $plan['checkbox_fields'] ?? [],
+            'field_meta' => pp_crowd_deep_debug_field_meta($plan['field_meta'] ?? []),
+            'payload_keys' => [],
+        ];
         if (!empty($plan['issues']['captcha'])) {
-            return ['ok' => false, 'reason' => 'captcha'];
+            return ['ok' => false, 'reason' => 'captcha', 'debug' => $debug];
         }
         if (!empty($plan['issues']['file'])) {
-            return ['ok' => false, 'reason' => 'file'];
+            return ['ok' => false, 'reason' => 'file', 'debug' => $debug];
         }
         if (!$plan['has_comment']) {
-            return ['ok' => false, 'reason' => 'no_comment'];
+            return ['ok' => false, 'reason' => 'no_comment', 'debug' => $debug];
         }
         if (empty($plan['fields'])) {
-            return ['ok' => false, 'reason' => 'no_fields'];
+            return ['ok' => false, 'reason' => 'no_fields', 'debug' => $debug];
         }
         $payload = [];
         foreach ($plan['fields'] as $name => $values) {
@@ -910,11 +1095,13 @@ if (!function_exists('pp_crowd_deep_build_plan')) {
                 $payload[$name] = $values;
             }
         }
+        $debug['payload_keys'] = array_keys($payload);
         return [
             'ok' => true,
             'method' => $method,
             'action' => $action,
             'payload' => $payload,
+            'debug' => $debug,
         ];
     }
 }
@@ -1106,6 +1293,8 @@ if (!function_exists('pp_crowd_deep_extract_excerpt')) {
 
 if (!function_exists('pp_crowd_deep_handle_link')) {
     function pp_crowd_deep_handle_link(array $link, array $identity, array $options): array {
+        $runId = isset($options['_run_id']) ? (int)$options['_run_id'] : null;
+        $linkId = isset($link['id']) ? (int)$link['id'] : 0;
         $url = (string)$link['url'];
         $cookieFile = tempnam(sys_get_temp_dir(), 'ppdeep_');
         $result = [
@@ -1119,15 +1308,34 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             'duration_ms' => null,
             'token' => $identity['token'],
         ];
+        pp_crowd_deep_debug_log('Deep link start', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'url' => $url,
+            'token' => $identity['token'] ?? '',
+        ]);
         $startAll = microtime(true);
         $fetch = pp_crowd_deep_http_request($url, [
             'method' => 'GET',
             'timeout' => 25,
             'cookieFile' => $cookieFile,
         ]);
+        pp_crowd_deep_debug_log('Deep initial fetch', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'httpStatus' => $fetch['status'] ?? 0,
+            'finalUrl' => $fetch['final_url'] ?? '',
+            'bodyBytes' => isset($fetch['body']) ? strlen((string)$fetch['body']) : 0,
+            'error' => $fetch['error'] ?? '',
+        ]);
         if ($fetch['error'] !== '') {
             $result['error'] = $fetch['error'];
             $result['status'] = 'failed';
+            pp_crowd_deep_debug_log('Deep fetch error', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'error' => $result['error'],
+            ]);
             @unlink($cookieFile);
             return $result;
         }
@@ -1135,6 +1343,11 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if ($body === '') {
             $result['error'] = __('Не получен HTML контент страницы.');
             $result['status'] = 'failed';
+            pp_crowd_deep_debug_log('Deep fetch empty body', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'finalUrl' => $fetch['final_url'] ?? '',
+            ]);
             @unlink($cookieFile);
             return $result;
         }
@@ -1142,14 +1355,38 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if (!$doc) {
             $result['error'] = __('Не удалось разобрать HTML.');
             $result['status'] = 'failed';
+            pp_crowd_deep_debug_log('Deep fetch parse failed', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'finalUrl' => $fetch['final_url'] ?? '',
+            ]);
             @unlink($cookieFile);
             return $result;
         }
         $forms = $doc->getElementsByTagName('form');
+        $formsCount = ($forms instanceof DOMNodeList) ? $forms->length : 0;
+        pp_crowd_deep_debug_log('Deep forms detected', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'count' => $formsCount,
+            'finalUrl' => $fetch['final_url'] ?? $url,
+        ]);
         $plan = null;
+        $formIndex = 0;
         foreach ($forms as $form) {
             if (!$form instanceof DOMElement) { continue; }
+            $formIndex++;
             $candidate = pp_crowd_deep_build_plan($form, $fetch['final_url'] ?? $url, $identity);
+            pp_crowd_deep_debug_log('Deep form candidate', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'index' => $formIndex,
+                'ok' => !empty($candidate['ok']),
+                'reason' => $candidate['reason'] ?? null,
+                'method' => $candidate['method'] ?? null,
+                'action' => $candidate['action'] ?? null,
+                'debug' => $candidate['debug'] ?? [],
+            ]);
             if (!empty($candidate['ok'])) {
                 $plan = $candidate;
                 break;
@@ -1157,6 +1394,13 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             if (!empty($candidate['reason']) && in_array($candidate['reason'], ['captcha', 'file'], true)) {
                 $result['status'] = $candidate['reason'] === 'captcha' ? 'blocked' : 'skipped';
                 $result['error'] = $candidate['reason'] === 'captcha' ? __('Обнаружена CAPTCHA, автоматическая отправка невозможна.') : __('Форма требует загрузку файла.');
+                pp_crowd_deep_debug_log('Deep form rejected critical', [
+                    'runId' => $runId,
+                    'linkId' => $linkId,
+                    'index' => $formIndex,
+                    'reason' => $candidate['reason'],
+                    'debug' => $candidate['debug'] ?? [],
+                ]);
                 @unlink($cookieFile);
                 return $result;
             }
@@ -1164,9 +1408,22 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if (!$plan) {
             $result['status'] = 'no_form';
             $result['error'] = __('На странице не найдена форма с полем комментария.');
+            pp_crowd_deep_debug_log('Deep plan not found', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'formsChecked' => $formIndex,
+            ]);
             @unlink($cookieFile);
             return $result;
         }
+        pp_crowd_deep_debug_log('Deep form selected', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'method' => $plan['method'],
+            'action' => $plan['action'],
+            'payloadKeys' => array_keys($plan['payload']),
+            'debug' => $plan['debug'] ?? [],
+        ]);
         $result['request_payload'] = pp_crowd_deep_clip(is_array($plan['payload']) ? http_build_query($plan['payload']) : (string)$plan['payload'], 800);
         $submit = pp_crowd_deep_http_request($plan['action'], [
             'method' => $plan['method'],
@@ -1174,6 +1431,16 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             'cookieFile' => $cookieFile,
             'referer' => $url,
             'data' => $plan['payload'],
+        ]);
+        pp_crowd_deep_debug_log('Deep submit request', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'method' => $plan['method'],
+            'action' => $plan['action'],
+            'httpStatus' => $submit['status'] ?? 0,
+            'finalUrl' => $submit['final_url'] ?? '',
+            'error' => $submit['error'] ?? '',
+            'payloadPreview' => $result['request_payload'],
         ]);
         $durationMs = (int)round((microtime(true) - $startAll) * 1000);
         $result['duration_ms'] = $durationMs;
@@ -1183,34 +1450,65 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if ($submit['error'] !== '') {
             $result['error'] = $submit['error'];
             $result['status'] = 'failed';
+            pp_crowd_deep_debug_log('Deep submit error', [
+                'runId' => $runId,
+                'linkId' => $linkId,
+                'error' => $result['error'],
+            ]);
             @unlink($cookieFile);
             return $result;
         }
         $token = $identity['token'];
         $excerpt = pp_crowd_deep_extract_excerpt($responseBody, $token);
+        $successKeywordsDetected = false;
+        $failureKeywordsDetected = false;
+        $statusReason = 'token_not_found';
         if ($excerpt !== '') {
             $result['status'] = 'success';
             $result['response_excerpt'] = pp_crowd_deep_clip($excerpt, 400);
+            $statusReason = 'token_match';
         } else {
-            if (pp_crowd_deep_detect_success_keywords($responseBody)) {
+            $successKeywordsDetected = pp_crowd_deep_detect_success_keywords($responseBody);
+            if ($successKeywordsDetected) {
                 $result['status'] = 'partial';
                 $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
                 $result['error'] = __('Сообщение не найдено автоматически, требуется ручная проверка.');
-            } elseif (pp_crowd_deep_detect_failure_keywords($responseBody)) {
-                $result['status'] = 'failed';
-                $result['error'] = __('Сайт отверг отправку комментария.');
-            } elseif ($result['http_status'] >= 200 && $result['http_status'] < 400) {
-                $result['status'] = 'partial';
-                $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
-                $result['error'] = __('Статус успешный, но сообщение не найдено.');
+                $statusReason = 'success_keywords';
             } else {
-                $result['status'] = 'failed';
-                $result['error'] = __('Не удалось подтвердить публикацию сообщения.');
+                $failureKeywordsDetected = pp_crowd_deep_detect_failure_keywords($responseBody);
+                if ($failureKeywordsDetected) {
+                    $result['status'] = 'failed';
+                    $result['error'] = __('Сайт отверг отправку комментария.');
+                    $statusReason = 'failure_keywords';
+                } elseif ($result['http_status'] >= 200 && $result['http_status'] < 400) {
+                    $result['status'] = 'partial';
+                    $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
+                    $result['error'] = __('Статус успешный, но сообщение не найдено.');
+                    $statusReason = 'http_ok_no_token';
+                } else {
+                    $result['status'] = 'failed';
+                    $result['error'] = __('Не удалось подтвердить публикацию сообщения.');
+                    $statusReason = 'http_error';
+                }
             }
         }
         if ($result['response_excerpt'] === '' && $responseBody !== '') {
             $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
         }
+        pp_crowd_deep_debug_log('Deep handle result', [
+            'runId' => $runId,
+            'linkId' => $linkId,
+            'status' => $result['status'],
+            'reason' => $statusReason,
+            'http_status' => $result['http_status'],
+            'duration_ms' => $result['duration_ms'],
+            'error' => $result['error'],
+            'excerpt_found' => $excerpt !== '',
+            'success_keywords' => $successKeywordsDetected,
+            'failure_keywords' => $failureKeywordsDetected,
+            'response_excerpt' => $result['response_excerpt'],
+            'evidence_url' => $result['evidence_url'],
+        ]);
         @unlink($cookieFile);
         return $result;
     }
@@ -1243,9 +1541,11 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         if (function_exists('session_write_close')) { @session_write_close(); }
         @ignore_user_abort(true);
         pp_crowd_links_log('Deep worker started', ['runId' => $runId]);
+        pp_crowd_deep_debug_log('Deep run start', ['runId' => $runId]);
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
+            pp_crowd_deep_debug_log('Deep run db connect failed', ['runId' => $runId, 'error' => $e->getMessage()]);
             pp_crowd_links_log('Deep worker cannot connect to DB', ['runId' => $runId, 'error' => $e->getMessage()]);
             return;
         }
@@ -1260,11 +1560,13 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         $runRow = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         if (!$runRow) {
+            pp_crowd_deep_debug_log('Deep run metadata missing', ['runId' => $runId]);
             $conn->close();
             return;
         }
         $status = (string)($runRow['status'] ?? '');
         if (!in_array($status, ['queued', 'running'], true)) {
+            pp_crowd_deep_debug_log('Deep run skipped due to status', ['runId' => $runId, 'status' => $status]);
             $conn->close();
             return;
         }
@@ -1282,10 +1584,18 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         }
         if (empty($links)) {
             @$conn->query("UPDATE crowd_deep_runs SET status='failed', notes='No links to process', finished_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
+            pp_crowd_deep_debug_log('Deep run has no links', ['runId' => $runId]);
             $conn->close();
             return;
         }
         $options = pp_crowd_deep_merge_options($runRow);
+        $options['_run_id'] = $runId;
+        pp_crowd_deep_debug_log('Deep run prepared', [
+            'runId' => $runId,
+            'scope' => $runRow['scope'] ?? null,
+            'total_links' => count($links),
+            'token_prefix' => $options['token_prefix'] ?? null,
+        ]);
         $counts = [
             'processed' => 0,
             'success' => 0,
@@ -1319,6 +1629,7 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         foreach ($links as $item) {
             if ($checkCancel($conn, $runId)) {
                 $cancelled = true;
+                pp_crowd_deep_debug_log('Deep run cancellation requested', ['runId' => $runId, 'processed' => $counts['processed']]);
                 break;
             }
             $linkId = (int)$item['id'];
@@ -1381,6 +1692,7 @@ if (!function_exists('pp_crowd_deep_process_run')) {
             pp_crowd_deep_update_run_counts($conn, $runId, $counts, 'cancelled');
             @$conn->query("UPDATE crowd_deep_runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1");
             $conn->close();
+            pp_crowd_deep_debug_log('Deep run cancelled', ['runId' => $runId, 'counts' => $counts]);
             pp_crowd_links_log('Deep worker finished with cancellation', ['runId' => $runId]);
             return;
         }
@@ -1389,6 +1701,7 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         pp_crowd_deep_update_run_counts($conn, $runId, $counts, $finalStatus);
         @$conn->query("UPDATE crowd_deep_runs SET finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1");
         $conn->close();
+        pp_crowd_deep_debug_log('Deep run finished', ['runId' => $runId, 'counts' => $counts, 'finalStatus' => $finalStatus]);
         pp_crowd_links_log('Deep worker finished', ['runId' => $runId, 'processed' => $counts['processed'], 'failed' => $counts['failed'], 'partial' => $counts['partial']]);
     }
 }
