@@ -105,8 +105,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Admin sections toggle (users, projects, settings, networks, crowd-links, diagnostics)
-    const sectionKeys = ['users','projects','settings','networks','crowd-links','diagnostics'];
+    // Admin sections toggle (users, projects, settings, networks, diagnostics)
+    const sectionKeys = ['users','projects','settings','networks','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);
@@ -119,32 +119,13 @@ document.addEventListener('DOMContentLoaded', function() {
             if (storageAvailable) {
                 try { localStorage.setItem('pp-admin-section', sectionKey); } catch (_) { /* ignore */ }
             }
-            try {
-                // Notify listeners (e.g., crowd links panel) about section change
-                const evt = new CustomEvent('pp-admin-section-changed', { detail: { section: sectionKey } });
-                document.dispatchEvent(evt);
-            } catch (_) { /* no-op */ }
         }
         window.ppShowSection = show;
-        // Try to derive initial section from hash like #crowd-links-section
-        const keyFromHash = () => {
-            const h = (window.location.hash || '').replace(/^#/, '');
-            if (!h) return null;
-            return h.endsWith('-section') ? h.slice(0, -('-section'.length)) : null;
-        };
-        let initial = keyFromHash();
-        if (!initial || !sections[initial]) {
-            initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
-        }
+        let initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
         if (!initial || !sections[initial]) {
             initial = sections.users ? 'users' : (sections.projects ? 'projects' : (sections.settings ? 'settings' : (sections.networks ? 'networks' : Object.keys(sections).find(k => sections[k]))));
         }
         show(initial || 'users');
-        // Keep in sync with hash navigation
-        window.addEventListener('hashchange', () => {
-            const k = keyFromHash();
-            if (k && sections[k]) { show(k); }
-        });
     }
 
     // OpenAI key checker (admin settings)
@@ -333,63 +314,4 @@ document.addEventListener('DOMContentLoaded', function() {
             try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
         });
     }
-
-    // Global poller: show crowd links processing status in navbar across pages
-    (function initCrowdGlobalStatus(){
-        const li = document.getElementById('crowdGlobalStatus');
-        const api = (typeof window.PP_CROWD_API === 'string') ? window.PP_CROWD_API : '';
-        if (!li || !api) return;
-        let timer = null;
-        let visible = false;
-        function updateIndicator(run, inflight) {
-            const a = li.querySelector('a');
-            const textEl = li.querySelector('.crowd-text');
-            if (!a || !textEl) return;
-            if (!run || (run.status !== 'running' && run.status !== 'queued')) {
-                li.classList.add('d-none');
-                visible = false;
-                return;
-            }
-            const processed = run.processed || 0;
-            const total = run.total || 0;
-            const pct = total > 0 ? Math.min(100, Math.round((processed/total)*100)) : 0;
-            const runningNow = inflight && typeof inflight.runningNow === 'number' ? inflight.runningNow : 0;
-            const queuedNow = inflight && typeof inflight.queuedNow === 'number' ? inflight.queuedNow : 0;
-            const parts = [];
-            parts.push((run.status === 'running' ? '▶' : '⏳') + ' ' + pct + '%');
-            if (runningNow > 0) parts.push('⏱ ' + runningNow);
-            if (queuedNow > 0) parts.push('… ' + queuedNow);
-            textEl.textContent = parts.join(' · ');
-            if (!visible) {
-                li.classList.remove('d-none');
-                visible = true;
-            }
-        }
-        function poll() {
-            const url = api + '?action=status';
-            fetch(url, { credentials: 'same-origin' })
-                .then(r => r.json()).then(data => {
-                    if (!data || !data.ok) {
-                        li.classList.add('d-none');
-                        visible = false;
-                        return;
-                    }
-                    updateIndicator(data.run || null, data.inflight || null);
-                })
-                .catch(() => {
-                    li.classList.add('d-none');
-                    visible = false;
-                })
-                .finally(() => {
-                    timer = setTimeout(poll, document.visibilityState === 'visible' ? 4000 : 8000);
-                });
-        }
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                if (timer) clearTimeout(timer);
-                poll();
-            }
-        });
-        poll();
-    })();
 });

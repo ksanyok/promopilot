@@ -101,52 +101,6 @@ if (!function_exists('rmdir_recursive')) {
     }
 }
 
-// --- Generators for common form fields on platforms ---
-if (!function_exists('pp_generate_email')) {
-    function pp_generate_email(?string $seed = null, string $domain = 'example.com'): string {
-        $seed = $seed ?: bin2hex(random_bytes(4));
-        $local = strtolower(preg_replace('~[^a-z0-9]+~', '', $seed));
-        if ($local === '') { $local = 'user' . random_int(1000, 9999); }
-        return $local . '@' . $domain;
-    }
-}
-
-if (!function_exists('pp_generate_password')) {
-    function pp_generate_password(int $length = 12): string {
-        $length = max(8, min(64, $length));
-        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*()_+';
-        $pwd = '';
-        for ($i = 0; $i < $length; $i++) {
-            $pwd .= $alphabet[random_int(0, strlen($alphabet) - 1)];
-        }
-        return $pwd;
-    }
-}
-
-if (!function_exists('pp_generate_name')) {
-    function pp_generate_name(?string $seed = null): string {
-        $adjectives = ['Bright','Calm','Swift','Brave','Merry','Neat','Nimble','Sunny','Wise','Lively'];
-        $nouns = ['Fox','Otter','Pine','River','Hill','Leaf','Sky','Stone','Star','Dawn'];
-        $a = $adjectives[random_int(0, count($adjectives)-1)];
-        $n = $nouns[random_int(0, count($nouns)-1)];
-        $num = random_int(10, 99);
-        return "$a $n $num";
-    }
-}
-
-if (!function_exists('pp_generate_message')) {
-    function pp_generate_message(string $linkUrl, ?string $topic = null): string {
-        $topic = $topic ? trim($topic) : 'our project';
-        return "Hello! Check out $topic here: $linkUrl\nThanks for your feedback!";
-    }
-}
-
-if (!function_exists('pp_generate_website')) {
-    function pp_generate_website(string $base = 'https://example.com'): string {
-        $paths = ['/', '/blog', '/news', '/post/welcome', '/about', '/landing'];
-        return rtrim($base, '/') . $paths[random_int(0, count($paths)-1)];
-    }
-}
 // Base URL helpers
 if (!function_exists('pp_guess_base_url')) {
     function pp_guess_base_url(): string {

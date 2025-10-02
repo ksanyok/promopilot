@@ -13,8 +13,6 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KE
 $settingsMsg = '';
 $networksMsg = '';
 $diagnosticsMsg = '';
-$crowdMsg = '';
-$crowdSettingsMsg = '';
 $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
 // Extend settings keys: AI provider and Google OAuth
@@ -185,84 +183,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $diagnosticsMsg = __('Не удалось автоматически определить Chrome. Проверьте подсказки ниже и установите браузер в корне проекта.');
             }
         }
-    } elseif (isset($_POST['crowd_import_submit'])) {
-        if (!verify_csrf()) {
-            $crowdMsg = __('Ошибка импорта.') . ' (CSRF)';
-        } else {
-            $files = $_FILES['crowd_files'] ?? null;
-            $hasFile = false;
-            $urls = [];
-            $importErrors = [];
-            if ($files && isset($files['name'])) {
-                $fileNames = $files['name'];
-                $tmpNames = $files['tmp_name'];
-                $errorCodes = $files['error'];
-                $count = is_array($fileNames) ? count($fileNames) : 1;
-                for ($i = 0; $i < $count; $i++) {
-                    $name = is_array($fileNames) ? (string)$fileNames[$i] : (string)$fileNames;
-                    $tmp = is_array($tmpNames) ? (string)$tmpNames[$i] : (string)$tmpNames;
-                    $error = is_array($errorCodes) ? (int)$errorCodes[$i] : (int)$errorCodes;
-                    if ($name === '' && $tmp === '') {
-                        continue;
-                    }
-                    $hasFile = true;
-                    if ($error !== UPLOAD_ERR_OK || !is_uploaded_file($tmp)) {
-                        $importErrors[] = sprintf(__('Файл «%s» не удалось загрузить.'), $name !== '' ? $name : __('(без имени)'));
-                        continue;
-                    }
-                    $content = @file_get_contents($tmp);
-                    if ($content === false) {
-                        $importErrors[] = sprintf(__('Файл «%s» не удалось прочитать.'), $name !== '' ? $name : __('(без имени)'));
-                        continue;
-                    }
-                    $lines = preg_split("/\r?\n/", $content);
-                    foreach ($lines as $line) {
-                        $line = trim((string)$line);
-                        if ($line === '' || mb_strlen($line) < 3) {
-                            continue;
-                        }
-                        $urls[] = $line;
-                    }
-                }
-            }
-            if (!$hasFile) {
-                $crowdMsg = __('Выберите хотя бы один файл для импорта.');
-            } elseif (empty($urls)) {
-                $crowdMsg = __('Подходящих ссылок не найдено.');
-                if (!empty($importErrors)) {
-                    $crowdMsg .= ' ' . implode(' ', $importErrors);
-                }
-            } else {
-                $result = pp_crowd_links_insert_urls($urls);
-                if (!$result['ok']) {
-                    $crowdMsg = __('Импорт не выполнен: ошибка базы данных.');
-                } else {
-                    $crowdMsg = sprintf(
-                        __('Импорт завершён. Добавлено %d, дубликатов %d, отклонено %d.'),
-                        (int)$result['inserted'],
-                        (int)$result['duplicates'],
-                        (int)$result['invalid']
-                    );
-                    if (!empty($importErrors)) {
-                        $crowdMsg .= ' ' . implode(' ', $importErrors);
-                    }
-                }
-            }
-        }
-    } elseif (isset($_POST['crowd_settings_submit'])) {
-        if (!verify_csrf()) {
-            $crowdSettingsMsg = __('Ошибка сохранения.') . ' (CSRF)';
-        } else {
-            $concurrency = (int)($_POST['crowd_concurrency'] ?? 5);
-            $timeout = (int)($_POST['crowd_timeout'] ?? 25);
-            $concurrency = max(1, min(20, $concurrency));
-            $timeout = max(5, min(180, $timeout));
-            set_settings([
-                'crowd_concurrency' => (string)$concurrency,
-                'crowd_request_timeout' => (string)$timeout,
-            ]);
-            $crowdSettingsMsg = __('Настройки раздела сохранены.');
-        }
     }
 }
 
@@ -364,30 +284,6 @@ $diagnostics = [
     ['label' => __('OpenAI API Key настроен'), 'value' => $openAiConfigured ? __('Да') : __('Нет')],
     ['label' => __('Последнее обновление сетей'), 'value' => $networksLastRefresh],
 ];
-
-$crowdStats = pp_crowd_links_get_stats();
-$crowdStatusFilter = isset($_GET['crowd_status']) ? strtolower(trim((string)$_GET['crowd_status'])) : 'all';
-if ($crowdStatusFilter === '') { $crowdStatusFilter = 'all'; }
-$crowdSearch = isset($_GET['crowd_search']) ? trim((string)$_GET['crowd_search']) : '';
-$crowdPage = isset($_GET['crowd_page']) ? (int)$_GET['crowd_page'] : 1;
-if ($crowdPage < 1) { $crowdPage = 1; }
-$crowdPerPage = 25;
-$crowdList = pp_crowd_links_fetch_links($crowdPage, $crowdPerPage, [
-    'status' => $crowdStatusFilter,
-    'search' => $crowdSearch,
-]);
-$crowdLinks = $crowdList['rows'];
-$crowdTotalLinks = (int)($crowdList['total'] ?? 0);
-$crowdTotalPages = max(1, (int)ceil($crowdTotalLinks / $crowdPerPage));
-if ($crowdPage > $crowdTotalPages) { $crowdPage = $crowdTotalPages; }
-$crowdDefaultConcurrency = (int)get_setting('crowd_concurrency', 5);
-if ($crowdDefaultConcurrency < 1) { $crowdDefaultConcurrency = 5; }
-$crowdDefaultTimeout = (int)get_setting('crowd_request_timeout', 25);
-if ($crowdDefaultTimeout < 5) { $crowdDefaultTimeout = 25; }
-$crowdStatusData = pp_crowd_links_get_status(null, 30);
-$crowdCurrentRun = $crowdStatusData['ok'] ? ($crowdStatusData['run'] ?? null) : null;
-$crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? []) : [];
-
 ?>
 
 <?php include '../includes/header.php'; ?>
@@ -437,16 +333,6 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
                         <path d="M19 17l-5-4"/>
                     </svg>
                     <?php echo __('Сети'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('crowd-links')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <path d="M10 13a5 5 0 0 1 7-7l1 1"/>
-                        <path d="M14 11a5 5 0 0 1-7 7l-1-1"/>
-                        <line x1="8" y1="16" x2="16" y2="8"/>
-                    </svg>
-                    <?php echo __('Крауд ссылки'); ?>
                 </a>
             </li>
             <li>
@@ -512,8 +398,6 @@ $crowdCurrentResults = $crowdStatusData['ok'] ? ($crowdStatusData['results'] ?? 
 <?php include __DIR__ . '/partials/projects_section.php'; ?>
 
 <?php include __DIR__ . '/partials/settings_section.php'; ?>
-
-<?php include __DIR__ . '/partials/crowd_links_section.php'; ?>
 
 <?php include __DIR__ . '/partials/networks_section.php'; ?>
 

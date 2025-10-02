@@ -76,7 +76,7 @@ if (!function_exists('pp_network_check_launch_worker')) {
     function pp_network_check_launch_worker(int $runId): bool {
         $script = PP_ROOT_PATH . '/scripts/network_check_worker.php';
         if (!is_file($script)) { return false; }
-    $phpBinary = function_exists('pp_get_php_cli') ? pp_get_php_cli() : (PHP_BINARY ?: 'php');
+        $phpBinary = PHP_BINARY ?: 'php';
         $runId = max(1, $runId);
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         if ($isWindows) {
@@ -86,21 +86,13 @@ if (!function_exists('pp_network_check_launch_worker')) {
             return false;
         }
         $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-    pp_network_check_log('Launching network check worker', ['runId' => $runId, 'command' => $cmd, 'phpBinary' => $phpBinary, 'phpSapi' => PHP_SAPI, 'cwd' => getcwd(), 'root' => PP_ROOT_PATH]);
+        pp_network_check_log('Launching network check worker', ['runId' => $runId, 'command' => $cmd, 'phpBinary' => $phpBinary]);
         if (function_exists('popen')) {
             $handle = @popen($cmd, 'r');
             if (is_resource($handle)) { @pclose($handle); return true; }
         }
-        if (function_exists('exec')) { @exec($cmd); return true; }
-        $descriptor = [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']];
-        $proc = @proc_open(escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId, $descriptor, $pipes, PP_ROOT_PATH);
-        if (is_resource($proc)) {
-            foreach ($pipes as $p) { if (is_resource($p)) { @fclose($p); } }
-            @proc_close($proc);
-            pp_network_check_log('Worker started via proc_open fallback', ['runId' => $runId, 'phpBinary' => $phpBinary]);
-            return true;
-        }
-        return false;
+        @exec($cmd);
+        return true;
     }
 }
 
