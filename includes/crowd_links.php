@@ -206,23 +206,29 @@ if (!function_exists('pp_crowd_links_import_files')) {
                 $result['errors'][] = sprintf(__('Не удалось открыть файл %s.'), htmlspecialchars($name, ENT_QUOTES, 'UTF-8'));
                 continue;
             }
-            while (!feof($handle)) {
-                $line = fgets($handle);
-                if ($line === false) {
-                    break;
+            $rowIndex = 0;
+            while (($rawColumns = fgetcsv($handle)) !== false) {
+                $rowIndex++;
+                if ($rawColumns === null) {
+                    continue;
                 }
-                $line = trim($line);
-                if ($line === '') {
+                if (count($rawColumns) === 1 && ($rawColumns[0] === null || trim((string)$rawColumns[0]) === '')) {
                     continue;
                 }
 
-                $rawColumns = str_getcsv($line);
-                if (count($rawColumns) <= 1 && strpos($line, ';') !== false) {
-                    $rawColumns = str_getcsv($line, ';');
+                if ($rowIndex === 1 && isset($rawColumns[0]) && is_string($rawColumns[0])) {
+                    $rawColumns[0] = preg_replace('/^\xEF\xBB\xBF/u', '', $rawColumns[0]);
                 }
-                if (!$rawColumns) { $rawColumns = [$line]; }
 
-                $urlCandidate = trim((string)($rawColumns[0] ?? ''));
+                if (count($rawColumns) === 1 && strpos((string)$rawColumns[0], ';') !== false) {
+                    $rawColumns = str_getcsv((string)$rawColumns[0], ';');
+                }
+
+                $rawColumns = array_map(static function ($value) {
+                    return is_string($value) ? trim($value) : $value;
+                }, $rawColumns);
+
+                $urlCandidate = (string)($rawColumns[0] ?? '');
                 if ($urlCandidate === '' || strtolower($urlCandidate) === 'url') {
                     continue;
                 }
