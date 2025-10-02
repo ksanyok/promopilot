@@ -16,6 +16,7 @@ require_once __DIR__ . '/network_check.php';   // Network diagnostics helpers
 require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base url, small utils)
 require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
 require_once __DIR__ . '/networks.php';        // Networks registry and utilities
+require_once __DIR__ . '/crowd_links.php';     // Crowd marketing links management
 require_once __DIR__ . '/page_meta.php';       // Page meta + URL analysis helpers
 require_once __DIR__ . '/publication_queue.php'; // Publication queue processing
 require_once __DIR__ . '/update.php';          // Version and update checks
@@ -400,6 +401,121 @@ function ensure_schema(): void {
         }
         if (pp_mysql_index_exists($conn, 'network_check_results', 'idx_nc_results_network') === false) {
             @$conn->query("CREATE INDEX `idx_nc_results_network` ON `network_check_results`(`network_slug`)");
+        }
+    }
+
+    // Crowd marketing links storage
+    $crowdCols = $getCols('crowd_links');
+    if (empty($crowdCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `crowd_links` (
+            `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            `url` TEXT NOT NULL,
+            `url_hash` CHAR(40) NOT NULL,
+            `domain` VARCHAR(255) NOT NULL,
+            `language` VARCHAR(16) NULL,
+            `region` VARCHAR(16) NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+            `status_code` SMALLINT NULL DEFAULT NULL,
+            `error` TEXT NULL,
+            `processing_run_id` INT NULL,
+            `last_run_id` INT NULL,
+            `last_checked_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_crowd_links_hash` (`url_hash`),
+            INDEX `idx_crowd_links_domain` (`domain`(191)),
+            INDEX `idx_crowd_links_status` (`status`),
+            INDEX `idx_crowd_links_processing` (`processing_run_id`),
+            INDEX `idx_crowd_links_last_run` (`last_run_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddCrowd = static function(string $field, string $ddl) use ($crowdCols, $conn) {
+            if (!isset($crowdCols[$field])) {
+                @$conn->query("ALTER TABLE `crowd_links` {$ddl}");
+            }
+        };
+        $maybeAddCrowd('url_hash', "ADD COLUMN `url_hash` CHAR(40) NOT NULL AFTER `url`");
+        $maybeAddCrowd('domain', "ADD COLUMN `domain` VARCHAR(255) NOT NULL AFTER `url_hash`");
+        $maybeAddCrowd('language', "ADD COLUMN `language` VARCHAR(16) NULL AFTER `domain`");
+        $maybeAddCrowd('region', "ADD COLUMN `region` VARCHAR(16) NULL AFTER `language`");
+        $maybeAddCrowd('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER `region`");
+        $maybeAddCrowd('status_code', "ADD COLUMN `status_code` SMALLINT NULL DEFAULT NULL AFTER `status`");
+        $maybeAddCrowd('error', "ADD COLUMN `error` TEXT NULL AFTER `status_code`");
+        $maybeAddCrowd('processing_run_id', "ADD COLUMN `processing_run_id` INT NULL AFTER `error`");
+        $maybeAddCrowd('last_run_id', "ADD COLUMN `last_run_id` INT NULL AFTER `processing_run_id`");
+        $maybeAddCrowd('last_checked_at', "ADD COLUMN `last_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_run_id`");
+        $maybeAddCrowd('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `last_checked_at`");
+        $maybeAddCrowd('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        $crowdCols = $getCols('crowd_links');
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'uniq_crowd_links_hash') === false && isset($crowdCols['url_hash'])) {
+            @$conn->query("CREATE UNIQUE INDEX `uniq_crowd_links_hash` ON `crowd_links`(`url_hash`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_domain') === false && isset($crowdCols['domain'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_domain` ON `crowd_links`(`domain`(191))");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_status') === false && isset($crowdCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_status` ON `crowd_links`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_processing') === false && isset($crowdCols['processing_run_id'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_processing` ON `crowd_links`(`processing_run_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_last_run') === false && isset($crowdCols['last_run_id'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_last_run` ON `crowd_links`(`last_run_id`)");
+        }
+    }
+
+    $crowdRunCols = $getCols('crowd_link_runs');
+    if (empty($crowdRunCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `crowd_link_runs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `scope` VARCHAR(20) NOT NULL DEFAULT 'all',
+            `total_links` INT NOT NULL DEFAULT 0,
+            `processed_count` INT NOT NULL DEFAULT 0,
+            `ok_count` INT NOT NULL DEFAULT 0,
+            `redirect_count` INT NOT NULL DEFAULT 0,
+            `client_error_count` INT NOT NULL DEFAULT 0,
+            `server_error_count` INT NOT NULL DEFAULT 0,
+            `unreachable_count` INT NOT NULL DEFAULT 0,
+            `initiated_by` INT NULL,
+            `notes` TEXT NULL,
+            `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `last_activity_at` TIMESTAMP NULL DEFAULT NULL,
+            INDEX `idx_crowd_runs_status` (`status`),
+            INDEX `idx_crowd_runs_created` (`created_at`),
+            CONSTRAINT `fk_crowd_runs_user` FOREIGN KEY (`initiated_by`) REFERENCES `users`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddRun = static function(string $field, string $ddl) use ($crowdRunCols, $conn) {
+            if (!isset($crowdRunCols[$field])) {
+                @$conn->query("ALTER TABLE `crowd_link_runs` {$ddl}");
+            }
+        };
+        $maybeAddRun('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'queued'");
+        $maybeAddRun('scope', "ADD COLUMN `scope` VARCHAR(20) NOT NULL DEFAULT 'all' AFTER `status`");
+        $maybeAddRun('total_links', "ADD COLUMN `total_links` INT NOT NULL DEFAULT 0 AFTER `scope`");
+        $maybeAddRun('processed_count', "ADD COLUMN `processed_count` INT NOT NULL DEFAULT 0 AFTER `total_links`");
+        $maybeAddRun('ok_count', "ADD COLUMN `ok_count` INT NOT NULL DEFAULT 0 AFTER `processed_count`");
+        $maybeAddRun('redirect_count', "ADD COLUMN `redirect_count` INT NOT NULL DEFAULT 0 AFTER `ok_count`");
+        $maybeAddRun('client_error_count', "ADD COLUMN `client_error_count` INT NOT NULL DEFAULT 0 AFTER `redirect_count`");
+        $maybeAddRun('server_error_count', "ADD COLUMN `server_error_count` INT NOT NULL DEFAULT 0 AFTER `client_error_count`");
+        $maybeAddRun('unreachable_count', "ADD COLUMN `unreachable_count` INT NOT NULL DEFAULT 0 AFTER `server_error_count`");
+        $maybeAddRun('initiated_by', "ADD COLUMN `initiated_by` INT NULL AFTER `unreachable_count`");
+        $maybeAddRun('notes', "ADD COLUMN `notes` TEXT NULL AFTER `initiated_by`");
+        $maybeAddRun('cancel_requested', "ADD COLUMN `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `notes`");
+        $maybeAddRun('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `cancel_requested`");
+        $maybeAddRun('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `created_at`");
+        $maybeAddRun('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $maybeAddRun('last_activity_at', "ADD COLUMN `last_activity_at` TIMESTAMP NULL DEFAULT NULL AFTER `finished_at`");
+        $crowdRunCols = $getCols('crowd_link_runs');
+        if (pp_mysql_index_exists($conn, 'crowd_link_runs', 'idx_crowd_runs_status') === false && isset($crowdRunCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_runs_status` ON `crowd_link_runs`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_link_runs', 'idx_crowd_runs_created') === false && isset($crowdRunCols['created_at'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_runs_created` ON `crowd_link_runs`(`created_at`)");
         }
     }
 

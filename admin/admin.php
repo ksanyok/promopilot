@@ -13,6 +13,8 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KE
 $settingsMsg = '';
 $networksMsg = '';
 $diagnosticsMsg = '';
+$crowdMsg = '';
+$crowdImportSummary = null;
 $allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
 $settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
 // Extend settings keys: AI provider and Google OAuth
@@ -171,6 +173,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $networksMsg = $msg;
             }
         }
+    } elseif (isset($_POST['crowd_import'])) {
+        if (!verify_csrf()) {
+            $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            try {
+                $crowdImportSummary = pp_crowd_links_import_files($_FILES['crowd_files'] ?? []);
+                if (!empty($crowdImportSummary['ok'])) {
+                    $crowdMsg = sprintf(
+                        __('Импорт завершён. Добавлено: %1$d, дубликатов: %2$d, пропущено: %3$d.'),
+                        (int)($crowdImportSummary['imported'] ?? 0),
+                        (int)($crowdImportSummary['duplicates'] ?? 0),
+                        (int)($crowdImportSummary['invalid'] ?? 0)
+                    );
+                } else {
+                    $errors = (array)($crowdImportSummary['errors'] ?? []);
+                    $crowdMsg = !empty($errors) ? implode(' ', $errors) : __('Не удалось выполнить импорт ссылок.');
+                }
+            } catch (Throwable $e) {
+                $crowdMsg = __('Не удалось выполнить импорт ссылок.');
+            }
+        }
+    } elseif (isset($_POST['crowd_clear_all'])) {
+        if (!verify_csrf()) {
+            $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $deleted = pp_crowd_links_delete_all();
+            $crowdMsg = $deleted > 0
+                ? sprintf(__('Удалено %d ссылок.'), $deleted)
+                : __('Ссылки не были удалены.');
+        }
+    } elseif (isset($_POST['crowd_delete_errors'])) {
+        if (!verify_csrf()) {
+            $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $deleted = pp_crowd_links_delete_errors();
+            $crowdMsg = $deleted > 0
+                ? sprintf(__('Удалено ссылок с ошибками: %d.'), $deleted)
+                : __('Не найдено ссылок с ошибками.');
+        }
+    } elseif (isset($_POST['crowd_delete_selected'])) {
+        if (!verify_csrf()) {
+            $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $selected = $_POST['crowd_selected'] ?? [];
+            if (!is_array($selected)) {
+                $selected = [$selected];
+            }
+            $deleted = pp_crowd_links_delete_selected($selected);
+            $crowdMsg = $deleted > 0
+                ? sprintf(__('Удалено выбранных ссылок: %d.'), $deleted)
+                : __('Не удалось удалить выбранные ссылки.');
+        }
     } elseif (isset($_POST['detect_chrome'])) {
         if (!verify_csrf()) {
             $diagnosticsMsg = __('Ошибка обновления.') . ' (CSRF)';
@@ -284,6 +338,32 @@ $diagnostics = [
     ['label' => __('OpenAI API Key настроен'), 'value' => $openAiConfigured ? __('Да') : __('Нет')],
     ['label' => __('Последнее обновление сетей'), 'value' => $networksLastRefresh],
 ];
+
+$crowdFilters = [
+    'page' => max(1, (int)($_GET['crowd_page'] ?? 1)),
+    'per_page' => (int)($_GET['crowd_per_page'] ?? 25),
+    'group' => (string)($_GET['crowd_group'] ?? 'links'),
+    'status' => (string)($_GET['crowd_status'] ?? ''),
+    'domain' => trim((string)($_GET['crowd_domain'] ?? '')),
+    'language' => trim((string)($_GET['crowd_language'] ?? '')),
+    'region' => trim((string)($_GET['crowd_region'] ?? '')),
+    'search' => trim((string)($_GET['crowd_search'] ?? '')),
+    'order' => (string)($_GET['crowd_order'] ?? 'recent'),
+];
+if ($crowdFilters['per_page'] < 10) { $crowdFilters['per_page'] = 10; }
+if ($crowdFilters['per_page'] > 200) { $crowdFilters['per_page'] = 200; }
+$crowdFilters['group'] = in_array($crowdFilters['group'], ['links','domains'], true) ? $crowdFilters['group'] : 'links';
+$crowdFilters['status'] = trim($crowdFilters['status']);
+$crowdFilters['order'] = in_array($crowdFilters['order'], ['recent','oldest','status','domain','checked'], true) ? $crowdFilters['order'] : 'recent';
+
+$crowdList = pp_crowd_links_list($crowdFilters);
+$crowdStats = pp_crowd_links_get_stats();
+$crowdStatusMeta = pp_crowd_links_status_meta();
+$crowdScopeOptions = pp_crowd_links_scope_options();
+$crowdStatusData = pp_crowd_links_get_status();
+$crowdCurrentRun = ($crowdStatusData['ok'] ?? false) ? ($crowdStatusData['run'] ?? null) : null;
+$crowdStatusError = ($crowdStatusData['ok'] ?? false) ? null : ($crowdStatusData['error'] ?? null);
+$crowdSelectedIds = isset($_POST['crowd_selected']) && is_array($_POST['crowd_selected']) ? array_values($_POST['crowd_selected']) : [];
 ?>
 
 <?php include '../includes/header.php'; ?>
@@ -333,6 +413,17 @@ $diagnostics = [
                         <path d="M19 17l-5-4"/>
                     </svg>
                     <?php echo __('Сети'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="#" class="menu-item" onclick="ppShowSection('crowd')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
+                        <path d="M7 11a3 3 0 1 1 3-3"/>
+                        <path d="M17 11a3 3 0 1 0-3-3"/>
+                        <path d="M2 21c0-3 3-6 6-6s6 3 6 6"/>
+                        <path d="M10 21c0-3 3-6 6-6s6 3 6 6"/>
+                    </svg>
+                    <?php echo __('Крауд маркетинг'); ?>
                 </a>
             </li>
             <li>
@@ -398,6 +489,8 @@ $diagnostics = [
 <?php include __DIR__ . '/partials/projects_section.php'; ?>
 
 <?php include __DIR__ . '/partials/settings_section.php'; ?>
+
+<?php include __DIR__ . '/partials/crowd_links_section.php'; ?>
 
 <?php include __DIR__ . '/partials/networks_section.php'; ?>
 
