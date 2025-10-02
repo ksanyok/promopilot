@@ -1063,11 +1063,14 @@ if (!function_exists('pp_crowd_links_process_run')) {
             }
             return false;
         };
-        $parallelLimit = 12;
-        $httpTimeout = 18;
-        if ($parallelLimit > 20) { $parallelLimit = 20; }
-        $batchSize = max($parallelLimit * 4, 40);
-        if ($batchSize > 200) { $batchSize = 200; }
+    $parallelLimit = 12;
+    $httpTimeout = 18;
+    $minParallel = 6;
+    $maxParallel = 24;
+    if ($parallelLimit < $minParallel) { $parallelLimit = $minParallel; }
+    if ($parallelLimit > $maxParallel) { $parallelLimit = $maxParallel; }
+    $batchSize = max($parallelLimit * 4, 40);
+    if ($batchSize > 200) { $batchSize = 200; }
 
         $updateStmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
         if ($updateStmt) {
@@ -1083,12 +1086,21 @@ if (!function_exists('pp_crowd_links_process_run')) {
         }
 
         $cancelled = false;
-        foreach (array_chunk($links, $batchSize) as $chunk) {
+        $totalLinks = count($links);
+        $offset = 0;
+        $chunkIndex = 0;
+        while ($offset < $totalLinks) {
+            $chunkIndex++;
+            $currentBatchSize = min($batchSize, $totalLinks - $offset);
+            $chunk = array_slice($links, $offset, $currentBatchSize);
+            $offset += $currentBatchSize;
+
             if ($checkCancel($conn, $runId)) {
                 $cancelled = true;
                 break;
             }
 
+            $chunkStart = microtime(true);
             $chunkIds = array_column($chunk, 'id');
             if (!empty($chunkIds)) {
                 $idList = implode(',', array_map('intval', $chunkIds));
@@ -1097,6 +1109,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
 
             $responses = pp_crowd_links_fetch_parallel($chunk, $httpTimeout, $parallelLimit);
 
+            $chunkTimeouts = 0;
+            $chunkUnreachables = 0;
             foreach ($chunk as $item) {
                 $linkId = (int)$item['id'];
                 $url = (string)$item['url'];
@@ -1124,13 +1138,20 @@ if (!function_exists('pp_crowd_links_process_run')) {
                         $errorText = sprintf(__('Неожиданный статус HTTP %d'), $statusCode);
                     } elseif ($curlError !== '') {
                         $errorText = $curlError;
+                        if (stripos($curlError, 'timed out') !== false || stripos($curlError, 'timeout') !== false) {
+                            $chunkTimeouts++;
+                        }
                     } else {
                         $errorText = __('Сайт недоступен или превышено время ожидания.');
+                    }
+                    if ($statusCode <= 0) {
+                        $chunkUnreachables++;
                     }
                 }
                 if ($body === '' && $newStatus === 'ok') {
                     $newStatus = 'unreachable';
                     $errorText = __('Получен пустой ответ от сервера.');
+                    $chunkUnreachables++;
                 }
                 $langRegion = ['language' => '', 'region' => ''];
                 if ($newStatus === 'ok' && $body !== '') {
@@ -1166,6 +1187,20 @@ if (!function_exists('pp_crowd_links_process_run')) {
             }
 
             pp_crowd_links_update_run_counts($conn, $runId, $counts, 'running');
+
+            $chunkDuration = microtime(true) - $chunkStart;
+            $timeoutRatio = $currentBatchSize > 0 ? ($chunkTimeouts / $currentBatchSize) : 0.0;
+            $unreachableRatio = $currentBatchSize > 0 ? ($chunkUnreachables / $currentBatchSize) : 0.0;
+            if ($chunkDuration < 4.5 && $timeoutRatio < 0.05 && $parallelLimit < $maxParallel) {
+                $parallelLimit += 2;
+                if ($parallelLimit > $maxParallel) { $parallelLimit = $maxParallel; }
+                pp_crowd_links_log('Adaptive concurrency increase', ['runId' => $runId, 'chunk' => $chunkIndex, 'parallel' => $parallelLimit, 'duration' => $chunkDuration]);
+            } elseif (($chunkDuration > 18.0 || $timeoutRatio > 0.2 || $unreachableRatio > 0.4) && $parallelLimit > $minParallel) {
+                $parallelLimit = max($minParallel, $parallelLimit - 2);
+                pp_crowd_links_log('Adaptive concurrency decrease', ['runId' => $runId, 'chunk' => $chunkIndex, 'parallel' => $parallelLimit, 'duration' => $chunkDuration, 'timeouts' => $chunkTimeouts, 'unreachables' => $chunkUnreachables]);
+            }
+            $batchSize = max($parallelLimit * 4, 40);
+            if ($batchSize > 200) { $batchSize = 200; }
 
             if ($checkCancel($conn, $runId)) {
                 $cancelled = true;
