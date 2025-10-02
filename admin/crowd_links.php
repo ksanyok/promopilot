@@ -142,5 +142,89 @@ if ($action === 'cancel') {
     exit;
 }
 
+if ($action === 'deep_start') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['ok' => false, 'error' => 'METHOD_NOT_ALLOWED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (!verify_csrf()) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'CSRF'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $scope = (string)($_POST['scope'] ?? 'all');
+    $selectedRaw = isset($_POST['ids']) ? (array)$_POST['ids'] : [];
+    $selected = [];
+    foreach ($selectedRaw as $value) {
+        $value = (int)$value;
+        if ($value > 0) {
+            $selected[] = $value;
+        }
+    }
+    $options = [
+        'message_template' => $_POST['message_template'] ?? null,
+        'message_link' => $_POST['message_link'] ?? null,
+        'name' => $_POST['name'] ?? null,
+        'company' => $_POST['company'] ?? null,
+        'email_user' => $_POST['email_user'] ?? null,
+        'email_domain' => $_POST['email_domain'] ?? null,
+        'phone' => $_POST['phone'] ?? null,
+        'token_prefix' => $_POST['token_prefix'] ?? null,
+    ];
+    $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
+    $result = pp_crowd_deep_start_check($userId ?: null, $scope, $selected, $options);
+    if (!$result['ok']) {
+        http_response_code(400);
+    }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'deep_status') {
+    $runId = isset($_GET['run_id']) ? (int)$_GET['run_id'] : null;
+    $result = pp_crowd_deep_get_status($runId);
+    if (!$result['ok']) {
+        http_response_code(400);
+    }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'deep_cancel') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['ok' => false, 'error' => 'METHOD_NOT_ALLOWED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (!verify_csrf()) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'CSRF'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $runId = isset($_POST['run_id']) ? (int)$_POST['run_id'] : null;
+    $force = !empty($_POST['force']);
+    $result = pp_crowd_deep_cancel($runId, $force);
+    if (!$result['ok']) {
+        http_response_code(400);
+    }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'deep_results') {
+    $runId = isset($_GET['run_id']) ? (int)$_GET['run_id'] : 0;
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
+    if ($runId <= 0) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'RUN_ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $data = pp_crowd_deep_fetch_results($runId, $limit, $offset);
+    echo json_encode(['ok' => true, 'items' => $data['items'], 'total' => $data['total']], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 echo json_encode(['ok' => false, 'error' => 'UNKNOWN_ACTION'], JSON_UNESCAPED_UNICODE);
 exit;

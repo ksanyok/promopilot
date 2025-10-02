@@ -115,8 +115,75 @@ if ($hasRun) {
 }
 $runPercentText = $runTotal > 0 ? ($runProgress . '%') : '—';
 $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
+
+$crowdDeepStatusLabels = [];
+foreach ($crowdDeepStatusMeta as $key => $meta) {
+    $crowdDeepStatusLabels[$key] = $meta['label'] ?? $key;
+}
+
+$crowdDeepStatusClasses = [];
+foreach ($crowdDeepStatusMeta as $key => $meta) {
+    $crowdDeepStatusClasses[$key] = $meta['class'] ?? 'badge bg-secondary';
+}
+
+$crowdDeepScopeLabels = [];
+foreach ($crowdDeepScopeOptions as $scopeKey => $scopeLabel) {
+    $crowdDeepScopeLabels[$scopeKey] = $scopeLabel;
+}
+
+$deepApiUrl = pp_url('admin/crowd_links.php');
+$deepHasRun = is_array($crowdDeepCurrentRun);
+$deepRunInProgress = $deepHasRun && !empty($crowdDeepCurrentRun['in_progress']);
+$deepRunStatusLabel = '—';
+$deepRunScopeLabel = '—';
+$deepRunProgress = 0;
+$deepRunProcessed = 0;
+$deepRunTotal = 0;
+$deepRunSuccess = 0;
+$deepRunPartial = 0;
+$deepRunFailed = 0;
+$deepRunSkipped = 0;
+$deepRunStartedAt = '—';
+$deepRunFinishedAt = '—';
+$deepRunNotes = __('Глубокая проверка ещё не запускалась');
+$deepRunId = $deepHasRun ? (int)$crowdDeepCurrentRun['id'] : 0;
+if ($deepHasRun) {
+    $deepRunStatusLabel = $crowdDeepStatusLabels[$crowdDeepCurrentRun['status']] ?? (string)$crowdDeepCurrentRun['status'];
+    $deepRunScopeLabel = $crowdDeepScopeLabels[$crowdDeepCurrentRun['scope']] ?? (string)$crowdDeepCurrentRun['scope'];
+    $deepRunProgress = (int)($crowdDeepCurrentRun['progress_percent'] ?? 0);
+    $deepRunProcessed = (int)($crowdDeepCurrentRun['processed_count'] ?? 0);
+    $deepRunTotal = (int)($crowdDeepCurrentRun['total_links'] ?? 0);
+    $deepRunSuccess = (int)($crowdDeepCurrentRun['success_count'] ?? 0);
+    $deepRunPartial = (int)($crowdDeepCurrentRun['partial_count'] ?? 0);
+    $deepRunFailed = (int)($crowdDeepCurrentRun['failed_count'] ?? 0);
+    $deepRunSkipped = (int)($crowdDeepCurrentRun['skipped_count'] ?? 0);
+    $deepRunStartedAt = (string)($crowdDeepCurrentRun['started_at'] ?? '—');
+    $deepRunFinishedAt = (string)($crowdDeepCurrentRun['finished_at'] ?? '—');
+    if ($deepRunStartedAt === '' || $deepRunStartedAt === '0000-00-00 00:00:00') { $deepRunStartedAt = '—'; }
+    if ($deepRunFinishedAt === '' || $deepRunFinishedAt === '0000-00-00 00:00:00') { $deepRunFinishedAt = '—'; }
+    $deepRunNotesRaw = (string)($crowdDeepCurrentRun['notes'] ?? '');
+    $deepRunNotes = $deepRunNotesRaw !== '' ? $deepRunNotesRaw : '—';
+}
+$deepRunPercentText = $deepRunTotal > 0 ? ($deepRunProgress . '%') : '—';
+$deepRunCountSummary = $deepRunTotal > 0 ? ($deepRunProcessed . '/' . $deepRunTotal) : '—';
+$deepRecentItems = is_array($crowdDeepRecentResults) ? $crowdDeepRecentResults : [];
+$deepFormTemplate = $deepHasRun ? (string)($crowdDeepCurrentRun['message_template'] ?? '') : (string)($crowdDeepDefaults['message_template'] ?? '');
+if ($deepFormTemplate === '') { $deepFormTemplate = (string)($crowdDeepDefaults['message_template'] ?? ''); }
+$deepFormLink = $deepHasRun ? (string)($crowdDeepCurrentRun['message_url'] ?? '') : (string)($crowdDeepDefaults['message_link'] ?? '');
+if ($deepFormLink === '') { $deepFormLink = (string)($crowdDeepDefaults['message_link'] ?? ''); }
+$deepFormName = (string)($crowdDeepDefaults['name'] ?? '');
+$deepFormCompany = (string)($crowdDeepDefaults['company'] ?? '');
+$deepFormEmailUser = (string)($crowdDeepDefaults['email_user'] ?? '');
+$deepFormEmailDomain = (string)($crowdDeepDefaults['email_domain'] ?? '');
+$deepFormPhone = (string)($crowdDeepDefaults['phone'] ?? '');
+$deepFormTokenPrefix = $deepHasRun ? (string)($crowdDeepCurrentRun['token_prefix'] ?? '') : (string)($crowdDeepDefaults['token_prefix'] ?? '');
+if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDefaults['token_prefix'] ?? ''); }
 ?>
-<div id="crowd-section" style="display:none;" data-crowd-api="<?php echo htmlspecialchars($apiUrl, ENT_QUOTES, 'UTF-8'); ?>">
+<div id="crowd-section" style="display:none;"
+    data-crowd-api="<?php echo htmlspecialchars($apiUrl, ENT_QUOTES, 'UTF-8'); ?>"
+    data-crowd-deep-api="<?php echo htmlspecialchars($deepApiUrl, ENT_QUOTES, 'UTF-8'); ?>"
+    data-crowd-deep-run-id="<?php echo $deepHasRun ? (int)$crowdDeepCurrentRun['id'] : ''; ?>"
+    data-crowd-deep-active="<?php echo $deepRunInProgress ? '1' : '0'; ?>">
     <div class="crowd-header mb-4 d-flex flex-wrap align-items-center justify-content-between gap-3">
         <h3 class="crowd-title d-flex align-items-center gap-2 mb-0">
             <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill"><i class="bi bi-people-fill me-1"></i><?php echo __('Крауд маркетинг'); ?></span>
@@ -305,6 +372,192 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         </div>
     </div>
 
+    <div class="card crowd-panel crowd-panel--deep shadow-sm border-0 mb-4" id="crowdDeepCard"
+         data-run-id="<?php echo $deepRunId ?: ''; ?>"
+         data-run-active="<?php echo $deepRunInProgress ? '1' : '0'; ?>">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h5 class="card-title mb-0 d-flex align-items-center gap-2">
+                        <i class="bi bi-search-heart text-danger"></i>
+                        <span><?php echo __('Глубокая проверка публикаций'); ?></span>
+                    </h5>
+                    <p class="text-muted small mb-0"><?php echo __('Автоматически отправляет тестовое сообщение, ищет опубликованный текст и фиксирует результат.'); ?></p>
+                </div>
+                <i class="bi bi-bullseye text-danger fs-4"></i>
+            </div>
+
+            <?php if (!empty($crowdDeepStatusError)): ?>
+                <div class="alert alert-warning mb-3"><?php echo __('Не удалось загрузить статус глубокой проверки.'); ?> (<?php echo htmlspecialchars((string)$crowdDeepStatusError, ENT_QUOTES, 'UTF-8'); ?>)</div>
+            <?php endif; ?>
+
+            <div id="crowdDeepMessage" class="small text-muted mb-3" role="status"></div>
+
+            <div class="row g-4">
+                <div class="col-lg-7">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="crowdDeepScope" class="form-label"><?php echo __('Диапазон'); ?></label>
+                            <select class="form-select" id="crowdDeepScope">
+                                <?php foreach ($crowdDeepScopeOptions as $scopeKey => $scopeLabel): ?>
+                                    <option value="<?php echo htmlspecialchars($scopeKey, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($scopeLabel, ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="crowdDeepTokenPrefix" class="form-label"><?php echo __('Префикс токена'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepTokenPrefix" value="<?php echo htmlspecialchars($deepFormTokenPrefix, ENT_QUOTES, 'UTF-8'); ?>" maxlength="12" autocomplete="off">
+                            <div class="form-text"><?php echo __('Используется для идентификации отправленного сообщения.'); ?></div>
+                        </div>
+                        <div class="col-md-12">
+                            <label for="crowdDeepMessageLink" class="form-label"><?php echo __('Ссылка в сообщении'); ?></label>
+                            <input type="url" class="form-control" id="crowdDeepMessageLink" value="<?php echo htmlspecialchars($deepFormLink, ENT_QUOTES, 'UTF-8'); ?>" placeholder="https://example.com/">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="crowdDeepName" class="form-label"><?php echo __('Имя отправителя'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepName" value="<?php echo htmlspecialchars($deepFormName, ENT_QUOTES, 'UTF-8'); ?>">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="crowdDeepCompany" class="form-label"><?php echo __('Компания'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepCompany" value="<?php echo htmlspecialchars($deepFormCompany, ENT_QUOTES, 'UTF-8'); ?>">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="crowdDeepEmailUser" class="form-label"><?php echo __('Email (логин)'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepEmailUser" value="<?php echo htmlspecialchars($deepFormEmailUser, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="crowdDeepEmailDomain" class="form-label"><?php echo __('Email (домен)'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepEmailDomain" value="<?php echo htmlspecialchars($deepFormEmailDomain, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="crowdDeepPhone" class="form-label"><?php echo __('Телефон'); ?></label>
+                            <input type="text" class="form-control" id="crowdDeepPhone" value="<?php echo htmlspecialchars($deepFormPhone, ENT_QUOTES, 'UTF-8'); ?>">
+                        </div>
+                        <div class="col-md-12">
+                            <label for="crowdDeepTemplate" class="form-label"><?php echo __('Шаблон сообщения'); ?></label>
+                            <textarea class="form-control" id="crowdDeepTemplate" rows="4" placeholder="{{token}} {{link}}"><?php echo htmlspecialchars($deepFormTemplate, ENT_QUOTES, 'UTF-8'); ?></textarea>
+                            <div class="form-text"><?php echo __('Поддерживаются плейсхолдеры {{token}} и {{link}}.'); ?></div>
+                        </div>
+                        <div class="col-12 d-flex gap-2">
+                            <button type="button" class="btn btn-danger flex-grow-1" id="crowdDeepStart">
+                                <span class="label-text"><i class="bi bi-broadcast-pin me-1"></i><?php echo __('Запустить глубокую проверку'); ?></span>
+                                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" id="crowdDeepCancel" <?php echo $deepRunInProgress ? '' : 'disabled'; ?>>
+                                <span class="label-text"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></span>
+                                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="crowd-status-card rounded-3 p-3" id="crowdDeepStatusCard">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <div class="text-muted small"><?php echo __('Статус'); ?></div>
+                                <div class="fw-semibold" data-deep-status><?php echo htmlspecialchars($deepRunStatusLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                            </div>
+                            <div class="text-end">
+                                <div class="text-muted small"><?php echo __('Диапазон'); ?></div>
+                                <div class="fw-semibold" data-deep-scope><?php echo htmlspecialchars($deepRunScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                            </div>
+                        </div>
+                        <div class="progress mb-2" style="height: 10px;">
+                            <div class="progress-bar bg-danger" id="crowdDeepProgressBar" role="progressbar" style="width: <?php echo (int)$deepRunProgress; ?>%;" aria-valuenow="<?php echo (int)$deepRunProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                        <div class="d-flex justify-content-between small mb-2">
+                            <div><span data-deep-processed><?php echo $deepRunProcessed; ?></span>/<span data-deep-total><?php echo $deepRunTotal; ?></span></div>
+                            <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-deep-success><?php echo $deepRunSuccess; ?></span></div>
+                            <div class="text-warning"><i class="bi bi-question-circle me-1"></i><span data-deep-partial><?php echo $deepRunPartial; ?></span></div>
+                            <div class="text-danger"><i class="bi bi-x-circle me-1"></i><span data-deep-failed><?php echo $deepRunFailed; ?></span></div>
+                            <div class="text-muted"><i class="bi bi-skip-forward-circle me-1"></i><span data-deep-skipped><?php echo $deepRunSkipped; ?></span></div>
+                        </div>
+                        <hr>
+                        <div class="row small g-2">
+                            <div class="col-sm-6">
+                                <div class="text-muted"><?php echo __('Запущено'); ?>:</div>
+                                <div data-deep-started><?php echo htmlspecialchars($deepRunStartedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                            </div>
+                            <div class="col-sm-6">
+                                <div class="text-muted"><?php echo __('Завершено'); ?>:</div>
+                                <div data-deep-finished><?php echo htmlspecialchars($deepRunFinishedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                            </div>
+                            <div class="col-sm-12">
+                                <div class="text-muted"><?php echo __('Комментарий'); ?>:</div>
+                                <div data-deep-notes><?php echo htmlspecialchars($deepRunNotes, ENT_QUOTES, 'UTF-8'); ?></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm border-0 mb-4" id="crowdDeepResultsCard" data-run-id="<?php echo $deepRunId ?: ''; ?>">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="card-title mb-0 d-flex align-items-center gap-2">
+                    <i class="bi bi-clipboard2-data text-danger"></i>
+                    <span><?php echo __('Результаты глубокой проверки'); ?></span>
+                </h5>
+                <div class="small text-muted" data-deep-results-meta><?php echo $deepRunTotal > 0 ? sprintf(__('Последний запуск: %s записей'), number_format($deepRunTotal, 0, '.', ' ')) : __('Пока нет результатов'); ?></div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle" id="crowdDeepResultsTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th><?php echo __('Время'); ?></th>
+                            <th><?php echo __('Статус'); ?></th>
+                            <th><?php echo __('URL'); ?></th>
+                            <th><?php echo __('Фрагмент'); ?></th>
+                            <th><?php echo __('Ошибка/Комментарий'); ?></th>
+                            <th><?php echo __('HTTP'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($deepRecentItems)): ?>
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-3" data-deep-empty><?php echo __('Результатов пока нет.'); ?></td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($deepRecentItems as $item): ?>
+                                <?php
+                                    $deepStatus = (string)($item['status'] ?? 'pending');
+                                    $deepMeta = $crowdDeepStatusMeta[$deepStatus] ?? null;
+                                    $deepBadgeClass = $deepMeta['class'] ?? 'badge bg-secondary';
+                                    $deepBadgeLabel = $deepMeta['label'] ?? $deepStatus;
+                                    $deepUrl = (string)($item['url'] ?? '');
+                                    $evidenceUrl = (string)($item['evidence_url'] ?? '');
+                                    $messageExcerpt = (string)($item['message_excerpt'] ?? '');
+                                    $responseExcerpt = (string)($item['response_excerpt'] ?? '');
+                                    $errorText = (string)($item['error'] ?? '');
+                                    $createdAt = (string)($item['created_at'] ?? '');
+                                ?>
+                                <tr>
+                                    <td><?php echo $createdAt !== '' ? htmlspecialchars($createdAt, ENT_QUOTES, 'UTF-8') : '—'; ?></td>
+                                    <td><span class="badge <?php echo htmlspecialchars($deepBadgeClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($deepBadgeLabel, ENT_QUOTES, 'UTF-8'); ?></span></td>
+                                    <td class="text-break">
+                                        <?php if ($deepUrl !== ''): ?>
+                                            <a href="<?php echo htmlspecialchars($deepUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener">#<?php echo (int)($item['link_id'] ?? 0); ?></a>
+                                            <?php if ($evidenceUrl !== ''): ?>
+                                                <a href="<?php echo htmlspecialchars($evidenceUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="ms-1" title="<?php echo __('Открыть ответ'); ?>"><i class="bi bi-box-arrow-up-right"></i></a>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            —
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="small text-break"><?php echo $messageExcerpt !== '' ? htmlspecialchars($messageExcerpt, ENT_QUOTES, 'UTF-8') : ($responseExcerpt !== '' ? htmlspecialchars($responseExcerpt, ENT_QUOTES, 'UTF-8') : '—'); ?></td>
+                                    <td class="small text-break"><?php echo $errorText !== '' ? htmlspecialchars($errorText, ENT_QUOTES, 'UTF-8') : '—'; ?></td>
+                                    <td><?php echo isset($item['http_status']) && $item['http_status'] ? (int)$item['http_status'] : '—'; ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <div class="card shadow-sm border-0 mb-4">
         <div class="card-body">
             <h5 class="card-title mb-3"><?php echo __('Фильтры и список ссылок'); ?></h5>
@@ -428,11 +681,13 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
                                     <th><?php echo __('URL'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Статус'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Код'); ?></th>
+                                    <th class="text-nowrap"><?php echo __('Глубокая проверка'); ?></th>
+                                    <th><?php echo __('Ответ / Ошибка'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Язык'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Регион'); ?></th>
                                     <th><?php echo __('Домен'); ?></th>
-                                    <th><?php echo __('Комментарий'); ?></th>
-                                    <th><?php echo __('Обновлено'); ?></th>
+                                    <th><?php echo __('HTTP комментарий'); ?></th>
+                                    <th><?php echo __('HTTP проверка'); ?></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -451,6 +706,24 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
                                             $checked = isset($crowdSelectedSet[$linkId]);
                                             $statusCode = (int)($row['status_code'] ?? 0);
                                             $processing = !empty($row['processing_run_id']);
+                                            $deepStatus = (string)($row['deep_status'] ?? 'pending');
+                                            $deepMeta = $crowdDeepStatusMeta[$deepStatus] ?? null;
+                                            $deepBadgeClass = $deepMeta['class'] ?? 'badge bg-secondary';
+                                            $deepBadgeLabel = $deepMeta['label'] ?? $deepStatus;
+                                            $deepProcessing = !empty($row['deep_processing_run_id']);
+                                            $deepError = (string)($row['deep_error'] ?? '');
+                                            $deepMessage = (string)($row['deep_message_excerpt'] ?? '');
+                                            $deepEvidenceUrl = (string)($row['deep_evidence_url'] ?? '');
+                                            $deepCheckedAt = (string)($row['deep_checked_at'] ?? '');
+                                            $deepCheckedDisplay = '—';
+                                            if ($deepCheckedAt !== '' && $deepCheckedAt !== '0000-00-00 00:00:00') {
+                                                $ts = strtotime($deepCheckedAt);
+                                                if ($ts) {
+                                                    $deepCheckedDisplay = date('Y-m-d H:i', $ts);
+                                                } else {
+                                                    $deepCheckedDisplay = $deepCheckedAt;
+                                                }
+                                            }
                                         ?>
                                         <tr data-link-id="<?php echo $linkId; ?>">
                                             <td>
@@ -471,6 +744,27 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
                                                 <?php endif; ?>
                                             </td>
                                             <td><?php echo $statusCode > 0 ? $statusCode : '—'; ?></td>
+                                            <td>
+                                                <span class="badge <?php echo htmlspecialchars($deepBadgeClass, ENT_QUOTES, 'UTF-8'); ?>" data-deep-status-badge><?php echo htmlspecialchars($deepBadgeLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                                                <?php if ($deepProcessing): ?>
+                                                    <span class="spinner-border spinner-border-sm text-danger ms-1" role="status" aria-hidden="true"></span>
+                                                <?php endif; ?>
+                                                <div class="small text-muted"><?php echo htmlspecialchars($deepCheckedDisplay, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </td>
+                                            <td class="small text-break">
+                                                <?php if ($deepMessage !== ''): ?>
+                                                    <div class="text-success fw-semibold mb-1"><?php echo htmlspecialchars($deepMessage, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                <?php endif; ?>
+                                                <?php if ($deepError !== ''): ?>
+                                                    <div class="text-danger"><?php echo htmlspecialchars($deepError, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                <?php endif; ?>
+                                                <?php if ($deepEvidenceUrl !== ''): ?>
+                                                    <a href="<?php echo htmlspecialchars($deepEvidenceUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="small text-decoration-none"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Ответ'); ?></a>
+                                                <?php endif; ?>
+                                                <?php if ($deepMessage === '' && $deepError === '' && $deepEvidenceUrl === ''): ?>
+                                                    —
+                                                <?php endif; ?>
+                                            </td>
                                             <td class="text-uppercase"><?php echo $row['language'] ? htmlspecialchars((string)$row['language'], ENT_QUOTES, 'UTF-8') : '—'; ?></td>
                                             <td class="text-uppercase"><?php echo $row['region'] ? htmlspecialchars((string)$row['region'], ENT_QUOTES, 'UTF-8') : '—'; ?></td>
                                             <td><?php echo htmlspecialchars((string)($row['domain'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
@@ -579,6 +873,37 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
     const headerBar = section.querySelector('[data-crowd-progress-bar]');
     const headerBarFill = section.querySelector('[data-crowd-progress-header]');
 
+    const deepApiBase = section.getAttribute('data-crowd-deep-api') || apiBase;
+    const deepCard = section.querySelector('#crowdDeepCard');
+    const deepStartBtn = section.querySelector('#crowdDeepStart');
+    const deepCancelBtn = section.querySelector('#crowdDeepCancel');
+    const deepScopeSelect = section.querySelector('#crowdDeepScope');
+    const deepTokenPrefixInput = section.querySelector('#crowdDeepTokenPrefix');
+    const deepMessageLinkInput = section.querySelector('#crowdDeepMessageLink');
+    const deepNameInput = section.querySelector('#crowdDeepName');
+    const deepCompanyInput = section.querySelector('#crowdDeepCompany');
+    const deepEmailUserInput = section.querySelector('#crowdDeepEmailUser');
+    const deepEmailDomainInput = section.querySelector('#crowdDeepEmailDomain');
+    const deepPhoneInput = section.querySelector('#crowdDeepPhone');
+    const deepTemplateInput = section.querySelector('#crowdDeepTemplate');
+    const deepMessageBox = section.querySelector('#crowdDeepMessage');
+    const deepStatusCard = section.querySelector('#crowdDeepStatusCard');
+    const deepProgressBar = section.querySelector('#crowdDeepProgressBar');
+    const deepStatusLabel = section.querySelector('[data-deep-status]');
+    const deepScopeLabel = section.querySelector('[data-deep-scope]');
+    const deepProcessedEl = section.querySelector('[data-deep-processed]');
+    const deepTotalEl = section.querySelector('[data-deep-total]');
+    const deepSuccessEl = section.querySelector('[data-deep-success]');
+    const deepPartialEl = section.querySelector('[data-deep-partial]');
+    const deepFailedEl = section.querySelector('[data-deep-failed]');
+    const deepSkippedEl = section.querySelector('[data-deep-skipped]');
+    const deepStartedEl = section.querySelector('[data-deep-started]');
+    const deepFinishedEl = section.querySelector('[data-deep-finished]');
+    const deepNotesEl = section.querySelector('[data-deep-notes]');
+    const deepResultsTable = section.querySelector('#crowdDeepResultsTable');
+    const deepResultsBody = deepResultsTable ? deepResultsTable.querySelector('tbody') : null;
+    const deepResultsMeta = section.querySelector('[data-deep-results-meta]');
+
     const labels = {
         selectSomething: <?php echo json_encode(__('Выберите хотя бы одну ссылку.'), JSON_UNESCAPED_UNICODE); ?>,
         startSuccess: <?php echo json_encode(__('Проверка запущена.'), JSON_UNESCAPED_UNICODE); ?>,
@@ -595,10 +920,32 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         autoStopped: <?php echo json_encode(__('Проверка автоматически остановлена из-за отсутствия активности.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
+    const deepLabels = {
+        selectSomething: <?php echo json_encode(__('Выберите ссылки для глубокой проверки.'), JSON_UNESCAPED_UNICODE); ?>,
+        startSuccess: <?php echo json_encode(__('Глубокая проверка запущена.'), JSON_UNESCAPED_UNICODE); ?>,
+        alreadyRunning: <?php echo json_encode(__('Глубокая проверка уже выполняется.'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelPending: <?php echo json_encode(__('Запрос на остановку отправлен.'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelIdle: <?php echo json_encode(__('Нет активной глубокой проверки.'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelFailed: <?php echo json_encode(__('Не удалось остановить глубокую проверку.'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelComplete: <?php echo json_encode(__('Глубокая проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>,
+        forceSuccess: <?php echo json_encode(__('Принудительная остановка глубокой проверки выполнена.'), JSON_UNESCAPED_UNICODE); ?>,
+        stallWarning: <?php echo json_encode(__('Похоже, глубокая проверка зависла. Повторите остановку для принудительного завершения.'), JSON_UNESCAPED_UNICODE); ?>,
+        autoStopped: <?php echo json_encode(__('Глубокая проверка автоматически остановлена из-за отсутствия активности.'), JSON_UNESCAPED_UNICODE); ?>,
+        noRuns: <?php echo json_encode(__('Глубокая проверка ещё не запускалась'), JSON_UNESCAPED_UNICODE); ?>,
+        statusMap: <?php echo json_encode($crowdDeepStatusLabels, JSON_UNESCAPED_UNICODE); ?>,
+        scopeMap: <?php echo json_encode($crowdDeepScopeLabels, JSON_UNESCAPED_UNICODE); ?>,
+        noResults: <?php echo json_encode(__('Результатов пока нет.'), JSON_UNESCAPED_UNICODE); ?>
+    };
+
     let pollTimer = null;
     let currentRunId = card ? parseInt(card.getAttribute('data-run-id') || '0', 10) : 0;
     const initialActive = card ? card.getAttribute('data-run-active') === '1' : false;
     let cancelAttempts = 0;
+
+    let deepPollTimer = null;
+    let currentDeepRunId = deepCard ? parseInt(deepCard.getAttribute('data-run-id') || '0', 10) : 0;
+    const deepInitialActive = deepCard ? deepCard.getAttribute('data-run-active') === '1' : false;
+    let deepCancelAttempts = 0;
 
     function updateMessage(text, type = 'muted') {
         if (!messageBox) return;
@@ -616,6 +963,148 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         };
         messageBox.textContent = text;
         messageBox.className = map[type] || map.muted;
+    }
+
+    function updateDeepMessage(text, type = 'muted') {
+        if (!deepMessageBox) return;
+        if (!text) {
+            deepMessageBox.textContent = '';
+            deepMessageBox.className = 'small text-muted mb-3';
+            return;
+        }
+        const map = {
+            success: 'small text-success mb-3',
+            danger: 'small text-danger mb-3',
+            warning: 'small text-warning mb-3',
+            info: 'small text-info mb-3',
+            muted: 'small text-muted mb-3'
+        };
+        deepMessageBox.textContent = text;
+        deepMessageBox.className = map[type] || map.muted;
+    }
+
+    function toggleDeepButtons(runActive) {
+        if (deepStartBtn) deepStartBtn.disabled = !!runActive;
+        if (deepCancelBtn) deepCancelBtn.disabled = !runActive;
+    }
+
+    function setDeepSpinner(btn, spinning) {
+        if (!btn) return;
+        const spinner = btn.querySelector('.spinner-border');
+        const label = btn.querySelector('.label-text');
+        if (spinning) {
+            btn.disabled = true;
+            if (spinner) spinner.classList.remove('d-none');
+            if (label) label.classList.add('d-none');
+        } else {
+            if (!deepCard || deepCard.getAttribute('data-run-active') !== '1') {
+                btn.disabled = false;
+            }
+            if (spinner) spinner.classList.add('d-none');
+            if (label) label.classList.remove('d-none');
+        }
+    }
+
+    function renderDeepResults(items) {
+        if (!deepResultsBody) return;
+        deepResultsBody.innerHTML = '';
+        if (!items || !items.length) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 6;
+            cell.className = 'text-center text-muted py-3';
+            cell.textContent = deepLabels.noResults;
+            row.appendChild(cell);
+            deepResultsBody.appendChild(row);
+            return;
+        }
+        items.forEach(item => {
+            const row = document.createElement('tr');
+            const createdAt = item.created_at || '—';
+            const status = item.status || 'pending';
+            const badgeLabel = deepLabels.statusMap[status] || status;
+            const badgeClass = (<?php echo json_encode($crowdDeepStatusClasses, JSON_UNESCAPED_UNICODE); ?>)[status] || 'badge bg-secondary';
+            const url = item.url || '';
+            const evidenceUrl = item.evidence_url || '';
+            const messageExcerpt = item.message_excerpt || item.response_excerpt || '';
+            const errorText = item.error || '';
+            const httpStatus = item.http_status || '';
+
+            const tdTime = document.createElement('td');
+            tdTime.textContent = createdAt;
+            row.appendChild(tdTime);
+
+            const tdStatus = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = badgeClass;
+            badge.textContent = badgeLabel;
+            tdStatus.appendChild(badge);
+            row.appendChild(tdStatus);
+
+            const tdUrl = document.createElement('td');
+            tdUrl.className = 'text-break';
+            if (url) {
+                const link = document.createElement('a');
+                link.href = url;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = '#' + (item.link_id || '');
+                tdUrl.appendChild(link);
+                if (evidenceUrl) {
+                    const evidenceLink = document.createElement('a');
+                    evidenceLink.href = evidenceUrl;
+                    evidenceLink.target = '_blank';
+                    evidenceLink.rel = 'noopener';
+                    evidenceLink.className = 'ms-1';
+                    evidenceLink.innerHTML = '<i class="bi bi-box-arrow-up-right"></i>';
+                    tdUrl.appendChild(evidenceLink);
+                }
+            } else {
+                tdUrl.textContent = '—';
+            }
+            row.appendChild(tdUrl);
+
+            const tdMessage = document.createElement('td');
+            tdMessage.className = 'small text-break';
+            tdMessage.textContent = messageExcerpt || '—';
+            row.appendChild(tdMessage);
+
+            const tdError = document.createElement('td');
+            tdError.className = 'small text-break';
+            tdError.textContent = errorText || '—';
+            row.appendChild(tdError);
+
+            const tdHttp = document.createElement('td');
+            tdHttp.textContent = httpStatus ? String(httpStatus) : '—';
+            row.appendChild(tdHttp);
+
+            deepResultsBody.appendChild(row);
+        });
+    }
+
+    async function fetchDeepResults(runId, limit = 20) {
+        if (!deepApiBase || !runId) return;
+        try {
+            const res = await fetch(`${deepApiBase}?action=deep_results&run_id=${encodeURIComponent(runId)}&limit=${encodeURIComponent(limit)}`, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                if (!res.ok && data && data.error) {
+                    updateDeepMessage(data.error, 'warning');
+                }
+                return;
+            }
+            renderDeepResults(data.items || []);
+            if (deepResultsMeta) {
+                const total = data.total || 0;
+                deepResultsMeta.textContent = total ? `<?php echo __('Записей'); ?>: ${total}` : deepLabels.noResults;
+            }
+        } catch (err) {
+            updateDeepMessage(err && err.message ? err.message : 'Error', 'warning');
+        }
     }
 
     function gatherSelectedIds() {
@@ -781,6 +1270,110 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         }
     }
 
+    function updateDeepRunCard(data) {
+        if (!deepCard) { return; }
+        if (!data) {
+            currentDeepRunId = 0;
+            deepCard.setAttribute('data-run-id', '');
+            deepCard.setAttribute('data-run-active', '0');
+            toggleDeepButtons(false);
+            if (deepPollTimer) {
+                clearTimeout(deepPollTimer);
+                deepPollTimer = null;
+            }
+            if (deepStatusLabel) deepStatusLabel.textContent = '—';
+            if (deepScopeLabel) deepScopeLabel.textContent = '—';
+            if (deepProgressBar) {
+                deepProgressBar.style.width = '0%';
+                deepProgressBar.setAttribute('aria-valuenow', '0');
+            }
+            if (deepProcessedEl) deepProcessedEl.textContent = '0';
+            if (deepTotalEl) deepTotalEl.textContent = '0';
+            if (deepSuccessEl) deepSuccessEl.textContent = '0';
+            if (deepPartialEl) deepPartialEl.textContent = '0';
+            if (deepFailedEl) deepFailedEl.textContent = '0';
+            if (deepSkippedEl) deepSkippedEl.textContent = '0';
+            if (deepStartedEl) deepStartedEl.textContent = '—';
+            if (deepFinishedEl) deepFinishedEl.textContent = '—';
+            if (deepNotesEl) deepNotesEl.textContent = deepLabels.noRuns || '—';
+            if (deepResultsMeta) deepResultsMeta.textContent = deepLabels.noResults || '—';
+            renderDeepResults([]);
+            return;
+        }
+        currentDeepRunId = data.id || 0;
+        deepCard.setAttribute('data-run-id', currentDeepRunId ? String(currentDeepRunId) : '');
+        const active = !!data.in_progress;
+        deepCard.setAttribute('data-run-active', active ? '1' : '0');
+        toggleDeepButtons(active);
+        if (!active) {
+            deepCancelAttempts = 0;
+        }
+        if (deepStatusLabel) {
+            deepStatusLabel.textContent = deepLabels.statusMap[data.status] || data.status || '—';
+        }
+        if (deepScopeLabel) {
+            deepScopeLabel.textContent = deepLabels.scopeMap[data.scope] || data.scope || '—';
+        }
+        const pct = data.progress_percent || 0;
+        if (deepProgressBar) {
+            deepProgressBar.style.width = pct + '%';
+            deepProgressBar.setAttribute('aria-valuenow', pct);
+        }
+        if (deepProcessedEl) deepProcessedEl.textContent = data.processed_count || 0;
+        if (deepTotalEl) deepTotalEl.textContent = data.total_links || 0;
+        if (deepSuccessEl) deepSuccessEl.textContent = data.success_count || 0;
+        if (deepPartialEl) deepPartialEl.textContent = data.partial_count || 0;
+        if (deepFailedEl) deepFailedEl.textContent = data.failed_count || 0;
+        if (deepSkippedEl) deepSkippedEl.textContent = data.skipped_count || 0;
+        if (deepStartedEl) deepStartedEl.textContent = data.started_at || '—';
+        if (deepFinishedEl) deepFinishedEl.textContent = data.finished_at || '—';
+        if (deepNotesEl) deepNotesEl.textContent = data.notes ? data.notes : '—';
+
+        if (deepPollTimer) {
+            clearTimeout(deepPollTimer);
+            deepPollTimer = null;
+        }
+        if (active) {
+            deepPollTimer = setTimeout(() => fetchDeepStatus(currentDeepRunId), 5000);
+        }
+        if (active && data.stalled && deepMessageBox && deepMessageBox.textContent.trim() === '') {
+            updateDeepMessage(deepLabels.stallWarning, 'warning');
+        }
+        if (!active && (!deepMessageBox || deepMessageBox.textContent.trim() === '')) {
+            if (data.status === 'cancelled') {
+                updateDeepMessage(deepLabels.cancelComplete, 'success');
+            } else if (data.status === 'failed') {
+                updateDeepMessage(deepLabels.autoStopped, 'warning');
+            }
+        }
+        if (currentDeepRunId) {
+            fetchDeepResults(currentDeepRunId, 20);
+        }
+    }
+
+    async function fetchDeepStatus(runId) {
+        if (!deepApiBase || !runId) { return; }
+        try {
+            const res = await fetch(`${deepApiBase}?action=deep_status&run_id=${encodeURIComponent(runId)}`, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                updateDeepMessage(data && data.error ? data.error : 'Error', 'warning');
+                return;
+            }
+            updateDeepRunCard(data.run || null);
+            if (data.run && data.run.in_progress) {
+                deepPollTimer = setTimeout(() => fetchDeepStatus(runId), 5000);
+            }
+        } catch (err) {
+            updateDeepMessage(err && err.message ? err.message : 'Error', 'warning');
+            deepPollTimer = setTimeout(() => fetchDeepStatus(runId), 7000);
+        }
+    }
+
     async function startCheck() {
         if (!apiBase || !startBtn) return;
         const scope = scopeSelect ? scopeSelect.value : 'all';
@@ -883,6 +1476,121 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         }
     }
 
+    async function startDeepCheck() {
+        if (!deepApiBase || !deepStartBtn) return;
+        const scope = deepScopeSelect ? deepScopeSelect.value : 'all';
+        const ids = scope === 'selection' ? gatherSelectedIds() : [];
+        if (scope === 'selection' && ids.length === 0) {
+            updateDeepMessage(deepLabels.selectSomething, 'warning');
+            return;
+        }
+        setDeepSpinner(deepStartBtn, true);
+        updateDeepMessage('');
+        try {
+            const body = new URLSearchParams();
+            body.set('scope', scope);
+            if (ids.length) {
+                ids.forEach(id => body.append('ids[]', String(id)));
+            }
+            body.set('message_template', (deepTemplateInput ? deepTemplateInput.value : '') || '');
+            body.set('message_link', (deepMessageLinkInput ? deepMessageLinkInput.value : '') || '');
+            body.set('name', (deepNameInput ? deepNameInput.value : '') || '');
+            body.set('company', (deepCompanyInput ? deepCompanyInput.value : '') || '');
+            body.set('email_user', (deepEmailUserInput ? deepEmailUserInput.value : '') || '');
+            body.set('email_domain', (deepEmailDomainInput ? deepEmailDomainInput.value : '') || '');
+            body.set('phone', (deepPhoneInput ? deepPhoneInput.value : '') || '');
+            body.set('token_prefix', (deepTokenPrefixInput ? deepTokenPrefixInput.value : '') || '');
+            body.set('csrf_token', window.CSRF_TOKEN || '');
+            const res = await fetch(`${deepApiBase}?action=deep_start`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+                body
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                if (data && Array.isArray(data.messages) && data.messages.length) {
+                    updateDeepMessage(data.messages.join(' '), 'danger');
+                } else {
+                    updateDeepMessage(data && data.error ? data.error : 'Error', 'danger');
+                }
+                return;
+            }
+            if (data.alreadyRunning) {
+                updateDeepMessage(deepLabels.alreadyRunning, 'info');
+            } else {
+                updateDeepMessage(deepLabels.startSuccess, 'success');
+            }
+            if (data.runId) {
+                currentDeepRunId = data.runId;
+                if (deepCard) {
+                    deepCard.setAttribute('data-run-id', String(currentDeepRunId));
+                    deepCard.setAttribute('data-run-active', '1');
+                }
+                toggleDeepButtons(true);
+                deepCancelAttempts = 0;
+                fetchDeepStatus(currentDeepRunId);
+            }
+        } catch (err) {
+            updateDeepMessage(err && err.message ? err.message : 'Error', 'danger');
+        } finally {
+            setDeepSpinner(deepStartBtn, false);
+        }
+    }
+
+    async function cancelDeepCheck() {
+        if (!deepApiBase || !deepCancelBtn) return;
+        const runId = currentDeepRunId;
+        if (!runId) {
+            updateDeepMessage(deepLabels.cancelIdle, 'info');
+            return;
+        }
+        setDeepSpinner(deepCancelBtn, true);
+        updateDeepMessage('');
+        try {
+            const body = new URLSearchParams();
+            body.set('run_id', String(runId));
+            deepCancelAttempts += 1;
+            if (deepCancelAttempts > 1) {
+                body.set('force', '1');
+            }
+            body.set('csrf_token', window.CSRF_TOKEN || '');
+            const res = await fetch(`${deepApiBase}?action=deep_cancel`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+                body
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                updateDeepMessage(deepLabels.cancelFailed, 'danger');
+                return;
+            }
+            if (data.finished) {
+                deepCancelAttempts = 0;
+                const msg = data.forced ? deepLabels.forceSuccess : deepLabels.cancelComplete;
+                updateDeepMessage(msg, 'success');
+            } else if (data.cancelRequested) {
+                updateDeepMessage(deepLabels.cancelPending, 'info');
+            } else if (data.alreadyFinished || (data.status && data.status !== 'queued' && data.status !== 'running')) {
+                deepCancelAttempts = 0;
+                updateDeepMessage(deepLabels.cancelComplete, 'success');
+            } else if (data.status === 'idle') {
+                deepCancelAttempts = 0;
+                updateDeepMessage(deepLabels.cancelIdle, 'info');
+            }
+            if (deepPollTimer) {
+                clearTimeout(deepPollTimer);
+                deepPollTimer = null;
+            }
+            fetchDeepStatus(currentDeepRunId);
+        } catch (err) {
+            updateDeepMessage(deepLabels.cancelFailed, 'danger');
+        } finally {
+            setDeepSpinner(deepCancelBtn, false);
+        }
+    }
+
     function handleSelectAction(action) {
         if (action === 'toggle') {
             const allChecked = Array.from(checkboxes).every(cb => cb.checked);
@@ -919,9 +1627,30 @@ $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
         });
     }
 
+    if (deepStartBtn) {
+        deepStartBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            startDeepCheck();
+        });
+    }
+
+    if (deepCancelBtn) {
+        deepCancelBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            cancelDeepCheck();
+        });
+    }
+
+    toggleButtons(initialActive);
+    toggleDeepButtons(deepInitialActive);
     updateCounts();
     if (initialActive && currentRunId) {
         fetchStatus(currentRunId);
+    }
+    if (deepInitialActive && currentDeepRunId) {
+        fetchDeepStatus(currentDeepRunId);
+    } else if (!deepInitialActive && currentDeepRunId) {
+        fetchDeepResults(currentDeepRunId, 20);
     }
 })();
 </script>

@@ -364,6 +364,14 @@ $crowdStatusData = pp_crowd_links_get_status();
 $crowdCurrentRun = ($crowdStatusData['ok'] ?? false) ? ($crowdStatusData['run'] ?? null) : null;
 $crowdStatusError = ($crowdStatusData['ok'] ?? false) ? null : ($crowdStatusData['error'] ?? null);
 $crowdSelectedIds = isset($_POST['crowd_selected']) && is_array($_POST['crowd_selected']) ? array_values($_POST['crowd_selected']) : [];
+
+$crowdDeepStatusMeta = pp_crowd_deep_status_meta();
+$crowdDeepScopeOptions = pp_crowd_deep_scope_options();
+$crowdDeepDefaults = pp_crowd_deep_default_options();
+$crowdDeepStatusData = pp_crowd_deep_get_status();
+$crowdDeepCurrentRun = ($crowdDeepStatusData['ok'] ?? false) ? ($crowdDeepStatusData['run'] ?? null) : null;
+$crowdDeepStatusError = ($crowdDeepStatusData['ok'] ?? false) ? null : ($crowdDeepStatusData['error'] ?? null);
+$crowdDeepRecentResults = pp_crowd_deep_get_recent_results($crowdDeepCurrentRun['id'] ?? null, 15);
 ?>
 
 <?php include '../includes/header.php'; ?>
