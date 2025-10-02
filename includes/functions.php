@@ -17,6 +17,7 @@ require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base u
 require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
 require_once __DIR__ . '/networks.php';        // Networks registry and utilities
 require_once __DIR__ . '/crowd_links.php';     // Crowd marketing links management
+require_once __DIR__ . '/crowd_deep.php';      // Crowd deep submission verification
 require_once __DIR__ . '/page_meta.php';       // Page meta + URL analysis helpers
 require_once __DIR__ . '/publication_queue.php'; // Publication queue processing
 require_once __DIR__ . '/update.php';          // Version and update checks
@@ -419,6 +420,13 @@ function ensure_schema(): void {
             `error` TEXT NULL,
             `processing_run_id` INT NULL,
             `last_run_id` INT NULL,
+            `deep_processing_run_id` INT NULL,
+            `deep_last_run_id` INT NULL,
+            `deep_status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+            `deep_error` TEXT NULL,
+            `deep_message_excerpt` TEXT NULL,
+            `deep_evidence_url` TEXT NULL,
+            `deep_checked_at` TIMESTAMP NULL DEFAULT NULL,
             `last_checked_at` TIMESTAMP NULL DEFAULT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -426,7 +434,9 @@ function ensure_schema(): void {
             INDEX `idx_crowd_links_domain` (`domain`(191)),
             INDEX `idx_crowd_links_status` (`status`),
             INDEX `idx_crowd_links_processing` (`processing_run_id`),
-            INDEX `idx_crowd_links_last_run` (`last_run_id`)
+            INDEX `idx_crowd_links_last_run` (`last_run_id`),
+            INDEX `idx_crowd_links_deep_status` (`deep_status`),
+            INDEX `idx_crowd_links_deep_processing` (`deep_processing_run_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
         $maybeAddCrowd = static function(string $field, string $ddl) use ($crowdCols, $conn) {
@@ -443,7 +453,14 @@ function ensure_schema(): void {
         $maybeAddCrowd('error', "ADD COLUMN `error` TEXT NULL AFTER `status_code`");
         $maybeAddCrowd('processing_run_id', "ADD COLUMN `processing_run_id` INT NULL AFTER `error`");
         $maybeAddCrowd('last_run_id', "ADD COLUMN `last_run_id` INT NULL AFTER `processing_run_id`");
-        $maybeAddCrowd('last_checked_at', "ADD COLUMN `last_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_run_id`");
+        $maybeAddCrowd('deep_processing_run_id', "ADD COLUMN `deep_processing_run_id` INT NULL AFTER `last_run_id`");
+        $maybeAddCrowd('deep_last_run_id', "ADD COLUMN `deep_last_run_id` INT NULL AFTER `deep_processing_run_id`");
+        $maybeAddCrowd('deep_status', "ADD COLUMN `deep_status` VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER `deep_last_run_id`");
+        $maybeAddCrowd('deep_error', "ADD COLUMN `deep_error` TEXT NULL AFTER `deep_status`");
+        $maybeAddCrowd('deep_message_excerpt', "ADD COLUMN `deep_message_excerpt` TEXT NULL AFTER `deep_error`");
+        $maybeAddCrowd('deep_evidence_url', "ADD COLUMN `deep_evidence_url` TEXT NULL AFTER `deep_message_excerpt`");
+        $maybeAddCrowd('deep_checked_at', "ADD COLUMN `deep_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `deep_evidence_url`");
+        $maybeAddCrowd('last_checked_at', "ADD COLUMN `last_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `deep_checked_at`");
         $maybeAddCrowd('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `last_checked_at`");
         $maybeAddCrowd('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
         $crowdCols = $getCols('crowd_links');
@@ -461,6 +478,12 @@ function ensure_schema(): void {
         }
         if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_last_run') === false && isset($crowdCols['last_run_id'])) {
             @$conn->query("CREATE INDEX `idx_crowd_links_last_run` ON `crowd_links`(`last_run_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_deep_status') === false && isset($crowdCols['deep_status'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_deep_status` ON `crowd_links`(`deep_status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_links', 'idx_crowd_links_deep_processing') === false && isset($crowdCols['deep_processing_run_id'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_links_deep_processing` ON `crowd_links`(`deep_processing_run_id`)");
         }
     }
 
@@ -516,6 +539,125 @@ function ensure_schema(): void {
         }
         if (pp_mysql_index_exists($conn, 'crowd_link_runs', 'idx_crowd_runs_created') === false && isset($crowdRunCols['created_at'])) {
             @$conn->query("CREATE INDEX `idx_crowd_runs_created` ON `crowd_link_runs`(`created_at`)");
+        }
+    }
+
+    // Deep crowd marketing validation run storage
+    $crowdDeepRunCols = $getCols('crowd_deep_runs');
+    if (empty($crowdDeepRunCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `crowd_deep_runs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'queued',
+            `scope` VARCHAR(20) NOT NULL DEFAULT 'all',
+            `total_links` INT NOT NULL DEFAULT 0,
+            `processed_count` INT NOT NULL DEFAULT 0,
+            `success_count` INT NOT NULL DEFAULT 0,
+            `partial_count` INT NOT NULL DEFAULT 0,
+            `failed_count` INT NOT NULL DEFAULT 0,
+            `skipped_count` INT NOT NULL DEFAULT 0,
+            `message_template` TEXT NULL,
+            `message_url` TEXT NULL,
+            `options_json` TEXT NULL,
+            `token_prefix` VARCHAR(32) NULL,
+            `initiated_by` INT NULL,
+            `notes` TEXT NULL,
+            `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `last_activity_at` TIMESTAMP NULL DEFAULT NULL,
+            INDEX `idx_crowd_deep_runs_status` (`status`),
+            INDEX `idx_crowd_deep_runs_created` (`created_at`),
+            CONSTRAINT `fk_crowd_deep_runs_user` FOREIGN KEY (`initiated_by`) REFERENCES `users`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddDeepRun = static function(string $field, string $ddl) use ($crowdDeepRunCols, $conn) {
+            if (!isset($crowdDeepRunCols[$field])) {
+                @$conn->query("ALTER TABLE `crowd_deep_runs` {$ddl}");
+            }
+        };
+        $maybeAddDeepRun('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'queued'");
+        $maybeAddDeepRun('scope', "ADD COLUMN `scope` VARCHAR(20) NOT NULL DEFAULT 'all' AFTER `status`");
+        $maybeAddDeepRun('total_links', "ADD COLUMN `total_links` INT NOT NULL DEFAULT 0 AFTER `scope`");
+        $maybeAddDeepRun('processed_count', "ADD COLUMN `processed_count` INT NOT NULL DEFAULT 0 AFTER `total_links`");
+        $maybeAddDeepRun('success_count', "ADD COLUMN `success_count` INT NOT NULL DEFAULT 0 AFTER `processed_count`");
+        $maybeAddDeepRun('partial_count', "ADD COLUMN `partial_count` INT NOT NULL DEFAULT 0 AFTER `success_count`");
+        $maybeAddDeepRun('failed_count', "ADD COLUMN `failed_count` INT NOT NULL DEFAULT 0 AFTER `partial_count`");
+        $maybeAddDeepRun('skipped_count', "ADD COLUMN `skipped_count` INT NOT NULL DEFAULT 0 AFTER `failed_count`");
+        $maybeAddDeepRun('message_template', "ADD COLUMN `message_template` TEXT NULL AFTER `skipped_count`");
+        $maybeAddDeepRun('message_url', "ADD COLUMN `message_url` TEXT NULL AFTER `message_template`");
+        $maybeAddDeepRun('options_json', "ADD COLUMN `options_json` TEXT NULL AFTER `message_url`");
+        $maybeAddDeepRun('token_prefix', "ADD COLUMN `token_prefix` VARCHAR(32) NULL AFTER `options_json`");
+        $maybeAddDeepRun('initiated_by', "ADD COLUMN `initiated_by` INT NULL AFTER `token_prefix`");
+        $maybeAddDeepRun('notes', "ADD COLUMN `notes` TEXT NULL AFTER `initiated_by`");
+        $maybeAddDeepRun('cancel_requested', "ADD COLUMN `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0 AFTER `notes`");
+        $maybeAddDeepRun('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `cancel_requested`");
+        $maybeAddDeepRun('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `created_at`");
+        $maybeAddDeepRun('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $maybeAddDeepRun('last_activity_at', "ADD COLUMN `last_activity_at` TIMESTAMP NULL DEFAULT NULL AFTER `finished_at`");
+        $crowdDeepRunCols = $getCols('crowd_deep_runs');
+        if (pp_mysql_index_exists($conn, 'crowd_deep_runs', 'idx_crowd_deep_runs_status') === false && isset($crowdDeepRunCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_deep_runs_status` ON `crowd_deep_runs`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_deep_runs', 'idx_crowd_deep_runs_created') === false && isset($crowdDeepRunCols['created_at'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_deep_runs_created` ON `crowd_deep_runs`(`created_at`)");
+        }
+    }
+
+    $crowdDeepResCols = $getCols('crowd_deep_results');
+    if (empty($crowdDeepResCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `crowd_deep_results` (
+            `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            `run_id` INT NOT NULL,
+            `link_id` BIGINT UNSIGNED NOT NULL,
+            `url` TEXT NOT NULL,
+            `status` VARCHAR(20) NOT NULL,
+            `http_status` INT NULL,
+            `final_url` TEXT NULL,
+            `message_token` VARCHAR(64) NULL,
+            `message_excerpt` TEXT NULL,
+            `response_excerpt` TEXT NULL,
+            `evidence_url` TEXT NULL,
+            `request_payload` TEXT NULL,
+            `duration_ms` INT NULL,
+            `error` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_crowd_deep_results_run` (`run_id`),
+            INDEX `idx_crowd_deep_results_link` (`link_id`),
+            INDEX `idx_crowd_deep_status` (`status`),
+            CONSTRAINT `fk_crowd_deep_results_run` FOREIGN KEY (`run_id`) REFERENCES `crowd_deep_runs`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_crowd_deep_results_link` FOREIGN KEY (`link_id`) REFERENCES `crowd_links`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddDeepResult = static function(string $field, string $ddl) use ($crowdDeepResCols, $conn) {
+            if (!isset($crowdDeepResCols[$field])) {
+                @$conn->query("ALTER TABLE `crowd_deep_results` {$ddl}");
+            }
+        };
+        $maybeAddDeepResult('run_id', "ADD COLUMN `run_id` INT NOT NULL");
+        $maybeAddDeepResult('link_id', "ADD COLUMN `link_id` BIGINT UNSIGNED NOT NULL AFTER `run_id`");
+        $maybeAddDeepResult('url', "ADD COLUMN `url` TEXT NOT NULL AFTER `link_id`");
+        $maybeAddDeepResult('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL AFTER `url`");
+        $maybeAddDeepResult('http_status', "ADD COLUMN `http_status` INT NULL AFTER `status`");
+        $maybeAddDeepResult('final_url', "ADD COLUMN `final_url` TEXT NULL AFTER `http_status`");
+        $maybeAddDeepResult('message_token', "ADD COLUMN `message_token` VARCHAR(64) NULL AFTER `final_url`");
+        $maybeAddDeepResult('message_excerpt', "ADD COLUMN `message_excerpt` TEXT NULL AFTER `message_token`");
+        $maybeAddDeepResult('response_excerpt', "ADD COLUMN `response_excerpt` TEXT NULL AFTER `message_excerpt`");
+        $maybeAddDeepResult('evidence_url', "ADD COLUMN `evidence_url` TEXT NULL AFTER `response_excerpt`");
+        $maybeAddDeepResult('request_payload', "ADD COLUMN `request_payload` TEXT NULL AFTER `evidence_url`");
+        $maybeAddDeepResult('duration_ms', "ADD COLUMN `duration_ms` INT NULL AFTER `request_payload`");
+        $maybeAddDeepResult('error', "ADD COLUMN `error` TEXT NULL AFTER `duration_ms`");
+        $maybeAddDeepResult('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+        $maybeAddDeepResult('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+        if (pp_mysql_index_exists($conn, 'crowd_deep_results', 'idx_crowd_deep_status') === false && isset($crowdDeepResCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_deep_status` ON `crowd_deep_results`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_deep_results', 'idx_crowd_deep_results_run') === false && isset($crowdDeepResCols['run_id'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_deep_results_run` ON `crowd_deep_results`(`run_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'crowd_deep_results', 'idx_crowd_deep_results_link') === false && isset($crowdDeepResCols['link_id'])) {
+            @$conn->query("CREATE INDEX `idx_crowd_deep_results_link` ON `crowd_deep_results`(`link_id`)");
         }
     }
 
