@@ -119,7 +119,7 @@ function buildHtmlFile(opts) {
   return {
     filename: `${filenameBase}.html`,
     buffer: Buffer.from(html, 'utf8'),
-    mime: 'text/html; charset=utf-8'
+    mime: 'text/html'
   };
 }
 

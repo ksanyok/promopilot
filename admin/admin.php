@@ -503,6 +503,8 @@ document.addEventListener('DOMContentLoaded', function(){
     let updateSelectionActionsState = function(){};
     let checkSelectedDisabledByRun = false;
     let setNetworkFiltersMessage = function(message) { void message; };
+    let queueNetworkSaveForRow = function(row, options) { void row; void options; };
+    let triggerNetworkSaveFlush = function(force) { void force; };
     let triggerNetworkFiltersRefresh = function(){};
 
     const startBtn = document.getElementById('networkCheckButton');
@@ -554,7 +556,7 @@ document.addEventListener('DOMContentLoaded', function(){
         mode: <?php echo json_encode(__('Режим'), JSON_UNESCAPED_UNICODE); ?>,
         bulkMode: <?php echo json_encode(__('Комплексная проверка'), JSON_UNESCAPED_UNICODE); ?>,
         singleMode: <?php echo json_encode(__('Проверка одной сети'), JSON_UNESCAPED_UNICODE); ?>,
-        applySuccessHint: <?php echo json_encode(__('Активированы только успешные сети. Проверьте список ниже и сохраните изменения.'), JSON_UNESCAPED_UNICODE); ?>,
+    applySuccessHint: <?php echo json_encode(__('Активированы только успешные сети. Изменения сохранятся автоматически.'), JSON_UNESCAPED_UNICODE); ?>,
         bulkStarted: <?php echo json_encode(__('Запущена комплексная проверка всех активных сетей.'), JSON_UNESCAPED_UNICODE); ?>,
         singleStarted: <?php echo json_encode(__('Проверка запущена для сети: %s'), JSON_UNESCAPED_UNICODE); ?>,
         canceling: <?php echo json_encode(__('Останавливаем проверку...'), JSON_UNESCAPED_UNICODE); ?>,
@@ -572,7 +574,14 @@ document.addEventListener('DOMContentLoaded', function(){
         noteError: <?php echo json_encode(__('Не удалось сохранить заметку.'), JSON_UNESCAPED_UNICODE); ?>,
         noteErrorCsrf: <?php echo json_encode(__('Сессия устарела. Обновите страницу.'), JSON_UNESCAPED_UNICODE); ?>,
         noteErrorNotFound: <?php echo json_encode(__('Сеть не найдена или недоступна.'), JSON_UNESCAPED_UNICODE); ?>,
-        noteErrorGeneric: <?php echo json_encode(__('Произошла ошибка при сохранении заметки.'), JSON_UNESCAPED_UNICODE); ?>
+        noteErrorGeneric: <?php echo json_encode(__('Произошла ошибка при сохранении заметки.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsSaving: <?php echo json_encode(__('Сохраняем изменения...'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsSavedSingle: <?php echo json_encode(__('Сеть «%s» сохранена.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsSavedMany: <?php echo json_encode(__('Сохранено сетей: %d.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsSaved: <?php echo json_encode(__('Изменения сетей сохранены.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsError: <?php echo json_encode(__('Не удалось сохранить изменения сетей.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsErrorCsrf: <?php echo json_encode(__('Сессия устарела. Обновите страницу.'), JSON_UNESCAPED_UNICODE); ?>,
+        settingsErrorNotFound: <?php echo json_encode(__('Сеть недоступна для сохранения.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const errorMessages = {
@@ -592,6 +601,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const apiStatus = <?php echo json_encode(pp_url('admin/network_check.php?action=status'), JSON_UNESCAPED_UNICODE); ?>;
     const apiCancel = <?php echo json_encode(pp_url('admin/network_check.php?action=cancel'), JSON_UNESCAPED_UNICODE); ?>;
     const apiNote = <?php echo json_encode(pp_url('admin/network_note.php'), JSON_UNESCAPED_UNICODE); ?>;
+    const apiNetworkSettings = <?php echo json_encode(pp_url('admin/network_settings.php'), JSON_UNESCAPED_UNICODE); ?>;
 
     let pollTimer = 0;
     let currentRunId = null;
@@ -877,15 +887,21 @@ document.addEventListener('DOMContentLoaded', function(){
             if (!match) return;
             const slug = match[1];
             if (!observed.has(slug)) return;
-            input.checked = successful.has(slug);
             const row = input.closest('tr');
+            const prevState = row && row.dataset ? (row.dataset.active || '0') : '0';
+            input.checked = successful.has(slug);
             if (row) {
-                row.dataset.active = (input.checked && !input.disabled) ? '1' : '0';
+                const nextState = (input.checked && !input.disabled) ? '1' : '0';
+                row.dataset.active = nextState;
+                if (prevState !== nextState) {
+                    queueNetworkSaveForRow(row, { delay: 200 });
+                }
             }
         });
         triggerNetworkFiltersRefresh();
-        setNetworkFiltersMessage(labels.applySuccessHint);
+        setNetworkFiltersMessage(labels.applySuccessHint, { duration: 3200 });
         setMessage('success', labels.applySuccessHint);
+        triggerNetworkSaveFlush(true);
     }
 
     function escapeHtml(str) {
@@ -1388,13 +1404,270 @@ document.addEventListener('DOMContentLoaded', function(){
         const filtersInfo = document.getElementById('networkFiltersInfo');
         const rows = Array.from(networksTable.querySelectorAll('tbody tr'));
 
+        const networkRowsMap = new Map();
+        const rowStateTimers = new WeakMap();
+        const networkSaveQueue = new Map();
+        let networkSaveTimer = 0;
+        let networkSaveInFlight = false;
+
+        const getRowSlug = (row) => (row && row.dataset ? (row.dataset.slug || '').trim() : '');
+
+        rows.forEach((row) => {
+            const slug = getRowSlug(row);
+            if (slug) {
+                networkRowsMap.set(slug, row);
+            }
+        });
+
+        const normalizePriorityValue = (value) => {
+            let num = parseInt(String(value), 10);
+            if (!Number.isFinite(num) || Number.isNaN(num)) { num = 0; }
+            if (num < 0) { num = 0; }
+            if (num > 999) { num = 999; }
+            return num;
+        };
+
+        const markRowPending = (row) => {
+            if (!row) { return; }
+            row.classList.add('network-row-saving');
+            row.classList.remove('network-row-error', 'network-row-saved');
+            const timer = rowStateTimers.get(row);
+            if (timer) {
+                window.clearTimeout(timer);
+                rowStateTimers.delete(row);
+            }
+        };
+
+        const markRowSaved = (row) => {
+            if (!row) { return; }
+            row.classList.remove('network-row-saving', 'network-row-error');
+            row.classList.add('network-row-saved');
+            const prev = rowStateTimers.get(row);
+            if (prev) {
+                window.clearTimeout(prev);
+            }
+            const timer = window.setTimeout(() => {
+                row.classList.remove('network-row-saved');
+                rowStateTimers.delete(row);
+            }, 1800);
+            rowStateTimers.set(row, timer);
+        };
+
+        const markRowError = (row) => {
+            if (!row) { return; }
+            row.classList.remove('network-row-saving', 'network-row-saved');
+            row.classList.add('network-row-error');
+            const prev = rowStateTimers.get(row);
+            if (prev) {
+                window.clearTimeout(prev);
+            }
+            const timer = window.setTimeout(() => {
+                row.classList.remove('network-row-error');
+                rowStateTimers.delete(row);
+            }, 4000);
+            rowStateTimers.set(row, timer);
+        };
+
+        const collectRowState = (row, opts = {}) => {
+            const slug = getRowSlug(row);
+            if (!slug) { return null; }
+            const enableInput = activationCheckboxFromRow(row);
+            const priorityInput = row.querySelector('input[name^="priority"]');
+            const levelInputs = Array.from(row.querySelectorAll('.level-checkbox'));
+            const enabled = enableInput && !enableInput.disabled ? (enableInput.checked ? 1 : 0) : 0;
+            const priorityRaw = priorityInput ? priorityInput.value : (row.dataset.priority || '0');
+            const priority = normalizePriorityValue(priorityRaw);
+            if (priorityInput && opts.syncInputs !== false) {
+                const current = parseInt(priorityInput.value, 10);
+                if (!Number.isFinite(current) || current !== priority) {
+                    priorityInput.value = String(priority);
+                }
+            }
+            row.dataset.priority = String(priority);
+            const levels = levelInputs.filter((cb) => cb.checked && !cb.disabled).map((cb) => cb.value);
+            row.dataset.levels = levels.join('|');
+            return { slug, enabled, priority, levels };
+        };
+
+        const scheduleNetworkSaveFlushInternal = (delay) => {
+            const ms = typeof delay === 'number' && delay >= 0 ? delay : 700;
+            if (networkSaveTimer) {
+                window.clearTimeout(networkSaveTimer);
+                networkSaveTimer = 0;
+            }
+            networkSaveTimer = window.setTimeout(() => {
+                networkSaveTimer = 0;
+                void flushNetworkSaveQueueInternal();
+            }, ms);
+        };
+
+        const handleNetworkSaveFailure = (payload, code = '') => {
+            payload.forEach((item) => {
+                const row = networkRowsMap.get(item.slug || '');
+                if (row) {
+                    markRowError(row);
+                }
+            });
+            let message = labels.settingsError || errorMessages.DEFAULT;
+            if (code === 'CSRF') {
+                message = labels.settingsErrorCsrf || message;
+            }
+            setInfoMessage(message);
+        };
+
+        const processNetworkSaveResponse = (payload, data) => {
+            const updated = Array.isArray(data.updated) ? data.updated : [];
+            const failedList = Array.isArray(data.failed) ? data.failed : (Array.isArray(data.errors) ? data.errors : []);
+
+            if (updated.length > 0) {
+                const names = [];
+                updated.forEach((item) => {
+                    const slug = item && item.slug ? item.slug : '';
+                    const row = networkRowsMap.get(slug);
+                    if (!row) { return; }
+                    if (typeof item.enabled !== 'undefined') {
+                        row.dataset.active = item.enabled ? '1' : '0';
+                        const toggle = activationCheckboxFromRow(row);
+                        if (toggle && !toggle.disabled) {
+                            toggle.checked = !!item.enabled;
+                        }
+                    }
+                    if (typeof item.priority !== 'undefined') {
+                        row.dataset.priority = String(item.priority);
+                        const priorityInput = row.querySelector('input[name^="priority"]');
+                        if (priorityInput) {
+                            priorityInput.value = String(item.priority);
+                        }
+                    }
+                    if (typeof item.level === 'string') {
+                        row.dataset.levels = item.level;
+                    }
+                    markRowSaved(row);
+                    if (row.dataset && row.dataset.title) {
+                        names.push(row.dataset.title);
+                    } else if (slug) {
+                        names.push(slug);
+                    }
+                });
+
+                let successMessage = '';
+                if (updated.length === 1 && labels.settingsSavedSingle) {
+                    successMessage = labels.settingsSavedSingle.replace('%s', names[0] || updated[0].slug || '');
+                } else if (updated.length > 1 && labels.settingsSavedMany) {
+                    successMessage = labels.settingsSavedMany.replace('%d', updated.length);
+                } else if (labels.settingsSaved) {
+                    successMessage = labels.settingsSaved;
+                }
+                if (successMessage) {
+                    setInfoMessage(successMessage, { duration: 2600 });
+                } else {
+                    setInfoMessage('', {});
+                }
+            } else if (!failedList.length) {
+                setInfoMessage('', {});
+            }
+
+            if (failedList.length) {
+                failedList.forEach((item) => {
+                    const row = networkRowsMap.get(item && item.slug ? item.slug : '');
+                    if (row) {
+                        markRowError(row);
+                    }
+                });
+                let errMessage = labels.settingsError || errorMessages.DEFAULT;
+                const first = failedList[0] || {};
+                if (first.code === 'CSRF') {
+                    errMessage = labels.settingsErrorCsrf || errMessage;
+                } else if (first.code === 'NOT_FOUND' || first.code === 'MISSING') {
+                    errMessage = labels.settingsErrorNotFound || errMessage;
+                } else if (first.message) {
+                    errMessage = first.message;
+                }
+                setInfoMessage(errMessage);
+            }
+        };
+
+        const flushNetworkSaveQueueInternal = async () => {
+            if (networkSaveInFlight) { return; }
+            if (networkSaveQueue.size === 0) { return; }
+            const payload = Array.from(networkSaveQueue.values()).map((item) => ({
+                slug: item.slug,
+                enabled: item.enabled,
+                priority: item.priority,
+                levels: item.levels,
+            }));
+            networkSaveQueue.clear();
+            networkSaveInFlight = true;
+            if (!infoMessage && labels.settingsSaving) {
+                setInfoMessage(labels.settingsSaving);
+            }
+            const body = new URLSearchParams();
+            body.set('csrf_token', window.CSRF_TOKEN || '');
+            body.set('payload', JSON.stringify(payload));
+            try {
+                const response = await fetch(apiNetworkSettings, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: body.toString(),
+                    credentials: 'same-origin'
+                });
+                const data = await response.json().catch(() => null);
+                if (!data) {
+                    handleNetworkSaveFailure(payload);
+                } else if (data.error === 'CSRF') {
+                    handleNetworkSaveFailure(payload, 'CSRF');
+                } else if (data.ok === false && (!Array.isArray(data.updated) || data.updated.length === 0)) {
+                    handleNetworkSaveFailure(payload, data.error || '');
+                } else {
+                    processNetworkSaveResponse(payload, data);
+                }
+            } catch (err) {
+                handleNetworkSaveFailure(payload);
+            } finally {
+                networkSaveInFlight = false;
+                if (networkSaveQueue.size > 0) {
+                    scheduleNetworkSaveFlushInternal(600);
+                }
+            }
+        };
+
+        const queueRowState = (row, options = {}) => {
+            const state = collectRowState(row, { syncInputs: options.syncInputs });
+            if (!state) { return; }
+            const existing = networkSaveQueue.get(state.slug) || { slug: state.slug };
+            networkSaveQueue.set(state.slug, {
+                ...existing,
+                enabled: state.enabled,
+                priority: state.priority,
+                levels: state.levels,
+            });
+            markRowPending(row);
+            if (options.immediate) {
+                scheduleNetworkSaveFlushInternal(0);
+            } else if (typeof options.delay === 'number') {
+                scheduleNetworkSaveFlushInternal(options.delay);
+            } else {
+                scheduleNetworkSaveFlushInternal(700);
+            }
+        };
+
+        queueNetworkSaveForRow = queueRowState;
+        triggerNetworkSaveFlush = function(force) {
+            if (force) {
+                scheduleNetworkSaveFlushInternal(0);
+            } else {
+                scheduleNetworkSaveFlushInternal(600);
+            }
+        };
+
         const normalizeValue = (val) => (val || '').toString().trim().toLowerCase();
         const getVisibleRows = () => rows.filter((row) => row.style.display !== 'none');
         const getSelectedRows = () => rows.filter((row) => row.dataset.selected === '1');
         const selectionCheckboxFromRow = (row) => row.querySelector('.network-select');
         const activationCheckboxFromRow = (row) => row.querySelector('input.form-check-input[name^="enable"]');
 
-        let infoMessage = '';
+    let infoMessage = '';
+    let infoMessageTimer = 0;
 
         const updateFiltersInfo = () => {
             if (!filtersInfo) { return; }
@@ -1414,9 +1687,21 @@ document.addEventListener('DOMContentLoaded', function(){
             filtersInfo.textContent = parts.join(' | ');
         };
 
-        const setInfoMessage = (message) => {
+        const setInfoMessage = (message, options = {}) => {
+            if (infoMessageTimer) {
+                window.clearTimeout(infoMessageTimer);
+                infoMessageTimer = 0;
+            }
             infoMessage = message ? String(message) : '';
             updateFiltersInfo();
+            const duration = (options && typeof options.duration === 'number') ? options.duration : 0;
+            if (infoMessage && duration > 0) {
+                infoMessageTimer = window.setTimeout(() => {
+                    infoMessageTimer = 0;
+                    infoMessage = '';
+                    updateFiltersInfo();
+                }, duration);
+            }
         };
 
         setNetworkFiltersMessage = setInfoMessage;
@@ -1566,7 +1851,31 @@ document.addEventListener('DOMContentLoaded', function(){
                 enableInput.addEventListener('change', () => {
                     row.dataset.active = (enableInput.checked && !enableInput.disabled) ? '1' : '0';
                     applyNetworkFilters();
+                    queueNetworkSaveForRow(row, { immediate: true });
                 });
+            }
+            const priorityInput = row.querySelector('input[name^="priority"]');
+            if (priorityInput) {
+                let priorityDebounce = 0;
+                priorityInput.addEventListener('input', () => {
+                    row.dataset.priority = priorityInput.value;
+                    if (priorityDebounce) {
+                        window.clearTimeout(priorityDebounce);
+                    }
+                    priorityDebounce = window.setTimeout(() => {
+                        priorityDebounce = 0;
+                        queueNetworkSaveForRow(row);
+                    }, 700);
+                });
+                const commitPriority = () => {
+                    if (priorityDebounce) {
+                        window.clearTimeout(priorityDebounce);
+                        priorityDebounce = 0;
+                    }
+                    queueNetworkSaveForRow(row, { immediate: true });
+                };
+                priorityInput.addEventListener('change', commitPriority);
+                priorityInput.addEventListener('blur', commitPriority);
             }
             const levelInputs = Array.from(row.querySelectorAll('.level-checkbox'));
             const updateRowLevelsDataset = () => {
@@ -1578,10 +1887,12 @@ document.addEventListener('DOMContentLoaded', function(){
                     cb.addEventListener('change', () => {
                         updateRowLevelsDataset();
                         applyNetworkFilters();
+                        queueNetworkSaveForRow(row);
                     });
                 });
                 updateRowLevelsDataset();
             }
+            collectRowState(row, { syncInputs: false });
         });
 
         if (selectAllCheckboxRef) {
@@ -1626,17 +1937,23 @@ document.addEventListener('DOMContentLoaded', function(){
                     const checkbox = activationCheckboxFromRow(row);
                     if (!checkbox || checkbox.disabled) { return; }
                     const isSuccess = normalizeValue(row.dataset.status || '') === 'success';
+                    const prev = row.dataset.active || '0';
                     checkbox.checked = isSuccess;
-                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    const nextState = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    row.dataset.active = nextState;
                     if (isSuccess) { activated++; }
+                    if (prev !== nextState) {
+                        queueNetworkSaveForRow(row, { delay: 300 });
+                    }
                 });
                 applyNetworkFilters();
                 const template = activateVerifiedBtn.getAttribute('data-message-template') || '';
                 if (template) {
-                    setInfoMessage(template.replace('%d', activated));
+                    setInfoMessage(template.replace('%d', activated), { duration: 3200 });
                 } else {
-                    setInfoMessage('');
+                    setInfoMessage('', {});
                 }
+                triggerNetworkSaveFlush(true);
             });
         }
 
@@ -1657,20 +1974,31 @@ document.addEventListener('DOMContentLoaded', function(){
             activateSelectedBtnRef.addEventListener('click', () => {
                 const selectedRows = getSelectedRows();
                 if (!selectedRows.length) {
-                    setInfoMessage(selectionEmptyMessage);
+                    setInfoMessage(selectionEmptyMessage, { duration: 2600 });
                     return;
                 }
                 let affected = 0;
                 selectedRows.forEach((row) => {
                     const checkbox = activationCheckboxFromRow(row);
                     if (!checkbox || checkbox.disabled) { return; }
+                    const prev = row.dataset.active || '0';
                     checkbox.checked = true;
-                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    const nextState = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    row.dataset.active = nextState;
                     affected++;
+                    if (prev !== nextState) {
+                        queueNetworkSaveForRow(row, { delay: 200 });
+                    }
                 });
                 applyNetworkFilters();
                 const template = activateSelectedBtnRef.getAttribute('data-message-template') || activatedTemplateDefault;
-                setInfoMessage(template ? template.replace('%d', affected) : '');
+                const msg = template ? template.replace('%d', affected) : '';
+                if (msg) {
+                    setInfoMessage(msg, { duration: 3200 });
+                } else {
+                    setInfoMessage('', {});
+                }
+                triggerNetworkSaveFlush(true);
             });
         }
 
@@ -1678,20 +2006,31 @@ document.addEventListener('DOMContentLoaded', function(){
             deactivateSelectedBtnRef.addEventListener('click', () => {
                 const selectedRows = getSelectedRows();
                 if (!selectedRows.length) {
-                    setInfoMessage(selectionEmptyMessage);
+                    setInfoMessage(selectionEmptyMessage, { duration: 2600 });
                     return;
                 }
                 let affected = 0;
                 selectedRows.forEach((row) => {
                     const checkbox = activationCheckboxFromRow(row);
                     if (!checkbox || checkbox.disabled) { return; }
+                    const prev = row.dataset.active || '0';
                     checkbox.checked = false;
-                    row.dataset.active = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    const nextState = (checkbox.checked && !checkbox.disabled) ? '1' : '0';
+                    row.dataset.active = nextState;
                     affected++;
+                    if (prev !== nextState) {
+                        queueNetworkSaveForRow(row, { delay: 200 });
+                    }
                 });
                 applyNetworkFilters();
                 const template = deactivateSelectedBtnRef.getAttribute('data-message-template') || deactivatedTemplateDefault;
-                setInfoMessage(template ? template.replace('%d', affected) : '');
+                const msg = template ? template.replace('%d', affected) : '';
+                if (msg) {
+                    setInfoMessage(msg, { duration: 3200 });
+                } else {
+                    setInfoMessage('', {});
+                }
+                triggerNetworkSaveFlush(true);
             });
         }
 
@@ -1709,7 +2048,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 updateSelectionActionsStateLocal();
                 updateFiltersInfo();
                 const template = clearSelectedBtnRef.getAttribute('data-message-template') || selectionClearedMessage;
-                setInfoMessage(template);
+                setInfoMessage(template, { duration: 2400 });
             });
         }
 
@@ -1719,7 +2058,7 @@ document.addEventListener('DOMContentLoaded', function(){
                 if (!selectedRows.length) {
                     const msg = labels.selectionEmpty || selectionEmptyMessage || errorMessages.DEFAULT;
                     setMessage('warning', msg);
-                    setInfoMessage(selectionEmptyMessage);
+                    setInfoMessage(selectionEmptyMessage, { duration: 2600 });
                     return;
                 }
                 const slugs = selectedRows.map((row) => (row.dataset.slug || '').trim()).filter(Boolean);

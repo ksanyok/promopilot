@@ -164,6 +164,10 @@
     <?php endif; ?>
     <div class="table-responsive mt-3">
         <?php if (!empty($networks)): ?>
+        <div class="alert alert-info small d-flex align-items-center gap-2 mb-3" role="status">
+            <i class="bi bi-cloud-check"></i>
+            <span><?php echo __('Изменения активации, приоритетов и уровней сохраняются автоматически.'); ?></span>
+        </div>
         <table class="table table-striped align-middle" id="networksTable">
             <thead>
             <tr>
@@ -210,6 +214,7 @@
                     data-active="<?php echo ($network['enabled'] && !$isMissing) ? '1' : '0'; ?>"
                     data-missing="<?php echo $isMissing ? '1' : '0'; ?>"
                     data-slug="<?php echo htmlspecialchars($network['slug']); ?>"
+                    data-title="<?php echo htmlspecialchars($network['title']); ?>"
                     data-regions="<?php echo htmlspecialchars(implode('|', $regionTokens)); ?>"
                     data-topics="<?php echo htmlspecialchars(implode('|', $topicTokens)); ?>"
                     data-priority="<?php echo (int)($network['priority'] ?? 0); ?>"

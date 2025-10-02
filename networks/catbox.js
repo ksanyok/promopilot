@@ -17,21 +17,36 @@ const config = {
       const fallback = buildHtmlFile({ article, variants, job });
       file = { ...fallback, filename: fallback.filename.replace(/\.html$/i, '.fallback.html') };
     }
+    const formData = {
+      reqtype: 'fileupload',
+      fileToUpload: { value: file.buffer, options: { filename: file.filename, contentType: file.mime } }
+    };
+    const userHash = (job && job.meta && job.meta.catbox_userhash) || process.env.CATBOX_USERHASH || process.env.PP_CATBOX_USERHASH;
+    if (userHash) {
+      formData.userhash = String(userHash);
+    }
     return {
       url: 'https://catbox.moe/user/api.php',
       method: 'POST',
-      formData: {
-        reqtype: 'fileupload',
-        fileToUpload: { value: file.buffer, options: { filename: file.filename, contentType: file.mime } }
-      }
+      formData
     };
   },
-  parseResponse: async ({ response }) => {
-    const text = (await response.text()).trim();
-    if (/^https?:\/\//i.test(text)) {
-      return { url: text };
+  parseResponse: async ({ response, logLine }) => {
+    const raw = await response.text();
+    const text = raw.trim();
+    if (typeof logLine === 'function') {
+      logLine('Catbox response received', {
+        status: response.status,
+        body: text.length > 500 ? text.slice(0, 500) + '…' : text
+      });
     }
-    return { url: '' };
+    const match = text.match(/https?:\/\/\S+/);
+    if (match && match[0]) {
+      const cleanUrl = match[0].replace(/[)>\]]+$/, '');
+      return { url: cleanUrl };
+    }
+    const errSnippet = text || `HTTP ${response.status} ${response.statusText || ''}`;
+    throw new Error(errSnippet.trim() || 'CATBOX_EMPTY_RESPONSE');
   }
 };
 

@@ -205,6 +205,105 @@ if (!function_exists('pp_set_networks_enabled')) {
     }
 }
 
+if (!function_exists('pp_update_network_settings')) {
+    function pp_update_network_settings(array $items): array {
+        $result = ['updated' => [], 'failed' => []];
+        if (empty($items)) { return $result; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return $result; }
+        if (!$conn) { return $result; }
+
+        $selectStmt = $conn->prepare('SELECT slug, enabled, priority, level, is_missing FROM networks WHERE slug = ? LIMIT 1');
+        $updateStmt = $conn->prepare('UPDATE networks SET enabled = ?, priority = ?, level = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ? LIMIT 1');
+        if (!$selectStmt || !$updateStmt) {
+            if ($selectStmt) { $selectStmt->close(); }
+            if ($updateStmt) { $updateStmt->close(); }
+            $conn->close();
+            return $result;
+        }
+
+        foreach ($items as $item) {
+            $slug = pp_normalize_slug((string)($item['slug'] ?? ''));
+            if ($slug === '') {
+                $result['failed'][] = [
+                    'slug' => '',
+                    'code' => 'INVALID_SLUG',
+                    'message' => __('Некорректный идентификатор сети.')
+                ];
+                continue;
+            }
+
+            $selectStmt->bind_param('s', $slug);
+            if (!$selectStmt->execute() || !($res = $selectStmt->get_result())) {
+                $result['failed'][] = [
+                    'slug' => $slug,
+                    'code' => 'DB_ERROR',
+                    'message' => __('Не удалось прочитать параметры сети.')
+                ];
+                continue;
+            }
+            $row = $res->fetch_assoc();
+            $res->free();
+            if (!$row) {
+                $result['failed'][] = [
+                    'slug' => $slug,
+                    'code' => 'NOT_FOUND',
+                    'message' => __('Сеть не найдена.')
+                ];
+                continue;
+            }
+            if ((int)($row['is_missing'] ?? 0) === 1) {
+                $result['failed'][] = [
+                    'slug' => $slug,
+                    'code' => 'MISSING',
+                    'message' => __('Файл сети отсутствует. Сохранение недоступно.')
+                ];
+                continue;
+            }
+
+            $enabled = array_key_exists('enabled', $item) ? (int)(!empty($item['enabled'])) : (int)($row['enabled'] ?? 0);
+            $priority = array_key_exists('priority', $item) ? (int)$item['priority'] : (int)($row['priority'] ?? 0);
+            if ($priority < 0) { $priority = 0; }
+            if ($priority > 999) { $priority = 999; }
+
+            $levelValue = $row['level'] ?? '';
+            if (array_key_exists('level', $item)) {
+                $levelValue = pp_normalize_network_levels($item['level']);
+            } elseif (array_key_exists('levels', $item)) {
+                $levelValue = pp_normalize_network_levels($item['levels']);
+            } elseif (array_key_exists('level_list', $item)) {
+                $levelValue = pp_normalize_network_levels($item['level_list']);
+            }
+            if (function_exists('mb_strlen')) {
+                if (mb_strlen($levelValue, 'UTF-8') > 50) { $levelValue = mb_substr($levelValue, 0, 50, 'UTF-8'); }
+            } elseif (strlen($levelValue) > 50) {
+                $levelValue = substr($levelValue, 0, 50);
+            }
+
+            $updateStmt->bind_param('iiss', $enabled, $priority, $levelValue, $slug);
+            if (!$updateStmt->execute()) {
+                $result['failed'][] = [
+                    'slug' => $slug,
+                    'code' => 'DB_WRITE',
+                    'message' => __('Не удалось сохранить параметры сети.')
+                ];
+                continue;
+            }
+
+            $result['updated'][] = [
+                'slug' => $slug,
+                'enabled' => $enabled,
+                'priority' => $priority,
+                'level' => $levelValue,
+            ];
+        }
+
+        $selectStmt->close();
+        $updateStmt->close();
+        $conn->close();
+        return $result;
+    }
+}
+
 if (!function_exists('pp_set_network_note')) {
     function pp_set_network_note(string $slug, string $note): bool {
         $slug = pp_normalize_slug($slug); if ($slug === '') { return false; }
