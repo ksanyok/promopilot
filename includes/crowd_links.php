@@ -50,6 +50,32 @@ if (!function_exists('pp_crowd_links_is_error_status')) {
     }
 }
 
+if (!function_exists('pp_crowd_links_is_stalled_run')) {
+    function pp_crowd_links_is_stalled_run(array $row, int $thresholdSeconds = 120): bool {
+        $status = (string)($row['status'] ?? '');
+        if (!in_array($status, ['queued', 'running'], true)) {
+            return false;
+        }
+        $now = time();
+        $lastActivityRaw = $row['last_activity_at'] ?? null;
+        $lastActivityTs = null;
+        if ($lastActivityRaw && $lastActivityRaw !== '0000-00-00 00:00:00') {
+            $lastActivityTs = strtotime((string)$lastActivityRaw) ?: null;
+        }
+        if ($lastActivityTs !== null && ($now - $lastActivityTs) >= $thresholdSeconds) {
+            return true;
+        }
+        $startedRaw = $row['started_at'] ?? null;
+        if ($lastActivityTs === null && $startedRaw && $startedRaw !== '0000-00-00 00:00:00') {
+            $startedTs = strtotime((string)$startedRaw) ?: null;
+            if ($startedTs !== null && ($now - $startedTs) >= $thresholdSeconds) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 if (!function_exists('pp_crowd_links_normalize_url')) {
     function pp_crowd_links_normalize_url(string $rawUrl): ?array {
         $url = trim($rawUrl);
@@ -554,16 +580,32 @@ if (!function_exists('pp_crowd_links_start_check')) {
         if (!$conn) {
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
-        $active = null;
-        if ($res = @$conn->query("SELECT id FROM crowd_link_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
+        $activeRow = null;
+        if ($res = @$conn->query("SELECT id, status, scope, total_links, processed_count, cancel_requested, started_at, last_activity_at FROM crowd_link_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
             if ($row = $res->fetch_assoc()) {
-                $active = (int)($row['id'] ?? 0);
+                $activeRow = $row;
             }
             $res->free();
         }
-        if ($active) {
-            $conn->close();
-            return ['ok' => true, 'runId' => $active, 'alreadyRunning' => true];
+        if ($activeRow) {
+            $activeId = (int)($activeRow['id'] ?? 0);
+            $status = (string)($activeRow['status'] ?? '');
+            $alreadyCancelRequested = !empty($activeRow['cancel_requested']);
+            $isStalled = pp_crowd_links_is_stalled_run($activeRow, 150);
+            if ($activeId && ($alreadyCancelRequested || $isStalled)) {
+                $note = __('Автоматическая остановка из-за отсутствия активности.');
+                $stmt = $conn->prepare("UPDATE crowd_link_runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP, notes=TRIM(CONCAT_WS('\n', NULLIF(notes,''), ?)) WHERE id=? LIMIT 1");
+                if ($stmt) {
+                    $stmt->bind_param('si', $note, $activeId);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+                @$conn->query('UPDATE crowd_links SET processing_run_id = NULL WHERE processing_run_id = ' . $activeId);
+                pp_crowd_links_log('Auto-cancelled stalled run', ['runId' => $activeId, 'cancelRequested' => $alreadyCancelRequested, 'stalled' => $isStalled]);
+            } elseif ($activeId) {
+                $conn->close();
+                return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true, 'status' => $status];
+            }
         }
         $ids = pp_crowd_links_collect_ids($conn, $scope, $selectedIds);
         if (empty($ids)) {
@@ -713,6 +755,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
         $run['error_count'] = $run['redirect_count'] + $run['client_error_count'] + $run['server_error_count'] + $run['unreachable_count'];
         $run['progress_percent'] = $run['total_links'] > 0 ? min(100, (int)round($run['processed_count'] * 100 / $run['total_links'])) : 0;
         $run['in_progress'] = in_array($run['status'], ['queued','running'], true);
+        $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150);
         return ['ok' => true, 'run' => $run];
     }
 }
@@ -739,7 +782,7 @@ if (!function_exists('pp_crowd_links_cancel')) {
             $conn->close();
             return ['ok' => true, 'status' => 'idle'];
         }
-        $stmt = $conn->prepare('SELECT id, status, cancel_requested FROM crowd_link_runs WHERE id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT id, status, cancel_requested, started_at, last_activity_at, notes FROM crowd_link_runs WHERE id = ? LIMIT 1');
         if (!$stmt) {
             $conn->close();
             return ['ok' => false, 'error' => 'DB_READ'];
@@ -757,12 +800,36 @@ if (!function_exists('pp_crowd_links_cancel')) {
             $conn->close();
             return ['ok' => true, 'runId' => $runId, 'status' => $status, 'alreadyFinished' => true];
         }
+        $alreadyRequested = !empty($row['cancel_requested']);
+        $shouldForce = $force;
+        if (!$shouldForce && $status === 'running') {
+            if ($alreadyRequested) {
+                $shouldForce = true;
+            } elseif (pp_crowd_links_is_stalled_run($row, 150)) {
+                $shouldForce = true;
+            }
+        }
         @$conn->query("UPDATE crowd_link_runs SET cancel_requested = 1 WHERE id = " . (int)$runId . " LIMIT 1");
-        if ($force || $status === 'queued') {
-            @$conn->query("UPDATE crowd_link_runs SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE id = " . (int)$runId . " LIMIT 1");
+        if ($status === 'queued') {
+            @$conn->query("UPDATE crowd_link_runs SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
             @$conn->query("UPDATE crowd_links SET processing_run_id = NULL WHERE processing_run_id = " . (int)$runId);
             $conn->close();
             return ['ok' => true, 'runId' => $runId, 'status' => 'cancelled', 'finished' => true];
+        }
+        if ($shouldForce) {
+            $note = __('Принудительно остановлено администратором.');
+            $stmt = $conn->prepare("UPDATE crowd_link_runs SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP, notes=TRIM(CONCAT_WS('\\n', NULLIF(notes,''), ?)) WHERE id = ? LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('si', $note, $runId);
+                $stmt->execute();
+                $stmt->close();
+            } else {
+                @$conn->query("UPDATE crowd_link_runs SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
+            }
+            @$conn->query("UPDATE crowd_links SET processing_run_id = NULL WHERE processing_run_id = " . (int)$runId);
+            pp_crowd_links_log('Run force-cancelled', ['runId' => $runId, 'requested' => $alreadyRequested]);
+            $conn->close();
+            return ['ok' => true, 'runId' => $runId, 'status' => 'cancelled', 'finished' => true, 'forced' => true];
         }
         $conn->close();
         return ['ok' => true, 'runId' => $runId, 'status' => $status, 'cancelRequested' => true];
@@ -814,6 +881,118 @@ if (!function_exists('pp_crowd_links_update_run_counts')) {
     }
 }
 
+if (!function_exists('pp_crowd_links_fetch_parallel')) {
+    /**
+     * Fetch multiple URLs in parallel using curl_multi when available.
+     * Falls back to sequential requests through pp_http_fetch.
+     * @param array<int,array{id:int,url:string}> $items
+     * @param int $timeout Request timeout per item (seconds)
+     * @param int $parallel Maximum number of concurrent requests
+     * @return array<int,array{status:int,headers:array<string,string>,body:string,final_url:string,error:string}>
+     */
+    function pp_crowd_links_fetch_parallel(array $items, int $timeout = 15, int $parallel = 10): array {
+        $results = [];
+        if (empty($items)) {
+            return $results;
+        }
+        $timeout = max(4, $timeout);
+        $parallel = max(1, $parallel);
+        if (!function_exists('curl_multi_init')) {
+            foreach ($items as $item) {
+                $fetch = pp_http_fetch($item['url'], $timeout);
+                $results[(int)$item['id']] = $fetch + ['error' => ''];
+            }
+            return $results;
+        }
+
+        $ua = 'PromoPilotBot/1.0 (+https://github.com/ksanyok/promopilot)';
+        $headersCommon = [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: ru,en;q=0.8',
+        ];
+        $chunks = array_chunk($items, $parallel);
+        foreach ($chunks as $chunk) {
+            $mh = curl_multi_init();
+            $handles = [];
+            foreach ($chunk as $item) {
+                $ch = curl_init();
+                curl_setopt_array($ch, [
+                    CURLOPT_URL => $item['url'],
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS => 6,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_HEADER => true,
+                    CURLOPT_TIMEOUT => $timeout,
+                    CURLOPT_CONNECTTIMEOUT => min(6, $timeout),
+                    CURLOPT_USERAGENT => $ua,
+                    CURLOPT_ACCEPT_ENCODING => '',
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_SSL_VERIFYHOST => 2,
+                    CURLOPT_HTTPHEADER => $headersCommon,
+                ]);
+                curl_multi_add_handle($mh, $ch);
+                $handles[(int)$ch] = ['handle' => $ch, 'item' => $item];
+            }
+
+            $active = null;
+            do {
+                $mrc = curl_multi_exec($mh, $active);
+            } while ($mrc === CURLM_CALL_MULTI_PERFORM);
+
+            while ($active && $mrc === CURLM_OK) {
+                if (curl_multi_select($mh, 1.0) === -1) {
+                    usleep(100000);
+                }
+                do {
+                    $mrc = curl_multi_exec($mh, $active);
+                } while ($mrc === CURLM_CALL_MULTI_PERFORM);
+            }
+
+            foreach ($handles as $info) {
+                $ch = $info['handle'];
+                $item = $info['item'];
+                $id = (int)$item['id'];
+                $url = (string)$item['url'];
+                $raw = curl_multi_getcontent($ch);
+                $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+                $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
+                $headerSize = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+                $body = '';
+                $respHeaders = [];
+                if ($raw !== false && $headerSize >= 0) {
+                    $headerPart = substr($raw, 0, $headerSize);
+                    $body = substr($raw, $headerSize);
+                    if ($body !== '' && strlen($body) > 524288) {
+                        $body = substr($body, 0, 524288);
+                    }
+                    $blocks = preg_split("/\r?\n\r?\n/", trim((string)$headerPart));
+                    $last = $blocks ? end($blocks) : '';
+                    foreach (preg_split("/\r?\n/", (string)$last) as $line) {
+                        if (strpos($line, ':') !== false) {
+                            [$k, $v] = array_map('trim', explode(':', $line, 2));
+                            if ($k !== '') {
+                                $respHeaders[strtolower($k)] = $v;
+                            }
+                        }
+                    }
+                }
+                $results[$id] = [
+                    'status' => $status,
+                    'headers' => $respHeaders,
+                    'body' => $body,
+                    'final_url' => $finalUrl,
+                    'error' => curl_error($ch) ?: '',
+                ];
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+            }
+            curl_multi_close($mh);
+        }
+
+        return $results;
+    }
+}
+
 if (!function_exists('pp_crowd_links_process_run')) {
     function pp_crowd_links_process_run(int $runId): void {
         if ($runId <= 0) { return; }
@@ -847,7 +1026,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
             $conn->close();
             return;
         }
-        @$conn->query("UPDATE crowd_link_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = " . (int)$runId . " LIMIT 1");
+    @$conn->query("UPDATE crowd_link_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP), last_activity_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
         $links = [];
         if ($res = @$conn->query('SELECT id, url FROM crowd_links WHERE processing_run_id = ' . (int)$runId . ' ORDER BY id ASC')) {
             while ($row = $res->fetch_assoc()) {
@@ -884,45 +1063,79 @@ if (!function_exists('pp_crowd_links_process_run')) {
             }
             return false;
         };
-        foreach ($links as $item) {
+        $parallelLimit = 12;
+        $httpTimeout = 18;
+        if ($parallelLimit > 20) { $parallelLimit = 20; }
+        $batchSize = max($parallelLimit * 4, 40);
+        if ($batchSize > 200) { $batchSize = 200; }
+
+        $updateStmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+        if ($updateStmt) {
+            $statusParam = '';
+            $statusCodeParam = 0;
+            $errorParam = '';
+            $langInParam = '';
+            $langOutParam = '';
+            $regionInParam = '';
+            $regionOutParam = '';
+            $idParam = 0;
+            $updateStmt->bind_param('sisssssi', $statusParam, $statusCodeParam, $errorParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
+        }
+
+        $cancelled = false;
+        foreach (array_chunk($links, $batchSize) as $chunk) {
             if ($checkCancel($conn, $runId)) {
-                pp_crowd_links_log('Worker cancellation requested', ['runId' => $runId]);
+                $cancelled = true;
                 break;
             }
-            $linkId = $item['id'];
-            $url = $item['url'];
-            $conn->query("UPDATE crowd_links SET status='checking', last_run_id=" . (int)$runId . ", last_checked_at=CURRENT_TIMESTAMP WHERE id=" . (int)$linkId . " LIMIT 1");
-            $http = pp_http_fetch($url, 18);
-            $statusCode = (int)($http['status'] ?? 0);
-            $body = (string)($http['body'] ?? '');
-            $finalUrl = (string)($http['final_url'] ?? $url);
-            $errorText = '';
-            $newStatus = 'pending';
-            if ($statusCode >= 200 && $statusCode < 300) {
-                $newStatus = 'ok';
-            } elseif ($statusCode >= 300 && $statusCode < 400) {
-                $newStatus = 'redirect';
-                $errorText = __('Редирект на') . ' ' . $finalUrl;
-            } elseif ($statusCode >= 400 && $statusCode < 500) {
-                $newStatus = 'client_error';
-                $errorText = sprintf(__('HTTP %d (клиентская ошибка)'), $statusCode);
-            } elseif ($statusCode >= 500 && $statusCode < 600) {
-                $newStatus = 'server_error';
-                $errorText = sprintf(__('HTTP %d (ошибка сервера)'), $statusCode);
-            } else {
-                $newStatus = 'unreachable';
-                $errorText = $statusCode > 0 ? sprintf(__('Неожиданный статус HTTP %d'), $statusCode) : __('Сайт недоступен или превышено время ожидания.');
+
+            $chunkIds = array_column($chunk, 'id');
+            if (!empty($chunkIds)) {
+                $idList = implode(',', array_map('intval', $chunkIds));
+                @$conn->query("UPDATE crowd_links SET status='checking', last_run_id=" . (int)$runId . ", last_checked_at=CURRENT_TIMESTAMP WHERE id IN ($idList)");
             }
-            if ($body === '' && $newStatus === 'ok') {
-                $newStatus = 'unreachable';
-                $errorText = __('Получен пустой ответ от сервера.');
-            }
-            $langRegion = ['language' => '', 'region' => ''];
-            if ($newStatus === 'ok' && $body !== '') {
-                $langRegion = pp_crowd_links_extract_lang_region($body);
-            }
-            $stmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
-            if ($stmt) {
+
+            $responses = pp_crowd_links_fetch_parallel($chunk, $httpTimeout, $parallelLimit);
+
+            foreach ($chunk as $item) {
+                $linkId = (int)$item['id'];
+                $url = (string)$item['url'];
+                $http = $responses[$linkId] ?? ['status' => 0, 'body' => '', 'final_url' => $url, 'headers' => [], 'error' => ''];
+                $statusCode = (int)($http['status'] ?? 0);
+                $body = (string)($http['body'] ?? '');
+                $finalUrl = (string)($http['final_url'] ?? $url);
+                $curlError = (string)($http['error'] ?? '');
+                $errorText = '';
+                $newStatus = 'pending';
+                if ($statusCode >= 200 && $statusCode < 300) {
+                    $newStatus = 'ok';
+                } elseif ($statusCode >= 300 && $statusCode < 400) {
+                    $newStatus = 'redirect';
+                    $errorText = __('Редирект на') . ' ' . $finalUrl;
+                } elseif ($statusCode >= 400 && $statusCode < 500) {
+                    $newStatus = 'client_error';
+                    $errorText = sprintf(__('HTTP %d (клиентская ошибка)'), $statusCode);
+                } elseif ($statusCode >= 500 && $statusCode < 600) {
+                    $newStatus = 'server_error';
+                    $errorText = sprintf(__('HTTP %d (ошибка сервера)'), $statusCode);
+                } else {
+                    $newStatus = 'unreachable';
+                    if ($statusCode > 0) {
+                        $errorText = sprintf(__('Неожиданный статус HTTP %d'), $statusCode);
+                    } elseif ($curlError !== '') {
+                        $errorText = $curlError;
+                    } else {
+                        $errorText = __('Сайт недоступен или превышено время ожидания.');
+                    }
+                }
+                if ($body === '' && $newStatus === 'ok') {
+                    $newStatus = 'unreachable';
+                    $errorText = __('Получен пустой ответ от сервера.');
+                }
+                $langRegion = ['language' => '', 'region' => ''];
+                if ($newStatus === 'ok' && $body !== '') {
+                    $langRegion = pp_crowd_links_extract_lang_region($body);
+                }
                 $langVal = $langRegion['language'] ?? '';
                 $regionVal = $langRegion['region'] ?? '';
                 if ($langVal !== '') {
@@ -931,17 +1144,37 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 if ($regionVal !== '') {
                     $regionVal = strtoupper($regionVal);
                 }
-                $stmt->bind_param('sisssssi', $newStatus, $statusCode, $errorText, $langVal, $langVal, $regionVal, $regionVal, $linkId);
-                $stmt->execute();
-                $stmt->close();
-            } else {
-                @$conn->query('UPDATE crowd_links SET status=' . "'" . $conn->real_escape_string($newStatus) . "'" . ', status_code=' . (int)$statusCode . ', error=' . "'" . $conn->real_escape_string($errorText) . "'" . ', processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=' . (int)$linkId . ' LIMIT 1');
+
+                if ($updateStmt) {
+                    $statusParam = $newStatus;
+                    $statusCodeParam = $statusCode;
+                    $errorParam = $errorText;
+                    $langInParam = $langVal;
+                    $langOutParam = $langVal;
+                    $regionInParam = $regionVal;
+                    $regionOutParam = $regionVal;
+                    $idParam = $linkId;
+                    $updateStmt->execute();
+                } else {
+                    @$conn->query('UPDATE crowd_links SET status=' . "'" . $conn->real_escape_string($newStatus) . "'" . ', status_code=' . (int)$statusCode . ', error=' . "'" . $conn->real_escape_string($errorText) . "'" . ', processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=' . (int)$linkId . ' LIMIT 1');
+                }
+
+                $counts['processed']++;
+                if (array_key_exists($newStatus, $counts)) {
+                    $counts[$newStatus]++;
+                }
             }
-            $counts['processed']++;
-            if (array_key_exists($newStatus, $counts)) {
-                $counts[$newStatus]++;
-            }
+
             pp_crowd_links_update_run_counts($conn, $runId, $counts, 'running');
+
+            if ($checkCancel($conn, $runId)) {
+                $cancelled = true;
+                break;
+            }
+        }
+
+        if ($updateStmt) {
+            $updateStmt->close();
         }
         $cancelled = $checkCancel($conn, $runId);
         if ($cancelled) {

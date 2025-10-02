@@ -535,12 +535,17 @@ if ($hasRun) {
         cancelFailed: <?php echo json_encode(__('Не удалось отменить проверку.'), JSON_UNESCAPED_UNICODE); ?>,
         statusMap: <?php echo json_encode($crowdStatusLabels, JSON_UNESCAPED_UNICODE); ?>,
         scopeMap: <?php echo json_encode($crowdScopeLabels, JSON_UNESCAPED_UNICODE); ?>,
-        noRuns: <?php echo json_encode(__('Проверка ещё не запускалась'), JSON_UNESCAPED_UNICODE); ?>
+        noRuns: <?php echo json_encode(__('Проверка ещё не запускалась'), JSON_UNESCAPED_UNICODE); ?>,
+        cancelComplete: <?php echo json_encode(__('Проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>,
+        forceSuccess: <?php echo json_encode(__('Принудительная остановка выполнена.'), JSON_UNESCAPED_UNICODE); ?>,
+        stallWarning: <?php echo json_encode(__('Похоже, проверка не отвечает. Повторите остановку для принудительного завершения.'), JSON_UNESCAPED_UNICODE); ?>,
+        autoStopped: <?php echo json_encode(__('Проверка автоматически остановлена из-за отсутствия активности.'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     let pollTimer = null;
     let currentRunId = card ? parseInt(card.getAttribute('data-run-id') || '0', 10) : 0;
     const initialActive = card ? card.getAttribute('data-run-active') === '1' : false;
+    let cancelAttempts = 0;
 
     function updateMessage(text, type = 'muted') {
         if (!messageBox) return;
@@ -630,6 +635,9 @@ if ($hasRun) {
         const active = !!data.in_progress;
         card.setAttribute('data-run-active', active ? '1' : '0');
         toggleButtons(active);
+        if (!active) {
+            cancelAttempts = 0;
+        }
         if (statusLabel) {
             statusLabel.textContent = labels.statusMap[data.status] || data.status;
         }
@@ -646,8 +654,8 @@ if ($hasRun) {
         if (okEl) okEl.textContent = data.ok_count || 0;
         if (errorEl) errorEl.textContent = data.error_count || 0;
         if (startedEl) startedEl.textContent = data.started_at || '—';
-    if (finishedEl) finishedEl.textContent = data.finished_at || '—';
-    if (notesEl) notesEl.textContent = data.notes ? data.notes : '—';
+        if (finishedEl) finishedEl.textContent = data.finished_at || '—';
+        if (notesEl) notesEl.textContent = data.notes ? data.notes : '—';
 
         if (!active && pollTimer) {
             clearTimeout(pollTimer);
@@ -655,6 +663,16 @@ if ($hasRun) {
         }
         if (active && !pollTimer) {
             pollTimer = setTimeout(() => fetchStatus(currentRunId), 4000);
+        }
+        if (active && data.stalled && messageBox && messageBox.textContent.trim() === '') {
+            updateMessage(labels.stallWarning, 'warning');
+        }
+        if (!active && (!messageBox || messageBox.textContent.trim() === '')) {
+            if (data.status === 'cancelled') {
+                updateMessage(labels.cancelComplete, 'success');
+            } else if (data.status === 'failed') {
+                updateMessage(labels.autoStopped, 'warning');
+            }
         }
     }
 
@@ -674,6 +692,10 @@ if ($hasRun) {
             updateRunCard(data.run || null);
             if (data.run && data.run.in_progress) {
                 pollTimer = setTimeout(() => fetchStatus(runId), 4000);
+            } else if (data.run && !data.run.in_progress && data.run.status === 'cancelled' && data.run.notes && data.run.notes.indexOf('автоматически') !== -1) {
+                if (!messageBox || messageBox.textContent.trim() === '') {
+                    updateMessage(labels.autoStopped, 'info');
+                }
             }
         } catch (err) {
             updateMessage(err && err.message ? err.message : 'Error', 'warning');
@@ -720,6 +742,7 @@ if ($hasRun) {
                 card.setAttribute('data-run-id', String(currentRunId));
                 card.setAttribute('data-run-active', '1');
                 toggleButtons(true);
+                cancelAttempts = 0;
                 fetchStatus(currentRunId);
             }
         } catch (err) {
@@ -741,6 +764,10 @@ if ($hasRun) {
         try {
             const body = new URLSearchParams();
             body.set('run_id', String(runId));
+            cancelAttempts += 1;
+            if (cancelAttempts > 1) {
+                body.set('force', '1');
+            }
             body.set('csrf_token', window.CSRF_TOKEN || '');
             const res = await fetch(apiBase + '?action=cancel', {
                 method: 'POST',
@@ -753,7 +780,19 @@ if ($hasRun) {
                 updateMessage(labels.cancelFailed, 'danger');
                 return;
             }
-            updateMessage(labels.cancelled, 'info');
+            if (data.finished) {
+                cancelAttempts = 0;
+                const msg = data.forced ? labels.forceSuccess : labels.cancelComplete;
+                updateMessage(msg, 'success');
+            } else if (data.cancelRequested) {
+                updateMessage(labels.cancelled, 'info');
+            } else if (data.alreadyFinished || (data.status && data.status !== 'queued' && data.status !== 'running')) {
+                cancelAttempts = 0;
+                updateMessage(labels.cancelComplete, 'success');
+            } else if (data.status === 'idle') {
+                cancelAttempts = 0;
+                updateMessage(labels.cancelIdle, 'info');
+            }
             if (pollTimer) {
                 clearTimeout(pollTimer);
                 pollTimer = null;
