@@ -5,6 +5,8 @@ return [
     'description' => 'Автоматическая регистрация аккаунта на WordPress.com, создание бесплатного сайта (*.wordpress.com) и публикация поста.',
     'handler' => __DIR__ . '/wordpress.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://wordpress.com',
         'regions' => ['Global'],

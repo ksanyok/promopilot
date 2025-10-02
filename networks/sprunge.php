@@ -5,6 +5,8 @@ return [
     'description' => 'sprunge.us — paste-сервис с простым curl-интерфейсом.',
     'handler' => __DIR__ . '/sprunge.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'http://sprunge.us',
         'regions' => [

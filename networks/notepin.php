@@ -5,6 +5,8 @@ return [
     'description' => 'Notepin — простой онлайн‑редактор заметок и постов с мгновенной публикацией.',
     'handler' => __DIR__ . '/notepin.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'supports' => ['articles', 'longform', 'markdown', 'html'],
         'docs' => 'https://notepin.co/write',

@@ -5,6 +5,8 @@ return [
     'description' => 'Shrib.com — онлайн-блокнот с автосохранением и публичными ссылками.',
     'handler' => __DIR__ . '/shrib.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://shrib.com',
         'regions' => [

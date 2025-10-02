@@ -5,6 +5,8 @@ return [
     'description' => 'Compiler Explorer (godbolt.org) — исследование ассемблера и шаринг кода.',
     'handler' => __DIR__ . '/godbolt.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://godbolt.org',
         'regions' => [

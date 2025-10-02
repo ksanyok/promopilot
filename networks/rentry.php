@@ -5,6 +5,8 @@ return [
     'description' => 'Markdown-страницы без регистрации на Rentry.co. Позволяет быстро публиковать статьи с форматированием и ссылками.',
     'handler' => __DIR__ . '/rentry.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://rentry.co',
         'regions' => [

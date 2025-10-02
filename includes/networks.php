@@ -33,6 +33,12 @@ if (!function_exists('pp_network_descriptor_from_file')) {
         if (!$isAbsolute) { $handler = realpath(dirname($file) . '/' . $handler) ?: (dirname($file) . '/' . $handler); }
         $handlerAbs = realpath($handler) ?: $handler;
         $descriptor['handler_type'] = strtolower(trim((string)($descriptor['handler_type'] ?? 'node')));
+        if (array_key_exists('priority', $descriptor)) {
+            $descriptor['priority'] = (int)$descriptor['priority'];
+        }
+        if (array_key_exists('level', $descriptor)) {
+            $descriptor['level'] = pp_normalize_network_levels($descriptor['level']);
+        }
         $descriptor['enabled'] = isset($descriptor['enabled']) ? (bool)$descriptor['enabled'] : true;
         $descriptor['meta'] = is_array($descriptor['meta'] ?? null) ? $descriptor['meta'] : [];
         $descriptor['source_file'] = $file; $descriptor['handler_abs'] = $handlerAbs; $descriptor['handler_rel'] = pp_path_to_relative($handlerAbs);
@@ -69,8 +75,8 @@ if (!function_exists('pp_refresh_networks')) {
         if ($stmt) {
             foreach ($descriptors as $slug => $descriptor) {
                 $enabled = $descriptor['enabled'] ? 1 : 0;
-                $priority = (int)($descriptor['priority'] ?? 0);
-                $level = trim((string)($descriptor['level'] ?? ''));
+                $priority = array_key_exists('priority', $descriptor) ? (int)$descriptor['priority'] : 0;
+                $level = array_key_exists('level', $descriptor) ? (string)$descriptor['level'] : '';
                 $notes = '';
                 if (array_key_exists($slug, $existing)) {
                     $enabled = (int)$existing[$slug]['enabled'];
@@ -78,7 +84,8 @@ if (!function_exists('pp_refresh_networks')) {
                     $level = (string)$existing[$slug]['level'];
                     $notes = (string)$existing[$slug]['notes'];
                 } else {
-                    $priority = $defaultPrioritySetting; $level = $defaultLevelsSetting;
+                    if ($priority === 0) { $priority = $defaultPrioritySetting; }
+                    if ($level === '') { $level = $defaultLevelsSetting; }
                 }
                 if ($priority < 0) { $priority = 0; } if ($priority > 999) { $priority = 999; }
                 $level = pp_normalize_network_levels($level);

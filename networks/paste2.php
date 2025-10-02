@@ -5,6 +5,8 @@ return [
     'description' => 'Paste2.org — публичные текстовые пасты и сниппеты.',
     'handler' => __DIR__ . '/paste2.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://paste2.org',
         'regions' => [

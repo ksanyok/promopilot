@@ -5,6 +5,8 @@ return [
     'description' => 'Pollie.app — лёгкое создание опросов без регистрации.',
     'handler' => __DIR__ . '/pollie.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://pollie.app',
         'regions' => [

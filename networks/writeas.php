@@ -5,6 +5,8 @@ return [
 	'description' => 'Write.as — минималистичная платформа для публикации заметок и статей в Markdown без регистрации и лишних форм.',
 	'handler' => __DIR__ . '/writeas.js',
 	'handler_type' => 'node',
+	'priority' => 100,
+	'level' => '1,2,3',
 	'meta' => [
 		'supports' => ['articles', 'longform', 'markdown'],
 		'docs' => 'https://write.as/new',

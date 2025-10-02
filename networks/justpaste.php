@@ -10,6 +10,8 @@ return [
     'description' => 'Глобальная площадка для публикации статей (JustPaste.it) с генерацией контента через OpenAI. Поддерживает вставку чистого HTML через вкладку Html.',
     'handler' => __DIR__ . '/justpaste.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'supports' => ['articles', 'longform', 'html'],
         'docs' => 'https://justpaste.it/',

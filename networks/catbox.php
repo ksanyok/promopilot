@@ -5,6 +5,8 @@ return [
     'description' => 'Catbox.moe — хостинг файлов и изображений без регистрации.',
     'handler' => __DIR__ . '/catbox.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://catbox.moe',
         'regions' => [

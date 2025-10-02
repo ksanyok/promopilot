@@ -5,6 +5,8 @@ return [
     'description' => 'Классический сервис Pastebin.com для публикации текстовых заметок и сниппетов без регистрации.',
     'handler' => __DIR__ . '/pastebin.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://pastebin.com',
         'regions' => [

@@ -5,6 +5,8 @@ return [
     'description' => 'dpaste.org — сервис с подсветкой синтаксиса и публичными ссылками для текстов и кода.',
     'handler' => __DIR__ . '/dpaste.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://dpaste.org',
         'regions' => [

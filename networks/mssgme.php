@@ -11,6 +11,8 @@ return [
     'description' => 'Link-in-bio платформа. Автоматизация регистрации, в дальнейшем — создание страницы и публикация.',
     'handler' => __DIR__ . '/mssgme.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'enabled' => false,
     'meta' => [
         'supports' => ['bio', 'links', 'landing'],

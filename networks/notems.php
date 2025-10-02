@@ -5,6 +5,8 @@ return [
     'description' => 'Note.ms — минималистичные публичные заметки по прямой ссылке.',
     'handler' => __DIR__ . '/notems.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://note.ms',
         'regions' => [

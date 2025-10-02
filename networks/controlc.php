@@ -5,6 +5,8 @@ return [
     'description' => 'Площадка для анонимных текстовых паст и заметок ControlC.com. Поддерживает быстрые публикации с Markdown и ссылками.',
     'handler' => __DIR__ . '/controlc.js',
     'handler_type' => 'node',
+    'priority' => 100,
+    'level' => '1,2,3',
     'meta' => [
         'url' => 'https://controlc.com',
         'regions' => [

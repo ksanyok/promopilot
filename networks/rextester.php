@@ -5,6 +5,8 @@ return [
     'description' => 'Rextester.com — онлайн-запуск кода и обмен ссылками на результаты.',
     'handler' => __DIR__ . '/rextester.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://rextester.com',
         'regions' => [

@@ -5,6 +5,8 @@ return [
     'description' => 'Etherpad от Wikimedia для совместного редактирования текста.',
     'handler' => __DIR__ . '/wikimediapad.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://etherpad.wikimedia.org',
         'regions' => [

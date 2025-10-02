@@ -5,6 +5,8 @@ return [
     'description' => 'Pastelink.net — публичные страницы с текстом и ссылками без регистрации.',
     'handler' => __DIR__ . '/pastelink.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://pastelink.net',
         'regions' => [

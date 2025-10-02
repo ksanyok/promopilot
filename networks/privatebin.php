@@ -5,6 +5,8 @@ return [
     'description' => 'PrivateBin — шифрованные пасты с шифрованием на стороне клиента. Подходит для безопасных публикаций ссылок.',
     'handler' => __DIR__ . '/privatebin.js',
     'handler_type' => 'node',
+    'priority' => 10,
+    'level' => '2,3',
     'meta' => [
         'url' => 'https://privatebin.net',
         'regions' => [
