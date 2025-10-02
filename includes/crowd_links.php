@@ -171,6 +171,19 @@ if (!function_exists('pp_crowd_links_import_files')) {
         }
         $seen = [];
         $maxSize = 10 * 1024 * 1024; // 10 MB per file
+        $allowedStatuses = array_keys(pp_crowd_links_status_meta());
+        $allowedStatuses[] = 'pending';
+        $allowedStatuses[] = 'checking';
+        $allowedStatuses = array_fill_keys(array_map('strtolower', array_unique($allowedStatuses)), true);
+        $maxErrorLength = 1000;
+        $cutString = static function(string $value, int $maxLen) {
+            if ($maxLen <= 0) { return ''; }
+            if (function_exists('mb_substr')) {
+                return mb_substr($value, 0, $maxLen);
+            }
+            return substr($value, 0, $maxLen);
+        };
+
         foreach ($files as $file) {
             $tmp = $file['tmp_name'];
             $name = (string)$file['name'];
@@ -198,7 +211,23 @@ if (!function_exists('pp_crowd_links_import_files')) {
                 if ($line === false) {
                     break;
                 }
-                $normalized = pp_crowd_links_normalize_url($line);
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+
+                $rawColumns = str_getcsv($line);
+                if (count($rawColumns) <= 1 && strpos($line, ';') !== false) {
+                    $rawColumns = str_getcsv($line, ';');
+                }
+                if (!$rawColumns) { $rawColumns = [$line]; }
+
+                $urlCandidate = trim((string)($rawColumns[0] ?? ''));
+                if ($urlCandidate === '' || strtolower($urlCandidate) === 'url') {
+                    continue;
+                }
+
+                $normalized = pp_crowd_links_normalize_url($urlCandidate);
                 if (!$normalized) {
                     $result['invalid']++;
                     continue;
@@ -222,6 +251,60 @@ if (!function_exists('pp_crowd_links_import_files')) {
                         $result['duplicates']++;
                     } else {
                         $result['errors'][] = sprintf(__('Ошибка при импорте ссылки %s: %s'), htmlspecialchars($normalized['url'], ENT_QUOTES, 'UTF-8'), $e->getMessage());
+                    }
+                }
+
+                if (count($rawColumns) > 1) {
+                    $metaUpdates = [];
+                    $statusRaw = strtolower(trim((string)($rawColumns[1] ?? '')));
+                    if ($statusRaw !== '' && isset($allowedStatuses[$statusRaw])) {
+                        $metaUpdates['status'] = $statusRaw;
+                    }
+                    $statusCodeRaw = trim((string)($rawColumns[2] ?? ''));
+                    if ($statusCodeRaw !== '' && is_numeric($statusCodeRaw)) {
+                        $metaUpdates['status_code'] = (int)$statusCodeRaw;
+                    }
+                    $languageRaw = trim((string)($rawColumns[3] ?? ''));
+                    if ($languageRaw !== '' && preg_match('~^[a-zA-Z0-9\-]{2,12}$~', $languageRaw)) {
+                        $metaUpdates['language'] = strtolower($languageRaw);
+                    }
+                    $regionRaw = trim((string)($rawColumns[4] ?? ''));
+                    if ($regionRaw !== '' && preg_match('~^[a-zA-Z0-9\-]{2,12}$~', $regionRaw)) {
+                        $metaUpdates['region'] = strtoupper($regionRaw);
+                    }
+                    $lastCheckedRaw = trim((string)($rawColumns[5] ?? ''));
+                    if ($lastCheckedRaw !== '') {
+                        $ts = strtotime($lastCheckedRaw);
+                        if ($ts) {
+                            $metaUpdates['last_checked_at'] = date('Y-m-d H:i:s', $ts);
+                        } elseif (preg_match('~^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})?$~', $lastCheckedRaw)) {
+                            $normalizedTs = str_replace('T', ' ', substr($lastCheckedRaw, 0, 19));
+                            $metaUpdates['last_checked_at'] = $normalizedTs;
+                        }
+                    }
+                    $errorRaw = trim((string)($rawColumns[9] ?? ''));
+                    if ($errorRaw !== '') {
+                        $metaUpdates['error'] = $cutString($errorRaw, $maxErrorLength);
+                    }
+
+                    if (!empty($metaUpdates)) {
+                        $setParts = [];
+                        $bindTypes = '';
+                        $bindValues = [];
+                        foreach ($metaUpdates as $column => $value) {
+                            $setParts[] = $column . ' = ?';
+                            $bindTypes .= ($column === 'status_code') ? 'i' : 's';
+                            $bindValues[] = $value;
+                        }
+                        $setParts[] = 'updated_at = CURRENT_TIMESTAMP';
+                        $sqlUpdate = 'UPDATE crowd_links SET ' . implode(', ', $setParts) . ' WHERE url_hash = ? LIMIT 1';
+                        $bindTypes .= 's';
+                        $bindValues[] = $hash;
+                        if ($updateStmt = $conn->prepare($sqlUpdate)) {
+                            $updateStmt->bind_param($bindTypes, ...$bindValues);
+                            $updateStmt->execute();
+                            $updateStmt->close();
+                        }
                     }
                 }
             }

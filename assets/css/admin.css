@@ -103,6 +103,88 @@
   box-shadow: 0 24px 36px rgba(10, 14, 28, 0.46);
 }
 
+.crowd-header {
+  position: relative;
+}
+
+.crowd-title {
+  font-size: clamp(1.45rem, 2vw, 1.8rem);
+  color: var(--pp-text);
+}
+
+.crowd-header-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+  background: linear-gradient(165deg, rgba(17, 21, 31, 0.92), rgba(12, 14, 22, 0.88));
+  border-radius: 18px;
+  border: 1px solid rgba(96, 122, 184, 0.32);
+  box-shadow: 0 18px 32px rgba(7, 10, 18, 0.38);
+  min-width: min(320px, 100%);
+}
+
+.crowd-header-progress__status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crowd-header-progress__label {
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: rgba(201, 212, 234, 0.72);
+}
+
+.crowd-header-progress__percent {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: #f2f6ff;
+}
+
+.crowd-header-progress__bar {
+  position: relative;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.crowd-header-progress__bar-fill {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background: linear-gradient(135deg, rgba(77, 163, 255, 0.95), rgba(61, 220, 151, 0.9));
+  box-shadow: 0 8px 16px rgba(38, 130, 220, 0.35);
+  transition: width .25s ease;
+}
+
+.crowd-header-progress__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: rgba(204, 214, 235, 0.75);
+}
+
+.crowd-header-progress__status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(77, 163, 255, 0.16);
+  border: 1px solid rgba(98, 132, 194, 0.4);
+  color: rgba(224, 233, 252, 0.88);
+  font-weight: 500;
+}
+
+.crowd-header-progress__count {
+  font-variant-numeric: tabular-nums;
+}
+
 .crowd-panel {
   position: relative;
   background: linear-gradient(150deg, rgba(18, 22, 32, 0.96), rgba(11, 13, 21, 0.98));
@@ -173,6 +255,57 @@
   border: 1px solid rgba(104, 134, 190, 0.28);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015), 0 16px 28px rgba(8, 12, 22, 0.42);
   backdrop-filter: blur(10px);
+}
+
+.crowd-pagination-wrapper {
+  display: flex;
+  justify-content: center;
+}
+
+.crowd-pagination {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(90, 118, 176, 0.35);
+  background: linear-gradient(165deg, rgba(17, 21, 31, 0.92), rgba(11, 14, 22, 0.9));
+  box-shadow: 0 16px 28px rgba(6, 10, 18, 0.38);
+}
+
+.crowd-pagination .page-link {
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(212, 223, 247, 0.8);
+  min-width: 34px;
+  text-align: center;
+  transition: background .18s ease, color .18s ease, transform .18s ease;
+}
+
+.crowd-pagination .page-link:hover {
+  background: rgba(77, 163, 255, 0.14);
+  color: #f4f7ff;
+  transform: translateY(-1px);
+}
+
+.crowd-pagination .page-item.active .page-link {
+  background: linear-gradient(135deg, rgba(77, 163, 255, 0.9), rgba(61, 220, 151, 0.85));
+  color: #0c1120;
+  box-shadow: 0 8px 16px rgba(32, 84, 156, 0.32);
+  font-weight: 600;
+}
+
+.crowd-pagination .page-item.disabled .page-link {
+  color: rgba(156, 169, 197, 0.45);
+  cursor: not-allowed;
+  background: transparent;
+  transform: none;
+}
+
+.crowd-pagination__ellipsis .page-link {
+  cursor: default;
+  color: rgba(156, 169, 197, 0.55);
+  pointer-events: none;
 }
 
 #crowdCheckCard {

@@ -81,6 +81,7 @@ foreach ($crowdScopeOptions as $scopeKey => $scopeLabel) {
 }
 
 $apiUrl = pp_url('admin/crowd_links.php');
+$exportUrl = pp_url('admin/crowd_links.php') . '?action=export';
 $hasRun = is_array($crowdCurrentRun);
 $runInProgress = $hasRun && !empty($crowdCurrentRun['in_progress']);
 $totalPages = (int)($crowdList['pages'] ?? 0);
@@ -112,12 +113,29 @@ if ($hasRun) {
     $notesRaw = (string)($crowdCurrentRun['notes'] ?? '');
     $runNotes = $notesRaw !== '' ? $notesRaw : '—';
 }
+$runPercentText = $runTotal > 0 ? ($runProgress . '%') : '—';
+$runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
 ?>
 <div id="crowd-section" style="display:none;" data-crowd-api="<?php echo htmlspecialchars($apiUrl, ENT_QUOTES, 'UTF-8'); ?>">
-    <h3 class="mb-4 d-flex align-items-center gap-2">
-        <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill"><i class="bi bi-people-fill me-1"></i><?php echo __('Крауд маркетинг'); ?></span>
-        <span><?php echo __('Управление крауд-ссылками'); ?></span>
-    </h3>
+    <div class="crowd-header mb-4 d-flex flex-wrap align-items-center justify-content-between gap-3">
+        <h3 class="crowd-title d-flex align-items-center gap-2 mb-0">
+            <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill"><i class="bi bi-people-fill me-1"></i><?php echo __('Крауд маркетинг'); ?></span>
+            <span><?php echo __('Управление крауд-ссылками'); ?></span>
+        </h3>
+        <div class="crowd-header-progress">
+            <div class="crowd-header-progress__status">
+                <span class="crowd-header-progress__label"><?php echo __('Прогресс проверки'); ?></span>
+                <span class="crowd-header-progress__percent" data-crowd-header-percent><?php echo htmlspecialchars($runPercentText, ENT_QUOTES, 'UTF-8'); ?></span>
+            </div>
+            <div class="crowd-header-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo (int)$runProgress; ?>" data-crowd-progress-bar>
+                <span class="crowd-header-progress__bar-fill" data-crowd-progress-header style="width: <?php echo (int)$runProgress; ?>%;"></span>
+            </div>
+            <div class="crowd-header-progress__meta">
+                <span class="crowd-header-progress__status-badge" data-crowd-header-status><?php echo htmlspecialchars($runStatusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="crowd-header-progress__count" data-crowd-header-count><?php echo htmlspecialchars($runCountSummary, ENT_QUOTES, 'UTF-8'); ?></span>
+            </div>
+        </div>
+    </div>
 
     <?php if (!empty($crowdMsg)): ?>
         <div class="alert alert-info fade-in"><?php echo htmlspecialchars($crowdMsg, ENT_QUOTES, 'UTF-8'); ?></div>
@@ -182,7 +200,12 @@ if ($hasRun) {
                             <h5 class="card-title mb-0"><?php echo __('Импорт ссылок'); ?></h5>
                             <p class="text-muted small mb-0"><?php echo __('Загрузите TXT файлы, по одной ссылке в строке.'); ?></p>
                         </div>
-                        <i class="bi bi-upload text-primary fs-4"></i>
+                        <div class="d-flex align-items-center gap-2">
+                            <a href="<?php echo htmlspecialchars($exportUrl, ENT_QUOTES, 'UTF-8'); ?>" class="btn btn-outline-light btn-sm" target="_blank" rel="noopener">
+                                <i class="bi bi-download me-1"></i><?php echo __('Экспорт CSV'); ?>
+                            </a>
+                            <i class="bi bi-upload text-primary fs-4"></i>
+                        </div>
                     </div>
                     <form method="post" enctype="multipart/form-data" class="needs-validation" novalidate>
                         <?php echo csrf_field(); ?>
@@ -471,22 +494,47 @@ if ($hasRun) {
             <?php endif; ?>
 
             <?php if ($totalPages > 1): ?>
-                <nav aria-label="<?php echo __('Навигация по страницам'); ?>" class="mt-4">
-                    <ul class="pagination pagination-sm mb-0">
-                        <?php
-                        $prevDisabled = $currentPage <= 1;
-                        $nextDisabled = $currentPage >= $totalPages;
-                        ?>
+                <?php
+                $pagesToRender = [];
+                if ($totalPages <= 10) {
+                    for ($p = 1; $p <= $totalPages; $p++) {
+                        $pagesToRender[] = $p;
+                    }
+                } else {
+                    $pagesToRender[] = 1;
+                    $windowStart = max(2, $currentPage - 2);
+                    $windowEnd = min($totalPages - 1, $currentPage + 2);
+                    if ($windowStart > 2) {
+                        $pagesToRender[] = 'ellipsis';
+                    }
+                    for ($p = $windowStart; $p <= $windowEnd; $p++) {
+                        $pagesToRender[] = $p;
+                    }
+                    if ($windowEnd < $totalPages - 1) {
+                        $pagesToRender[] = 'ellipsis';
+                    }
+                    $pagesToRender[] = $totalPages;
+                }
+                $prevDisabled = $currentPage <= 1;
+                $nextDisabled = $currentPage >= $totalPages;
+                ?>
+                <nav aria-label="<?php echo __('Навигация по страницам'); ?>" class="mt-4 crowd-pagination-wrapper">
+                    <ul class="pagination pagination-sm crowd-pagination mb-0">
                         <li class="page-item <?php echo $prevDisabled ? 'disabled' : ''; ?>">
                             <a class="page-link" href="<?php echo $prevDisabled ? '#' : htmlspecialchars($crowdBuildUrl(['crowd_page' => max(1, $currentPage - 1)]), ENT_QUOTES, 'UTF-8'); ?>" aria-label="<?php echo __('Предыдущая'); ?>">
                                 <span aria-hidden="true">&laquo;</span>
                             </a>
                         </li>
-                        <?php for ($page = 1; $page <= $totalPages; $page++): ?>
-                            <li class="page-item <?php echo $page === $currentPage ? 'active' : ''; ?>">
-                                <a class="page-link" href="<?php echo htmlspecialchars($crowdBuildUrl(['crowd_page' => $page]), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $page; ?></a>
-                            </li>
-                        <?php endfor; ?>
+                        <?php foreach ($pagesToRender as $pageItem): ?>
+                            <?php if ($pageItem === 'ellipsis'): ?>
+                                <li class="page-item disabled crowd-pagination__ellipsis"><span class="page-link">&hellip;</span></li>
+                            <?php else: ?>
+                                <?php $page = (int)$pageItem; ?>
+                                <li class="page-item <?php echo $page === $currentPage ? 'active' : ''; ?>">
+                                    <a class="page-link" href="<?php echo htmlspecialchars($crowdBuildUrl(['crowd_page' => $page]), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $page; ?></a>
+                                </li>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
                         <li class="page-item <?php echo $nextDisabled ? 'disabled' : ''; ?>">
                             <a class="page-link" href="<?php echo $nextDisabled ? '#' : htmlspecialchars($crowdBuildUrl(['crowd_page' => min($totalPages, $currentPage + 1)]), ENT_QUOTES, 'UTF-8'); ?>" aria-label="<?php echo __('Следующая'); ?>">
                                 <span aria-hidden="true">&raquo;</span>
@@ -525,6 +573,11 @@ if ($hasRun) {
     const selectionCounter = section.querySelector('[data-crowd-selected-count]');
     const deleteBtn = section.querySelector('#crowdDeleteSelected');
     const table = section.querySelector('#crowdLinksTable');
+    const headerStatus = section.querySelector('[data-crowd-header-status]');
+    const headerPercent = section.querySelector('[data-crowd-header-percent]');
+    const headerCount = section.querySelector('[data-crowd-header-count]');
+    const headerBar = section.querySelector('[data-crowd-progress-bar]');
+    const headerBarFill = section.querySelector('[data-crowd-progress-header]');
 
     const labels = {
         selectSomething: <?php echo json_encode(__('Выберите хотя бы одну ссылку.'), JSON_UNESCAPED_UNICODE); ?>,
@@ -628,6 +681,11 @@ if ($hasRun) {
             if (startedEl) startedEl.textContent = '—';
             if (finishedEl) finishedEl.textContent = '—';
             if (notesEl) notesEl.textContent = labels.noRuns || '—';
+            if (headerStatus) headerStatus.textContent = '—';
+            if (headerPercent) headerPercent.textContent = '—';
+            if (headerCount) headerCount.textContent = '—';
+            if (headerBar) headerBar.setAttribute('aria-valuenow', '0');
+            if (headerBarFill) headerBarFill.style.width = '0%';
             return;
         }
         currentRunId = data.id || 0;
@@ -648,14 +706,34 @@ if ($hasRun) {
             const pct = data.progress_percent || 0;
             progressBar.style.width = pct + '%';
             progressBar.setAttribute('aria-valuenow', pct);
+            if (headerBarFill) {
+                headerBarFill.style.width = pct + '%';
+            }
+            if (headerBar) {
+                headerBar.setAttribute('aria-valuenow', pct);
+            }
+        }
+        if (headerPercent) {
+            const pctText = (data.total_links || 0) > 0 ? ((data.progress_percent || 0) + '%') : '—';
+            headerPercent.textContent = pctText;
         }
         if (processedEl) processedEl.textContent = data.processed_count || 0;
         if (totalEl) totalEl.textContent = data.total_links || 0;
         if (okEl) okEl.textContent = data.ok_count || 0;
         if (errorEl) errorEl.textContent = data.error_count || 0;
+        if (headerCount) {
+            if ((data.total_links || 0) > 0) {
+                headerCount.textContent = (data.processed_count || 0) + '/' + (data.total_links || 0);
+            } else {
+                headerCount.textContent = '—';
+            }
+        }
         if (startedEl) startedEl.textContent = data.started_at || '—';
         if (finishedEl) finishedEl.textContent = data.finished_at || '—';
         if (notesEl) notesEl.textContent = data.notes ? data.notes : '—';
+        if (headerStatus) {
+            headerStatus.textContent = labels.statusMap[data.status] || data.status || '—';
+        }
 
         if (!active && pollTimer) {
             clearTimeout(pollTimer);
