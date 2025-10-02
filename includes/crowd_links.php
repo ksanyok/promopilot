@@ -995,10 +995,12 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
             return $results;
         }
 
-        $ua = 'PromoPilotBot/1.0 (+https://github.com/ksanyok/promopilot)';
+        // Use a realistic browser UA to avoid bot-specific content and challenges
+        $ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
         $headersCommon = [
             'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: ru,en;q=0.8',
+            'Accept-Language: en-US,en;q=0.9,ru;q=0.8',
+            'Upgrade-Insecure-Requests: 1',
         ];
         $chunks = array_chunk($items, $parallel);
         foreach ($chunks as $chunk) {
@@ -1052,8 +1054,9 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
                 if ($raw !== false && $headerSize >= 0) {
                     $headerPart = substr($raw, 0, $headerSize);
                     $body = substr($raw, $headerSize);
-                    if ($body !== '' && strlen($body) > 524288) {
-                        $body = substr($body, 0, 524288);
+                    // Cap body at 1MB to keep memory predictable yet include most comment sections
+                    if ($body !== '' && strlen($body) > 1048576) {
+                        $body = substr($body, 0, 1048576);
                     }
                     $blocks = preg_split("/\r?\n\r?\n/", trim((string)$headerPart));
                     $last = $blocks ? end($blocks) : '';
@@ -1091,15 +1094,34 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
         function pp_crowd_links_has_comment_form(string $html): bool {
             if ($html === '') { return false; }
             $doc = pp_html_dom($html);
-            if (!$doc) { return false; }
+            if (!$doc) {
+                // Fallback: quick regex search
+                if (preg_match('~<form\b[^>]*>.*?<textarea\b~is', $html)) { return true; }
+                // WordPress signature often present
+                if (stripos($html, 'wp-comments-post.php') !== false && stripos($html, '<textarea') !== false) { return true; }
+                return false;
+            }
             $xp = new DOMXPath($doc);
             // Direct: any form containing a textarea
             $node = $xp->query('//form[.//textarea]')->item(0);
             if ($node instanceof DOMElement) { return true; }
+            // HTML5: textarea referencing a form by @form attribute
+            $ta = $xp->query('//textarea[@form]')->item(0);
+            if ($ta instanceof DOMElement) {
+                $formId = trim($ta->getAttribute('form'));
+                if ($formId !== '') {
+                    $ref = $xp->query('//form[@id="' . htmlspecialchars($formId, ENT_QUOTES, 'UTF-8') . '"]')->item(0);
+                    if ($ref instanceof DOMElement) { return true; }
+                }
+            }
             // Fallback: malformed markup where textarea and submit are siblings under a likely container
             $candidate = $xp->query('//*[self::section or self::article or self::div or self::main or self::aside][.//textarea and (.//button | .//input[@type="submit" or @type="button"])][not(.//form)]')->item(0);
             if ($candidate instanceof DOMElement) { return true; }
-            // Ultra-fallback: standalone textarea on page (rare, but count as form-like)
+            // Ultra-fallback: regex check in case of broken DOM tree
+            if (preg_match('~<form\b[^>]*>.*?<textarea\b~is', $html)) { return true; }
+            // WordPress signature often present
+            if (stripos($html, 'wp-comments-post.php') !== false && stripos($html, '<textarea') !== false) { return true; }
+            // Finally, consider any standalone textarea as signal
             $anyTextarea = $xp->query('//textarea')->item(0);
             return $anyTextarea instanceof DOMElement;
         }
@@ -1272,6 +1294,18 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     if (!pp_crowd_links_has_comment_form($body)) {
                         $newStatus = 'no_form';
                         $errorText = __('На странице нет формы с полем комментария (textarea).');
+                        // Lightweight diagnostics to help analyze false negatives without storing full HTML
+                        $hasWpEndpoint = (stripos($body, 'wp-comments-post.php') !== false);
+                        $hasCommentFormId = (stripos($body, 'id="commentform"') !== false) || (stripos($body, 'class="comment-form"') !== false);
+                        $hasTextarea = (stripos($body, '<textarea') !== false);
+                        pp_crowd_links_log('no_form_detected', [
+                            'link_id' => $linkId,
+                            'url' => $url,
+                            'final_url' => $finalUrl,
+                            'wp_comments_post' => $hasWpEndpoint,
+                            'commentform_hint' => $hasCommentFormId,
+                            'textarea_present' => $hasTextarea,
+                        ]);
                     }
                     // Extract language/region regardless of no_form to enrich meta
                     $lr = pp_crowd_links_extract_lang_region($body);

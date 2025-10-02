@@ -957,7 +957,8 @@ if (!function_exists('pp_http_fetch')) {
 function pp_http_fetch(string $url, int $timeout = 12): array {
     $headers = [];
     $status = 0; $body = ''; $finalUrl = $url;
-    $ua = 'PromoPilotBot/1.0 (+https://github.com/ksanyok/promopilot)';
+    // Use a realistic browser UA to avoid altered content for bots
+    $ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     if (function_exists('curl_init')) {
         $ch = curl_init();
         curl_setopt_array($ch, [
@@ -974,7 +975,8 @@ function pp_http_fetch(string $url, int $timeout = 12): array {
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER => [
                 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language: ru,en;q=0.8'
+                'Accept-Language: en-US,en;q=0.9,ru;q=0.8',
+                'Upgrade-Insecure-Requests: 1'
             ],
         ]);
         $resp = curl_exec($ch);
@@ -982,6 +984,9 @@ function pp_http_fetch(string $url, int $timeout = 12): array {
             $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
             $rawHeaders = substr($resp, 0, $headerSize);
             $body = substr($resp, $headerSize);
+            if ($body !== '' && strlen($body) > 1048576) {
+                $body = substr($body, 0, 1048576);
+            }
             $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
             // Parse headers (multiple response headers possible on redirects; take the last block)
@@ -1006,7 +1011,8 @@ function pp_http_fetch(string $url, int $timeout = 12): array {
                 'header' => [
                     'User-Agent: ' . $ua,
                     'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language: ru,en;q=0.8',
+                    'Accept-Language: en-US,en;q=0.9,ru;q=0.8',
+                    'Upgrade-Insecure-Requests: 1',
                 ],
             ],
             'ssl' => [ 'verify_peer' => true, 'verify_peer_name' => true ],
