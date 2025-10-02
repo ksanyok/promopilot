@@ -34,6 +34,7 @@ if (!function_exists('pp_crowd_links_status_meta')) {
             'pending' => ['label' => __('Не проверена'), 'class' => 'badge bg-secondary'],
             'checking' => ['label' => __('Проверяется'), 'class' => 'badge bg-info text-dark'],
             'ok' => ['label' => __('Рабочая'), 'class' => 'badge bg-success'],
+            'no_form' => ['label' => __('Форма не найдена'), 'class' => 'badge bg-danger'],
             'redirect' => ['label' => __('Редирект (3xx)'), 'class' => 'badge bg-warning text-dark'],
             'client_error' => ['label' => __('Ошибка клиента (4xx)'), 'class' => 'badge bg-danger'],
             'server_error' => ['label' => __('Ошибка сервера (5xx)'), 'class' => 'badge bg-danger'],
@@ -46,7 +47,7 @@ if (!function_exists('pp_crowd_links_status_meta')) {
 
 if (!function_exists('pp_crowd_links_is_error_status')) {
     function pp_crowd_links_is_error_status(string $status): bool {
-        return in_array($status, ['redirect', 'client_error', 'server_error', 'unreachable'], true);
+        return in_array($status, ['redirect', 'client_error', 'server_error', 'unreachable', 'no_form'], true);
     }
 }
 
@@ -401,7 +402,7 @@ if (!function_exists('pp_crowd_links_list')) {
         $where = [];
         if ($status !== '') {
             if ($status === 'errors') {
-                $where[] = "(cl.status IN ('redirect','client_error','server_error','unreachable'))";
+                $where[] = "(cl.status IN ('redirect','client_error','server_error','unreachable','no_form'))";
             } else {
                 $where[] = "cl.status = '" . $conn->real_escape_string($status) . "'";
             }
@@ -435,7 +436,7 @@ if (!function_exists('pp_crowd_links_list')) {
                         SUM(cl.status = 'ok') AS ok_links,
                         SUM(cl.status = 'pending') AS pending_links,
                         SUM(cl.status = 'checking') AS checking_links,
-                        SUM(cl.status IN ('redirect','client_error','server_error','unreachable')) AS error_links,
+                        SUM(cl.status IN ('redirect','client_error','server_error','unreachable','no_form')) AS error_links,
                         MAX(cl.last_checked_at) AS last_checked_at
                     FROM crowd_links cl
                     $whereSql
@@ -518,7 +519,7 @@ if (!function_exists('pp_crowd_links_delete_errors')) {
         if (!$conn) {
             return 0;
         }
-        $sql = "DELETE FROM crowd_links WHERE status IN ('redirect','client_error','server_error','unreachable')";
+        $sql = "DELETE FROM crowd_links WHERE status IN ('redirect','client_error','server_error','unreachable','no_form')";
         @$conn->query($sql);
         $affected = $conn->affected_rows;
         $conn->close();
@@ -1082,6 +1083,28 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
     }
 }
 
+    if (!function_exists('pp_crowd_links_has_comment_form')) {
+        /**
+         * Simple heuristic: does the page contain at least one <form> with a <textarea>?
+         * Allows for common anti-bot attributes and nested structures.
+         */
+        function pp_crowd_links_has_comment_form(string $html): bool {
+            if ($html === '') { return false; }
+            $doc = pp_html_dom($html);
+            if (!$doc) { return false; }
+            $xp = new DOMXPath($doc);
+            // Direct: any form containing a textarea
+            $node = $xp->query('//form[.//textarea]')->item(0);
+            if ($node instanceof DOMElement) { return true; }
+            // Fallback: malformed markup where textarea and submit are siblings under a likely container
+            $candidate = $xp->query('//*[self::section or self::article or self::div or self::main or self::aside][.//textarea and (.//button | .//input[@type="submit" or @type="button"])][not(.//form)]')->item(0);
+            if ($candidate instanceof DOMElement) { return true; }
+            // Ultra-fallback: standalone textarea on page (rare, but count as form-like)
+            $anyTextarea = $xp->query('//textarea')->item(0);
+            return $anyTextarea instanceof DOMElement;
+        }
+    }
+
 if (!function_exists('pp_crowd_links_process_run')) {
     function pp_crowd_links_process_run(int $runId): void {
         if ($runId <= 0) { return; }
@@ -1143,6 +1166,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
             'client_error' => 0,
             'server_error' => 0,
             'unreachable' => 0,
+            'no_form' => 0,
         ];
         $checkCancel = static function(mysqli $conn, int $runId): bool {
             $res = @$conn->query('SELECT cancel_requested FROM crowd_link_runs WHERE id = ' . (int)$runId . ' LIMIT 1');
@@ -1244,7 +1268,14 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 }
                 $langRegion = ['language' => '', 'region' => ''];
                 if ($newStatus === 'ok' && $body !== '') {
-                    $langRegion = pp_crowd_links_extract_lang_region($body);
+                    // Simple presence check: require a form with textarea; otherwise mark as no_form
+                    if (!pp_crowd_links_has_comment_form($body)) {
+                        $newStatus = 'no_form';
+                        $errorText = __('На странице нет формы с полем комментария (textarea).');
+                    }
+                    // Extract language/region regardless of no_form to enrich meta
+                    $lr = pp_crowd_links_extract_lang_region($body);
+                    if (is_array($lr)) { $langRegion = $lr; }
                 }
                 $langVal = $langRegion['language'] ?? '';
                 $regionVal = $langRegion['region'] ?? '';
@@ -1309,7 +1340,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
             pp_crowd_links_log('Worker finished with cancellation', ['runId' => $runId]);
             return;
         }
-        $errorSum = $counts['redirect'] + $counts['client_error'] + $counts['server_error'] + $counts['unreachable'];
+    $errorSum = $counts['redirect'] + $counts['client_error'] + $counts['server_error'] + $counts['unreachable'] + ($counts['no_form'] ?? 0);
         $finalStatus = ($counts['processed'] === $total && $errorSum === 0) ? 'success' : 'completed';
         pp_crowd_links_update_run_counts($conn, $runId, $counts, $finalStatus);
         @$conn->query("UPDATE crowd_link_runs SET finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1");

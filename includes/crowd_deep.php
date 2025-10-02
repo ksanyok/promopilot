@@ -39,71 +39,6 @@ if (!function_exists('pp_crowd_deep_is_error_status')) {
     }
 }
 
-if (!function_exists('pp_crowd_deep_debug_sanitize')) {
-    function pp_crowd_deep_debug_sanitize($value, int $depth = 0)
-    {
-        if ($depth > 4) {
-            if (is_scalar($value) || $value === null) {
-                return $value;
-            }
-            return '...';
-        }
-        if (is_array($value)) {
-            $sanitized = [];
-            $count = 0;
-            foreach ($value as $key => $item) {
-                if ($count++ >= 40) {
-                    $sanitized['__truncated__'] = true;
-                    break;
-                }
-                $sanitized[$key] = pp_crowd_deep_debug_sanitize($item, $depth + 1);
-            }
-            return $sanitized;
-        }
-        if (is_string($value)) {
-            if (function_exists('pp_crowd_deep_clip')) {
-                return pp_crowd_deep_clip($value, 600);
-            }
-            if (function_exists('mb_substr')) {
-                return mb_substr($value, 0, 600, 'UTF-8');
-            }
-            return substr($value, 0, 600);
-        }
-        if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
-            return $value;
-        }
-        if (is_object($value)) {
-            return 'object:' . get_class($value);
-        }
-        return (string)$value;
-    }
-}
-
-if (!function_exists('pp_crowd_deep_debug_log')) {
-    function pp_crowd_deep_debug_log(string $message, array $context = []): void
-    {
-        try {
-            $dir = PP_ROOT_PATH . '/logs';
-            if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
-            if (!is_dir($dir) || !is_writable($dir)) { return; }
-            $file = $dir . '/crowd_deep_debug.log';
-            $timestamp = date('Y-m-d H:i:s');
-            $line = '[' . $timestamp . '] ' . $message;
-            if (!empty($context)) {
-                $sanitized = pp_crowd_deep_debug_sanitize($context);
-                $encoded = json_encode($sanitized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-                if ($encoded !== false && $encoded !== null) {
-                    $line .= ' ' . $encoded;
-                }
-            }
-            $line .= "\n";
-            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
-        } catch (Throwable $e) {
-            // ignore
-        }
-    }
-}
-
 if (!function_exists('pp_crowd_deep_default_options')) {
     function pp_crowd_deep_default_options(): array {
         return [
@@ -296,14 +231,6 @@ if (!function_exists('pp_crowd_deep_start_check')) {
             return ['ok' => false, 'error' => 'INVALID_OPTIONS', 'messages' => $prepared['errors']];
         }
         $options = $prepared['options'];
-        pp_crowd_deep_debug_log('Deep run request', [
-            'userId' => $userId,
-            'scope' => $scope,
-            'selectedCount' => count($selectedIds),
-            'token_prefix' => $options['token_prefix'] ?? null,
-            'message_link' => $options['message_link'] ?? null,
-            'template_length' => isset($options['message_template']) ? (function_exists('mb_strlen') ? mb_strlen($options['message_template'], 'UTF-8') : strlen($options['message_template'])) : null,
-        ]);
         pp_crowd_links_log('Request to start deep crowd check', ['userId' => $userId, 'scope' => $scope, 'selected' => count($selectedIds)]);
         try {
             $conn = @connect_db();
@@ -669,6 +596,82 @@ if (!function_exists('pp_crowd_deep_collect_text_nodes')) {
     }
 }
 
+if (!function_exists('pp_crowd_deep_normalize_token')) {
+    function pp_crowd_deep_normalize_token(string $text): string {
+        $text = preg_replace('~\s+~u', ' ', trim($text));
+        if ($text === '') {
+            return '';
+        }
+        if (function_exists('mb_strtolower')) {
+            return mb_strtolower($text, 'UTF-8');
+        }
+        return strtolower($text);
+    }
+}
+
+if (!function_exists('pp_crowd_deep_add_token')) {
+    function pp_crowd_deep_add_token(array &$tokens, string $value): void {
+        $normalized = pp_crowd_deep_normalize_token($value);
+        if ($normalized === '') {
+            return;
+        }
+        $tokens[] = $normalized;
+        $parts = preg_split('~[\s,;:/\\|_\-]+~u', $normalized);
+        if (is_array($parts)) {
+            foreach ($parts as $part) {
+                $part = trim($part);
+                if ($part !== '' && $part !== $normalized) {
+                    $tokens[] = $part;
+                }
+            }
+        }
+    }
+}
+
+if (!function_exists('pp_crowd_deep_collect_context_tokens')) {
+    function pp_crowd_deep_collect_context_tokens(DOMElement $field): array {
+        $tokens = [];
+        $push = static function($text) use (&$tokens): void {
+            if ($text === null) { return; }
+            pp_crowd_deep_add_token($tokens, (string)$text);
+        };
+
+        $parent = $field->parentNode;
+        if ($parent instanceof DOMElement) {
+            foreach ($parent->childNodes as $child) {
+                if ($child === $field) {
+                    break;
+                }
+                if ($child instanceof DOMText) {
+                    $push($child->nodeValue);
+                } elseif ($child instanceof DOMElement) {
+                    $tag = strtolower($child->tagName);
+                    if (in_array($tag, ['label', 'span', 'strong', 'b', 'em', 'i', 'small', 'p', 'div', 'legend', 'th'], true)) {
+                        $push($child->textContent);
+                    }
+                }
+            }
+
+            $parentTag = strtolower($parent->tagName);
+            if (in_array($parentTag, ['td', 'th', 'li', 'dt', 'dd'], true)) {
+                $sibling = $parent->previousSibling;
+                $checked = 0;
+                while ($sibling && $checked < 3) {
+                    if ($sibling instanceof DOMText) {
+                        $push($sibling->nodeValue);
+                    } elseif ($sibling instanceof DOMElement) {
+                        $push($sibling->textContent);
+                        $checked++;
+                    }
+                    $sibling = $sibling->previousSibling;
+                }
+            }
+        }
+
+        return $tokens;
+    }
+}
+
 if (!function_exists('pp_crowd_deep_find_label_text')) {
     function pp_crowd_deep_find_label_text(DOMElement $element, DOMXPath $xp): string {
         $id = $element->getAttribute('id');
@@ -693,21 +696,51 @@ if (!function_exists('pp_crowd_deep_find_label_text')) {
 if (!function_exists('pp_crowd_deep_collect_tokens')) {
     function pp_crowd_deep_collect_tokens(DOMElement $field, DOMXPath $xp): array {
         $tokens = [];
-        foreach (['name', 'id', 'class', 'placeholder', 'title', 'aria-label'] as $attr) {
+        foreach (['name', 'id', 'class', 'placeholder', 'title', 'aria-label', 'aria-labelledby', 'aria-describedby', 'autocomplete'] as $attr) {
             $val = trim((string)$field->getAttribute($attr));
             if ($val !== '') {
-                $tokens[] = strtolower($val);
+                if ($attr === 'class') {
+                    foreach (preg_split('~\s+~u', $val) as $cls) {
+                        pp_crowd_deep_add_token($tokens, $cls);
+                    }
+                } elseif (in_array($attr, ['aria-labelledby', 'aria-describedby'], true)) {
+                    $doc = $field->ownerDocument;
+                    if ($doc instanceof DOMDocument) {
+                        foreach (preg_split('~\s+~u', $val) as $refId) {
+                            $refId = trim($refId);
+                            if ($refId === '') { continue; }
+                            $labelNode = $doc->getElementById($refId);
+                            if ($labelNode instanceof DOMElement) {
+                                pp_crowd_deep_add_token($tokens, $labelNode->textContent);
+                            }
+                        }
+                    }
+                } else {
+                    pp_crowd_deep_add_token($tokens, $val);
+                }
             }
         }
-        $label = strtolower(trim(pp_crowd_deep_find_label_text($field, $xp)));
-        if ($label !== '') {
-            $tokens[] = $label;
+        if ($field->hasAttributes()) {
+            foreach ($field->attributes as $attribute) {
+                if (!$attribute instanceof DOMAttr) { continue; }
+                $name = strtolower($attribute->name);
+                if (strpos($name, 'data-') === 0) {
+                    pp_crowd_deep_add_token($tokens, (string)$attribute->value);
+                }
+            }
+        }
+        $labelText = trim(pp_crowd_deep_find_label_text($field, $xp));
+        if ($labelText !== '') {
+            pp_crowd_deep_add_token($tokens, $labelText);
+        }
+        foreach (pp_crowd_deep_collect_context_tokens($field) as $ctx) {
+            pp_crowd_deep_add_token($tokens, $ctx);
         }
         $parent = $field->parentNode;
         if ($parent instanceof DOMElement) {
             $legend = $xp->query('./ancestor::fieldset/legend', $field)->item(0);
             if ($legend instanceof DOMElement) {
-                $tokens[] = strtolower(trim($legend->textContent));
+                pp_crowd_deep_add_token($tokens, $legend->textContent);
             }
         }
         $tokens = array_values(array_unique(array_filter($tokens, static fn($v) => $v !== '')));
@@ -733,17 +766,35 @@ if (!function_exists('pp_crowd_deep_match_tokens')) {
 
 if (!function_exists('pp_crowd_deep_classify_field')) {
     function pp_crowd_deep_classify_field(DOMElement $field, DOMXPath $xp): array {
-        static $commentTokens = ['comment', 'message', 'review', 'feedback', 'body', 'opis', 'posta', 'опыт', 'коммент', 'сообщ', 'жалоб', 'question', 'ответ', 'texto', 'coment', 'review', 'mesaj', 'content', 'thoughts', 'discussion', 'descr', 'enquiry'];
-        static $nameTokens = ['name', 'author', 'fname', 'lname', 'fullname', 'fio', 'имя', 'фамил', 'surname', 'nome', 'nombre', 'prenom', 'ten', 'nick', 'username', 'contact', 'appellation'];
-        static $emailTokens = ['mail', 'email', 'courriel', 'correo', 'почт', 'adresse', 'e-mail'];
-        static $urlTokens = ['url', 'website', 'site', 'link', 'homepage', 'http', 'web'];
-        static $phoneTokens = ['phone', 'tel', 'mobile', 'whatsapp', 'номер', 'telefon', 'telefone', 'cel', 'whats'];
-        static $subjectTokens = ['subject', 'tema', 'topic', 'title', 'heading', 'тема', 'заголов', 'betreff'];
-        static $companyTokens = ['company', 'organisation', 'organization', 'org', 'business', 'brand', 'firma', 'empresa', 'компан'];
-        static $captchaTokens = ['captcha', 'recaptcha', 'cptch', 'security code', 'verification code', 'antispam', 'anti-spam', 'botcheck', 'are you human', 'g-recaptcha'];
-        static $termsTokens = ['privacy', 'policy', 'terms', 'consent', 'rgpd', 'gdpr', 'agree', 'accept', 'processing', 'compliance'];
+    static $commentTokens = [
+        'comment', 'commentary', 'commentaire', 'commento', 'commenti', 'coment', 'comentario', 'comentarios', 'comentários',
+        'message', 'messages', 'mensaje', 'mensajes', 'mensagem', 'mensagens', 'messaggio', 'messaggi', 'messagerie', 'msg',
+        'review', 'feedback', 'reply', 'respond', 'response', 'réponse', 'responda', 'resposta', 'risposta', 'antwort',
+        'body', 'content', 'discussion', 'thoughts', 'descr', 'description', 'opis', 'posta', 'texto',
+    'guestbook', 'gästebuch', 'opinie', 'opinia', 'otziv', 'отзыв', 'опыт', 'коммент', 'комментар', 'сообщ', 'жалоб', 'ответ', 'вопрос', 'відгук',
+        'hozzászól', 'hozzaszol', 'vélemény', 'velemeny', 'yorum', 'yorumunuz', 'yorumlar',
+        'nachricht', 'nachrichten', 'nachrichtentext', 'bemerkung', 'anmerkung', 'bericht',
+        'wiadomość', 'wiadomosc', 'wiadomości', 'wiadomosci', 'komentarz', 'komentarze', 'komentar', 'komentari', 'komentár', 'komentář',
+        'recensione', 'reseña', 'resena', 'recenzja', 'recenzje', 'recenzija',
+        'balasan', 'pesan', 'ulasan', 'jawaban',
+        '留言', '留言板', '留言内容', '留言內容', '评论', '評論', '评论内容', '評論內容', '反馈', '反饋',
+        '메시지', '메세지', '댓글', '리뷰',
+        'تعليق', 'تعليقات', 'رسالة', 'نص', 'مراجعة', 'رد'
+    ];
+    static $nameTokens = [
+    'name', 'author', 'fname', 'lname', 'fullname', 'fio', 'имя', 'фамил', 'фио', 'surname', 'nome', 'nombre', 'apellido',
+    'prenom', 'prénom', 'ten', 'nick', 'username', 'contact', 'kontakt', 'kontak', 'appellation', 'név', 'neve', 'nev', 'jméno', 'jmeno', 'naam', 'navn',
+        '名字', '姓名', '氏名', 'お名前', '名前', '이름', 'имяфамилия', 'імʼя', 'імя', 'नाम', 'nome completo', 'full name'
+    ];
+    static $emailTokens = ['mail', 'email', 'e-mail', 'courriel', 'correo', 'корресп', 'почт', 'adresse', 'adres', 'mailing', 'mailadresse', 'e-mailadres'];
+    static $urlTokens = ['url', 'website', 'site', 'link', 'homepage', 'http', 'web', 'honlap', 'weboldal', 'сайт', 'страница', '网址', '站点'];
+        static $phoneTokens = ['phone', 'tel', 'telephone', 'mobile', 'whatsapp', 'номер', 'telefon', 'telefone', 'cel', 'celular', 'whats', 'gsm', 'handy'];
+        static $subjectTokens = ['subject', 'tema', 'topic', 'title', 'heading', 'тема', 'заголов', 'betreff', 'assunto', 'asunto', 'temat'];
+    static $companyTokens = ['company', 'organisation', 'organization', 'org', 'business', 'brand', 'firma', 'empresa', 'компан', 'vállalat', 'vallalat', 'unternehmen', 'compania'];
+    static $captchaTokens = ['captcha', 'recaptcha', 'cptch', 'security code', 'verification code', 'antispam', 'anti-spam', 'botcheck', 'bot-check', 'are you human', 'g-recaptcha'];
+    static $termsTokens = ['privacy', 'policy', 'terms', 'consent', 'rgpd', 'gdpr', 'agree', 'accept', 'processing', 'compliance', 'conditions', 'política', 'política de privacidad', 'условия'];
+    static $honeypotTokens = ['honeypot', 'hp_', 'trap', 'ak_hp', 'fakefield', 'antispam', 'anti spam', 'spamtrap', 'spam-trap', 'nobot', 'no_bot', 'botcheck', 'leave blank'];
         static $ratingTokens = ['rating', 'stars', 'vote', 'score', 'оцен'];
-        static $honeypotTokens = ['honeypot', 'hp_', 'trap', 'ak_hp', 'fakefield', 'antispam'];
 
         $tag = strtolower($field->tagName);
         $type = strtolower((string)$field->getAttribute('type'));
@@ -762,48 +813,52 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
         }
         $role = 'generic';
         $nameLower = strtolower((string)$field->getAttribute('name'));
-        if ($nameLower !== '' && preg_match('~(honeypot|_hp_|ak_hp|trapfield|spamtrap|no_bot)~i', $nameLower)) {
-            $role = 'honeypot';
+        $isHoneypot = false;
+        if ($nameLower !== '' && preg_match('~(honeypot|_hp_|ak_hp|trapfield|spamtrap|nobot|no_bot|testfield|bot_trap)~i', $nameLower)) {
+            $isHoneypot = true;
         } elseif (pp_crowd_deep_match_tokens($tokens, $honeypotTokens)) {
+            $isHoneypot = true;
+        }
+        if ($isHoneypot) {
             $role = 'honeypot';
         }
         if ($type === 'hidden') {
             $role = 'hidden';
-        } elseif ($type === 'textarea') {
-            if ($role !== 'honeypot') {
-                $role = 'comment';
-            }
-        } elseif ($type === 'checkbox') {
+        } elseif ($role !== 'honeypot' && $type === 'textarea') {
+            $role = 'comment';
+        } elseif ($role !== 'honeypot' && in_array($type, ['submit', 'button', 'image'], true)) {
+            $role = 'submit';
+        } elseif ($role !== 'honeypot' && pp_crowd_deep_match_tokens($tokens, $commentTokens)) {
+            $role = 'comment';
+        } elseif ($role !== 'honeypot' && ($type === 'email' || pp_crowd_deep_match_tokens($tokens, $emailTokens))) {
+            $role = 'email';
+        } elseif ($role !== 'honeypot' && ($type === 'url' || pp_crowd_deep_match_tokens($tokens, $urlTokens))) {
+            $role = 'url';
+        } elseif ($role !== 'honeypot' && ($type === 'tel' || pp_crowd_deep_match_tokens($tokens, $phoneTokens))) {
+            $role = 'phone';
+        } elseif ($role !== 'honeypot' && $type === 'password') {
+            $role = 'password';
+        } elseif ($role !== 'honeypot' && $type === 'checkbox') {
             $role = pp_crowd_deep_match_tokens($tokens, $termsTokens) ? 'accept' : 'checkbox';
-        } elseif ($type === 'radio') {
+        } elseif ($role !== 'honeypot' && $type === 'radio') {
             if (pp_crowd_deep_match_tokens($tokens, $ratingTokens)) {
                 $role = 'rating';
             } else {
                 $role = 'radio';
             }
-        } elseif ($type === 'file') {
+        } elseif ($role !== 'honeypot' && $type === 'file') {
             $role = 'file';
-        } elseif ($type === 'email' || pp_crowd_deep_match_tokens($tokens, $emailTokens)) {
-            $role = 'email';
-        } elseif ($type === 'url' || pp_crowd_deep_match_tokens($tokens, $urlTokens)) {
-            $role = 'url';
-        } elseif ($type === 'tel' || pp_crowd_deep_match_tokens($tokens, $phoneTokens)) {
-            $role = 'phone';
-        } elseif ($type === 'password') {
-            $role = 'password';
-        } elseif (pp_crowd_deep_match_tokens($tokens, $captchaTokens) || strtolower((string)$field->getAttribute('id')) === 'g-recaptcha-response') {
+        } elseif ($role !== 'honeypot' && (pp_crowd_deep_match_tokens($tokens, $captchaTokens) || strtolower((string)$field->getAttribute('id')) === 'g-recaptcha-response')) {
             $role = 'captcha';
-        } elseif (pp_crowd_deep_match_tokens($tokens, $commentTokens)) {
-            if ($role !== 'honeypot') {
-                $role = 'comment';
-            }
-        } elseif (pp_crowd_deep_match_tokens($tokens, $nameTokens)) {
+        } elseif ($role !== 'honeypot' && pp_crowd_deep_match_tokens($tokens, $commentTokens)) {
+            $role = 'comment';
+        } elseif ($role !== 'honeypot' && pp_crowd_deep_match_tokens($tokens, $nameTokens)) {
             $role = 'name';
-        } elseif (pp_crowd_deep_match_tokens($tokens, $subjectTokens)) {
+        } elseif ($role !== 'honeypot' && pp_crowd_deep_match_tokens($tokens, $subjectTokens)) {
             $role = 'subject';
-        } elseif (pp_crowd_deep_match_tokens($tokens, $companyTokens)) {
+        } elseif ($role !== 'honeypot' && pp_crowd_deep_match_tokens($tokens, $companyTokens)) {
             $role = 'company';
-        } elseif ($tag === 'select') {
+        } elseif ($role !== 'honeypot' && $tag === 'select') {
             if (pp_crowd_deep_match_tokens($tokens, $ratingTokens)) {
                 $role = 'rating';
             } elseif (pp_crowd_deep_match_tokens($tokens, $commentTokens)) {
@@ -820,7 +875,6 @@ if (!function_exists('pp_crowd_deep_classify_field')) {
             'tokens' => $tokens,
             'tag' => $tag,
             'type' => $type,
-            'name' => $nameLower,
         ];
     }
 }
@@ -832,9 +886,6 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
         $hasComment = false;
         $radioGroups = [];
         $commentFieldName = null;
-        $fieldMeta = [];
-        $acceptNames = [];
-        $checkboxNames = [];
         $nodeList = $xp->query('.//input | .//textarea | .//select', $form);
         $recaptchaPresent = false;
         if ($nodeList) {
@@ -842,23 +893,6 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                 if (!$node instanceof DOMElement) { continue; }
                 $info = pp_crowd_deep_classify_field($node, $xp);
                 $name = trim((string)$node->getAttribute('name'));
-                if ($name === '' && $info['role'] === 'comment') {
-                    $fallbackId = trim((string)$node->getAttribute('id'));
-                    if ($fallbackId !== '') {
-                        $name = $fallbackId;
-                    }
-                }
-                $metaEntry = [
-                    'role' => $info['role'],
-                    'required' => $info['required'],
-                    'tag' => strtolower($node->tagName),
-                    'type' => $node->tagName === 'input' ? strtolower((string)$node->getAttribute('type')) : '',
-                ];
-                if ($name !== '') {
-                    $fieldMeta[$name][] = $metaEntry;
-                } else {
-                    $fieldMeta['_unnamed'][] = $metaEntry;
-                }
                 if ($info['role'] === 'captcha') {
                     $recaptchaPresent = true;
                 }
@@ -916,26 +950,6 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                     case 'accept':
                     case 'checkbox':
                         $value = $node->hasAttribute('value') ? $node->getAttribute('value') : 'on';
-                        $nameLowerLocal = strtolower($name);
-                        if ($info['role'] === 'accept') {
-                            $acceptNames[] = $name;
-                            if ($node->hasAttribute('value') === false || $value === '' || strtolower($value) === 'on') {
-                                if (strpos($nameLowerLocal, 'consent') !== false || strpos($nameLowerLocal, 'agree') !== false) {
-                                    $value = 'yes';
-                                } elseif (strpos($nameLowerLocal, 'cookie') !== false) {
-                                    $value = 'yes';
-                                } else {
-                                    $value = '1';
-                                }
-                            }
-                        } else {
-                            $checkboxNames[] = $name;
-                        }
-                        if ($name !== '') {
-                            if ($nameLowerLocal === 'wp-comment-cookies-consent') {
-                                $value = 'yes';
-                            }
-                        }
                         break;
                     case 'rating':
                         $value = '5';
@@ -1010,44 +1024,89 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
             'issues' => $issues,
             'has_comment' => $hasComment,
             'comment_field' => $commentFieldName,
-            'field_meta' => $fieldMeta,
-            'accept_fields' => array_values(array_unique(array_filter($acceptNames))),
-            'checkbox_fields' => array_values(array_unique(array_filter($checkboxNames))),
         ];
     }
 }
 
-if (!function_exists('pp_crowd_deep_debug_field_meta')) {
-    function pp_crowd_deep_debug_field_meta(array $fieldMeta): array
-    {
-        $summary = [];
-        foreach ($fieldMeta as $name => $entries) {
-            if (!is_array($entries)) { continue; }
-            $roles = [];
-            $tags = [];
-            $types = [];
-            $required = false;
-            foreach ($entries as $entry) {
-                if (!is_array($entry)) { continue; }
-                $role = (string)($entry['role'] ?? '');
-                if ($role !== '') { $roles[] = $role; }
-                if (!empty($entry['required'])) { $required = true; }
-                $tag = (string)($entry['tag'] ?? '');
-                if ($tag !== '') { $tags[] = $tag; }
-                $type = (string)($entry['type'] ?? '');
-                if ($type !== '') { $types[] = $type; }
-            }
-            $summary[$name] = [
-                'roles' => array_values(array_unique($roles)),
-                'required' => $required,
-                'tags' => array_values(array_unique($tags)),
-            ];
-            $types = array_values(array_filter(array_unique($types)));
-            if (!empty($types)) {
-                $summary[$name]['types'] = $types;
+// Fallback collector for malformed markup where controls are outside <form> but in the same container (e.g., tables)
+if (!function_exists('pp_crowd_deep_prepare_fields_from_container')) {
+    function pp_crowd_deep_prepare_fields_from_container(DOMElement $container, DOMXPath $xp, array $identity, ?DOMElement $form = null): array {
+        $fields = [];
+        $issues = [];
+        $hasComment = false;
+        $radioGroups = [];
+        $commentFieldName = null;
+        $recaptchaPresent = false;
+        $formId = $form instanceof DOMElement ? (string)$form->getAttribute('id') : '';
+        // pick all controls under the container that are not inside another form
+        $nodeList = $xp->query('.//input[not(ancestor::form)] | .//textarea[not(ancestor::form)] | .//select[not(ancestor::form)]', $container);
+        if ($nodeList) {
+            foreach ($nodeList as $node) {
+                if (!$node instanceof DOMElement) { continue; }
+                // If element uses HTML5 form attribute, ensure it targets our form (if provided)
+                $attrForm = trim((string)$node->getAttribute('form'));
+                if ($attrForm !== '') {
+                    if ($formId === '' || $attrForm !== $formId) { continue; }
+                }
+                $info = pp_crowd_deep_classify_field($node, $xp);
+                $name = trim((string)$node->getAttribute('name'));
+                if ($info['role'] === 'captcha') { $recaptchaPresent = true; }
+                if ($info['role'] === 'hidden') {
+                    if ($name !== '') { $fields[$name][] = $node->getAttribute('value'); }
+                    continue;
+                }
+                if ($info['role'] === 'file') { $issues['file'] = true; continue; }
+                if ($info['role'] === 'honeypot') { if ($name !== '') { $fields[$name][] = ''; } $issues['honeypot'] = true; continue; }
+                if ($name === '') { if ($info['role'] === 'comment') { $issues['comment_missing_name'] = true; } continue; }
+                $value = null;
+                switch ($info['role']) {
+                    case 'comment': $value = $identity['message']; $hasComment = true; $commentFieldName = $name; break;
+                    case 'name': $value = $identity['name']; break;
+                    case 'email': $value = $identity['email']; break;
+                    case 'url': $value = $identity['website']; break;
+                    case 'phone': $value = $identity['phone']; break;
+                    case 'password': $value = $identity['password']; break;
+                    case 'subject': $value = sprintf('PromoPilot %s', $identity['token']); break;
+                    case 'company': $value = $identity['company']; break;
+                    case 'accept':
+                    case 'checkbox': $value = $node->hasAttribute('value') ? $node->getAttribute('value') : 'on'; break;
+                    case 'rating': $value = '5'; break;
+                    case 'radio':
+                        $group = $name;
+                        if (!isset($radioGroups[$group])) { $radioGroups[$group] = true; $value = $node->hasAttribute('value') ? $node->getAttribute('value') : '1'; }
+                        else { continue 2; }
+                        break;
+                    default:
+                        if ($info['required']) { $value = $identity['fallback']; }
+                        else { $value = $node->getAttribute('value'); if ($value === '') { continue 2; } }
+                        break;
+                }
+                if ($info['role'] === 'captcha') { $issues['captcha'] = true; continue; }
+                if ($node->tagName === 'select') {
+                    $selected = null;
+                    foreach ($node->getElementsByTagName('option') as $option) {
+                        $optValue = $option->getAttribute('value');
+                        $optText = trim((string)$option->textContent);
+                        $disabled = $option->hasAttribute('disabled');
+                        if ($option->hasAttribute('selected') && !$disabled && $optValue !== '') { $selected = $optValue; break; }
+                        if ($selected === null && !$disabled && ($optValue !== '' || $optText !== '')) { $selected = $optValue !== '' ? $optValue : $optText; }
+                    }
+                    if ($selected === null) { if ($info['required']) { $issues['select'] = true; } continue; }
+                    $value = $selected;
+                }
+                if ($node->tagName === 'textarea') { $value = $value ?? $node->textContent; }
+                if ($node->tagName === 'input') { $type = strtolower($node->getAttribute('type')); if ($type === 'number' && !is_numeric($value)) { $value = '5'; } }
+                if ($info['role'] === 'checkbox' || $info['role'] === 'accept') { $fields[$name][] = (string)$value; }
+                else { $fields[$name] = [$value !== null ? (string)$value : '']; }
             }
         }
-        return $summary;
+        if ($recaptchaPresent) { $issues['captcha'] = true; }
+        return [
+            'fields' => $fields,
+            'issues' => $issues,
+            'has_comment' => $hasComment,
+            'comment_field' => $commentFieldName,
+        ];
     }
 }
 
@@ -1059,33 +1118,35 @@ if (!function_exists('pp_crowd_deep_build_plan')) {
         $action = trim($form->getAttribute('action'));
         $action = $action !== '' ? pp_abs_url($action, $baseUrl) : $baseUrl;
         $plan = pp_crowd_deep_prepare_fields($form, $xp, $identity);
-        $issues = [];
-        foreach (($plan['issues'] ?? []) as $issueName => $flag) {
-            if ($flag) { $issues[] = $issueName; }
+        // Fallback: if form has no controls/comment due to malformed markup (controls outside form), try nearest container
+        if ((!$plan['has_comment'] || empty($plan['fields'])) && empty($plan['issues']['captcha']) && empty($plan['issues']['file'])) {
+            $container = $form->parentNode;
+            $chosen = null;
+            $preferredTags = ['div','table','section','article','main','body'];
+            while ($container && $container instanceof DOMElement) {
+                // Use nodeName (available on DOMNode) to satisfy static analysis tools
+                $tag = strtolower($container->nodeName);
+                if (in_array($tag, $preferredTags, true)) { $chosen = $container; break; }
+                $container = $container->parentNode;
+            }
+            if ($chosen instanceof DOMElement) {
+                $fallback = pp_crowd_deep_prepare_fields_from_container($chosen, $xp, $identity, $form);
+                if ($fallback['has_comment'] && !empty($fallback['fields'])) {
+                    $plan = $fallback;
+                }
+            }
         }
-        $debug = [
-            'method' => $method,
-            'action' => $action,
-            'issues' => $issues,
-            'has_comment' => !empty($plan['has_comment']),
-            'comment_field' => $plan['comment_field'] ?? null,
-            'field_count' => isset($plan['fields']) && is_array($plan['fields']) ? count($plan['fields']) : 0,
-            'accept_fields' => $plan['accept_fields'] ?? [],
-            'checkbox_fields' => $plan['checkbox_fields'] ?? [],
-            'field_meta' => pp_crowd_deep_debug_field_meta($plan['field_meta'] ?? []),
-            'payload_keys' => [],
-        ];
         if (!empty($plan['issues']['captcha'])) {
-            return ['ok' => false, 'reason' => 'captcha', 'debug' => $debug];
+            return ['ok' => false, 'reason' => 'captcha'];
         }
         if (!empty($plan['issues']['file'])) {
-            return ['ok' => false, 'reason' => 'file', 'debug' => $debug];
+            return ['ok' => false, 'reason' => 'file'];
         }
         if (!$plan['has_comment']) {
-            return ['ok' => false, 'reason' => 'no_comment', 'debug' => $debug];
+            return ['ok' => false, 'reason' => 'no_comment'];
         }
         if (empty($plan['fields'])) {
-            return ['ok' => false, 'reason' => 'no_fields', 'debug' => $debug];
+            return ['ok' => false, 'reason' => 'no_fields'];
         }
         $payload = [];
         foreach ($plan['fields'] as $name => $values) {
@@ -1095,13 +1156,11 @@ if (!function_exists('pp_crowd_deep_build_plan')) {
                 $payload[$name] = $values;
             }
         }
-        $debug['payload_keys'] = array_keys($payload);
         return [
             'ok' => true,
             'method' => $method,
             'action' => $action,
             'payload' => $payload,
-            'debug' => $debug,
         ];
     }
 }
@@ -1114,11 +1173,12 @@ if (!function_exists('pp_crowd_deep_http_request')) {
         $headers = $opts['headers'] ?? [];
         $cookieFile = $opts['cookieFile'] ?? null;
         $referer = $opts['referer'] ?? '';
-        $ua = 'PromoPilotDeepBot/1.0 (+https://github.com/ksanyok/promopilot)';
+        // Use a realistic browser UA to reduce WAF/antispam blocks
+        $ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
         $defaultHeaders = [
             'User-Agent: ' . $ua,
             'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: ru,en;q=0.8',
+            'Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         ];
         $headers = array_merge($defaultHeaders, $headers);
         $body = '';
@@ -1155,6 +1215,18 @@ if (!function_exists('pp_crowd_deep_http_request')) {
                 } else {
                     $options[CURLOPT_POSTFIELDS] = (string)$data;
                 }
+                // Add an Origin header for CSRF protections if not already present
+                $origin = '';
+                $p = @parse_url($url);
+                if (is_array($p) && !empty($p['scheme']) && !empty($p['host'])) {
+                    $origin = $p['scheme'] . '://' . $p['host'];
+                }
+                if ($origin !== '') {
+                    $hasOrigin = false;
+                    foreach ($headers as $h) { if (stripos($h, 'origin:') === 0) { $hasOrigin = true; break; } }
+                    if (!$hasOrigin) { $headers[] = 'Origin: ' . $origin; }
+                }
+                $options[CURLOPT_HTTPHEADER] = $headers;
             } elseif ($method !== 'GET') {
                 $options[CURLOPT_CUSTOMREQUEST] = $method;
                 if (is_array($data)) {
@@ -1162,6 +1234,18 @@ if (!function_exists('pp_crowd_deep_http_request')) {
                 } elseif ($data !== null) {
                     $options[CURLOPT_POSTFIELDS] = (string)$data;
                 }
+                // For non-GET requests, also attach Origin
+                $origin = '';
+                $p = @parse_url($url);
+                if (is_array($p) && !empty($p['scheme']) && !empty($p['host'])) {
+                    $origin = $p['scheme'] . '://' . $p['host'];
+                }
+                if ($origin !== '') {
+                    $hasOrigin = false;
+                    foreach ($headers as $h) { if (stripos($h, 'origin:') === 0) { $hasOrigin = true; break; } }
+                    if (!$hasOrigin) { $headers[] = 'Origin: ' . $origin; }
+                }
+                $options[CURLOPT_HTTPHEADER] = $headers;
             }
             curl_setopt_array($ch, $options);
             $raw = curl_exec($ch);
@@ -1293,8 +1377,6 @@ if (!function_exists('pp_crowd_deep_extract_excerpt')) {
 
 if (!function_exists('pp_crowd_deep_handle_link')) {
     function pp_crowd_deep_handle_link(array $link, array $identity, array $options): array {
-        $runId = isset($options['_run_id']) ? (int)$options['_run_id'] : null;
-        $linkId = isset($link['id']) ? (int)$link['id'] : 0;
         $url = (string)$link['url'];
         $cookieFile = tempnam(sys_get_temp_dir(), 'ppdeep_');
         $result = [
@@ -1308,34 +1390,15 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             'duration_ms' => null,
             'token' => $identity['token'],
         ];
-        pp_crowd_deep_debug_log('Deep link start', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'url' => $url,
-            'token' => $identity['token'] ?? '',
-        ]);
         $startAll = microtime(true);
         $fetch = pp_crowd_deep_http_request($url, [
             'method' => 'GET',
             'timeout' => 25,
             'cookieFile' => $cookieFile,
         ]);
-        pp_crowd_deep_debug_log('Deep initial fetch', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'httpStatus' => $fetch['status'] ?? 0,
-            'finalUrl' => $fetch['final_url'] ?? '',
-            'bodyBytes' => isset($fetch['body']) ? strlen((string)$fetch['body']) : 0,
-            'error' => $fetch['error'] ?? '',
-        ]);
         if ($fetch['error'] !== '') {
             $result['error'] = $fetch['error'];
             $result['status'] = 'failed';
-            pp_crowd_deep_debug_log('Deep fetch error', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'error' => $result['error'],
-            ]);
             @unlink($cookieFile);
             return $result;
         }
@@ -1343,11 +1406,6 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if ($body === '') {
             $result['error'] = __('Не получен HTML контент страницы.');
             $result['status'] = 'failed';
-            pp_crowd_deep_debug_log('Deep fetch empty body', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'finalUrl' => $fetch['final_url'] ?? '',
-            ]);
             @unlink($cookieFile);
             return $result;
         }
@@ -1355,38 +1413,14 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if (!$doc) {
             $result['error'] = __('Не удалось разобрать HTML.');
             $result['status'] = 'failed';
-            pp_crowd_deep_debug_log('Deep fetch parse failed', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'finalUrl' => $fetch['final_url'] ?? '',
-            ]);
             @unlink($cookieFile);
             return $result;
         }
         $forms = $doc->getElementsByTagName('form');
-        $formsCount = ($forms instanceof DOMNodeList) ? $forms->length : 0;
-        pp_crowd_deep_debug_log('Deep forms detected', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'count' => $formsCount,
-            'finalUrl' => $fetch['final_url'] ?? $url,
-        ]);
         $plan = null;
-        $formIndex = 0;
         foreach ($forms as $form) {
             if (!$form instanceof DOMElement) { continue; }
-            $formIndex++;
             $candidate = pp_crowd_deep_build_plan($form, $fetch['final_url'] ?? $url, $identity);
-            pp_crowd_deep_debug_log('Deep form candidate', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'index' => $formIndex,
-                'ok' => !empty($candidate['ok']),
-                'reason' => $candidate['reason'] ?? null,
-                'method' => $candidate['method'] ?? null,
-                'action' => $candidate['action'] ?? null,
-                'debug' => $candidate['debug'] ?? [],
-            ]);
             if (!empty($candidate['ok'])) {
                 $plan = $candidate;
                 break;
@@ -1394,13 +1428,6 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             if (!empty($candidate['reason']) && in_array($candidate['reason'], ['captcha', 'file'], true)) {
                 $result['status'] = $candidate['reason'] === 'captcha' ? 'blocked' : 'skipped';
                 $result['error'] = $candidate['reason'] === 'captcha' ? __('Обнаружена CAPTCHA, автоматическая отправка невозможна.') : __('Форма требует загрузку файла.');
-                pp_crowd_deep_debug_log('Deep form rejected critical', [
-                    'runId' => $runId,
-                    'linkId' => $linkId,
-                    'index' => $formIndex,
-                    'reason' => $candidate['reason'],
-                    'debug' => $candidate['debug'] ?? [],
-                ]);
                 @unlink($cookieFile);
                 return $result;
             }
@@ -1408,22 +1435,9 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if (!$plan) {
             $result['status'] = 'no_form';
             $result['error'] = __('На странице не найдена форма с полем комментария.');
-            pp_crowd_deep_debug_log('Deep plan not found', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'formsChecked' => $formIndex,
-            ]);
             @unlink($cookieFile);
             return $result;
         }
-        pp_crowd_deep_debug_log('Deep form selected', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'method' => $plan['method'],
-            'action' => $plan['action'],
-            'payloadKeys' => array_keys($plan['payload']),
-            'debug' => $plan['debug'] ?? [],
-        ]);
         $result['request_payload'] = pp_crowd_deep_clip(is_array($plan['payload']) ? http_build_query($plan['payload']) : (string)$plan['payload'], 800);
         $submit = pp_crowd_deep_http_request($plan['action'], [
             'method' => $plan['method'],
@@ -1431,16 +1445,6 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
             'cookieFile' => $cookieFile,
             'referer' => $url,
             'data' => $plan['payload'],
-        ]);
-        pp_crowd_deep_debug_log('Deep submit request', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'method' => $plan['method'],
-            'action' => $plan['action'],
-            'httpStatus' => $submit['status'] ?? 0,
-            'finalUrl' => $submit['final_url'] ?? '',
-            'error' => $submit['error'] ?? '',
-            'payloadPreview' => $result['request_payload'],
         ]);
         $durationMs = (int)round((microtime(true) - $startAll) * 1000);
         $result['duration_ms'] = $durationMs;
@@ -1450,65 +1454,34 @@ if (!function_exists('pp_crowd_deep_handle_link')) {
         if ($submit['error'] !== '') {
             $result['error'] = $submit['error'];
             $result['status'] = 'failed';
-            pp_crowd_deep_debug_log('Deep submit error', [
-                'runId' => $runId,
-                'linkId' => $linkId,
-                'error' => $result['error'],
-            ]);
             @unlink($cookieFile);
             return $result;
         }
         $token = $identity['token'];
         $excerpt = pp_crowd_deep_extract_excerpt($responseBody, $token);
-        $successKeywordsDetected = false;
-        $failureKeywordsDetected = false;
-        $statusReason = 'token_not_found';
         if ($excerpt !== '') {
             $result['status'] = 'success';
             $result['response_excerpt'] = pp_crowd_deep_clip($excerpt, 400);
-            $statusReason = 'token_match';
         } else {
-            $successKeywordsDetected = pp_crowd_deep_detect_success_keywords($responseBody);
-            if ($successKeywordsDetected) {
+            if (pp_crowd_deep_detect_success_keywords($responseBody)) {
                 $result['status'] = 'partial';
                 $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
                 $result['error'] = __('Сообщение не найдено автоматически, требуется ручная проверка.');
-                $statusReason = 'success_keywords';
+            } elseif (pp_crowd_deep_detect_failure_keywords($responseBody)) {
+                $result['status'] = 'failed';
+                $result['error'] = __('Сайт отверг отправку комментария.');
+            } elseif ($result['http_status'] >= 200 && $result['http_status'] < 400) {
+                $result['status'] = 'partial';
+                $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
+                $result['error'] = __('Статус успешный, но сообщение не найдено.');
             } else {
-                $failureKeywordsDetected = pp_crowd_deep_detect_failure_keywords($responseBody);
-                if ($failureKeywordsDetected) {
-                    $result['status'] = 'failed';
-                    $result['error'] = __('Сайт отверг отправку комментария.');
-                    $statusReason = 'failure_keywords';
-                } elseif ($result['http_status'] >= 200 && $result['http_status'] < 400) {
-                    $result['status'] = 'partial';
-                    $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
-                    $result['error'] = __('Статус успешный, но сообщение не найдено.');
-                    $statusReason = 'http_ok_no_token';
-                } else {
-                    $result['status'] = 'failed';
-                    $result['error'] = __('Не удалось подтвердить публикацию сообщения.');
-                    $statusReason = 'http_error';
-                }
+                $result['status'] = 'failed';
+                $result['error'] = __('Не удалось подтвердить публикацию сообщения.');
             }
         }
         if ($result['response_excerpt'] === '' && $responseBody !== '') {
             $result['response_excerpt'] = pp_crowd_deep_clip(substr($responseBody, 0, 400), 400);
         }
-        pp_crowd_deep_debug_log('Deep handle result', [
-            'runId' => $runId,
-            'linkId' => $linkId,
-            'status' => $result['status'],
-            'reason' => $statusReason,
-            'http_status' => $result['http_status'],
-            'duration_ms' => $result['duration_ms'],
-            'error' => $result['error'],
-            'excerpt_found' => $excerpt !== '',
-            'success_keywords' => $successKeywordsDetected,
-            'failure_keywords' => $failureKeywordsDetected,
-            'response_excerpt' => $result['response_excerpt'],
-            'evidence_url' => $result['evidence_url'],
-        ]);
         @unlink($cookieFile);
         return $result;
     }
@@ -1541,11 +1514,9 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         if (function_exists('session_write_close')) { @session_write_close(); }
         @ignore_user_abort(true);
         pp_crowd_links_log('Deep worker started', ['runId' => $runId]);
-        pp_crowd_deep_debug_log('Deep run start', ['runId' => $runId]);
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
-            pp_crowd_deep_debug_log('Deep run db connect failed', ['runId' => $runId, 'error' => $e->getMessage()]);
             pp_crowd_links_log('Deep worker cannot connect to DB', ['runId' => $runId, 'error' => $e->getMessage()]);
             return;
         }
@@ -1560,13 +1531,11 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         $runRow = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         if (!$runRow) {
-            pp_crowd_deep_debug_log('Deep run metadata missing', ['runId' => $runId]);
             $conn->close();
             return;
         }
         $status = (string)($runRow['status'] ?? '');
         if (!in_array($status, ['queued', 'running'], true)) {
-            pp_crowd_deep_debug_log('Deep run skipped due to status', ['runId' => $runId, 'status' => $status]);
             $conn->close();
             return;
         }
@@ -1584,18 +1553,10 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         }
         if (empty($links)) {
             @$conn->query("UPDATE crowd_deep_runs SET status='failed', notes='No links to process', finished_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
-            pp_crowd_deep_debug_log('Deep run has no links', ['runId' => $runId]);
             $conn->close();
             return;
         }
         $options = pp_crowd_deep_merge_options($runRow);
-        $options['_run_id'] = $runId;
-        pp_crowd_deep_debug_log('Deep run prepared', [
-            'runId' => $runId,
-            'scope' => $runRow['scope'] ?? null,
-            'total_links' => count($links),
-            'token_prefix' => $options['token_prefix'] ?? null,
-        ]);
         $counts = [
             'processed' => 0,
             'success' => 0,
@@ -1629,7 +1590,6 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         foreach ($links as $item) {
             if ($checkCancel($conn, $runId)) {
                 $cancelled = true;
-                pp_crowd_deep_debug_log('Deep run cancellation requested', ['runId' => $runId, 'processed' => $counts['processed']]);
                 break;
             }
             $linkId = (int)$item['id'];
@@ -1692,7 +1652,6 @@ if (!function_exists('pp_crowd_deep_process_run')) {
             pp_crowd_deep_update_run_counts($conn, $runId, $counts, 'cancelled');
             @$conn->query("UPDATE crowd_deep_runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1");
             $conn->close();
-            pp_crowd_deep_debug_log('Deep run cancelled', ['runId' => $runId, 'counts' => $counts]);
             pp_crowd_links_log('Deep worker finished with cancellation', ['runId' => $runId]);
             return;
         }
@@ -1701,7 +1660,6 @@ if (!function_exists('pp_crowd_deep_process_run')) {
         pp_crowd_deep_update_run_counts($conn, $runId, $counts, $finalStatus);
         @$conn->query("UPDATE crowd_deep_runs SET finished_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1");
         $conn->close();
-        pp_crowd_deep_debug_log('Deep run finished', ['runId' => $runId, 'counts' => $counts, 'finalStatus' => $finalStatus]);
         pp_crowd_links_log('Deep worker finished', ['runId' => $runId, 'processed' => $counts['processed'], 'failed' => $counts['failed'], 'partial' => $counts['partial']]);
     }
 }
