@@ -598,7 +598,7 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
 }
 
 if (!function_exists('pp_crowd_links_wait_for_worker_start')) {
-    function pp_crowd_links_wait_for_worker_start(int $runId, float $timeoutSeconds = 3.0): bool {
+    function pp_crowd_links_wait_for_worker_start(int $runId, float $timeoutSeconds = 8.0): bool {
         $deadline = microtime(true) + max(0.5, $timeoutSeconds);
         while (microtime(true) < $deadline) {
             try {
@@ -689,9 +689,9 @@ if (!function_exists('pp_crowd_links_start_check')) {
             $diffLast = isset($activeRow['diff_last']) ? (int)$activeRow['diff_last'] : null;
             $diffStarted = isset($activeRow['diff_started']) ? (int)$activeRow['diff_started'] : null;
             if (in_array((string)($activeRow['status'] ?? ''), ['queued','running'], true)) {
-                if ($diffLast !== null && $diffLast >= 150) { $isStalled = true; }
-                elseif (($activeRow['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $isStalled = true; }
-                else { $isStalled = pp_crowd_links_is_stalled_run($activeRow, 150); }
+                if ($diffLast !== null && $diffLast >= 300) { $isStalled = true; }
+                elseif (($activeRow['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 300) { $isStalled = true; }
+                else { $isStalled = pp_crowd_links_is_stalled_run($activeRow, 300); }
             }
             // If there are no links bound to this run (e.g., after DB cleanup), treat as stalled and cancel
             if ($activeId) {
@@ -704,7 +704,7 @@ if (!function_exists('pp_crowd_links_start_check')) {
                     $isStalled = true;
                 }
             }
-            if ($activeId && ($alreadyCancelRequested || $isStalled)) {
+            if ($activeId && $alreadyCancelRequested) {
                 $note = __('Автоматическая остановка из-за отсутствия активности.');
                 $stmt = $conn->prepare("UPDATE crowd_link_runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP, notes=TRIM(CONCAT_WS('\n', NULLIF(notes,''), ?)) WHERE id=? LIMIT 1");
                 if ($stmt) {
@@ -714,6 +714,22 @@ if (!function_exists('pp_crowd_links_start_check')) {
                 }
                 @$conn->query('UPDATE crowd_links SET processing_run_id = NULL WHERE processing_run_id = ' . $activeId);
                 pp_crowd_links_log('Auto-cancelled stalled run', ['runId' => $activeId, 'cancelRequested' => $alreadyCancelRequested, 'stalled' => $isStalled]);
+            } elseif ($activeId && $isStalled) {
+                // Auto-resume: try to relaunch existing worker to continue remaining links
+                $note = __('Автопродолжение после паузы/зависания.');
+                if ($status === 'queued') {
+                    @$conn->query("UPDATE crowd_link_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = " . (int)$activeId . " LIMIT 1");
+                }
+                // Touch activity and append note
+                if ($stmt = $conn->prepare("UPDATE crowd_link_runs SET last_activity_at=CURRENT_TIMESTAMP, notes=TRIM(CONCAT_WS('\\n', NULLIF(notes,''), ?)) WHERE id=? LIMIT 1")) {
+                    $stmt->bind_param('si', $note, $activeId);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+                pp_crowd_links_log('Auto-resume run', ['runId' => $activeId, 'status' => $status]);
+                pp_crowd_links_launch_worker($activeId);
+                $conn->close();
+                return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true, 'resumed' => true, 'status' => 'running'];
             } elseif ($activeId) {
                 $conn->close();
                 return ['ok' => true, 'runId' => $activeId, 'alreadyRunning' => true, 'status' => $status];
@@ -783,13 +799,12 @@ if (!function_exists('pp_crowd_links_start_check')) {
             }
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
-        if (!pp_crowd_links_wait_for_worker_start($runId, 3.0)) {
-            pp_crowd_links_log('Worker did not start in time, running inline', ['runId' => $runId]);
-            try {
-                pp_crowd_links_process_run($runId);
-            } catch (Throwable $e) {
-                pp_crowd_links_log('Inline processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
-            }
+        // Wait longer for the background worker to flip status to running
+        if (!pp_crowd_links_wait_for_worker_start($runId, 8.0)) {
+            // Retry once more to launch, but do NOT run inline to avoid web timeout kills
+            pp_crowd_links_log('Worker did not start in time, retrying launch', ['runId' => $runId]);
+            pp_crowd_links_launch_worker($runId);
+            pp_crowd_links_wait_for_worker_start($runId, 8.0);
         }
         return ['ok' => true, 'runId' => $runId, 'total' => $total, 'alreadyRunning' => false];
     }
@@ -874,9 +889,20 @@ if (!function_exists('pp_crowd_links_get_status')) {
         $diffStarted = isset($row['diff_started']) ? (int)$row['diff_started'] : null;
         $run['stalled'] = false;
         if ($run['in_progress']) {
-            if ($diffLast !== null && $diffLast >= 150) { $run['stalled'] = true; }
-            elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $run['stalled'] = true; }
-            else { $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150); }
+            if ($diffLast !== null && $diffLast >= 300) { $run['stalled'] = true; }
+            elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 300) { $run['stalled'] = true; }
+            else { $run['stalled'] = pp_crowd_links_is_stalled_run($row, 300); }
+        }
+        // Optional: auto-resume on status check (no heavy logic, just gently nudge the worker)
+        if ($run['in_progress'] && $run['stalled']) {
+            try {
+                $conn2 = @connect_db();
+                if ($conn2) {
+                    @$conn2->query('UPDATE crowd_link_runs SET last_activity_at=CURRENT_TIMESTAMP WHERE id=' . (int)$run['id'] . ' LIMIT 1');
+                    $conn2->close();
+                }
+            } catch (Throwable $e) { /* ignore */ }
+            pp_crowd_links_launch_worker($run['id']);
         }
         return ['ok' => true, 'run' => $run];
     }
@@ -933,9 +959,9 @@ if (!function_exists('pp_crowd_links_cancel')) {
             } else {
                 $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
                 $diffStarted = isset($row['diff_started']) ? (int)$row['diff_started'] : null;
-                if ($diffLast !== null && $diffLast >= 150) { $shouldForce = true; }
-                elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $shouldForce = true; }
-                elseif (pp_crowd_links_is_stalled_run($row, 150)) { $shouldForce = true; }
+                if ($diffLast !== null && $diffLast >= 300) { $shouldForce = true; }
+                elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 300) { $shouldForce = true; }
+                elseif (pp_crowd_links_is_stalled_run($row, 300)) { $shouldForce = true; }
             }
         }
         @$conn->query("UPDATE crowd_link_runs SET cancel_requested = 1 WHERE id = " . (int)$runId . " LIMIT 1");
@@ -1317,6 +1343,9 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 break;
             }
 
+            // Heartbeat: update last_activity_at at least every batch start
+            try { @$conn->query("UPDATE crowd_link_runs SET last_activity_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1"); } catch (Throwable $e) { /* ignore */ }
+
             $chunkStart = microtime(true);
             $chunkIds = array_column($chunk, 'id');
             if (!empty($chunkIds)) {
@@ -1480,6 +1509,10 @@ if (!function_exists('pp_crowd_links_process_run')) {
             pp_crowd_links_update_run_counts($conn, $runId, $counts, 'running');
 
             $chunkDuration = microtime(true) - $chunkStart;
+            // Heartbeat: if батч шёл долго, пульснём ещё раз, чтобы UI не считал процесс зависшим
+            if ($chunkDuration > 10) {
+                try { @$conn->query("UPDATE crowd_link_runs SET last_activity_at=CURRENT_TIMESTAMP WHERE id=" . (int)$runId . " LIMIT 1"); } catch (Throwable $e) { /* ignore */ }
+            }
             $timeoutRatio = $currentBatchSize > 0 ? ($chunkTimeouts / $currentBatchSize) : 0.0;
             $unreachableRatio = $currentBatchSize > 0 ? ($chunkUnreachables / $currentBatchSize) : 0.0;
             if ($chunkDuration < 4.5 && $timeoutRatio < 0.05 && $parallelLimit < $maxParallel) {
