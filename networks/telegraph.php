@@ -10,7 +10,7 @@ return [
     'description' => 'Глобальная площадка для публикации статей (Telegra.ph) с генерацией контента через OpenAI. Подходит для широкого круга тематик и регионов.',
     'handler' => __DIR__ . '/telegraph.js',
     'handler_type' => 'node',
-    'priority' => 100,
+    'priority' => 88,
     'level' => '1,2,3',
     'meta' => [
         'supports' => ['articles', 'longform'],

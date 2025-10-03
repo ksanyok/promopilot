@@ -124,6 +124,41 @@
                 <label class="form-label"><?php echo __('Telegram канал'); ?></label>
                 <input type="text" name="telegram_channel" class="form-control" value="<?php echo htmlspecialchars($settings['telegram_channel']); ?>" placeholder="@your_channel или chat_id">
             </div>
+
+            <div class="col-12"><hr></div>
+            <div class="col-12">
+                <h4 class="mt-2 mb-3"><?php echo __('Настройки продвижения'); ?></h4>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label"><?php echo __('Стоимость продвижения за ссылку'); ?></label>
+                <div class="input-group">
+                    <input type="number" step="0.01" min="0" name="promotion_price_per_link" class="form-control" value="<?php echo htmlspecialchars($settings['promotion_price_per_link']); ?>" required>
+                    <span class="input-group-text"><?php echo htmlspecialchars(strtoupper($settings['currency'] ?? 'RUB')); ?></span>
+                </div>
+                <div class="form-text"><?php echo __('Используется при запуске продвижения и списывается с баланса с учетом скидки.'); ?></div>
+            </div>
+            <div class="col-md-8">
+                <label class="form-label"><?php echo __('Включенные уровни'); ?></label>
+                <div class="d-flex flex-wrap gap-4">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="promotionLevel1" name="promotion_level1_enabled" value="1" <?php echo ($settings['promotion_level1_enabled']==='1' ? 'checked' : ''); ?>>
+                        <label class="form-check-label" for="promotionLevel1"><?php echo __('Уровень 1'); ?></label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="promotionLevel2" name="promotion_level2_enabled" value="1" <?php echo ($settings['promotion_level2_enabled']==='1' ? 'checked' : ''); ?>>
+                        <label class="form-check-label" for="promotionLevel2"><?php echo __('Уровень 2'); ?></label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="promotionLevel3" name="promotion_level3_enabled" value="1" <?php echo ($settings['promotion_level3_enabled']==='1' ? 'checked' : ''); ?>>
+                        <label class="form-check-label" for="promotionLevel3"><?php echo __('Уровень 3'); ?></label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="promotionCrowd" name="promotion_crowd_enabled" value="1" <?php echo ($settings['promotion_crowd_enabled']==='1' ? 'checked' : ''); ?>>
+                        <label class="form-check-label" for="promotionCrowd"><?php echo __('Крауд'); ?></label>
+                    </div>
+                </div>
+                <div class="form-text"><?php echo __('Отключенные уровни не будут запускаться для новых продвижений.'); ?></div>
+            </div>
         </div>
         <div class="mt-3">
             <button type="submit" name="settings_submit" value="1" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>

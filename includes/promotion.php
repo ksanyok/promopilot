@@ -42,6 +42,7 @@ if (!function_exists('pp_promotion_settings')) {
             'level2_max_len' => 2100,
             'crowd_per_article' => 100,
             'network_repeat_limit' => 2,
+            'price_per_link' => max(0, (float)str_replace(',', '.', (string)get_setting('promotion_price_per_link', '0'))),
         ];
         $map = [
             'promotion_level1_enabled' => 'level1_enabled',
@@ -127,23 +128,86 @@ if (!function_exists('pp_promotion_start_run')) {
         }
         $settings = pp_promotion_settings();
         $settingsJson = json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: '{}';
-        $stmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot) VALUES (?, ?, ?, \'queued\', \'pending_level1\', ?, ?)');
-        if (!$stmt) {
-            $conn->close();
-            return ['ok' => false, 'error' => 'DB'];
-        }
-        $linkId = (int)$linkRow['id'];
-        $stmt->bind_param('iisiss', $projectId, $linkId, $url, $userId, $settingsJson);
-        if (!$stmt->execute()) {
+        $basePrice = max(0, (float)($settings['price_per_link'] ?? 0));
+
+        $runId = 0;
+        $chargedAmount = 0.0;
+        $discountPercent = 0.0;
+        try {
+            $conn->begin_transaction();
+            $userStmt = $conn->prepare('SELECT balance, promotion_discount FROM users WHERE id = ? LIMIT 1 FOR UPDATE');
+            if (!$userStmt) {
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'DB'];
+            }
+            $userStmt->bind_param('i', $userId);
+            if (!$userStmt->execute()) {
+                $userStmt->close();
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'DB'];
+            }
+            $userRow = $userStmt->get_result()->fetch_assoc();
+            $userStmt->close();
+            if (!$userRow) {
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'USER_NOT_FOUND'];
+            }
+
+            $balance = (float)$userRow['balance'];
+            $discountPercent = max(0.0, min(100.0, (float)($userRow['promotion_discount'] ?? 0)));
+            $chargedAmount = max(0.0, round($basePrice * (1 - $discountPercent / 100), 2));
+
+            if ($chargedAmount > 0 && ($balance + 1e-6) < $chargedAmount) {
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'INSUFFICIENT_FUNDS'];
+            }
+
+            if ($chargedAmount > 0) {
+                $upd = $conn->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
+                if (!$upd) {
+                    $conn->rollback();
+                    $conn->close();
+                    return ['ok' => false, 'error' => 'DB'];
+                }
+                $upd->bind_param('di', $chargedAmount, $userId);
+                if (!$upd->execute()) {
+                    $upd->close();
+                    $conn->rollback();
+                    $conn->close();
+                    return ['ok' => false, 'error' => 'DB'];
+                }
+                $upd->close();
+            }
+
+            $stmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent) VALUES (?, ?, ?, \'queued\', \'pending_level1\', ?, ?, ?, ?)');
+            if (!$stmt) {
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'DB'];
+            }
+            $linkId = (int)$linkRow['id'];
+            $stmt->bind_param('iisisdd', $projectId, $linkId, $url, $userId, $settingsJson, $chargedAmount, $discountPercent);
+            if (!$stmt->execute()) {
+                $stmt->close();
+                $conn->rollback();
+                $conn->close();
+                return ['ok' => false, 'error' => 'DB'];
+            }
+            $runId = (int)$conn->insert_id;
             $stmt->close();
+            $conn->commit();
+        } catch (Throwable $e) {
+            try { $conn->rollback(); } catch (Throwable $rollbackIgnored) {}
             $conn->close();
             return ['ok' => false, 'error' => 'DB'];
         }
-        $runId = (int)$conn->insert_id;
-        $stmt->close();
         $conn->close();
         pp_promotion_launch_worker($runId);
-        return ['ok' => true, 'status' => 'queued', 'run_id' => $runId];
+        return ['ok' => true, 'status' => 'queued', 'run_id' => $runId, 'charged' => $chargedAmount, 'discount' => $discountPercent];
     }
 }
 
@@ -666,6 +730,12 @@ if (!function_exists('pp_promotion_get_status')) {
             'crowd' => ['planned' => $crowdCount],
             'run_id' => $runId,
             'report_ready' => !empty($run['report_json']) || $run['status'] === 'completed',
+            'charge' => [
+                'amount' => (float)$run['charged_amount'],
+                'discount_percent' => (float)$run['discount_percent'],
+            ],
+            'charged_amount' => (float)$run['charged_amount'],
+            'discount_percent' => (float)$run['discount_percent'],
         ];
     }
 }

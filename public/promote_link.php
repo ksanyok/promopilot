@@ -97,6 +97,8 @@ if (empty($result['ok'])) {
         'LEVEL1_DISABLED' => 'LEVEL1_DISABLED',
         'URL_NOT_FOUND' => 'URL_NOT_IN_PROJECT',
         'DB' => 'DB',
+        'INSUFFICIENT_FUNDS' => 'INSUFFICIENT_FUNDS',
+        'USER_NOT_FOUND' => 'DB',
     ];
     $code = $result['error'] ?? 'UNKNOWN';
     echo json_encode(['ok' => false, 'error' => $map[$code] ?? $code]);

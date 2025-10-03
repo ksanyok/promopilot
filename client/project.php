@@ -1416,7 +1416,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     'LEVEL1_DISABLED': '<?php echo __('Уровень 1 отключен в настройках.'); ?>',
                     'URL_NOT_IN_PROJECT': '<?php echo __('Ссылка не принадлежит проекту.'); ?>',
                     'DB': '<?php echo __('Ошибка базы данных'); ?>',
-                    'FORBIDDEN': '<?php echo __('Нет прав'); ?>'
+                    'FORBIDDEN': '<?php echo __('Нет прав'); ?>',
+                    'INSUFFICIENT_FUNDS': '<?php echo __('Недостаточно средств на балансе.'); ?>'
                 };
                 if (map[msg]) { msg = map[msg]; }
                 alert('<?php echo __('Ошибка запуска продвижения'); ?>: ' + msg);

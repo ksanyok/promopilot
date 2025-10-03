@@ -29,6 +29,12 @@ $settingsKeys = array_merge($settingsKeys, [
     'captcha_api_key',
     'captcha_fallback_provider', // none | 2captcha | anti-captcha | capsolver
     'captcha_fallback_api_key',
+    // Promotion pricing and levels
+    'promotion_price_per_link',
+    'promotion_level1_enabled',
+    'promotion_level2_enabled',
+    'promotion_level3_enabled',
+    'promotion_crowd_enabled',
 ]);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -51,6 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $googleClientId = trim((string)($_POST['google_client_id'] ?? ''));
             $googleClientSecret = trim((string)($_POST['google_client_secret'] ?? ''));
 
+            $priceRaw = str_replace(',', '.', (string)($_POST['promotion_price_per_link'] ?? '0'));
+            $promotionPrice = max(0, round((float)$priceRaw, 2));
             $pairs = [
                 ['currency', $currency],
                 ['openai_api_key', $openai],
@@ -66,6 +74,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['captcha_api_key', trim((string)($_POST['captcha_api_key'] ?? ''))],
                 ['captcha_fallback_provider', in_array(($_POST['captcha_fallback_provider'] ?? 'none'), ['none','2captcha','anti-captcha','capsolver'], true) ? $_POST['captcha_fallback_provider'] : 'none'],
                 ['captcha_fallback_api_key', trim((string)($_POST['captcha_fallback_api_key'] ?? ''))],
+                // Promotion
+                ['promotion_price_per_link', number_format($promotionPrice, 2, '.', '')],
+                ['promotion_level1_enabled', isset($_POST['promotion_level1_enabled']) ? '1' : '0'],
+                ['promotion_level2_enabled', isset($_POST['promotion_level2_enabled']) ? '1' : '0'],
+                ['promotion_level3_enabled', isset($_POST['promotion_level3_enabled']) ? '1' : '0'],
+                ['promotion_crowd_enabled', isset($_POST['promotion_crowd_enabled']) ? '1' : '0'],
             ];
             $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
             if ($stmt) {
@@ -241,7 +255,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Load settings
-$settings = ['currency' => 'RUB', 'openai_api_key' => '', 'telegram_token' => '', 'telegram_channel' => ''];
+$settings = [
+    'currency' => 'RUB',
+    'openai_api_key' => '',
+    'telegram_token' => '',
+    'telegram_channel' => '',
+    'promotion_price_per_link' => '0.00',
+    'promotion_level1_enabled' => '1',
+    'promotion_level2_enabled' => '1',
+    'promotion_level3_enabled' => '0',
+    'promotion_crowd_enabled' => '1',
+];
 // Defaults for new settings
 $settings += [
     'ai_provider' => $settings['ai_provider'] ?? 'openai',
@@ -263,8 +287,16 @@ if ($res) {
     }
 }
 
+$promoDefaults = pp_promotion_settings();
+$settings['promotion_price_per_link'] = $settings['promotion_price_per_link'] ?? number_format((float)($promoDefaults['price_per_link'] ?? 0), 2, '.', '');
+$settings['promotion_level1_enabled'] = $settings['promotion_level1_enabled'] ?? ($promoDefaults['level1_enabled'] ? '1' : '0');
+$settings['promotion_level2_enabled'] = $settings['promotion_level2_enabled'] ?? ($promoDefaults['level2_enabled'] ? '1' : '0');
+$settings['promotion_level3_enabled'] = $settings['promotion_level3_enabled'] ?? ($promoDefaults['level3_enabled'] ? '1' : '0');
+$settings['promotion_crowd_enabled'] = $settings['promotion_crowd_enabled'] ?? ($promoDefaults['crowd_enabled'] ? '1' : '0');
+
+
 // Получить пользователей
-$users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.created_at, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");
+$users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.promotion_discount, u.created_at, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");
 
 // Получить проекты
 $projects = $conn->query("SELECT p.id, p.name, p.description, p.links, p.created_at, u.username, COUNT(pb.id) AS published_count FROM projects p JOIN users u ON p.user_id = u.id LEFT JOIN publications pb ON pb.project_id = p.id GROUP BY p.id ORDER BY p.id");

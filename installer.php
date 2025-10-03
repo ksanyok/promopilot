@@ -185,6 +185,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         password VARCHAR(255),
         role ENUM('admin','client') DEFAULT 'client',
         balance DECIMAL(10,2) DEFAULT 0.00,
+        promotion_discount DECIMAL(5,2) NOT NULL DEFAULT 0.00,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
@@ -224,6 +225,117 @@ function setup_database(string $host, string $user, string $pass, string $db, st
 
     if ($mysqli->error) {
         $errors[] = 'Ошибка создания таблицы publications: ' . $mysqli->error;
+    }
+
+    // Normalized project links
+    $mysqli->query("CREATE TABLE IF NOT EXISTS project_links (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        project_id INT NOT NULL,
+        url TEXT NOT NULL,
+        anchor VARCHAR(255) NULL,
+        language VARCHAR(10) NOT NULL DEFAULT 'ru',
+        wish TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_project_links_project (project_id),
+        CONSTRAINT fk_project_links_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы project_links: ' . $mysqli->error;
+    }
+
+    // Settings key/value storage
+    $mysqli->query("CREATE TABLE IF NOT EXISTS settings (
+        k VARCHAR(191) PRIMARY KEY,
+        v TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы settings: ' . $mysqli->error;
+    }
+
+    // Promotion runs (cascade execution root)
+    $mysqli->query("CREATE TABLE IF NOT EXISTS promotion_runs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        project_id INT NOT NULL,
+        link_id INT NOT NULL,
+        target_url TEXT NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        stage VARCHAR(32) NOT NULL DEFAULT 'pending_level1',
+        initiated_by INT NULL,
+        settings_snapshot TEXT NULL,
+        charged_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+        progress_total INT NOT NULL DEFAULT 0,
+        progress_done INT NOT NULL DEFAULT 0,
+        error TEXT NULL,
+        report_json LONGTEXT NULL,
+        started_at TIMESTAMP NULL DEFAULT NULL,
+        finished_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_promotion_runs_project (project_id),
+        INDEX idx_promotion_runs_link (link_id),
+        INDEX idx_promotion_runs_status (status),
+        CONSTRAINT fk_promotion_runs_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        CONSTRAINT fk_promotion_runs_link FOREIGN KEY (link_id) REFERENCES project_links(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы promotion_runs: ' . $mysqli->error;
+    }
+
+    // Promotion nodes (individual tasks within a run)
+    $mysqli->query("CREATE TABLE IF NOT EXISTS promotion_nodes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        run_id INT NOT NULL,
+        level INT NOT NULL DEFAULT 1,
+        parent_id INT NULL,
+        target_url TEXT NOT NULL,
+        result_url TEXT NULL,
+        network_slug VARCHAR(100) NOT NULL,
+        publication_id INT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        anchor_text VARCHAR(255) NULL,
+        initiated_by INT NULL,
+        queued_at TIMESTAMP NULL DEFAULT NULL,
+        started_at TIMESTAMP NULL DEFAULT NULL,
+        finished_at TIMESTAMP NULL DEFAULT NULL,
+        error TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_promotion_nodes_run (run_id),
+        INDEX idx_promotion_nodes_publication (publication_id),
+        INDEX idx_promotion_nodes_status (status),
+        CONSTRAINT fk_promotion_nodes_run FOREIGN KEY (run_id) REFERENCES promotion_runs(id) ON DELETE CASCADE,
+        CONSTRAINT fk_promotion_nodes_parent FOREIGN KEY (parent_id) REFERENCES promotion_nodes(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы promotion_nodes: ' . $mysqli->error;
+    }
+
+    // Promotion crowd tasks (external submissions)
+    $mysqli->query("CREATE TABLE IF NOT EXISTS promotion_crowd_tasks (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        run_id INT NOT NULL,
+        node_id INT NULL,
+        crowd_link_id INT NULL,
+        target_url TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'planned',
+        result_url TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_promotion_crowd_run (run_id),
+        INDEX idx_promotion_crowd_node (node_id),
+        CONSTRAINT fk_promotion_crowd_run FOREIGN KEY (run_id) REFERENCES promotion_runs(id) ON DELETE CASCADE,
+        CONSTRAINT fk_promotion_crowd_node FOREIGN KEY (node_id) REFERENCES promotion_nodes(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы promotion_crowd_tasks: ' . $mysqli->error;
     }
 
     $admin_pass_hashed = password_hash($admin_pass, PASSWORD_DEFAULT);
