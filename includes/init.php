@@ -121,6 +121,7 @@ if (!function_exists('asset_url')) {
 
 // Load core functions (with robust relative includes)
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/promotion.php';
 
 // Auto-heal database schema (idempotent)
 if (function_exists('ensure_schema')) {

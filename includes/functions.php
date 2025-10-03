@@ -103,6 +103,10 @@ function ensure_schema(): void {
     if (!empty($usersCols) && !isset($usersCols['balance'])) {
         @$conn->query("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
     }
+    if (!empty($usersCols) && !isset($usersCols['promotion_discount'])) {
+        @$conn->query("ALTER TABLE `users` ADD COLUMN `promotion_discount` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `balance`");
+        $usersCols = $getCols('users');
+    }
     // Users table: add profile fields if missing
     if (!empty($usersCols)) {
         if (!isset($usersCols['full_name'])) {
@@ -770,6 +774,150 @@ function ensure_schema(): void {
             }
         }
     } catch (Throwable $e) { /* ignore migration errors */ }
+
+    // Promotion cascade tables
+    $promoRunsCols = $getCols('promotion_runs');
+    if (empty($promoRunsCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `promotion_runs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `project_id` INT NOT NULL,
+            `link_id` INT NOT NULL,
+            `target_url` TEXT NOT NULL,
+            `status` VARCHAR(32) NOT NULL DEFAULT 'queued',
+            `stage` VARCHAR(32) NOT NULL DEFAULT 'pending_level1',
+            `initiated_by` INT NULL,
+            `settings_snapshot` TEXT NULL,
+            `charged_amount` DECIMAL(12,2) NOT NULL DEFAULT 0,
+            `discount_percent` DECIMAL(5,2) NOT NULL DEFAULT 0,
+            `progress_total` INT NOT NULL DEFAULT 0,
+            `progress_done` INT NOT NULL DEFAULT 0,
+            `error` TEXT NULL,
+            `report_json` LONGTEXT NULL,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_promotion_runs_project` (`project_id`),
+            INDEX `idx_promotion_runs_link` (`link_id`),
+            INDEX `idx_promotion_runs_status` (`status`),
+            CONSTRAINT `fk_promotion_runs_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_promotion_runs_link` FOREIGN KEY (`link_id`) REFERENCES `project_links`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ensureRunCol = static function(string $column, string $ddl) use ($promoRunsCols, $conn): void {
+            if (!isset($promoRunsCols[$column])) { @($conn->query("ALTER TABLE `promotion_runs` {$ddl}")); }
+        };
+        $ensureRunCol('stage', "ADD COLUMN `stage` VARCHAR(32) NOT NULL DEFAULT 'pending_level1' AFTER `status`");
+        $ensureRunCol('initiated_by', "ADD COLUMN `initiated_by` INT NULL AFTER `stage`");
+        $ensureRunCol('settings_snapshot', "ADD COLUMN `settings_snapshot` TEXT NULL AFTER `initiated_by`");
+    $ensureRunCol('charged_amount', "ADD COLUMN `charged_amount` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `settings_snapshot`");
+    $ensureRunCol('discount_percent', "ADD COLUMN `discount_percent` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `charged_amount`");
+    $ensureRunCol('progress_total', "ADD COLUMN `progress_total` INT NOT NULL DEFAULT 0 AFTER `discount_percent`");
+        $ensureRunCol('progress_done', "ADD COLUMN `progress_done` INT NOT NULL DEFAULT 0 AFTER `progress_total`");
+        $ensureRunCol('error', "ADD COLUMN `error` TEXT NULL AFTER `progress_done`");
+        $ensureRunCol('report_json', "ADD COLUMN `report_json` LONGTEXT NULL AFTER `error`");
+        $ensureRunCol('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `report_json`");
+        $ensureRunCol('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $ensureRunCol('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        if (pp_mysql_index_exists($conn, 'promotion_runs', 'idx_promotion_runs_status') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_runs_status` ON `promotion_runs`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_runs', 'idx_promotion_runs_project') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_runs_project` ON `promotion_runs`(`project_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_runs', 'idx_promotion_runs_link') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_runs_link` ON `promotion_runs`(`link_id`)");
+        }
+    }
+
+    $promoNodesCols = $getCols('promotion_nodes');
+    if (empty($promoNodesCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `promotion_nodes` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `run_id` INT NOT NULL,
+            `level` INT NOT NULL DEFAULT 1,
+            `parent_id` INT NULL,
+            `target_url` TEXT NOT NULL,
+            `result_url` TEXT NULL,
+            `network_slug` VARCHAR(100) NOT NULL,
+            `publication_id` INT NULL,
+            `status` VARCHAR(32) NOT NULL DEFAULT 'pending',
+            `anchor_text` VARCHAR(255) NULL,
+            `initiated_by` INT NULL,
+            `queued_at` TIMESTAMP NULL DEFAULT NULL,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `error` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_promotion_nodes_run` (`run_id`),
+            INDEX `idx_promotion_nodes_publication` (`publication_id`),
+            INDEX `idx_promotion_nodes_status` (`status`),
+            CONSTRAINT `fk_promotion_nodes_run` FOREIGN KEY (`run_id`) REFERENCES `promotion_runs`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_promotion_nodes_parent` FOREIGN KEY (`parent_id`) REFERENCES `promotion_nodes`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ensureNodeCol = static function(string $column, string $ddl) use ($promoNodesCols, $conn): void {
+            if (!isset($promoNodesCols[$column])) { @($conn->query("ALTER TABLE `promotion_nodes` {$ddl}")); }
+        };
+        $ensureNodeCol('parent_id', "ADD COLUMN `parent_id` INT NULL AFTER `level`");
+        $ensureNodeCol('target_url', "ADD COLUMN `target_url` TEXT NOT NULL AFTER `parent_id`");
+        $ensureNodeCol('result_url', "ADD COLUMN `result_url` TEXT NULL AFTER `target_url`");
+        $ensureNodeCol('network_slug', "ADD COLUMN `network_slug` VARCHAR(100) NOT NULL AFTER `result_url`");
+        $ensureNodeCol('publication_id', "ADD COLUMN `publication_id` INT NULL AFTER `network_slug`");
+        $ensureNodeCol('status', "ADD COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'pending' AFTER `publication_id`");
+        $ensureNodeCol('anchor_text', "ADD COLUMN `anchor_text` VARCHAR(255) NULL AFTER `status`");
+        $ensureNodeCol('initiated_by', "ADD COLUMN `initiated_by` INT NULL AFTER `anchor_text`");
+        $ensureNodeCol('queued_at', "ADD COLUMN `queued_at` TIMESTAMP NULL DEFAULT NULL AFTER `initiated_by`");
+        $ensureNodeCol('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `queued_at`");
+        $ensureNodeCol('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $ensureNodeCol('error', "ADD COLUMN `error` TEXT NULL AFTER `finished_at`");
+        $ensureNodeCol('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        if (pp_mysql_index_exists($conn, 'promotion_nodes', 'idx_promotion_nodes_run') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_nodes_run` ON `promotion_nodes`(`run_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_nodes', 'idx_promotion_nodes_publication') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_nodes_publication` ON `promotion_nodes`(`publication_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_nodes', 'idx_promotion_nodes_status') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_nodes_status` ON `promotion_nodes`(`status`)");
+        }
+    }
+
+    $promoCrowdCols = $getCols('promotion_crowd_tasks');
+    if (empty($promoCrowdCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `promotion_crowd_tasks` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `run_id` INT NOT NULL,
+            `node_id` INT NULL,
+            `crowd_link_id` INT NULL,
+            `target_url` TEXT NOT NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'planned',
+            `result_url` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_promotion_crowd_run` (`run_id`),
+            INDEX `idx_promotion_crowd_node` (`node_id`),
+            CONSTRAINT `fk_promotion_crowd_run` FOREIGN KEY (`run_id`) REFERENCES `promotion_runs`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_promotion_crowd_node` FOREIGN KEY (`node_id`) REFERENCES `promotion_nodes`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ensureCrowdCol = static function(string $column, string $ddl) use ($promoCrowdCols, $conn): void {
+            if (!isset($promoCrowdCols[$column])) { @($conn->query("ALTER TABLE `promotion_crowd_tasks` {$ddl}")); }
+        };
+        $ensureCrowdCol('node_id', "ADD COLUMN `node_id` INT NULL AFTER `run_id`");
+        $ensureCrowdCol('crowd_link_id', "ADD COLUMN `crowd_link_id` INT NULL AFTER `node_id`");
+        $ensureCrowdCol('target_url', "ADD COLUMN `target_url` TEXT NOT NULL AFTER `crowd_link_id`");
+        $ensureCrowdCol('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'planned' AFTER `target_url`");
+        $ensureCrowdCol('result_url', "ADD COLUMN `result_url` TEXT NULL AFTER `status`");
+        $ensureCrowdCol('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        if (pp_mysql_index_exists($conn, 'promotion_crowd_tasks', 'idx_promotion_crowd_run') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_crowd_run` ON `promotion_crowd_tasks`(`run_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_crowd_tasks', 'idx_promotion_crowd_node') === false) {
+            @$conn->query("CREATE INDEX `idx_promotion_crowd_node` ON `promotion_crowd_tasks`(`node_id`)");
+        }
+    }
 
     // Settings table optional—skip if missing
 

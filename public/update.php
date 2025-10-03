@@ -235,9 +235,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             try { $apply("ALTER TABLE `projects` MODIFY COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); } catch (Throwable $e) { /* ignore */ }
         }
 
-        // Ensure users.balance
+        // Ensure users.balance and new promotion discount column
         if (!$columnExists('users','balance')) {
             $apply("ALTER TABLE `users` ADD COLUMN `balance` DECIMAL(12,2) NOT NULL DEFAULT 0");
+        }
+        if (!$columnExists('users','promotion_discount')) {
+            $apply("ALTER TABLE `users` ADD COLUMN `promotion_discount` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `balance`");
         }
 
         // Ensure publications table and columns
@@ -283,6 +286,127 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (!$columnExists('project_links','language'))   { $apply("ALTER TABLE `project_links` ADD COLUMN `language` VARCHAR(10) NOT NULL DEFAULT 'ru'"); }
             if (!$columnExists('project_links','wish'))       { $apply("ALTER TABLE `project_links` ADD COLUMN `wish` TEXT NULL"); }
             if (!$columnExists('project_links','updated_at')) { $apply("ALTER TABLE `project_links` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"); }
+        }
+
+        // Ensure promotion_runs table (tracks each promotion launch)
+        if (!$tableExists('promotion_runs')) {
+            $apply("CREATE TABLE IF NOT EXISTS `promotion_runs` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `project_id` INT NOT NULL,
+                `link_id` INT NOT NULL,
+                `target_url` TEXT NOT NULL,
+                `status` VARCHAR(32) NOT NULL DEFAULT 'queued',
+                `stage` VARCHAR(32) NOT NULL DEFAULT 'pending_level1',
+                `initiated_by` INT NULL,
+                `settings_snapshot` TEXT NULL,
+                `charged_amount` DECIMAL(12,2) NOT NULL DEFAULT 0,
+                `discount_percent` DECIMAL(5,2) NOT NULL DEFAULT 0,
+                `progress_total` INT NOT NULL DEFAULT 0,
+                `progress_done` INT NOT NULL DEFAULT 0,
+                `error` TEXT NULL,
+                `report_json` LONGTEXT NULL,
+                `started_at` TIMESTAMP NULL DEFAULT NULL,
+                `finished_at` TIMESTAMP NULL DEFAULT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX `idx_promotion_runs_project` (`project_id`),
+                INDEX `idx_promotion_runs_link` (`link_id`),
+                INDEX `idx_promotion_runs_status` (`status`),
+                CONSTRAINT `fk_promotion_runs_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE,
+                CONSTRAINT `fk_promotion_runs_link` FOREIGN KEY (`link_id`) REFERENCES `project_links`(`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>promotion_runs: ' . __('Создана/обновлена таблица.');
+        } else {
+            if (!$columnExists('promotion_runs','stage'))             { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `stage` VARCHAR(32) NOT NULL DEFAULT 'pending_level1' AFTER `status`"); }
+            if (!$columnExists('promotion_runs','initiated_by'))      { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `initiated_by` INT NULL AFTER `stage`"); }
+            if (!$columnExists('promotion_runs','settings_snapshot')) { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `settings_snapshot` TEXT NULL AFTER `initiated_by`"); }
+            if (!$columnExists('promotion_runs','charged_amount'))    { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `charged_amount` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `settings_snapshot`"); }
+            if (!$columnExists('promotion_runs','discount_percent'))  { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `discount_percent` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `charged_amount`"); }
+            if (!$columnExists('promotion_runs','progress_total'))    { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `progress_total` INT NOT NULL DEFAULT 0 AFTER `discount_percent`"); }
+            if (!$columnExists('promotion_runs','progress_done'))     { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `progress_done` INT NOT NULL DEFAULT 0 AFTER `progress_total`"); }
+            if (!$columnExists('promotion_runs','error'))             { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `error` TEXT NULL AFTER `progress_done`"); }
+            if (!$columnExists('promotion_runs','report_json'))       { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `report_json` LONGTEXT NULL AFTER `error`"); }
+            if (!$columnExists('promotion_runs','started_at'))        { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `report_json`"); }
+            if (!$columnExists('promotion_runs','finished_at'))       { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`"); }
+            if (!$columnExists('promotion_runs','updated_at'))        { $apply("ALTER TABLE `promotion_runs` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`"); }
+            if (!$indexExists('promotion_runs','idx_promotion_runs_status'))  { $apply("CREATE INDEX `idx_promotion_runs_status` ON `promotion_runs`(`status`)"); }
+            if (!$indexExists('promotion_runs','idx_promotion_runs_project')) { $apply("CREATE INDEX `idx_promotion_runs_project` ON `promotion_runs`(`project_id`)"); }
+            if (!$indexExists('promotion_runs','idx_promotion_runs_link'))    { $apply("CREATE INDEX `idx_promotion_runs_link` ON `promotion_runs`(`link_id`)"); }
+        }
+
+        // Ensure promotion_nodes table (execution steps within a run)
+        if (!$tableExists('promotion_nodes')) {
+            $apply("CREATE TABLE IF NOT EXISTS `promotion_nodes` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `run_id` INT NOT NULL,
+                `level` INT NOT NULL DEFAULT 1,
+                `parent_id` INT NULL,
+                `target_url` TEXT NOT NULL,
+                `result_url` TEXT NULL,
+                `network_slug` VARCHAR(100) NOT NULL,
+                `publication_id` INT NULL,
+                `status` VARCHAR(32) NOT NULL DEFAULT 'pending',
+                `anchor_text` VARCHAR(255) NULL,
+                `initiated_by` INT NULL,
+                `queued_at` TIMESTAMP NULL DEFAULT NULL,
+                `started_at` TIMESTAMP NULL DEFAULT NULL,
+                `finished_at` TIMESTAMP NULL DEFAULT NULL,
+                `error` TEXT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX `idx_promotion_nodes_run` (`run_id`),
+                INDEX `idx_promotion_nodes_publication` (`publication_id`),
+                INDEX `idx_promotion_nodes_status` (`status`),
+                CONSTRAINT `fk_promotion_nodes_run` FOREIGN KEY (`run_id`) REFERENCES `promotion_runs`(`id`) ON DELETE CASCADE,
+                CONSTRAINT `fk_promotion_nodes_parent` FOREIGN KEY (`parent_id`) REFERENCES `promotion_nodes`(`id`) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>promotion_nodes: ' . __('Создана/обновлена таблица.');
+        } else {
+            if (!$columnExists('promotion_nodes','parent_id'))      { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `parent_id` INT NULL AFTER `level`"); }
+            if (!$columnExists('promotion_nodes','target_url'))     { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `target_url` TEXT NOT NULL AFTER `parent_id`"); }
+            if (!$columnExists('promotion_nodes','result_url'))     { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `result_url` TEXT NULL AFTER `target_url`"); }
+            if (!$columnExists('promotion_nodes','network_slug'))   { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `network_slug` VARCHAR(100) NOT NULL AFTER `result_url`"); }
+            if (!$columnExists('promotion_nodes','publication_id')) { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `publication_id` INT NULL AFTER `network_slug`"); }
+            if (!$columnExists('promotion_nodes','status'))         { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'pending' AFTER `publication_id`"); }
+            if (!$columnExists('promotion_nodes','anchor_text'))    { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `anchor_text` VARCHAR(255) NULL AFTER `status`"); }
+            if (!$columnExists('promotion_nodes','initiated_by'))   { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `initiated_by` INT NULL AFTER `anchor_text`"); }
+            if (!$columnExists('promotion_nodes','queued_at'))      { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `queued_at` TIMESTAMP NULL DEFAULT NULL AFTER `initiated_by`"); }
+            if (!$columnExists('promotion_nodes','started_at'))     { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `queued_at`"); }
+            if (!$columnExists('promotion_nodes','finished_at'))    { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`"); }
+            if (!$columnExists('promotion_nodes','error'))          { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `error` TEXT NULL AFTER `finished_at`"); }
+            if (!$columnExists('promotion_nodes','updated_at'))     { $apply("ALTER TABLE `promotion_nodes` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`"); }
+            if (!$indexExists('promotion_nodes','idx_promotion_nodes_run'))          { $apply("CREATE INDEX `idx_promotion_nodes_run` ON `promotion_nodes`(`run_id`)"); }
+            if (!$indexExists('promotion_nodes','idx_promotion_nodes_publication')) { $apply("CREATE INDEX `idx_promotion_nodes_publication` ON `promotion_nodes`(`publication_id`)"); }
+            if (!$indexExists('promotion_nodes','idx_promotion_nodes_status'))      { $apply("CREATE INDEX `idx_promotion_nodes_status` ON `promotion_nodes`(`status`)"); }
+        }
+
+        // Ensure promotion_crowd_tasks table (crowd backlinks)
+        if (!$tableExists('promotion_crowd_tasks')) {
+            $apply("CREATE TABLE IF NOT EXISTS `promotion_crowd_tasks` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `run_id` INT NOT NULL,
+                `node_id` INT NULL,
+                `crowd_link_id` INT NULL,
+                `target_url` TEXT NOT NULL,
+                `status` VARCHAR(20) NOT NULL DEFAULT 'planned',
+                `result_url` TEXT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX `idx_promotion_crowd_run` (`run_id`),
+                INDEX `idx_promotion_crowd_node` (`node_id`),
+                CONSTRAINT `fk_promotion_crowd_run` FOREIGN KEY (`run_id`) REFERENCES `promotion_runs`(`id`) ON DELETE CASCADE,
+                CONSTRAINT `fk_promotion_crowd_node` FOREIGN KEY (`node_id`) REFERENCES `promotion_nodes`(`id`) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $message .= '<br>promotion_crowd_tasks: ' . __('Создана/обновлена таблица.');
+        } else {
+            if (!$columnExists('promotion_crowd_tasks','node_id'))       { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `node_id` INT NULL AFTER `run_id`"); }
+            if (!$columnExists('promotion_crowd_tasks','crowd_link_id'))  { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `crowd_link_id` INT NULL AFTER `node_id`"); }
+            if (!$columnExists('promotion_crowd_tasks','target_url'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `target_url` TEXT NOT NULL AFTER `crowd_link_id`"); }
+            if (!$columnExists('promotion_crowd_tasks','status'))         { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'planned' AFTER `target_url`"); }
+            if (!$columnExists('promotion_crowd_tasks','result_url'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `result_url` TEXT NULL AFTER `status`"); }
+            if (!$columnExists('promotion_crowd_tasks','updated_at'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`"); }
+            if (!$indexExists('promotion_crowd_tasks','idx_promotion_crowd_run'))  { $apply("CREATE INDEX `idx_promotion_crowd_run` ON `promotion_crowd_tasks`(`run_id`)"); }
+            if (!$indexExists('promotion_crowd_tasks','idx_promotion_crowd_node')) { $apply("CREATE INDEX `idx_promotion_crowd_node` ON `promotion_crowd_tasks`(`node_id`)"); }
         }
 
         // Ensure page_meta table (for analyzed page metadata)
