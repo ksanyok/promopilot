@@ -1671,15 +1671,16 @@ document.addEventListener('DOMContentLoaded', function() {
     function buildPromotionFlowRoot(meta) {
         const targetUrl = meta?.target || '';
         const host = getHostname(targetUrl);
+        const hostDisplay = truncateMiddle(host, 44);
         const resetCard = `
             <div class="promotion-flow-card is-root" role="button" tabindex="0" data-flow-reset="1">
                 <div class="card-title d-flex align-items-center gap-2">
                     <span class="badge bg-primary-subtle text-light-emphasis">ROOT</span>
                     <span class="text-truncate">${escapeHtml(PROMOTION_REPORT_STRINGS.root)}</span>
                 </div>
-                ${host ? `<div class="card-meta small text-muted">${escapeHtml(host)}</div>` : ''}
+                ${host ? `<div class="card-meta small text-muted" title="${escapeAttribute(host)}">${escapeHtml(hostDisplay)}</div>` : ''}
             </div>`;
-        const linkHtml = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" class="small text-muted text-decoration-none" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>` : `<span class="small text-muted">—</span>`;
+        const linkHtml = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" class="small text-muted text-decoration-none" target="_blank" rel="noopener" title="${escapeAttribute(targetUrl)}">${escapeHtml(truncateMiddle(targetUrl, 56))}</a>` : `<span class="small text-muted">—</span>`;
         return `
             <div class="promotion-flow-column" data-flow-column="root">
                 <div class="promotion-flow-header">
@@ -1820,8 +1821,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="badge bg-primary-subtle text-light-emphasis">L${level}</span>
                 </div>
                 ${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="card-link text-truncate" title="${escapeAttribute(url)}">${escapeHtml(label)}</a>` : `<span class="card-link text-muted">—</span>`}
-                ${anchor ? `<div class="card-meta small text-muted" title="${escapeAttribute(anchor)}">${escapeHtml(anchor)}</div>` : ''}
-                ${host ? `<div class="card-meta small text-muted">${escapeHtml(host)}</div>` : ''}
+                ${anchor ? `<div class="card-meta small text-muted" title="${escapeAttribute(anchor)}">${escapeHtml(truncateMiddle(anchor, 44))}</div>` : ''}
+                ${host ? `<div class="card-meta small text-muted" title="${escapeAttribute(host)}">${escapeHtml(host)}</div>` : ''}
             </div>
         `;
     }
@@ -1838,19 +1839,28 @@ document.addEventListener('DOMContentLoaded', function() {
         return raw !== undefined && raw !== null ? String(raw) : '';
     }
 
-    function formatFlowUrl(url, maxLen = 48) {
+    function truncateMiddle(text, maxLen = 40) {
+        const str = String(text ?? '');
+        if (str.length <= maxLen) { return str; }
+        const ellipsis = '…';
+        const keep = maxLen - ellipsis.length;
+        const head = Math.ceil(keep / 2);
+        const tail = Math.floor(keep / 2);
+        return str.slice(0, head) + ellipsis + str.slice(str.length - tail);
+    }
+
+    function formatFlowUrl(url, maxLen = 36) {
         if (!url) { return ''; }
         try {
             const parsed = new URL(url);
             const host = (parsed.hostname || '').replace(/^www\./i, '');
-            let path = parsed.pathname || '/';
-            if (path.length > maxLen) {
-                path = path.slice(0, Math.max(1, maxLen - 1)).trimEnd() + '…';
-            }
-            return `${host}${path}`;
+            const path = parsed.pathname || '/';
+            const search = parsed.search || '';
+            const hash = parsed.hash || '';
+            const combined = `${host}${path}${search}${hash}`;
+            return truncateMiddle(combined, maxLen);
         } catch (_e) {
-            const trimmed = url.length > maxLen ? url.slice(0, Math.max(1, maxLen - 1)) + '…' : url;
-            return trimmed;
+            return truncateMiddle(url, maxLen);
         }
     }
 

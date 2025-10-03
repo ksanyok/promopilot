@@ -958,6 +958,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 }
 .promotion-flow-card .card-link {
   display: block;
+  width: 100%;
+  max-width: 100%;
   margin-top: 6px;
   font-size: .78rem;
   color: var(--accent);
@@ -974,6 +976,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  width: 100%;
+  max-width: 100%;
 }
 .promotion-flow-subgroup {
   display: flex;
