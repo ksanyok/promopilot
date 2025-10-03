@@ -3,8 +3,26 @@ require_once __DIR__ . '/../includes/init.php';
 
 $runId = isset($argv[1]) ? (int)$argv[1] : 0;
 if ($runId <= 0) {
-    fwrite(STDERR, "Usage: php crowd_links_worker.php <runId>\n");
-    exit(1);
+    // Fallback mode: auto-pick the latest queued/running run so cron can drive processing
+    try {
+        $conn = @connect_db();
+    } catch (Throwable $e) {
+        fwrite(STDERR, "DB connect failed\n");
+        exit(1);
+    }
+    if ($conn) {
+        if ($res = @$conn->query("SELECT id FROM crowd_link_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
+            if ($row = $res->fetch_assoc()) {
+                $runId = (int)($row['id'] ?? 0);
+            }
+            $res->free();
+        }
+        $conn->close();
+    }
+    if ($runId <= 0) {
+        fwrite(STDERR, "No active runs\n");
+        exit(0);
+    }
 }
 
 try {

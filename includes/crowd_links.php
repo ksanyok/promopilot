@@ -571,7 +571,74 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
         if (!is_file($script)) {
             return false;
         }
-        $phpBinary = PHP_BINARY ?: 'php';
+        // Prefer a real CLI php over lsphp wrappers
+        $phpBinary = PHP_BINARY ?: '';
+        $origBinary = $phpBinary;
+        $phpEnv = getenv('PP_PHP_CLI');
+        if ($phpEnv && @is_executable($phpEnv)) {
+            $phpBinary = $phpEnv;
+        }
+        if (defined('PP_PHP_CLI')) {
+            $constVal = constant('PP_PHP_CLI');
+            if ($constVal && @is_executable($constVal)) {
+                $phpBinary = $constVal;
+            }
+        }
+        $bn = $phpBinary ? strtolower(basename($phpBinary)) : '';
+        $needsCli = ($phpBinary === '' || $bn === 'lsphp' || $bn === 'litespeed');
+        $candidates = [];
+        if ($needsCli) {
+            $candidates = array_filter([
+                // User-provided override first
+                $phpEnv ?: null,
+                // Common locations
+                '/usr/bin/php',
+                '/usr/local/bin/php',
+                '/bin/php',
+                // CloudLinux alt-php paths (most common versions)
+                '/opt/alt/php83/usr/bin/php',
+                '/opt/alt/php82/usr/bin/php',
+                '/opt/alt/php81/usr/bin/php',
+                '/opt/alt/php80/usr/bin/php',
+                '/opt/alt/php74/usr/bin/php',
+            ]);
+            foreach ($candidates as $cand) {
+                if ($cand && @is_file($cand) && @is_executable($cand)) {
+                    $phpBinary = $cand;
+                    break;
+                }
+            }
+            // As a last resort, try system PATH 'php'
+            if ($phpBinary === '' || strtolower(basename($phpBinary)) === 'lsphp') {
+                $which = @shell_exec('command -v php 2>/dev/null');
+                if (is_string($which)) {
+                    $which = trim($which);
+                    if ($which !== '' && @is_executable($which)) {
+                        $phpBinary = $which;
+                    }
+                }
+            }
+            // If still nothing sensible, fall back to original (may be lsphp)
+            if ($phpBinary === '') {
+                $phpBinary = $origBinary ?: 'php';
+            }
+        }
+        $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+        $disabled = array_filter($disabled, static function($v){ return $v !== ''; });
+        $canPopen = function_exists('popen') && !in_array('popen', $disabled, true);
+        $canExec = function_exists('exec') && !in_array('exec', $disabled, true);
+        $canShell = function_exists('shell_exec') && !in_array('shell_exec', $disabled, true);
+        $canProc = function_exists('proc_open') && !in_array('proc_open', $disabled, true);
+        pp_crowd_links_log('Worker PHP binary selected', [
+            'runId' => $runId,
+            'binary' => $phpBinary,
+            'orig' => $origBinary,
+            'canPopen' => $canPopen,
+            'canExec' => $canExec,
+            'canShell' => $canShell,
+            'canProc' => $canProc,
+            'disabled' => array_values($disabled),
+        ]);
         $runId = max(1, $runId);
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         if ($isWindows) {
@@ -583,11 +650,12 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
             }
             return false;
         }
-        // Try nohup first to disown from web server process
+        // Try nohup first to disown from web server process; then setsid; then plain background
         $cmdNohup = 'nohup ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        $cmdSetsid = 'setsid ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
         $cmdPlain = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
         $tried = [];
-        foreach ([$cmdNohup, $cmdPlain] as $cmd) {
+        foreach ([$cmdNohup, $cmdSetsid, $cmdPlain] as $cmd) {
             $tried[] = $cmd;
             pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
             if (function_exists('popen')) {
