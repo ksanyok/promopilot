@@ -897,6 +897,57 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 }
 .promotion-status-complete i { font-size: 1rem; }
 
+/* Promotion dashboard stats */
+.promotion-stats-row { --promo-stat-bg: color-mix(in srgb, var(--surface) 82%, transparent 18%); }
+.promotion-stat-card {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%);
+  border-radius: var(--radius-sm);
+  background: var(--promo-stat-bg);
+  color: var(--text);
+  overflow: hidden;
+  box-shadow: 0 16px 30px rgba(9, 14, 28, .16);
+}
+.promotion-stat-card::after {
+  content: '';
+  position: absolute;
+  inset: auto -30% -45% auto;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  filter: blur(45px);
+  opacity: .6;
+}
+.promotion-stat-card__label { letter-spacing: .05em; }
+.promotion-stat-card__value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+.promotion-stat-card__meta { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+.promotion-stat-card__meta-value { font-weight: 600; color: var(--text); }
+.promotion-stat-card--total::after { background: linear-gradient(135deg, rgba(59,130,246,.36), rgba(14,165,233,.18)); }
+.promotion-stat-card--active { background: linear-gradient(135deg, rgba(34,197,94,.18), rgba(59,130,246,.12)); }
+.promotion-stat-card--active::after { background: linear-gradient(135deg, rgba(59,130,246,.4), rgba(139,92,246,.25)); }
+.promotion-stat-card--done { background: linear-gradient(135deg, rgba(16,185,129,.18), rgba(5,150,105,.12)); }
+.promotion-stat-card--done::after { background: linear-gradient(135deg, rgba(16,185,129,.5), rgba(22,163,74,.32)); }
+.promotion-stat-card--issues { background: linear-gradient(135deg, rgba(239,68,68,.18), rgba(241,196,15,.14)); }
+.promotion-stat-card--issues::after { background: linear-gradient(135deg, rgba(239,68,68,.48), rgba(241,138,41,.3)); }
+.promotion-stat-card--issues .promotion-stat-card__value { color: var(--danger); }
+.promotion-stat-card--done .promotion-stat-card__value { color: var(--success); }
+.promotion-stat-card--active .promotion-stat-card__value { color: var(--info, #38bdf8); }
+
+/* Status toolbar legends */
+.status-toolbar { margin-top: 4px; }
+.status-toolbar .status-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.status-toolbar .status-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.status-toolbar .legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-toolbar .legend-dot-idle { background: color-mix(in srgb, var(--muted) 65%, transparent 35%); }
+.status-toolbar .legend-dot-running { background: var(--info, #38bdf8); }
+.status-toolbar .legend-dot-done { background: var(--success); }
+.status-toolbar .legend-dot-cancelled { background: var(--danger); }
+
 /* ===== Promotion report modal ===== */
 .promotion-report-wrapper { color: var(--text); }
 .promotion-report-toolbar .btn { border-color: color-mix(in srgb, var(--border) 80%, transparent 20%); }

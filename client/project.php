@@ -408,6 +408,32 @@ if (function_exists('pp_promotion_get_status')) {
     }
 }
 
+$promotionSummary = [
+    'total' => count($links),
+    'active' => 0,
+    'completed' => 0,
+    'idle' => 0,
+    'issues' => 0,
+];
+$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'];
+$promotionIssueStates = ['failed','cancelled'];
+foreach ($links as $item) {
+    $linkUrl = (string)($item['url'] ?? '');
+    $status = 'idle';
+    if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
+        $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
+    }
+    if (in_array($status, $promotionActiveStates, true)) {
+        $promotionSummary['active']++;
+    } elseif ($status === 'completed') {
+        $promotionSummary['completed']++;
+    } elseif (in_array($status, $promotionIssueStates, true)) {
+        $promotionSummary['issues']++;
+    } else {
+        $promotionSummary['idle']++;
+    }
+}
+
 // Make this page full-width (no Bootstrap container wrapper from header)
 $pp_container = false;
 $pp_container_class = '';
@@ -473,6 +499,54 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
             </div>
 
             <!-- Modal: Project Info -->
+            <div class="row g-3 mb-4 promotion-stats-row">
+                <div class="col-sm-6 col-lg-3">
+                    <div class="card promotion-stat-card promotion-stat-card--total h-100 bounce-in fade-in">
+                        <div class="card-body d-flex flex-column justify-content-between">
+                            <div class="promotion-stat-card__label text-uppercase small fw-semibold text-muted"><?php echo __('Всего ссылок'); ?></div>
+                            <div class="promotion-stat-card__value" data-stat-total><?php echo number_format($promotionSummary['total'], 0, '.', ' '); ?></div>
+                            <div class="promotion-stat-card__meta text-muted" data-stat-idle-wrapper>
+                                <i class="bi bi-hourglass-split me-1"></i><span><?php echo __('Ожидают запуска'); ?>:</span>
+                                <span class="promotion-stat-card__meta-value" data-stat-idle><?php echo number_format($promotionSummary['idle'], 0, '.', ' '); ?></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <div class="card promotion-stat-card promotion-stat-card--active h-100 bounce-in fade-in" style="animation-delay:.06s;">
+                        <div class="card-body d-flex flex-column justify-content-between">
+                            <div class="promotion-stat-card__label text-uppercase small fw-semibold text-muted"><?php echo __('В работе'); ?></div>
+                            <div class="promotion-stat-card__value" data-stat-active><?php echo number_format($promotionSummary['active'], 0, '.', ' '); ?></div>
+                            <div class="promotion-stat-card__meta text-muted small">
+                                <i class="bi bi-lightning-charge me-1"></i><?php echo __('Активных сценариев продвижения сейчас'); ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <div class="card promotion-stat-card promotion-stat-card--done h-100 bounce-in fade-in" style="animation-delay:.12s;">
+                        <div class="card-body d-flex flex-column justify-content-between">
+                            <div class="promotion-stat-card__label text-uppercase small fw-semibold text-muted"><?php echo __('Завершено'); ?></div>
+                            <div class="promotion-stat-card__value" data-stat-completed><?php echo number_format($promotionSummary['completed'], 0, '.', ' '); ?></div>
+                            <div class="promotion-stat-card__meta text-muted small">
+                                <i class="bi bi-patch-check-fill me-1"></i><?php echo __('Достигли планового охвата'); ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <div class="card promotion-stat-card promotion-stat-card--issues h-100 bounce-in fade-in" style="animation-delay:.18s;">
+                        <div class="card-body d-flex flex-column justify-content-between">
+                            <div class="promotion-stat-card__label text-uppercase small fw-semibold text-muted"><?php echo __('Требуют внимания'); ?></div>
+                            <div class="promotion-stat-card__value" data-stat-issues><?php echo number_format($promotionSummary['issues'], 0, '.', ' '); ?></div>
+                            <div class="promotion-stat-card__meta text-muted small">
+                                <i class="bi bi-exclamation-triangle me-1"></i><?php echo __('Отменено или ошибка'); ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="modal fade modal-fixed-center" id="projectInfoModal" tabindex="-1" aria-hidden="true">
               <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
                 <div class="modal-content">
@@ -584,13 +658,14 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                         <!-- Кнопка сохранения больше не нужна: автосохранение при добавлении -->
                     </div>
                 </div>
-
-                <!-- Таблица ссылок -->
-                                <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
-                                <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
-                                <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
-                        <div class="toolbar">
-                            <span class="d-none d-md-inline small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Легенда статусов'); ?>">🟢 <?php echo __('Опубликована'); ?> · 🟡 <?php echo __('В ожидании'); ?> · ⚪ <?php echo __('Не опубликована'); ?></span>
+        <!-- Таблица ссылок -->
+                        <div class="toolbar status-toolbar d-flex flex-wrap align-items-center gap-3">
+                            <div class="status-legend small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Статусы продвижения'); ?>">
+                                <span><span class="legend-dot legend-dot-idle"></span><?php echo __('Продвижение не запускалось'); ?></span>
+                                <span><span class="legend-dot legend-dot-running"></span><?php echo __('Продвижение выполняется'); ?></span>
+                                <span><span class="legend-dot legend-dot-done"></span><?php echo __('Продвижение завершено'); ?></span>
+                                <span><span class="legend-dot legend-dot-cancelled"></span><?php echo __('Продвижение отменено'); ?></span>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body">
@@ -688,10 +763,14 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                 $promotionStatusLabel = __('Отменено');
                                                 break;
                                             default:
-                                                $promotionStatusLabel = $promotionStatus === 'idle' ? __('Не запущено') : ucfirst($promotionStatus);
+                                                if ($promotionStatus === 'idle') {
+                                                    $promotionStatusLabel = __('Продвижение не запускалось');
+                                                } else {
+                                                    $promotionStatusLabel = ucfirst($promotionStatus);
+                                                }
                                                 break;
                                         }
-                                        $canEdit = !$promotionActive;
+                                        $canEdit = ($promotionStatus === 'idle');
                                         $pu = @parse_url($url);
                                         $hostDisp = $pp_normalize_host($pu['host'] ?? '');
                                         $pathDisp = (string)($pu['path'] ?? '/');
@@ -763,7 +842,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                     <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
                                                     <span class="promotion-progress-count ms-1 <?php echo $promotionTarget > 0 ? '' : 'd-none'; ?>"><?php echo $promotionTarget > 0 ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
                                                 </div>
-                                                <div class="promotion-progress-visual mt-2">
+                                                <div class="promotion-progress-visual mt-2 <?php echo $promotionActive ? '' : 'd-none'; ?>">
                                                     <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
                                                         <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                                             <span><?php echo __('Уровень 1'); ?></span>
@@ -809,7 +888,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                 </button>
                                             <?php endif; ?>
 
-                                            <?php if ($promotionRunId > 0): ?>
+                                            <?php if ($promotionRunId > 0 && $promotionActive): ?>
                                                 <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Промежуточный отчет'); ?>">
                                                     <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
                                                 </button>
@@ -822,8 +901,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php if ($canEdit): ?>
                                                 <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
                                                 <button type="button" class="icon-btn action-remove" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                                            <?php elseif ($promotionActive): ?>
-                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>
+                                            <?php else: ?>
+                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактирование доступно до запуска продвижения.'); ?>"><i class="bi bi-lock"></i></button>
+                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Удаление доступно до запуска продвижения.'); ?>"><i class="bi bi-trash"></i></button>
                                             <?php endif; ?>
                                         </td>
                                     </tr>
@@ -1026,7 +1106,7 @@ document.addEventListener('DOMContentLoaded', function() {
         'completed': '<?php echo __('Завершено'); ?>',
         'failed': '<?php echo __('Ошибка продвижения'); ?>',
         'cancelled': '<?php echo __('Отменено'); ?>',
-        'idle': '<?php echo __('Не запущено'); ?>'
+        'idle': '<?php echo __('Продвижение не запускалось'); ?>'
     };
     const PROMOTION_DETAIL_LABELS = {
         level1: <?php echo json_encode(__('Уровень 1')); ?>,
@@ -1066,6 +1146,55 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let promotionReportContext = null;
 
+    const PROMOTION_STATS_ELEMENTS = {
+        total: document.querySelector('[data-stat-total]'),
+        active: document.querySelector('[data-stat-active]'),
+        completed: document.querySelector('[data-stat-completed]'),
+        issues: document.querySelector('[data-stat-issues]'),
+        idle: document.querySelector('[data-stat-idle]'),
+        idleWrapper: document.querySelector('[data-stat-idle-wrapper]')
+    };
+
+    function formatStatValue(value) {
+        if (typeof Intl !== 'undefined' && Intl.NumberFormat) {
+            try { return new Intl.NumberFormat('ru-RU').format(Number(value) || 0); } catch (_) {}
+        }
+        return String(Number(value) || 0);
+    }
+
+    function recalcPromotionStats() {
+        const tbody = linksTbody || document.querySelector('.table-links tbody');
+        const rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+        let total = rows.length;
+        let active = 0;
+        let completed = 0;
+        let idle = 0;
+        let issues = 0;
+        rows.forEach(tr => {
+            const datasetStatus = tr.dataset.promotionStatus || '';
+            const blockStatus = tr.querySelector('.promotion-status-block')?.dataset.status || '';
+            const status = datasetStatus || blockStatus || 'idle';
+            if (PROMOTION_ACTIVE_STATUSES.includes(status)) {
+                active++;
+            } else if (status === 'completed') {
+                completed++;
+            } else if (status === 'failed' || status === 'cancelled') {
+                issues++;
+            } else {
+                idle++;
+            }
+        });
+
+        if (PROMOTION_STATS_ELEMENTS.total) PROMOTION_STATS_ELEMENTS.total.textContent = formatStatValue(total);
+        if (PROMOTION_STATS_ELEMENTS.active) PROMOTION_STATS_ELEMENTS.active.textContent = formatStatValue(active);
+        if (PROMOTION_STATS_ELEMENTS.completed) PROMOTION_STATS_ELEMENTS.completed.textContent = formatStatValue(completed);
+        if (PROMOTION_STATS_ELEMENTS.issues) PROMOTION_STATS_ELEMENTS.issues.textContent = formatStatValue(issues);
+        if (PROMOTION_STATS_ELEMENTS.idle) PROMOTION_STATS_ELEMENTS.idle.textContent = formatStatValue(idle);
+        if (PROMOTION_STATS_ELEMENTS.idleWrapper) {
+            PROMOTION_STATS_ELEMENTS.idleWrapper.classList.toggle('opacity-50', total === 0);
+        }
+    }
+
     function isPromotionActiveStatus(status) {
         return PROMOTION_ACTIVE_STATUSES.includes(status);
     }
@@ -1088,6 +1217,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const progressWrapper = block.querySelector('.promotion-progress-visual');
     const completeEl = block.querySelector('.promotion-status-complete');
     const completeTextEl = completeEl?.querySelector('.promotion-status-complete-text');
+    const isActive = isPromotionActiveStatus(status);
     const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0) || 0;
     const level1Required = Number(level1Data.required ?? block.dataset.level1Required ?? tr.dataset.level1Required ?? progress?.target ?? progress?.total ?? 0) || 0;
     const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0) || 0;
@@ -1111,7 +1241,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         const countEl = block.querySelector('.promotion-progress-count');
         if (countEl) {
-            if (target > 0 && status !== 'completed') {
+            if (target > 0 && isActive) {
                 countEl.textContent = `(${done} / ${target})`;
                 countEl.classList.remove('d-none');
             } else {
@@ -1131,10 +1261,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (progressWrapper) {
-            if (status === 'completed') {
-                progressWrapper.classList.add('d-none');
-            } else {
+            if (isActive) {
                 progressWrapper.classList.remove('d-none');
+            } else {
+                progressWrapper.classList.add('d-none');
             }
         }
 
@@ -1244,6 +1374,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (typeof initTooltips === 'function') {
             initTooltips(block);
         }
+
+        recalcPromotionStats();
     }
 
     // Update helper: reflect edited values into the row UI
@@ -1326,7 +1458,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (promotionFinished) {
             // no promote button when completed
         } else if (promotionActive) {
-            html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote disabled" disabled data-loading="1">'
+            html += '<button type="button" class="btn btn-sm btn-publish me-1" disabled data-loading="1">'
                 + '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>'
                 + '<span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>'
                 + '</button>';
@@ -1334,7 +1466,7 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="' + escapeAttribute(url) + '" data-id="' + escapeAttribute(linkId) + '"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
         }
 
-        if (promotionRunId) {
+        if (promotionRunId && promotionActive) {
             html += '<button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Промежуточный отчет'); ?>"><i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span></button>';
         }
 
@@ -1342,16 +1474,18 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<button type="button" class="btn btn-outline-success btn-sm me-1 action-promotion-report" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Скачать отчет'); ?>"><i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span></button>';
         }
 
-        const canEdit = !promotionActive;
+    const canEdit = (promotionStatus === 'idle');
         if (canEdit) {
             html += '<button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>';
             html += '<button type="button" class="icon-btn action-remove" data-id="' + escapeAttribute(linkId) + '" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>';
-        } else if (promotionActive) {
-            html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>';
+        } else {
+            html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактирование доступно до запуска продвижения.'); ?>"><i class="bi bi-lock"></i></button>';
+            html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Удаление доступно до запуска продвижения.'); ?>"><i class="bi bi-trash"></i></button>';
         }
 
         actionsCell.innerHTML = html;
         bindDynamicRowActions();
+        recalcPromotionStats();
     }
 
     async function saveRowEdit(tr, btn) {
@@ -1427,6 +1561,11 @@ document.addEventListener('DOMContentLoaded', function() {
     async function handleEditButton(btn) {
         const tr = btn.closest('tr');
         if (!tr) return;
+        const status = tr.dataset.promotionStatus || 'idle';
+        if (status !== 'idle') {
+            alert('<?php echo __('Редактирование доступно до запуска продвижения.'); ?>');
+            return;
+        }
         const isEditing = !tr.querySelector('.url-cell .edit-url')?.classList.contains('d-none');
         if (!isEditing) {
             toggleRowEdit(tr, true);
@@ -1447,6 +1586,11 @@ document.addEventListener('DOMContentLoaded', function() {
     async function handleRemoveButton(btn) {
         const tr = btn.closest('tr');
         if (!tr) return;
+        const status = tr.dataset.promotionStatus || 'idle';
+        if (status !== 'idle') {
+            alert('<?php echo __('Удаление доступно до запуска продвижения.'); ?>');
+            return;
+        }
         const id = parseInt(btn.getAttribute('data-id') || tr.getAttribute('data-id') || '', 10);
         if (Number.isNaN(id) || id <= 0) { alert('<?php echo __('Невозможно удалить: идентификатор ссылки не определен. Обновите страницу.'); ?>'); return; }
         if (!confirm('<?php echo __('Удалить ссылку?'); ?>')) return;
@@ -1464,6 +1608,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Remove row and renumber
             tr.remove();
             refreshRowNumbers();
+            recalcPromotionStats();
         } catch (e) {
             alert('<?php echo __('Сетевая ошибка'); ?>');
         } finally {
@@ -2298,10 +2443,10 @@ document.addEventListener('DOMContentLoaded', function() {
                              data-crowd-planned="0">
                             <div class="promotion-status-top">
                                 <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
-                                <span class="promotion-status-label ms-1"><?php echo __('Не запущено'); ?></span>
+                                <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
                                 <span class="promotion-progress-count ms-1 d-none"></span>
                             </div>
-                            <div class="promotion-progress-visual mt-2">
+                            <div class="promotion-progress-visual mt-2 d-none">
                                 <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
                                     <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                         <span><?php echo __('Уровень 1'); ?></span>
@@ -2346,6 +2491,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 refreshRowNumbers();
                 bindDynamicRowActions();
                 initTooltips(tr);
+                recalcPromotionStats();
             }
 
             // Очистим поля
@@ -2413,6 +2559,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initial bind
     bindDynamicRowActions();
+    recalcPromotionStats();
 
     // Background polling for pending statuses so user can navigate and return
     async function pollStatusesOnce() {
