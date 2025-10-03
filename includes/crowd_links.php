@@ -583,16 +583,25 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
             }
             return false;
         }
-        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
-        if (function_exists('popen')) {
-            $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) {
-                @pclose($handle);
-                return true;
+        // Try nohup first to disown from web server process
+        $cmdNohup = 'nohup ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        $cmdPlain = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        $tried = [];
+        foreach ([$cmdNohup, $cmdPlain] as $cmd) {
+            $tried[] = $cmd;
+            pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
+            if (function_exists('popen')) {
+                $handle = @popen($cmd, 'r');
+                if (is_resource($handle)) {
+                    @pclose($handle);
+                    return true;
+                }
             }
+            @exec($cmd);
+            // We cannot reliably detect success here; continue to next variant
         }
-        @exec($cmd);
+        // Best effort
+        pp_crowd_links_log('Worker launch attempted (fallback)', ['runId' => $runId, 'tried' => $tried]);
         return true;
     }
 }
@@ -783,12 +792,17 @@ if (!function_exists('pp_crowd_links_start_check')) {
             }
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
-        if (!pp_crowd_links_wait_for_worker_start($runId, 3.0)) {
-            pp_crowd_links_log('Worker did not start in time, running inline', ['runId' => $runId]);
-            try {
-                pp_crowd_links_process_run($runId);
-            } catch (Throwable $e) {
-                pp_crowd_links_log('Inline processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
+        if (!pp_crowd_links_wait_for_worker_start($runId, 8.0)) {
+            if ($total > 200) {
+                // Для больших запусков не уходим в inline, оставляем очередь на фонового воркера
+                pp_crowd_links_log('Worker start not confirmed yet, leaving queued for background', ['runId' => $runId, 'total' => $total]);
+            } else {
+                pp_crowd_links_log('Worker did not start in time, running inline', ['runId' => $runId]);
+                try {
+                    pp_crowd_links_process_run($runId);
+                } catch (Throwable $e) {
+                    pp_crowd_links_log('Inline processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
+                }
             }
         }
         return ['ok' => true, 'runId' => $runId, 'total' => $total, 'alreadyRunning' => false];
@@ -864,7 +878,8 @@ if (!function_exists('pp_crowd_links_get_status')) {
             'last_activity_at' => $row['last_activity_at'] ?? null,
             'last_activity_iso' => pp_crowd_links_format_ts($row['last_activity_at'] ?? null),
         ];
-        $run['error_count'] = $run['redirect_count'] + $run['client_error_count'] + $run['server_error_count'] + $run['unreachable_count'];
+    // Ошибки считаем как всё, что не OK: это включает redirect, 4xx/5xx, недоступна и случаи без формы
+    $run['error_count'] = max(0, $run['processed_count'] - $run['ok_count']);
         $run['progress_percent'] = $run['total_links'] > 0 ? min(100, (int)round($run['processed_count'] * 100 / $run['total_links'])) : 0;
         $run['in_progress'] = in_array($run['status'], ['queued','running'], true);
         $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
@@ -1265,7 +1280,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
             $regionInParam = '';
             $regionOutParam = '';
             $idParam = 0;
-            $updateStmt->bind_param('sisssssssi', $statusParam, $statusCodeParam, $errorParam, $requiredParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
+            $updateStmt->bind_param('sissssssi', $statusParam, $statusCodeParam, $errorParam, $requiredParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
         }
 
         $cancelled = false;
@@ -1320,9 +1335,11 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     if ($statusCode > 0) {
                         $errorText = sprintf(__('Неожиданный статус HTTP %d'), $statusCode);
                     } elseif ($curlError !== '') {
-                        $errorText = $curlError;
                         if (stripos($curlError, 'timed out') !== false || stripos($curlError, 'timeout') !== false) {
+                            $errorText = __('Таймаут соединения.');
                             $chunkTimeouts++;
+                        } else {
+                            $errorText = $curlError;
                         }
                     } else {
                         $errorText = __('Сайт недоступен или превышено время ожидания.');
