@@ -665,7 +665,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                             <tbody>
                                 <?php if (empty($items)): ?>
                                     <tr>
-                                        <td colspan="9" class="text-center text-muted py-4"><?php echo __('Записей не найдено.'); ?></td>
+                                        <td colspan="11" class="text-center text-muted py-4"><?php echo __('Записей не найдено.'); ?></td>
                                     </tr>
                                 <?php else: ?>
                                     <?php foreach ($items as $row): ?>
@@ -682,6 +682,10 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                             $deepMeta = $crowdDeepStatusMeta[$deepStatus] ?? null;
                                             $deepBadgeClass = $deepMeta['class'] ?? 'badge bg-secondary';
                                             $deepBadgeLabel = $deepMeta['label'] ?? $deepStatus;
+                                            // Shorten verbose default label for pending deep check to keep table compact
+                                            if ($deepStatus === 'pending') {
+                                                $deepBadgeLabel = __('Нет глубокой проверки');
+                                            }
                                             $deepProcessing = !empty($row['deep_processing_run_id']);
                                             $deepError = (string)($row['deep_error'] ?? '');
                                             $deepMessage = (string)($row['deep_message_excerpt'] ?? '');
@@ -703,8 +707,21 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                             </td>
                                             <td>
                                                 <div class="fw-semibold text-break">
-                                                    <a href="<?php echo htmlspecialchars((string)($row['url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="link-primary">
-                                                        <?php echo htmlspecialchars((string)($row['url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>
+                                                    <?php
+                                                        $fullUrl = (string)($row['url'] ?? '');
+                                                        $displayUrl = $fullUrl;
+                                                        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+                                                            if (mb_strlen($fullUrl) > 30) {
+                                                                $displayUrl = mb_substr($fullUrl, 0, 30) . '…';
+                                                            }
+                                                        } else {
+                                                            if (strlen($fullUrl) > 30) {
+                                                                $displayUrl = substr($fullUrl, 0, 30) . '…';
+                                                            }
+                                                        }
+                                                    ?>
+                                                    <a href="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES, 'UTF-8'); ?>" title="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="link-primary">
+                                                        <?php echo htmlspecialchars($displayUrl, ENT_QUOTES, 'UTF-8'); ?>
                                                     </a>
                                                 </div>
                                                 <div class="small text-muted">ID <?php echo $linkId; ?></div>
@@ -835,6 +852,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     const finishedEl = section.querySelector('[data-crowd-finished]');
     const notesEl = section.querySelector('[data-crowd-notes]');
     const selectAllBtns = section.querySelectorAll('[data-crowd-select]');
+    const masterCheckbox = section.querySelector('thead input[data-crowd-select="toggle"]');
     const checkboxes = section.querySelectorAll('input[data-crowd-checkbox]');
     const selectionCounter = section.querySelector('[data-crowd-selected-count]');
     const deleteBtn = section.querySelector('#crowdDeleteSelected');
@@ -1043,6 +1061,12 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         selectionCounter.textContent = count;
         if (deleteBtn) {
             deleteBtn.disabled = count === 0;
+        }
+        // Update master checkbox state
+        if (masterCheckbox && checkboxes && checkboxes.length) {
+            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+            masterCheckbox.checked = checkedCount > 0 && checkedCount === checkboxes.length;
+            masterCheckbox.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
         }
     }
 
@@ -1523,8 +1547,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
 
     function handleSelectAction(action) {
         if (action === 'toggle') {
-            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
-            checkboxes.forEach(cb => { cb.checked = !allChecked; });
+            // Header master checkbox toggles all visible row checkboxes
+            const newState = masterCheckbox ? masterCheckbox.checked : !Array.from(checkboxes).every(cb => cb.checked);
+            checkboxes.forEach(cb => { cb.checked = newState; });
         } else if (action === 'all') {
             checkboxes.forEach(cb => { cb.checked = true; });
         } else if (action === 'none') {
@@ -1534,10 +1559,17 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     selectAllBtns.forEach(btn => {
-        btn.addEventListener('click', function(e){
-            e.preventDefault();
-            handleSelectAction(this.getAttribute('data-crowd-select'));
-        });
+        // For header checkbox, use change event to capture checked state
+        if (btn === masterCheckbox) {
+            btn.addEventListener('change', function(){
+                handleSelectAction('toggle');
+            });
+        } else {
+            btn.addEventListener('click', function(e){
+                e.preventDefault();
+                handleSelectAction(this.getAttribute('data-crowd-select'));
+            });
+        }
     });
 
     checkboxes.forEach(cb => {
