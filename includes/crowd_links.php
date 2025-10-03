@@ -503,7 +503,8 @@ if (!function_exists('pp_crowd_links_delete_all')) {
             }
             $res->free();
         }
-        @$conn->query('TRUNCATE TABLE crowd_links');
+        // Use DELETE to respect foreign key constraints (TRUNCATE ignores FKs and fails when referenced)
+        @$conn->query('DELETE FROM crowd_links');
         $conn->close();
         return $affected;
     }
@@ -1102,6 +1103,15 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
                 return false;
             }
             $xp = new DOMXPath($doc);
+            // WordPress/common comment form markers
+            $wpForm = $xp->query("//form[@id='commentform' or contains(concat(' ', normalize-space(@class), ' '), ' comment-form ')]")->item(0);
+            if ($wpForm instanceof DOMElement) { return true; }
+            $respond = $xp->query("//*[@id='respond' or contains(concat(' ', normalize-space(@class), ' '), ' comment-respond ')]")->item(0);
+            if ($respond instanceof DOMElement) { return true; }
+            $wpHidden = $xp->query("//input[@name='comment_post_ID' or @name='comment_parent']")->item(0);
+            if ($wpHidden instanceof DOMElement) { return true; }
+            $commentTextarea = $xp->query("//textarea[@id='comment' or @name='comment']")->item(0);
+            if ($commentTextarea instanceof DOMElement) { return true; }
             // Direct: any form containing a textarea
             $node = $xp->query('//form[.//textarea]')->item(0);
             if ($node instanceof DOMElement) { return true; }
@@ -1198,13 +1208,15 @@ if (!function_exists('pp_crowd_links_process_run')) {
             }
             return false;
         };
-    $parallelLimit = 12;
-    $httpTimeout = 18;
-    $minParallel = 6;
-    $maxParallel = 24;
+    // Faster defaults: higher parallelism, slightly lower timeout, smaller batches for quicker UI updates
+    $parallelLimit = 24;
+    $httpTimeout = 12;
+    $minParallel = 12;
+    $maxParallel = 64;
     if ($parallelLimit < $minParallel) { $parallelLimit = $minParallel; }
     if ($parallelLimit > $maxParallel) { $parallelLimit = $maxParallel; }
-    $batchSize = max($parallelLimit * 4, 40);
+    // Smaller batch per cycle so progress updates more frequently
+    $batchSize = max((int)floor($parallelLimit * 1.5), 24);
     if ($batchSize > 200) { $batchSize = 200; }
 
         $updateStmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
@@ -1346,14 +1358,14 @@ if (!function_exists('pp_crowd_links_process_run')) {
             $timeoutRatio = $currentBatchSize > 0 ? ($chunkTimeouts / $currentBatchSize) : 0.0;
             $unreachableRatio = $currentBatchSize > 0 ? ($chunkUnreachables / $currentBatchSize) : 0.0;
             if ($chunkDuration < 4.5 && $timeoutRatio < 0.05 && $parallelLimit < $maxParallel) {
-                $parallelLimit += 2;
+                $parallelLimit += 4;
                 if ($parallelLimit > $maxParallel) { $parallelLimit = $maxParallel; }
                 pp_crowd_links_log('Adaptive concurrency increase', ['runId' => $runId, 'chunk' => $chunkIndex, 'parallel' => $parallelLimit, 'duration' => $chunkDuration]);
             } elseif (($chunkDuration > 18.0 || $timeoutRatio > 0.2 || $unreachableRatio > 0.4) && $parallelLimit > $minParallel) {
-                $parallelLimit = max($minParallel, $parallelLimit - 2);
+                $parallelLimit = max($minParallel, $parallelLimit - 4);
                 pp_crowd_links_log('Adaptive concurrency decrease', ['runId' => $runId, 'chunk' => $chunkIndex, 'parallel' => $parallelLimit, 'duration' => $chunkDuration, 'timeouts' => $chunkTimeouts, 'unreachables' => $chunkUnreachables]);
             }
-            $batchSize = max($parallelLimit * 4, 40);
+            $batchSize = max((int)floor($parallelLimit * 1.5), 24);
             if ($batchSize > 200) { $batchSize = 200; }
 
             if ($checkCancel($conn, $runId)) {

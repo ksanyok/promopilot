@@ -204,6 +204,13 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         </div>
     </div>
 
+    <?php if ($deepRunInProgress || $runInProgress): ?>
+        <div class="alert alert-info py-2 px-3 mb-3" role="status">
+            <i class="bi bi-activity me-2"></i>
+            <strong><?php echo $deepRunInProgress ? __('Сейчас идёт глубокая проверка публикаций') : __('Сейчас идёт быстрая проверка ссылок'); ?></strong>
+        </div>
+    <?php endif; ?>
+
     <?php if (!empty($crowdMsg)): ?>
         <div class="alert alert-info fade-in"><?php echo htmlspecialchars($crowdMsg, ENT_QUOTES, 'UTF-8'); ?></div>
     <?php endif; ?>
@@ -296,6 +303,17 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                             </ul>
                         </div>
                     <?php endif; ?>
+                    <hr class="my-3">
+                    <div class="d-flex flex-wrap gap-2">
+                        <form method="post" class="d-inline">
+                            <?php echo csrf_field(); ?>
+                            <button type="submit" name="crowd_delete_errors" value="1" class="btn btn-outline-warning btn-sm"><i class="bi bi-trash me-1"></i><?php echo __('Удалить ошибки'); ?></button>
+                        </form>
+                        <form method="post" class="d-inline" onsubmit="return confirm('<?php echo __('Удалить все ссылки?'); ?>');">
+                            <?php echo csrf_field(); ?>
+                            <button type="submit" name="crowd_clear_all" value="1" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash3 me-1"></i><?php echo __('Очистить всё'); ?></button>
+                        </form>
+                    </div>
                 </div>
             </div>
         </div>
@@ -618,14 +636,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             </form>
 
             <div class="d-flex flex-wrap gap-2 mb-3">
-                <form method="post" class="d-inline">
-                    <?php echo csrf_field(); ?>
-                    <button type="submit" name="crowd_delete_errors" value="1" class="btn btn-outline-warning btn-sm"><i class="bi bi-trash me-1"></i><?php echo __('Удалить ошибки'); ?></button>
-                </form>
-                <form method="post" class="d-inline" onsubmit="return confirm('<?php echo __('Удалить все ссылки?'); ?>');">
-                    <?php echo csrf_field(); ?>
-                    <button type="submit" name="crowd_clear_all" value="1" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash3 me-1"></i><?php echo __('Очистить всё'); ?></button>
-                </form>
                 <div class="ms-auto small text-muted align-self-center">
                     <?php echo __('Найдено записей'); ?>: <strong><?php echo (int)($crowdList['total'] ?? 0); ?></strong>
                 </div>
