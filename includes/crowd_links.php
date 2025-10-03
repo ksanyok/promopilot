@@ -1044,6 +1044,13 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
         $chunks = array_chunk($items, $parallel);
         foreach ($chunks as $chunk) {
             $mh = curl_multi_init();
+            // Hint libcurl to use HTTP/2 multiplexing if available
+            if (defined('CURLMOPT_PIPELINING')) {
+                @curl_multi_setopt($mh, CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
+            }
+            if (defined('CURLMOPT_MAX_HOST_CONNECTIONS')) {
+                @curl_multi_setopt($mh, CURLMOPT_MAX_HOST_CONNECTIONS, max(2, (int)floor($parallel / 2)));
+            }
             $handles = [];
             foreach ($chunk as $item) {
                 $ch = curl_init();
@@ -1054,13 +1061,26 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
                     CURLOPT_RETURNTRANSFER => true,
                     CURLOPT_HEADER => true,
                     CURLOPT_TIMEOUT => $timeout,
-                    CURLOPT_CONNECTTIMEOUT => min(6, $timeout),
+                    CURLOPT_CONNECTTIMEOUT => min(5, $timeout),
                     CURLOPT_USERAGENT => $ua,
                     CURLOPT_ACCEPT_ENCODING => '',
                     CURLOPT_SSL_VERIFYPEER => true,
                     CURLOPT_SSL_VERIFYHOST => 2,
                     CURLOPT_HTTPHEADER => $headersCommon,
                 ]);
+                // Prefer IPv4 to avoid long IPv6 fallbacks on some hosts
+                if (defined('CURL_IPRESOLVE_V4')) { @curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); }
+                // Enable HTTP/2 if supported
+                if (defined('CURL_HTTP_VERSION_2TLS')) { @curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS); }
+                // Keepalive hints
+                if (defined('CURLOPT_TCP_KEEPALIVE')) { @curl_setopt($ch, CURLOPT_TCP_KEEPALIVE, 1); }
+                if (defined('CURLOPT_TCP_KEEPIDLE')) { @curl_setopt($ch, CURLOPT_TCP_KEEPIDLE, 30); }
+                if (defined('CURLOPT_TCP_KEEPINTVL')) { @curl_setopt($ch, CURLOPT_TCP_KEEPINTVL, 15); }
+                // DNS cache lifetime (sec)
+                if (defined('CURLOPT_DNS_CACHE_TIMEOUT')) { @curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, 120); }
+                // Fail fast on stalled connections
+                if (defined('CURLOPT_LOW_SPEED_LIMIT')) { @curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 200); }
+                if (defined('CURLOPT_LOW_SPEED_TIME')) { @curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, min(6, $timeout)); }
                 curl_multi_add_handle($mh, $ch);
                 $handles[(int)$ch] = ['handle' => $ch, 'item' => $item];
             }
@@ -1071,9 +1091,8 @@ if (!function_exists('pp_crowd_links_fetch_parallel')) {
             } while ($mrc === CURLM_CALL_MULTI_PERFORM);
 
             while ($active && $mrc === CURLM_OK) {
-                if (curl_multi_select($mh, 1.0) === -1) {
-                    usleep(100000);
-                }
+                $sel = curl_multi_select($mh, 0.8);
+                if ($sel === -1) { usleep(80000); }
                 do {
                     $mrc = curl_multi_exec($mh, $active);
                 } while ($mrc === CURLM_CALL_MULTI_PERFORM);
@@ -1210,15 +1229,25 @@ if (!function_exists('pp_crowd_links_process_run')) {
         }
     @$conn->query("UPDATE crowd_link_runs SET status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP), last_activity_at=CURRENT_TIMESTAMP WHERE id = " . (int)$runId . " LIMIT 1");
         $links = [];
-        if ($res = @$conn->query('SELECT id, url FROM crowd_links WHERE processing_run_id = ' . (int)$runId . ' ORDER BY id ASC')) {
+        if ($res = @$conn->query('SELECT id, url, domain FROM crowd_links WHERE processing_run_id = ' . (int)$runId . ' ORDER BY id ASC')) {
             while ($row = $res->fetch_assoc()) {
                 $id = (int)($row['id'] ?? 0);
                 $url = (string)($row['url'] ?? '');
+                $domain = (string)($row['domain'] ?? '');
                 if ($id > 0 && $url !== '') {
-                    $links[] = ['id' => $id, 'url' => $url];
+                    $links[] = ['id' => $id, 'url' => $url, 'domain' => $domain];
                 }
             }
             $res->free();
+        }
+        // Group by domain to improve connection reuse within chunks (keep-alive) and reduce DNS lookups
+        if (!empty($links)) {
+            usort($links, static function(array $a, array $b) {
+                $da = $a['domain'] ?? '';
+                $db = $b['domain'] ?? '';
+                if ($da === $db) { return ($a['id'] <=> $b['id']); }
+                return $da <=> $db;
+            });
         }
         $total = count($links);
         if ($total === 0) {
@@ -1247,10 +1276,10 @@ if (!function_exists('pp_crowd_links_process_run')) {
             return false;
         };
     // Faster defaults: higher parallelism, slightly lower timeout, smaller batches for quicker UI updates
-    $parallelLimit = 24;
-    $httpTimeout = 12;
-    $minParallel = 12;
-    $maxParallel = 64;
+    $parallelLimit = 32;    // starting concurrency
+    $httpTimeout = 12;      // per-request timeout
+    $minParallel = 16;      // don't go below this
+    $maxParallel = 64;      // cap to avoid network overload
     if ($parallelLimit < $minParallel) { $parallelLimit = $minParallel; }
     if ($parallelLimit > $maxParallel) { $parallelLimit = $maxParallel; }
     // Smaller batch per cycle so progress updates more frequently
@@ -1294,6 +1323,9 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $idList = implode(',', array_map('intval', $chunkIds));
                 @$conn->query("UPDATE crowd_links SET status='checking', last_run_id=" . (int)$runId . ", last_checked_at=CURRENT_TIMESTAMP WHERE id IN ($idList)");
             }
+
+            // Reduce autocommit overhead for batch writes
+            try { @$conn->begin_transaction(); } catch (Throwable $e) { /* ignore */ }
 
             $responses = pp_crowd_links_fetch_parallel($chunk, $httpTimeout, $parallelLimit);
 
@@ -1344,8 +1376,20 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 $langRegion = ['language' => '', 'region' => ''];
                 $requiredFields = '';
                 if ($newStatus === 'ok' && $body !== '') {
+                    // Quick content-type and heuristic short-circuit to avoid heavy DOM parsing when not needed
+                    $ctype = strtolower((string)(($http['headers']['content-type'] ?? $http['headers']['content_type'] ?? '')));
+                    if ($ctype !== '' && strpos($ctype, 'text/html') === false && strpos($ctype, 'application/xhtml+xml') === false) {
+                        $newStatus = 'no_form';
+                        $errorText = __('Контент не HTML: ') . $ctype;
+                    } else {
+                        // Cheap scan: if there's no textarea at all, it's definitely not a comment form
+                        if (stripos($body, '<textarea') === false) {
+                            $newStatus = 'no_form';
+                            $errorText = __('На странице нет формы с полем комментария (textarea).');
+                        }
+                    }
                     // Simple presence check: require a form with textarea; otherwise mark as no_form
-                    if (!pp_crowd_links_has_comment_form($body)) {
+                    if ($newStatus === 'ok' && !pp_crowd_links_has_comment_form($body)) {
                         $newStatus = 'no_form';
                         $errorText = __('На странице нет формы с полем комментария (textarea).');
                         // Lightweight diagnostics to help analyze false negatives without storing full HTML
@@ -1362,38 +1406,40 @@ if (!function_exists('pp_crowd_links_process_run')) {
                         ]);
                     }
                     // Extract required fields from first form with textarea
-                    try {
-                        $doc = pp_html_dom($body);
-                        if ($doc) {
-                            $xp = new DOMXPath($doc);
-                            $form = $xp->query('//form[.//textarea]')->item(0);
-                            if ($form instanceof DOMElement) {
-                                $req = [];
-                                $inputs = $xp->query('.//input | .//select | .//textarea', $form);
-                                if ($inputs) {
-                                    foreach ($inputs as $node) {
-                                        if (!$node instanceof DOMElement) { continue; }
-                                        $isReq = $node->hasAttribute('required');
-                                        if (!$isReq) {
-                                            $cls = strtolower($node->getAttribute('class'));
-                                            if (strpos($cls, 'required') !== false) { $isReq = true; }
-                                            $aria = strtolower($node->getAttribute('aria-required'));
-                                            if (in_array($aria, ['1','true'], true)) { $isReq = true; }
-                                        }
-                                        if ($isReq) {
-                                            $name = trim((string)$node->getAttribute('name'));
-                                            if ($name === '') { $name = strtolower($node->tagName); }
-                                            $type = strtolower((string)$node->getAttribute('type'));
-                                            if ($node->tagName === 'textarea') { $type = 'textarea'; }
-                                            $req[] = $name . ($type ? (':' . $type) : '');
+                    if ($newStatus === 'ok') {
+                        try {
+                            $doc = pp_html_dom($body);
+                            if ($doc) {
+                                $xp = new DOMXPath($doc);
+                                $form = $xp->query('//form[.//textarea]')->item(0);
+                                if ($form instanceof DOMElement) {
+                                    $req = [];
+                                    $inputs = $xp->query('.//input | .//select | .//textarea', $form);
+                                    if ($inputs) {
+                                        foreach ($inputs as $node) {
+                                            if (!$node instanceof DOMElement) { continue; }
+                                            $isReq = $node->hasAttribute('required');
+                                            if (!$isReq) {
+                                                $cls = strtolower($node->getAttribute('class'));
+                                                if (strpos($cls, 'required') !== false) { $isReq = true; }
+                                                $aria = strtolower($node->getAttribute('aria-required'));
+                                                if (in_array($aria, ['1','true'], true)) { $isReq = true; }
+                                            }
+                                            if ($isReq) {
+                                                $name = trim((string)$node->getAttribute('name'));
+                                                if ($name === '') { $name = strtolower($node->tagName); }
+                                                $type = strtolower((string)$node->getAttribute('type'));
+                                                if ($node->tagName === 'textarea') { $type = 'textarea'; }
+                                                $req[] = $name . ($type ? (':' . $type) : '');
+                                            }
                                         }
                                     }
+                                    if (!empty($req)) { $requiredFields = implode(', ', array_slice(array_unique($req), 0, 40)); }
                                 }
-                                if (!empty($req)) { $requiredFields = implode(', ', array_slice(array_unique($req), 0, 40)); }
                             }
+                        } catch (Throwable $e) {
+                            // ignore
                         }
-                    } catch (Throwable $e) {
-                        // ignore
                     }
                     // Extract language/region regardless of no_form to enrich meta
                     $lr = pp_crowd_links_extract_lang_region($body);
@@ -1429,6 +1475,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
                 }
             }
 
+            // Commit batch DB writes before updating counters
+            try { @$conn->commit(); } catch (Throwable $e) { /* ignore */ }
             pp_crowd_links_update_run_counts($conn, $runId, $counts, 'running');
 
             $chunkDuration = microtime(true) - $chunkStart;
