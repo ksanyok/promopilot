@@ -980,7 +980,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     function toggleDeepButtons(runActive) {
-        if (deepStartBtn) deepStartBtn.disabled = !!runActive;
+        // Keep Start enabled even if a run is active; backend will return alreadyRunning
+        if (deepStartBtn) deepStartBtn.disabled = false;
         if (deepCancelBtn) deepCancelBtn.disabled = !runActive;
     }
 
@@ -993,9 +994,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (spinner) spinner.classList.remove('d-none');
             if (label) label.classList.add('d-none');
         } else {
-            if (!deepCard || deepCard.getAttribute('data-run-active') !== '1') {
-                btn.disabled = false;
-            }
+            // Re-enable start button after request regardless of run state
+            btn.disabled = false;
             if (spinner) spinner.classList.add('d-none');
             if (label) label.classList.remove('d-none');
         }
@@ -1034,7 +1034,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     function toggleButtons(runActive) {
-        if (startBtn) startBtn.disabled = runActive;
+        // Keep Start enabled even if a run is active; backend will return alreadyRunning
+        if (startBtn) startBtn.disabled = false;
         if (cancelBtn) cancelBtn.disabled = !runActive;
     }
 
@@ -1047,9 +1048,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (spinner) spinner.classList.remove('d-none');
             if (label) label.classList.add('d-none');
         } else {
-            if (!card || card.getAttribute('data-run-active') !== '1') {
-                btn.disabled = false;
-            }
+            // Re-enable start button after request regardless of run state
+            btn.disabled = false;
             if (spinner) spinner.classList.add('d-none');
             if (label) label.classList.remove('d-none');
         }
