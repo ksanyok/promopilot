@@ -658,6 +658,20 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
         foreach ([$cmdNohup, $cmdSetsid, $cmdPlain] as $cmd) {
             $tried[] = $cmd;
             pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
+            // If shell_exec available, try to capture PID via sh -c '... & echo $!'
+            $pid = null;
+            if (function_exists('shell_exec') && !in_array('shell_exec', $disabled ?? [], true)) {
+                $cmdWithEcho = $cmd . ' echo $!';
+                $pidOut = @shell_exec('sh -c ' . escapeshellarg($cmdWithEcho));
+                if (is_string($pidOut)) {
+                    $pidOut = trim($pidOut);
+                    if ($pidOut !== '' && ctype_digit($pidOut)) {
+                        $pid = (int)$pidOut;
+                        pp_crowd_links_log('Worker launched (pid captured)', ['runId' => $runId, 'pid' => $pid]);
+                        return true;
+                    }
+                }
+            }
             if (function_exists('popen')) {
                 $handle = @popen($cmd, 'r');
                 if (is_resource($handle)) {
@@ -957,6 +971,21 @@ if (!function_exists('pp_crowd_links_get_status')) {
             if ($diffLast !== null && $diffLast >= 150) { $run['stalled'] = true; }
             elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $run['stalled'] = true; }
             else { $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150); }
+        }
+        // Auto re-launch attempt if stuck in queued without started_at for > 20s
+        if ((string)$row['status'] === 'queued') {
+            $createdAt = $row['created_at'] ?? null;
+            $startedAt = $row['started_at'] ?? null;
+            $age = null;
+            if ($createdAt && $createdAt !== '0000-00-00 00:00:00') {
+                $ts = strtotime((string)$createdAt);
+                if ($ts) { $age = time() - $ts; }
+            }
+            if ((!$startedAt || $startedAt === '0000-00-00 00:00:00') && ($age !== null && $age >= 20)) {
+                // Best effort: try to re-launch worker; safe to call repeatedly if previous never started
+                pp_crowd_links_log('Re-launch attempt (still queued)', ['runId' => (int)$row['id']]);
+                @pp_crowd_links_launch_worker((int)$row['id']);
+            }
         }
         return ['ok' => true, 'run' => $run];
     }
