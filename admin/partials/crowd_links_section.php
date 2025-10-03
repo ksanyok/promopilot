@@ -386,10 +386,10 @@ $pp_truncate = static function (string $text, int $length = 30): string {
                                                 <div class="fw-semibold" data-crowd-scope"><?php echo htmlspecialchars($runScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
                                             </div>
                                         </div>
-                                        <div class="progress mb-2" style="height: 10px;">
+                                        <div class="progress mb-2<?php echo $runInProgress ? '' : ' d-none'; ?>" id="crowdCheckProgressContainer" style="height: 10px;">
                                             <div class="progress-bar bg-success" id="crowdCheckProgressBar" role="progressbar" style="width: <?php echo $runProgress; ?>%;" aria-valuenow="<?php echo $runProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
                                         </div>
-                                        <div class="d-flex justify-content-between small">
+                                        <div class="d-flex justify-content-between small<?php echo $runInProgress ? '' : ' d-none'; ?>" id="crowdCheckCountsRow">
                                             <div><span data-crowd-processed"><?php echo $runProcessed; ?></span>/<span data-crowd-total"><?php echo $runTotal; ?></span></div>
                                             <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-crowd-ok"><?php echo $runOk; ?></span></div>
                                             <div class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i><span data-crowd-errors"><?php echo $runErrors; ?></span></div>
@@ -902,6 +902,8 @@ $pp_truncate = static function (string $text, int $length = 30): string {
     const messageBox = section.querySelector('#crowdCheckMessage');
     const card = section.querySelector('#crowdCheckCard');
     const statusBox = section.querySelector('#crowdCheckStatusCard');
+    const progressContainer = section.querySelector('#crowdCheckProgressContainer');
+    const countsRow = section.querySelector('#crowdCheckCountsRow');
     const progressBar = section.querySelector('#crowdCheckProgressBar');
     const statusLabel = section.querySelector('[data-crowd-status]');
     const totalEl = section.querySelector('[data-crowd-total]');
@@ -971,7 +973,8 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         cancelComplete: <?php echo json_encode(__('Проверка остановлена.'), JSON_UNESCAPED_UNICODE); ?>,
         forceSuccess: <?php echo json_encode(__('Принудительная остановка выполнена.'), JSON_UNESCAPED_UNICODE); ?>,
         stallWarning: <?php echo json_encode(__('Похоже, проверка не отвечает. Повторите остановку для принудительного завершения.'), JSON_UNESCAPED_UNICODE); ?>,
-        autoStopped: <?php echo json_encode(__('Проверка автоматически остановлена из-за отсутствия активности.'), JSON_UNESCAPED_UNICODE); ?>
+        autoStopped: <?php echo json_encode(__('Проверка автоматически остановлена из-за отсутствия активности.'), JSON_UNESCAPED_UNICODE); ?>,
+        stopping: <?php echo json_encode(__('Останавливается…'), JSON_UNESCAPED_UNICODE); ?>
     };
 
     const deepLabels = {
@@ -1177,9 +1180,20 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         return ids;
     }
 
+    function setProgressVisible(show) {
+        if (progressContainer) {
+            progressContainer.classList.toggle('d-none', !show);
+        }
+        if (countsRow) {
+            countsRow.classList.toggle('d-none', !show);
+        }
+    }
+
     function toggleButtons(runActive) {
         if (startBtn) startBtn.disabled = runActive;
         if (cancelBtn) cancelBtn.disabled = !runActive;
+        // Toggle progress UI visibility with the run state by default
+        setProgressVisible(runActive);
     }
 
     function setSpinner(btn, spinning) {
@@ -1294,7 +1308,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             pollTimer = null;
         }
         if (active && !pollTimer) {
-            pollTimer = setTimeout(() => fetchStatus(currentRunId), 4000);
+            pollTimer = setTimeout(() => fetchStatus(currentRunId), 2000);
         }
         if (active && data.stalled && messageBox && messageBox.textContent.trim() === '') {
             updateMessage(labels.stallWarning, 'warning');
@@ -1323,7 +1337,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             }
             updateRunCard(data.run || null);
             if (data.run && data.run.in_progress) {
-                pollTimer = setTimeout(() => fetchStatus(runId), 4000);
+                pollTimer = setTimeout(() => fetchStatus(runId), 2000);
             } else if (data.run && !data.run.in_progress && data.run.status === 'cancelled' && data.run.notes && data.run.notes.indexOf('автоматически') !== -1) {
                 if (!messageBox || messageBox.textContent.trim() === '') {
                     updateMessage(labels.autoStopped, 'info');
@@ -1331,7 +1345,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             }
         } catch (err) {
             updateMessage(err && err.message ? err.message : 'Error', 'warning');
-            pollTimer = setTimeout(() => fetchStatus(runId), 6000);
+            pollTimer = setTimeout(() => fetchStatus(runId), 4000);
         }
     }
 
@@ -1506,6 +1520,12 @@ $pp_truncate = static function (string $text, int $length = 30): string {
                 card.setAttribute('data-run-id', String(currentRunId));
                 card.setAttribute('data-run-active', '1');
                 toggleButtons(true);
+                // Immediately show zeroed progress UI on start
+                if (progressBar) { progressBar.style.width = '0%'; progressBar.setAttribute('aria-valuenow', '0'); }
+                if (processedEl) processedEl.textContent = '0';
+                if (totalEl) totalEl.textContent = String(data.total || 0);
+                if (okEl) okEl.textContent = '0';
+                if (errorEl) errorEl.textContent = '0';
                 cancelAttempts = 0;
                 fetchStatus(currentRunId);
             }
@@ -1525,6 +1545,9 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         }
         setSpinner(cancelBtn, true);
         updateMessage('');
+        // Optimistically hide progress UI and show stopping status
+        setProgressVisible(false);
+        if (statusLabel) { statusLabel.textContent = labels.stopping || statusLabel.textContent; }
         try {
             const body = new URLSearchParams();
             body.set('run_id', String(runId));
@@ -1542,6 +1565,8 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.ok === false) {
                 updateMessage(labels.cancelFailed, 'danger');
+                // Restore progress UI if cancel failed
+                setProgressVisible(true);
                 return;
             }
             if (data.finished) {
@@ -1564,6 +1589,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             fetchStatus(currentRunId);
         } catch (err) {
             updateMessage(labels.cancelFailed, 'danger');
+            setProgressVisible(true);
         } finally {
             setSpinner(cancelBtn, false);
         }

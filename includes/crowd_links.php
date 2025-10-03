@@ -864,7 +864,10 @@ if (!function_exists('pp_crowd_links_get_status')) {
             'last_activity_at' => $row['last_activity_at'] ?? null,
             'last_activity_iso' => pp_crowd_links_format_ts($row['last_activity_at'] ?? null),
         ];
-        $run['error_count'] = $run['redirect_count'] + $run['client_error_count'] + $run['server_error_count'] + $run['unreachable_count'];
+    // Treat everything except strict OK (HTTP 200 with textarea form) as error.
+    // We don't store a separate no_form counter in the run row, so include it implicitly:
+    // errors = processed - ok
+    $run['error_count'] = max(0, $run['processed_count'] - $run['ok_count']);
         $run['progress_percent'] = $run['total_links'] > 0 ? min(100, (int)round($run['processed_count'] * 100 / $run['total_links'])) : 0;
         $run['in_progress'] = in_array($run['status'], ['queued','running'], true);
         $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
