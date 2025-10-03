@@ -253,6 +253,17 @@ if (!function_exists('pp_crowd_deep_start_check')) {
             $status = (string)($activeRow['status'] ?? '');
             $alreadyCancelRequested = !empty($activeRow['cancel_requested']);
             $isStalled = pp_crowd_links_is_stalled_run($activeRow, 180);
+            // If there are no links bound to this deep run (e.g., after DB cleanup), treat as stalled and cancel
+            if ($activeId) {
+                $hasBoundLinks = false;
+                if ($res2 = @$conn->query('SELECT 1 FROM crowd_links WHERE deep_processing_run_id = ' . $activeId . ' LIMIT 1')) {
+                    $hasBoundLinks = (bool)$res2->fetch_row();
+                    $res2->free();
+                }
+                if (!$hasBoundLinks) {
+                    $isStalled = true;
+                }
+            }
             if ($activeId && ($alreadyCancelRequested || $isStalled)) {
                 $note = __('Автоматическая остановка глубокой проверки из-за отсутствия активности.');
                 $stmt = $conn->prepare("UPDATE crowd_deep_runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, cancel_requested=0, last_activity_at=CURRENT_TIMESTAMP, notes=TRIM(CONCAT_WS('\n', NULLIF(notes,''), ?)) WHERE id=? LIMIT 1");
