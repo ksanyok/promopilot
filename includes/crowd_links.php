@@ -571,74 +571,7 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
         if (!is_file($script)) {
             return false;
         }
-        // Prefer a real CLI php over lsphp wrappers
-        $phpBinary = PHP_BINARY ?: '';
-        $origBinary = $phpBinary;
-        $phpEnv = getenv('PP_PHP_CLI');
-        if ($phpEnv && @is_executable($phpEnv)) {
-            $phpBinary = $phpEnv;
-        }
-        if (defined('PP_PHP_CLI')) {
-            $constVal = constant('PP_PHP_CLI');
-            if ($constVal && @is_executable($constVal)) {
-                $phpBinary = $constVal;
-            }
-        }
-        $bn = $phpBinary ? strtolower(basename($phpBinary)) : '';
-        $needsCli = ($phpBinary === '' || $bn === 'lsphp' || $bn === 'litespeed');
-        $candidates = [];
-        if ($needsCli) {
-            $candidates = array_filter([
-                // User-provided override first
-                $phpEnv ?: null,
-                // Common locations
-                '/usr/bin/php',
-                '/usr/local/bin/php',
-                '/bin/php',
-                // CloudLinux alt-php paths (most common versions)
-                '/opt/alt/php83/usr/bin/php',
-                '/opt/alt/php82/usr/bin/php',
-                '/opt/alt/php81/usr/bin/php',
-                '/opt/alt/php80/usr/bin/php',
-                '/opt/alt/php74/usr/bin/php',
-            ]);
-            foreach ($candidates as $cand) {
-                if ($cand && @is_file($cand) && @is_executable($cand)) {
-                    $phpBinary = $cand;
-                    break;
-                }
-            }
-            // As a last resort, try system PATH 'php'
-            if ($phpBinary === '' || strtolower(basename($phpBinary)) === 'lsphp') {
-                $which = @shell_exec('command -v php 2>/dev/null');
-                if (is_string($which)) {
-                    $which = trim($which);
-                    if ($which !== '' && @is_executable($which)) {
-                        $phpBinary = $which;
-                    }
-                }
-            }
-            // If still nothing sensible, fall back to original (may be lsphp)
-            if ($phpBinary === '') {
-                $phpBinary = $origBinary ?: 'php';
-            }
-        }
-        $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-        $disabled = array_filter($disabled, static function($v){ return $v !== ''; });
-        $canPopen = function_exists('popen') && !in_array('popen', $disabled, true);
-        $canExec = function_exists('exec') && !in_array('exec', $disabled, true);
-        $canShell = function_exists('shell_exec') && !in_array('shell_exec', $disabled, true);
-        $canProc = function_exists('proc_open') && !in_array('proc_open', $disabled, true);
-        pp_crowd_links_log('Worker PHP binary selected', [
-            'runId' => $runId,
-            'binary' => $phpBinary,
-            'orig' => $origBinary,
-            'canPopen' => $canPopen,
-            'canExec' => $canExec,
-            'canShell' => $canShell,
-            'canProc' => $canProc,
-            'disabled' => array_values($disabled),
-        ]);
+        $phpBinary = PHP_BINARY ?: 'php';
         $runId = max(1, $runId);
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         if ($isWindows) {
@@ -650,40 +583,16 @@ if (!function_exists('pp_crowd_links_launch_worker')) {
             }
             return false;
         }
-        // Try nohup first to disown from web server process; then setsid; then plain background
-        $cmdNohup = 'nohup ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        $cmdSetsid = 'setsid ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        $cmdPlain = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
-        $tried = [];
-        foreach ([$cmdNohup, $cmdSetsid, $cmdPlain] as $cmd) {
-            $tried[] = $cmd;
-            pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
-            // If shell_exec available, try to capture PID via sh -c '... & echo $!'
-            $pid = null;
-            if (function_exists('shell_exec') && !in_array('shell_exec', $disabled ?? [], true)) {
-                $cmdWithEcho = $cmd . ' echo $!';
-                $pidOut = @shell_exec('sh -c ' . escapeshellarg($cmdWithEcho));
-                if (is_string($pidOut)) {
-                    $pidOut = trim($pidOut);
-                    if ($pidOut !== '' && ctype_digit($pidOut)) {
-                        $pid = (int)$pidOut;
-                        pp_crowd_links_log('Worker launched (pid captured)', ['runId' => $runId, 'pid' => $pid]);
-                        return true;
-                    }
-                }
+        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . ' ' . $runId . ' > /dev/null 2>&1 &';
+        pp_crowd_links_log('Launching worker', ['runId' => $runId, 'cmd' => $cmd]);
+        if (function_exists('popen')) {
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) {
+                @pclose($handle);
+                return true;
             }
-            if (function_exists('popen')) {
-                $handle = @popen($cmd, 'r');
-                if (is_resource($handle)) {
-                    @pclose($handle);
-                    return true;
-                }
-            }
-            @exec($cmd);
-            // We cannot reliably detect success here; continue to next variant
         }
-        // Best effort
-        pp_crowd_links_log('Worker launch attempted (fallback)', ['runId' => $runId, 'tried' => $tried]);
+        @exec($cmd);
         return true;
     }
 }
@@ -874,17 +783,12 @@ if (!function_exists('pp_crowd_links_start_check')) {
             }
             return ['ok' => false, 'error' => 'WORKER_LAUNCH_FAILED'];
         }
-        if (!pp_crowd_links_wait_for_worker_start($runId, 8.0)) {
-            if ($total > 200) {
-                // Для больших запусков не уходим в inline, оставляем очередь на фонового воркера
-                pp_crowd_links_log('Worker start not confirmed yet, leaving queued for background', ['runId' => $runId, 'total' => $total]);
-            } else {
-                pp_crowd_links_log('Worker did not start in time, running inline', ['runId' => $runId]);
-                try {
-                    pp_crowd_links_process_run($runId);
-                } catch (Throwable $e) {
-                    pp_crowd_links_log('Inline processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
-                }
+        if (!pp_crowd_links_wait_for_worker_start($runId, 3.0)) {
+            pp_crowd_links_log('Worker did not start in time, running inline', ['runId' => $runId]);
+            try {
+                pp_crowd_links_process_run($runId);
+            } catch (Throwable $e) {
+                pp_crowd_links_log('Inline processing failed', ['runId' => $runId, 'error' => $e->getMessage()]);
             }
         }
         return ['ok' => true, 'runId' => $runId, 'total' => $total, 'alreadyRunning' => false];
@@ -960,8 +864,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
             'last_activity_at' => $row['last_activity_at'] ?? null,
             'last_activity_iso' => pp_crowd_links_format_ts($row['last_activity_at'] ?? null),
         ];
-    // Ошибки считаем как всё, что не OK: это включает redirect, 4xx/5xx, недоступна и случаи без формы
-    $run['error_count'] = max(0, $run['processed_count'] - $run['ok_count']);
+        $run['error_count'] = $run['redirect_count'] + $run['client_error_count'] + $run['server_error_count'] + $run['unreachable_count'];
         $run['progress_percent'] = $run['total_links'] > 0 ? min(100, (int)round($run['processed_count'] * 100 / $run['total_links'])) : 0;
         $run['in_progress'] = in_array($run['status'], ['queued','running'], true);
         $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
@@ -971,21 +874,6 @@ if (!function_exists('pp_crowd_links_get_status')) {
             if ($diffLast !== null && $diffLast >= 150) { $run['stalled'] = true; }
             elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $run['stalled'] = true; }
             else { $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150); }
-        }
-        // Auto re-launch attempt if stuck in queued without started_at for > 20s
-        if ((string)$row['status'] === 'queued') {
-            $createdAt = $row['created_at'] ?? null;
-            $startedAt = $row['started_at'] ?? null;
-            $age = null;
-            if ($createdAt && $createdAt !== '0000-00-00 00:00:00') {
-                $ts = strtotime((string)$createdAt);
-                if ($ts) { $age = time() - $ts; }
-            }
-            if ((!$startedAt || $startedAt === '0000-00-00 00:00:00') && ($age !== null && $age >= 20)) {
-                // Best effort: try to re-launch worker; safe to call repeatedly if previous never started
-                pp_crowd_links_log('Re-launch attempt (still queued)', ['runId' => (int)$row['id']]);
-                @pp_crowd_links_launch_worker((int)$row['id']);
-            }
         }
         return ['ok' => true, 'run' => $run];
     }
@@ -1377,6 +1265,8 @@ if (!function_exists('pp_crowd_links_process_run')) {
             $regionInParam = '';
             $regionOutParam = '';
             $idParam = 0;
+            // Types: s (status), i (status_code), s (error), s (form_required),
+            //        s (langIn), s (langOut), s (regionIn), s (regionOut), i (id)
             $updateStmt->bind_param('sissssssi', $statusParam, $statusCodeParam, $errorParam, $requiredParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
         }
 
@@ -1432,11 +1322,9 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     if ($statusCode > 0) {
                         $errorText = sprintf(__('Неожиданный статус HTTP %d'), $statusCode);
                     } elseif ($curlError !== '') {
+                        $errorText = $curlError;
                         if (stripos($curlError, 'timed out') !== false || stripos($curlError, 'timeout') !== false) {
-                            $errorText = __('Таймаут соединения.');
                             $chunkTimeouts++;
-                        } else {
-                            $errorText = $curlError;
                         }
                     } else {
                         $errorText = __('Сайт недоступен или превышено время ожидания.');

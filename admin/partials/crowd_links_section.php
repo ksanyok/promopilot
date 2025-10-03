@@ -97,7 +97,6 @@ $runOk = 0;
 $runErrors = 0;
 $runStartedAt = '—';
 $runFinishedAt = '—';
-$runLastActivityAt = '—';
 $runNotes = __('Проверка ещё не запускалась');
 if ($hasRun) {
     $runStatusLabel = $crowdStatusLabels[$crowdCurrentRun['status']] ?? (string)$crowdCurrentRun['status'];
@@ -109,10 +108,8 @@ if ($hasRun) {
     $runErrors = (int)($crowdCurrentRun['error_count'] ?? 0);
     $runStartedAt = (string)($crowdCurrentRun['started_at'] ?? '—');
     $runFinishedAt = (string)($crowdCurrentRun['finished_at'] ?? '—');
-    $runLastActivityAt = (string)($crowdCurrentRun['last_activity_at'] ?? '—');
     if ($runStartedAt === '' || $runStartedAt === '0000-00-00 00:00:00') { $runStartedAt = '—'; }
     if ($runFinishedAt === '' || $runFinishedAt === '0000-00-00 00:00:00') { $runFinishedAt = '—'; }
-    if ($runLastActivityAt === '' || $runLastActivityAt === '0000-00-00 00:00:00') { $runLastActivityAt = '—'; }
     $notesRaw = (string)($crowdCurrentRun['notes'] ?? '');
     $runNotes = $notesRaw !== '' ? $notesRaw : '—';
 }
@@ -148,7 +145,6 @@ $deepRunFailed = 0;
 $deepRunSkipped = 0;
 $deepRunStartedAt = '—';
 $deepRunFinishedAt = '—';
-$deepRunLastActivityAt = '—';
 $deepRunNotes = __('Глубокая проверка ещё не запускалась');
 $deepRunId = $deepHasRun ? (int)$crowdDeepCurrentRun['id'] : 0;
 if ($deepHasRun) {
@@ -163,10 +159,8 @@ if ($deepHasRun) {
     $deepRunSkipped = (int)($crowdDeepCurrentRun['skipped_count'] ?? 0);
     $deepRunStartedAt = (string)($crowdDeepCurrentRun['started_at'] ?? '—');
     $deepRunFinishedAt = (string)($crowdDeepCurrentRun['finished_at'] ?? '—');
-    $deepRunLastActivityAt = (string)($crowdDeepCurrentRun['last_activity_at'] ?? '—');
     if ($deepRunStartedAt === '' || $deepRunStartedAt === '0000-00-00 00:00:00') { $deepRunStartedAt = '—'; }
     if ($deepRunFinishedAt === '' || $deepRunFinishedAt === '0000-00-00 00:00:00') { $deepRunFinishedAt = '—'; }
-    if ($deepRunLastActivityAt === '' || $deepRunLastActivityAt === '0000-00-00 00:00:00') { $deepRunLastActivityAt = '—'; }
     $deepRunNotesRaw = (string)($crowdDeepCurrentRun['notes'] ?? '');
     $deepRunNotes = $deepRunNotesRaw !== '' ? $deepRunNotesRaw : '—';
 }
@@ -247,7 +241,6 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             <div class="crowd-header-progress__meta">
                 <span class="crowd-header-progress__status-badge" data-crowd-header-status><?php echo htmlspecialchars($headerStatusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
                 <span class="crowd-header-progress__count" data-crowd-header-count><?php echo htmlspecialchars($headerCountSummary, ENT_QUOTES, 'UTF-8'); ?></span>
-                <span class="crowd-header-progress__last ms-2 text-muted small"><?php echo __('Посл. активность'); ?>: <span data-crowd-header-last-activity><?php echo htmlspecialchars($deepRunInProgress ? $deepRunLastActivityAt : $runLastActivityAt, ENT_QUOTES, 'UTF-8'); ?></span></span>
             </div>
         </div>
     </div>
@@ -930,7 +923,6 @@ $pp_truncate = static function (string $text, int $length = 30): string {
     const headerBar = section.querySelector('[data-crowd-progress-bar]');
     const headerBarFill = section.querySelector('[data-crowd-progress-header]');
     const headerKind = section.querySelector('[data-crowd-header-kind]');
-    const headerLastActivity = section.querySelector('[data-crowd-header-last-activity]');
     const tabsRoot = section.querySelector('#crowdTabs');
     const tabButtons = tabsRoot ? tabsRoot.querySelectorAll('[data-crowd-tab]') : [];
     const tabPanels = section.querySelectorAll('[data-crowd-tab-panel]');
@@ -1243,7 +1235,6 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             if (headerPercent) headerPercent.textContent = '—';
             if (headerCount) headerCount.textContent = '—';
             if (headerKind) headerKind.textContent = '—';
-            if (headerLastActivity) headerLastActivity.textContent = '—';
             if (headerBar) headerBar.setAttribute('aria-valuenow', '0');
             if (headerBarFill) headerBarFill.style.width = '0%';
             return;
@@ -1277,21 +1268,10 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             const pctText = (data.total_links || 0) > 0 ? ((data.progress_percent || 0) + '%') : '—';
             headerPercent.textContent = pctText;
         }
-        // Update simple run counters in the card
-        const processed = Number(data.processed_count || 0);
-        const total = Number(data.total_links || 0);
-        const ok = Number(data.ok_count || 0);
-        let err = (data.error_count != null)
-            ? Number(data.error_count)
-            : Number((data.redirect_count || 0) + (data.client_error_count || 0) + (data.server_error_count || 0) + (data.unreachable_count || 0));
-        if (total > 0) {
-            // Делаем error_count максимально честным: всё, что не OK из обработанных
-            err = Math.max(err, processed - ok);
-        }
-        if (processedEl) processedEl.textContent = String(processed);
-        if (totalEl) totalEl.textContent = String(total);
-        if (okEl) okEl.textContent = String(ok);
-        if (errorEl) errorEl.textContent = String(err);
+    if (processedEl) processedEl.textContent = data.processed_count || 0;
+        if (totalEl) totalEl.textContent = data.total_links || 0;
+        if (okEl) okEl.textContent = data.ok_count || 0;
+        if (errorEl) errorEl.textContent = data.error_count || 0;
         if (headerCount) {
             if ((data.total_links || 0) > 0) {
                 headerCount.textContent = (data.processed_count || 0) + '/' + (data.total_links || 0);
@@ -1307,9 +1287,6 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         }
         if (headerKind) {
             headerKind.textContent = '<?php echo addslashes(__('Простая проверка')); ?>';
-        }
-        if (headerLastActivity) {
-            headerLastActivity.textContent = data.last_activity_at || '—';
         }
 
         if (!active && pollTimer) {
@@ -1435,9 +1412,6 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             } else {
                 headerCount.textContent = '—';
             }
-        }
-        if (headerLastActivity) {
-            headerLastActivity.textContent = data.last_activity_at || '—';
         }
         if (headerBarFill) {
             const pct = data.progress_percent || 0;
