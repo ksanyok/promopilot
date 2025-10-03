@@ -672,7 +672,10 @@ if (!function_exists('pp_crowd_links_start_check')) {
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
         $activeRow = null;
-        if ($res = @$conn->query("SELECT id, status, scope, total_links, processed_count, cancel_requested, started_at, last_activity_at FROM crowd_link_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
+        if ($res = @$conn->query("SELECT id, status, scope, total_links, processed_count, cancel_requested, started_at, last_activity_at,
+                TIMESTAMPDIFF(SECOND, last_activity_at, NOW()) AS diff_last,
+                TIMESTAMPDIFF(SECOND, started_at, NOW()) AS diff_started
+            FROM crowd_link_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1")) {
             if ($row = $res->fetch_assoc()) {
                 $activeRow = $row;
             }
@@ -682,7 +685,14 @@ if (!function_exists('pp_crowd_links_start_check')) {
             $activeId = (int)($activeRow['id'] ?? 0);
             $status = (string)($activeRow['status'] ?? '');
             $alreadyCancelRequested = !empty($activeRow['cancel_requested']);
-            $isStalled = pp_crowd_links_is_stalled_run($activeRow, 150);
+            $isStalled = false;
+            $diffLast = isset($activeRow['diff_last']) ? (int)$activeRow['diff_last'] : null;
+            $diffStarted = isset($activeRow['diff_started']) ? (int)$activeRow['diff_started'] : null;
+            if (in_array((string)($activeRow['status'] ?? ''), ['queued','running'], true)) {
+                if ($diffLast !== null && $diffLast >= 150) { $isStalled = true; }
+                elseif (($activeRow['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $isStalled = true; }
+                else { $isStalled = pp_crowd_links_is_stalled_run($activeRow, 150); }
+            }
             // If there are no links bound to this run (e.g., after DB cleanup), treat as stalled and cancel
             if ($activeId) {
                 $hasBoundLinks = false;
@@ -818,7 +828,7 @@ if (!function_exists('pp_crowd_links_get_status')) {
             $conn->close();
             return ['ok' => true, 'run' => null];
         }
-        $stmt = $conn->prepare('SELECT * FROM crowd_link_runs WHERE id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT *, TIMESTAMPDIFF(SECOND, last_activity_at, NOW()) AS diff_last, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS diff_started FROM crowd_link_runs WHERE id = ? LIMIT 1');
         if (!$stmt) {
             $conn->close();
             return ['ok' => false, 'error' => 'DB_READ'];
@@ -857,7 +867,14 @@ if (!function_exists('pp_crowd_links_get_status')) {
         $run['error_count'] = $run['redirect_count'] + $run['client_error_count'] + $run['server_error_count'] + $run['unreachable_count'];
         $run['progress_percent'] = $run['total_links'] > 0 ? min(100, (int)round($run['processed_count'] * 100 / $run['total_links'])) : 0;
         $run['in_progress'] = in_array($run['status'], ['queued','running'], true);
-        $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150);
+        $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
+        $diffStarted = isset($row['diff_started']) ? (int)$row['diff_started'] : null;
+        $run['stalled'] = false;
+        if ($run['in_progress']) {
+            if ($diffLast !== null && $diffLast >= 150) { $run['stalled'] = true; }
+            elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $run['stalled'] = true; }
+            else { $run['stalled'] = pp_crowd_links_is_stalled_run($row, 150); }
+        }
         return ['ok' => true, 'run' => $run];
     }
 }
@@ -884,7 +901,10 @@ if (!function_exists('pp_crowd_links_cancel')) {
             $conn->close();
             return ['ok' => true, 'status' => 'idle'];
         }
-    $stmt = $conn->prepare('SELECT id, status, cancel_requested, started_at, last_activity_at, notes FROM crowd_link_runs WHERE id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT id, status, cancel_requested, started_at, last_activity_at, notes,
+            TIMESTAMPDIFF(SECOND, last_activity_at, NOW()) AS diff_last,
+            TIMESTAMPDIFF(SECOND, started_at, NOW()) AS diff_started
+        FROM crowd_link_runs WHERE id = ? LIMIT 1');
         if (!$stmt) {
             $conn->close();
             return ['ok' => false, 'error' => 'DB_READ'];
@@ -907,8 +927,12 @@ if (!function_exists('pp_crowd_links_cancel')) {
         if (!$shouldForce && $status === 'running') {
             if ($alreadyRequested) {
                 $shouldForce = true;
-            } elseif (pp_crowd_links_is_stalled_run($row, 150)) {
-                $shouldForce = true;
+            } else {
+                $diffLast = isset($row['diff_last']) ? (int)$row['diff_last'] : null;
+                $diffStarted = isset($row['diff_started']) ? (int)$row['diff_started'] : null;
+                if ($diffLast !== null && $diffLast >= 150) { $shouldForce = true; }
+                elseif (($row['last_activity_at'] ?? null) === null && $diffStarted !== null && $diffStarted >= 150) { $shouldForce = true; }
+                elseif (pp_crowd_links_is_stalled_run($row, 150)) { $shouldForce = true; }
             }
         }
         @$conn->query("UPDATE crowd_link_runs SET cancel_requested = 1 WHERE id = " . (int)$runId . " LIMIT 1");
@@ -1230,17 +1254,18 @@ if (!function_exists('pp_crowd_links_process_run')) {
     $batchSize = max((int)floor($parallelLimit * 1.5), 24);
     if ($batchSize > 200) { $batchSize = 200; }
 
-        $updateStmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+        $updateStmt = $conn->prepare("UPDATE crowd_links SET status=?, status_code=?, error=?, form_required=?, language=IF(? = '', language, ?), region=IF(? = '', region, ?), processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
         if ($updateStmt) {
             $statusParam = '';
             $statusCodeParam = 0;
             $errorParam = '';
+            $requiredParam = null;
             $langInParam = '';
             $langOutParam = '';
             $regionInParam = '';
             $regionOutParam = '';
             $idParam = 0;
-            $updateStmt->bind_param('sisssssi', $statusParam, $statusCodeParam, $errorParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
+            $updateStmt->bind_param('sisssssssi', $statusParam, $statusCodeParam, $errorParam, $requiredParam, $langInParam, $langOutParam, $regionInParam, $regionOutParam, $idParam);
         }
 
         $cancelled = false;
@@ -1312,6 +1337,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $chunkUnreachables++;
                 }
                 $langRegion = ['language' => '', 'region' => ''];
+                $requiredFields = '';
                 if ($newStatus === 'ok' && $body !== '') {
                     // Simple presence check: require a form with textarea; otherwise mark as no_form
                     if (!pp_crowd_links_has_comment_form($body)) {
@@ -1330,6 +1356,40 @@ if (!function_exists('pp_crowd_links_process_run')) {
                             'textarea_present' => $hasTextarea,
                         ]);
                     }
+                    // Extract required fields from first form with textarea
+                    try {
+                        $doc = pp_html_dom($body);
+                        if ($doc) {
+                            $xp = new DOMXPath($doc);
+                            $form = $xp->query('//form[.//textarea]')->item(0);
+                            if ($form instanceof DOMElement) {
+                                $req = [];
+                                $inputs = $xp->query('.//input | .//select | .//textarea', $form);
+                                if ($inputs) {
+                                    foreach ($inputs as $node) {
+                                        if (!$node instanceof DOMElement) { continue; }
+                                        $isReq = $node->hasAttribute('required');
+                                        if (!$isReq) {
+                                            $cls = strtolower($node->getAttribute('class'));
+                                            if (strpos($cls, 'required') !== false) { $isReq = true; }
+                                            $aria = strtolower($node->getAttribute('aria-required'));
+                                            if (in_array($aria, ['1','true'], true)) { $isReq = true; }
+                                        }
+                                        if ($isReq) {
+                                            $name = trim((string)$node->getAttribute('name'));
+                                            if ($name === '') { $name = strtolower($node->tagName); }
+                                            $type = strtolower((string)$node->getAttribute('type'));
+                                            if ($node->tagName === 'textarea') { $type = 'textarea'; }
+                                            $req[] = $name . ($type ? (':' . $type) : '');
+                                        }
+                                    }
+                                }
+                                if (!empty($req)) { $requiredFields = implode(', ', array_slice(array_unique($req), 0, 40)); }
+                            }
+                        }
+                    } catch (Throwable $e) {
+                        // ignore
+                    }
                     // Extract language/region regardless of no_form to enrich meta
                     $lr = pp_crowd_links_extract_lang_region($body);
                     if (is_array($lr)) { $langRegion = $lr; }
@@ -1347,6 +1407,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $statusParam = $newStatus;
                     $statusCodeParam = $statusCode;
                     $errorParam = $errorText;
+                    $requiredParam = $requiredFields;
                     $langInParam = $langVal;
                     $langOutParam = $langVal;
                     $regionInParam = $regionVal;
@@ -1354,7 +1415,7 @@ if (!function_exists('pp_crowd_links_process_run')) {
                     $idParam = $linkId;
                     $updateStmt->execute();
                 } else {
-                    @$conn->query('UPDATE crowd_links SET status=' . "'" . $conn->real_escape_string($newStatus) . "'" . ', status_code=' . (int)$statusCode . ', error=' . "'" . $conn->real_escape_string($errorText) . "'" . ', processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=' . (int)$linkId . ' LIMIT 1');
+                    @$conn->query('UPDATE crowd_links SET status=' . "'" . $conn->real_escape_string($newStatus) . "'" . ', status_code=' . (int)$statusCode . ', error=' . "'" . $conn->real_escape_string($errorText) . "'" . ', form_required=' . "'" . $conn->real_escape_string($requiredFields) . "'" . ', processing_run_id=NULL, last_checked_at=CURRENT_TIMESTAMP WHERE id=' . (int)$linkId . ' LIMIT 1');
                 }
 
                 $counts['processed']++;

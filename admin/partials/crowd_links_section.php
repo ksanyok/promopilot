@@ -115,13 +115,6 @@ if ($hasRun) {
 }
 $runPercentText = $runTotal > 0 ? ($runProgress . '%') : '—';
 $runCountSummary = $runTotal > 0 ? ($runProcessed . '/' . $runTotal) : '—';
-// If no simple run is in progress, keep header clean (to avoid showing stale last run)
-if (!$runInProgress) {
-    $runProgress = 0;
-    $runPercentText = '—';
-    $runCountSummary = '—';
-    $runStatusLabel = '—';
-}
 
 $crowdDeepStatusLabels = [];
 foreach ($crowdDeepStatusMeta as $key => $meta) {
@@ -185,6 +178,46 @@ $deepFormEmailDomain = (string)($crowdDeepDefaults['email_domain'] ?? '');
 $deepFormPhone = (string)($crowdDeepDefaults['phone'] ?? '');
 $deepFormTokenPrefix = $deepHasRun ? (string)($crowdDeepCurrentRun['token_prefix'] ?? '') : (string)($crowdDeepDefaults['token_prefix'] ?? '');
 if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDefaults['token_prefix'] ?? ''); }
+// Header progress kind: which check is currently active
+$headerKind = '—';
+if ($deepRunInProgress) {
+    $headerKind = __('Глубокая проверка');
+} elseif ($runInProgress) {
+    $headerKind = __('Простая проверка');
+}
+
+// Header progress metrics should reflect the active run on first render
+$headerStatusLabel = $runStatusLabel;
+$headerProgress = $runProgress;
+$headerPercentText = $runPercentText;
+$headerCountSummary = $runCountSummary;
+if ($deepRunInProgress) {
+    $headerStatusLabel = $deepRunStatusLabel;
+    $headerProgress = $deepRunProgress;
+    $headerPercentText = $deepRunPercentText;
+    $headerCountSummary = $deepRunCountSummary;
+}
+
+// If deep run is active, align initial header metrics to deep run so UI is correct before JS polling kicks in
+if ($deepRunInProgress) {
+    $runStatusLabel = $deepRunStatusLabel;
+    $runProgress = $deepRunProgress;
+    $runProcessed = $deepRunProcessed;
+    $runTotal = $deepRunTotal;
+    $runPercentText = $deepRunTotal > 0 ? ($deepRunProgress . '%') : '—';
+    $runCountSummary = $deepRunTotal > 0 ? ($deepRunProcessed . '/' . $deepRunTotal) : '—';
+}
+
+// Helper to truncate URL display to 30 characters
+$pp_truncate = static function (string $text, int $length = 30): string {
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($text, 'UTF-8') > $length) {
+            return mb_substr($text, 0, $length, 'UTF-8') . '…';
+        }
+        return $text;
+    }
+    return strlen($text) > $length ? substr($text, 0, $length) . '…' : $text;
+};
 ?>
 <div id="crowd-section" style="display:none;"
     data-crowd-api="<?php echo htmlspecialchars($apiUrl, ENT_QUOTES, 'UTF-8'); ?>"
@@ -199,24 +232,18 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         <div class="crowd-header-progress">
             <div class="crowd-header-progress__status">
                 <span class="crowd-header-progress__label"><?php echo __('Прогресс проверки'); ?></span>
-                <span class="crowd-header-progress__percent" data-crowd-header-percent><?php echo htmlspecialchars($runPercentText, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" data-crowd-header-kind><?php echo htmlspecialchars($headerKind, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="crowd-header-progress__percent" data-crowd-header-percent><?php echo htmlspecialchars($headerPercentText, ENT_QUOTES, 'UTF-8'); ?></span>
             </div>
-            <div class="crowd-header-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo (int)$runProgress; ?>" data-crowd-progress-bar>
-                <span class="crowd-header-progress__bar-fill" data-crowd-progress-header style="width: <?php echo (int)$runProgress; ?>%;"></span>
+            <div class="crowd-header-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo (int)$headerProgress; ?>" data-crowd-progress-bar>
+                <span class="crowd-header-progress__bar-fill" data-crowd-progress-header style="width: <?php echo (int)$headerProgress; ?>%;"></span>
             </div>
             <div class="crowd-header-progress__meta">
-                <span class="crowd-header-progress__status-badge" data-crowd-header-status><?php echo htmlspecialchars($runStatusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
-                <span class="crowd-header-progress__count" data-crowd-header-count><?php echo htmlspecialchars($runCountSummary, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="crowd-header-progress__status-badge" data-crowd-header-status><?php echo htmlspecialchars($headerStatusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="crowd-header-progress__count" data-crowd-header-count><?php echo htmlspecialchars($headerCountSummary, ENT_QUOTES, 'UTF-8'); ?></span>
             </div>
         </div>
     </div>
-
-    <?php if ($deepRunInProgress || $runInProgress): ?>
-        <div class="alert alert-info py-2 px-3 mb-3" role="status" id="crowdRunningBanner">
-            <i class="bi bi-activity me-2"></i>
-            <strong id="crowdRunningBannerText"><?php echo $deepRunInProgress ? __('Сейчас идёт глубокая проверка публикаций') : __('Сейчас идёт быстрая проверка ссылок'); ?></strong>
-        </div>
-    <?php endif; ?>
 
     <?php if (!empty($crowdMsg)): ?>
         <div class="alert alert-info fade-in"><?php echo htmlspecialchars($crowdMsg, ENT_QUOTES, 'UTF-8'); ?></div>
@@ -272,10 +299,10 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         </div>
     </div>
 
-    <div class="row g-4 mb-4">
-        <div class="col-12">
-            <div class="card crowd-panel crowd-panel--upload h-100">
-                <div class="card-body">
+    <!-- Import (full width row) -->
+    <div class="mb-4">
+        <div class="card crowd-panel crowd-panel--upload h-100">
+            <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <div>
                             <h5 class="card-title mb-0"><?php echo __('Импорт ссылок'); ?></h5>
@@ -300,243 +327,282 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                             <i class="bi bi-file-earmark-plus me-1"></i><?php echo __('Импортировать'); ?>
                         </button>
                     </form>
-                    <?php if (is_array($crowdImportSummary) && !empty($crowdImportSummary['ok'])): ?>
-                        <div class="alert alert-success mt-3 mb-0">
-                            <div class="fw-semibold mb-1"><?php echo __('Результаты импорта'); ?>:</div>
-                            <ul class="mb-0 ps-3">
-                                <li><?php echo __('Добавлено новых ссылок'); ?>: <strong><?php echo (int)($crowdImportSummary['imported'] ?? 0); ?></strong></li>
-                                <li><?php echo __('Найдено дубликатов'); ?>: <strong><?php echo (int)($crowdImportSummary['duplicates'] ?? 0); ?></strong></li>
-                                <li><?php echo __('Пропущено строк'); ?>: <strong><?php echo (int)($crowdImportSummary['invalid'] ?? 0); ?></strong></li>
-                            </ul>
-                        </div>
-                    <?php endif; ?>
-                    <hr class="my-3">
-                    <div class="d-flex flex-wrap gap-2">
-                        <form method="post" class="d-inline">
-                            <?php echo csrf_field(); ?>
-                            <button type="submit" name="crowd_delete_errors" value="1" class="btn btn-outline-warning btn-sm"><i class="bi bi-trash me-1"></i><?php echo __('Удалить ошибки'); ?></button>
-                        </form>
-                        <form method="post" class="d-inline" onsubmit="return confirm('<?php echo __('Удалить все ссылки?'); ?>');">
-                            <?php echo csrf_field(); ?>
-                            <button type="submit" name="crowd_clear_all" value="1" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash3 me-1"></i><?php echo __('Очистить всё'); ?></button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-        </div>
+            </div> <!-- /.card-body -->
+        </div> <!-- /.card -->
     </div>
 
-    <ul class="nav nav-tabs mb-3" id="crowdTabs" role="tablist">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="tab-simple" data-bs-toggle="tab" data-bs-target="#crowd-tab-simple" type="button" role="tab" aria-controls="crowd-tab-simple" aria-selected="true">
-                <i class="bi bi-robot me-1"></i><?php echo __('Быстрая проверка'); ?>
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-deep" data-bs-toggle="tab" data-bs-target="#crowd-tab-deep" type="button" role="tab" aria-controls="crowd-tab-deep" aria-selected="false">
-                <i class="bi bi-search-heart me-1"></i><?php echo __('Глубокая проверка'); ?>
-            </button>
-        </li>
-    </ul>
-    <div class="tab-content mb-4" id="crowdTabsContent">
-        <div class="tab-pane fade show active" id="crowd-tab-simple" role="tabpanel" aria-labelledby="tab-simple">
-            <div class="card crowd-panel crowd-panel--status" id="crowdCheckCard" data-run-id="<?php echo $hasRun ? (int)$crowdCurrentRun['id'] : ''; ?>" data-run-active="<?php echo $runInProgress ? '1' : '0'; ?>">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <div>
-                            <h5 class="card-title mb-0"><?php echo __('Проверка ссылок'); ?></h5>
-                            <p class="text-muted small mb-0"><?php echo __('HTTP код ответа и наличие формы с полем textarea.'); ?></p>
-                        </div>
-                        <i class="bi bi-robot text-success fs-4"></i>
-                    </div>
-                    <div class="row g-3 align-items-end mb-3">
-                        <div class="col-md-6">
-                            <label for="crowdCheckScope" class="form-label"><?php echo __('Диапазон проверки'); ?></label>
-                            <select class="form-select" id="crowdCheckScope">
-                                <?php foreach ($crowdScopeOptions as $scopeKey => $scopeLabel): ?>
-                                    <option value="<?php echo htmlspecialchars($scopeKey, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($scopeLabel, ENT_QUOTES, 'UTF-8'); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="d-flex gap-2">
-                                <button type="button" class="btn btn-success flex-grow-1" id="crowdCheckStart">
-                                    <span class="label-text"><i class="bi bi-play-circle me-1"></i><?php echo __('Запустить проверку'); ?></span>
-                                    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                                </button>
-                                <button type="button" class="btn btn-outline-secondary" id="crowdCheckCancel" <?php echo $runInProgress ? '' : 'disabled'; ?>>
-                                    <span class="label-text"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></span>
-                                    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="crowdCheckMessage" class="small text-muted crowd-check-message mb-3" role="status"></div>
-                    <div class="crowd-status-card rounded-3 p-3" id="crowdCheckStatusCard">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <div>
-                                <div class="text-muted small"><?php echo __('Статус'); ?></div>
-                                <div class="fw-semibold" data-crowd-status><?php echo htmlspecialchars($runStatusLabel, ENT_QUOTES, 'UTF-8'); ?></div>
-                            </div>
-                            <div class="text-end">
-                                <div class="text-muted small"><?php echo __('Диапазон'); ?></div>
-                                <div class="fw-semibold" data-crowd-scope><?php echo htmlspecialchars($runScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
-                            </div>
-                        </div>
-                        <div class="progress mb-2" style="height: 10px;">
-                            <div class="progress-bar bg-success" id="crowdCheckProgressBar" role="progressbar" style="width: <?php echo $runProgress; ?>%;" aria-valuenow="<?php echo $runProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
-                        </div>
-                        <div class="d-flex justify-content-between small">
-                            <div><span data-crowd-processed><?php echo $runProcessed; ?></span>/<span data-crowd-total><?php echo $runTotal; ?></span></div>
-                            <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-crowd-ok><?php echo $runOk; ?></span></div>
-                            <div class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i><span data-crowd-errors><?php echo $runErrors; ?></span></div>
-                        </div>
-                        <hr>
-                        <div class="row small g-2">
-                            <div class="col-sm-6">
-                                <div class="text-muted"><?php echo __('Запущено'); ?>:</div>
-                                <div data-crowd-started><?php echo htmlspecialchars($runStartedAt, ENT_QUOTES, 'UTF-8'); ?></div>
-                            </div>
-                            <div class="col-sm-6">
-                                <div class="text-muted"><?php echo __('Завершено'); ?>:</div>
-                                <div data-crowd-finished><?php echo htmlspecialchars($runFinishedAt, ENT_QUOTES, 'UTF-8'); ?></div>
-                            </div>
-                            <div class="col-sm-12">
-                                <div class="text-muted"><?php echo __('Комментарий'); ?>:</div>
-                                <div data-crowd-notes><?php echo htmlspecialchars($runNotes, ENT_QUOTES, 'UTF-8'); ?></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="tab-pane fade" id="crowd-tab-deep" role="tabpanel" aria-labelledby="tab-deep">
-            <div class="card crowd-panel crowd-panel--deep shadow-sm border-0" id="crowdDeepCard"
-                 data-run-id="<?php echo $deepRunId ?: ''; ?>"
-                 data-run-active="<?php echo $deepRunInProgress ? '1' : '0'; ?>">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <div>
-                            <h5 class="card-title mb-0 d-flex align-items-center gap-2">
-                                <i class="bi bi-search-heart text-danger"></i>
-                                <span><?php echo __('Глубокая проверка публикаций'); ?></span>
-                            </h5>
-                            <p class="text-muted small mb-0"><?php echo __('Автоматически отправляет тестовое сообщение, ищет опубликованный текст и фиксирует результат.'); ?></p>
-                        </div>
-                        <i class="bi bi-bullseye text-danger fs-4"></i>
-                    </div>
-
-                    <?php if (!empty($crowdDeepStatusError)): ?>
-                        <div class="alert alert-warning mb-3"><?php echo __('Не удалось загрузить статус глубокой проверки.'); ?> (<?php echo htmlspecialchars((string)$crowdDeepStatusError, ENT_QUOTES, 'UTF-8'); ?>)</div>
-                    <?php endif; ?>
-
-                    <div id="crowdDeepMessage" class="small text-muted mb-3" role="status"></div>
-
-                    <div class="row g-4">
-                        <div class="col-lg-7">
-                            <div class="row g-3">
-                                <div class="col-md-6">
-                                    <label for="crowdDeepScope" class="form-label"><?php echo __('Диапазон'); ?></label>
-                                    <select class="form-select" id="crowdDeepScope">
-                                        <?php foreach ($crowdDeepScopeOptions as $scopeKey => $scopeLabel): ?>
-                                            <option value="<?php echo htmlspecialchars($scopeKey, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($scopeLabel, ENT_QUOTES, 'UTF-8'); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="crowdDeepTokenPrefix" class="form-label"><?php echo __('Префикс токена'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepTokenPrefix" value="<?php echo htmlspecialchars($deepFormTokenPrefix, ENT_QUOTES, 'UTF-8'); ?>" maxlength="12" autocomplete="off">
-                                    <div class="form-text"><?php echo __('Используется для идентификации отправленного сообщения.'); ?></div>
-                                </div>
-                                <div class="col-md-12">
-                                    <label for="crowdDeepMessageLink" class="form-label"><?php echo __('Ссылка в сообщении'); ?></label>
-                                    <input type="url" class="form-control" id="crowdDeepMessageLink" value="<?php echo htmlspecialchars($deepFormLink, ENT_QUOTES, 'UTF-8'); ?>" placeholder="https://example.com/">
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="crowdDeepName" class="form-label"><?php echo __('Имя отправителя'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepName" value="<?php echo htmlspecialchars($deepFormName, ENT_QUOTES, 'UTF-8'); ?>">
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="crowdDeepCompany" class="form-label"><?php echo __('Компания'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepCompany" value="<?php echo htmlspecialchars($deepFormCompany, ENT_QUOTES, 'UTF-8'); ?>">
-                                </div>
-                                <div class="col-md-4">
-                                    <label for="crowdDeepEmailUser" class="form-label"><?php echo __('Email (логин)'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepEmailUser" value="<?php echo htmlspecialchars($deepFormEmailUser, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
-                                </div>
-                                <div class="col-md-4">
-                                    <label for="crowdDeepEmailDomain" class="form-label"><?php echo __('Email (домен)'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepEmailDomain" value="<?php echo htmlspecialchars($deepFormEmailDomain, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
-                                </div>
-                                <div class="col-md-4">
-                                    <label for="crowdDeepPhone" class="form-label"><?php echo __('Телефон'); ?></label>
-                                    <input type="text" class="form-control" id="crowdDeepPhone" value="<?php echo htmlspecialchars($deepFormPhone, ENT_QUOTES, 'UTF-8'); ?>">
-                                </div>
-                                <div class="col-md-12">
-                                    <label for="crowdDeepTemplate" class="form-label"><?php echo __('Шаблон сообщения'); ?></label>
-                                    <textarea class="form-control" id="crowdDeepTemplate" rows="4" placeholder="{{token}} {{link}}"><?php echo htmlspecialchars($deepFormTemplate, ENT_QUOTES, 'UTF-8'); ?></textarea>
-                                    <div class="form-text"><?php echo __('Поддерживаются плейсхолдеры {{token}} и {{link}}.'); ?></div>
-                                </div>
-                                <div class="col-12 d-flex gap-2">
-                                    <button type="button" class="btn btn-danger flex-grow-1" id="crowdDeepStart">
-                                        <span class="label-text"><i class="bi bi-broadcast-pin me-1"></i><?php echo __('Запустить глубокую проверку'); ?></span>
-                                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary" id="crowdDeepCancel" <?php echo $deepRunInProgress ? '' : 'disabled'; ?>>
-                                        <span class="label-text"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></span>
-                                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-lg-5">
-                            <div class="crowd-status-card rounded-3 p-3" id="crowdDeepStatusCard">
-                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <div>
-                                        <div class="text-muted small"><?php echo __('Статус'); ?></div>
-                                        <div class="fw-semibold" data-deep-status><?php echo htmlspecialchars($deepRunStatusLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+    <!-- Checks tabs (full width row) -->
+    <div class="mb-4">
+                    <ul class="nav nav-tabs" id="crowdTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" data-crowd-tab="simple" type="button" role="tab"><?php echo __('Простая проверка'); ?></button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" data-crowd-tab="deep" type="button" role="tab"><?php echo __('Глубокая проверка'); ?></button>
+                        </li>
+                    </ul>
+                    <div class="tab-content pt-3">
+                        <div class="tab-pane fade show active" data-crowd-tab-panel="simple" role="tabpanel">
+                            <div class="card crowd-panel crowd-panel--status h-100" id="crowdCheckCard" data-run-id="<?php echo $hasRun ? (int)$crowdCurrentRun['id'] : ''; ?>" data-run-active="<?php echo $runInProgress ? '1' : '0'; ?>">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <div>
+                                            <h5 class="card-title mb-0"><?php echo __('Проверка ссылок'); ?></h5>
+                                            <p class="text-muted small mb-0"><?php echo __('Фоновая проверка HTTP статусов и hreflang.'); ?></p>
+                                        </div>
+                                        <i class="bi bi-robot text-success fs-4"></i>
                                     </div>
-                                    <div class="text-end">
-                                        <div class="text-muted small"><?php echo __('Диапазон'); ?></div>
-                                        <div class="fw-semibold" data-deep-scope><?php echo htmlspecialchars($deepRunScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <div class="row g-3 align-items-end mb-3">
+                                        <div class="col-md-6">
+                                            <label for="crowdCheckScope" class="form-label"><?php echo __('Диапазон проверки'); ?></label>
+                                            <select class="form-select" id="crowdCheckScope">
+                                                <?php foreach ($crowdScopeOptions as $scopeKey => $scopeLabel): ?>
+                                                    <option value="<?php echo htmlspecialchars($scopeKey, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($scopeLabel, ENT_QUOTES, 'UTF-8'); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="d-flex gap-2">
+                                                <button type="button" class="btn btn-success flex-grow-1" id="crowdCheckStart">
+                                                    <span class="label-text"><i class="bi bi-play-circle me-1"></i><?php echo __('Запустить проверку'); ?></span>
+                                                    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                                </button>
+                                                <button type="button" class="btn btn-outline-secondary" id="crowdCheckCancel" <?php echo $runInProgress ? '' : 'disabled'; ?>>
+                                                    <span class="label-text"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></span>
+                                                    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="progress mb-2" style="height: 10px;">
-                                    <div class="progress-bar bg-danger" id="crowdDeepProgressBar" role="progressbar" style="width: <?php echo (int)$deepRunProgress; ?>%;" aria-valuenow="<?php echo (int)$deepRunProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
-                                </div>
-                                <div class="d-flex justify-content-between small mb-2">
-                                    <div><span data-deep-processed><?php echo $deepRunProcessed; ?></span>/<span data-deep-total><?php echo $deepRunTotal; ?></span></div>
-                                    <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-deep-success><?php echo $deepRunSuccess; ?></span></div>
-                                    <div class="text-warning"><i class="bi bi-question-circle me-1"></i><span data-deep-partial><?php echo $deepRunPartial; ?></span></div>
-                                    <div class="text-danger"><i class="bi bi-x-circle me-1"></i><span data-deep-failed><?php echo $deepRunFailed; ?></span></div>
-                                    <div class="text-muted"><i class="bi bi-skip-forward-circle me-1"></i><span data-deep-skipped><?php echo $deepRunSkipped; ?></span></div>
-                                </div>
-                                <hr>
-                                <div class="row small g-2">
-                                    <div class="col-sm-6">
-                                        <div class="text-muted"><?php echo __('Запущено'); ?>:</div>
-                                        <div data-deep-started><?php echo htmlspecialchars($deepRunStartedAt, ENT_QUOTES, 'UTF-8'); ?></div>
-                                    </div>
-                                    <div class="col-sm-6">
-                                        <div class="text-muted"><?php echo __('Завершено'); ?>:</div>
-                                        <div data-deep-finished><?php echo htmlspecialchars($deepRunFinishedAt, ENT_QUOTES, 'UTF-8'); ?></div>
-                                    </div>
-                                    <div class="col-sm-12">
-                                        <div class="text-muted"><?php echo __('Комментарий'); ?>:</div>
-                                        <div data-deep-notes><?php echo htmlspecialchars($deepRunNotes, ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <div id="crowdCheckMessage" class="small text-muted crowd-check-message mb-3" role="status"></div>
+                                    <div class="crowd-status-card rounded-3 p-3" id="crowdCheckStatusCard">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <div>
+                                                <div class="text-muted small"><?php echo __('Статус'); ?></div>
+                                                <div class="fw-semibold" data-crowd-status"><?php echo htmlspecialchars($runStatusLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </div>
+                                            <div class="text-end">
+                                                <div class="text-muted small"><?php echo __('Диапазон'); ?></div>
+                                                <div class="fw-semibold" data-crowd-scope"><?php echo htmlspecialchars($runScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </div>
+                                        </div>
+                                        <div class="progress mb-2" style="height: 10px;">
+                                            <div class="progress-bar bg-success" id="crowdCheckProgressBar" role="progressbar" style="width: <?php echo $runProgress; ?>%;" aria-valuenow="<?php echo $runProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <div class="d-flex justify-content-between small">
+                                            <div><span data-crowd-processed"><?php echo $runProcessed; ?></span>/<span data-crowd-total"><?php echo $runTotal; ?></span></div>
+                                            <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-crowd-ok"><?php echo $runOk; ?></span></div>
+                                            <div class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i><span data-crowd-errors"><?php echo $runErrors; ?></span></div>
+                                        </div>
+                                        <hr>
+                                        <div class="row small g-2">
+                                            <div class="col-sm-6">
+                                                <div class="text-muted"><?php echo __('Запущено'); ?>:</div>
+                                                <div data-crowd-started"><?php echo htmlspecialchars($runStartedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </div>
+                                            <div class="col-sm-6">
+                                                <div class="text-muted"><?php echo __('Завершено'); ?>:</div>
+                                                <div data-crowd-finished"><?php echo htmlspecialchars($runFinishedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </div>
+                                            <div class="col-sm-12">
+                                                <div class="text-muted"><?php echo __('Комментарий'); ?>:</div>
+                                                <div data-crowd-notes"><?php echo htmlspecialchars($runNotes, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+                        <div class="tab-pane fade" data-crowd-tab-panel="deep" role="tabpanel">
+                            <div class="card crowd-panel crowd-panel--deep shadow-sm border-0 mb-4" id="crowdDeepCard"
+                                 data-run-id="<?php echo $deepRunId ?: ''; ?>"
+                                 data-run-active="<?php echo $deepRunInProgress ? '1' : '0'; ?>">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <div>
+                                            <h5 class="card-title mb-0 d-flex align-items-center gap-2">
+                                                <i class="bi bi-search-heart text-danger"></i>
+                                                <span><?php echo __('Глубокая проверка публикаций'); ?></span>
+                                            </h5>
+                                            <p class="text-muted small mb-0"><?php echo __('Автоматически отправляет тестовое сообщение, ищет опубликованный текст и фиксирует результат.'); ?></p>
+                                        </div>
+                                        <i class="bi bi-bullseye text-danger fs-4"></i>
+                                    </div>
 
-    
+                                    <?php if (!empty($crowdDeepStatusError)): ?>
+                                        <div class="alert alert-warning mb-3"><?php echo __('Не удалось загрузить статус глубокой проверки.'); ?> (<?php echo htmlspecialchars((string)$crowdDeepStatusError, ENT_QUOTES, 'UTF-8'); ?>)</div>
+                                    <?php endif; ?>
+
+                                    <div id="crowdDeepMessage" class="small text-muted mb-3" role="status"></div>
+
+                                    <div class="row g-4">
+                                        <div class="col-lg-7">
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label for="crowdDeepScope" class="form-label"><?php echo __('Диапазон'); ?></label>
+                                                    <select class="form-select" id="crowdDeepScope">
+                                                        <?php foreach ($crowdDeepScopeOptions as $scopeKey => $scopeLabel): ?>
+                                                            <option value="<?php echo htmlspecialchars($scopeKey, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($scopeLabel, ENT_QUOTES, 'UTF-8'); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label for="crowdDeepTokenPrefix" class="form-label"><?php echo __('Префикс токена'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepTokenPrefix" value="<?php echo htmlspecialchars($deepFormTokenPrefix, ENT_QUOTES, 'UTF-8'); ?>" maxlength="12" autocomplete="off">
+                                                    <div class="form-text"><?php echo __('Используется для идентификации отправленного сообщения.'); ?></div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <label for="crowdDeepMessageLink" class="form-label"><?php echo __('Ссылка в сообщении'); ?></label>
+                                                    <input type="url" class="form-control" id="crowdDeepMessageLink" value="<?php echo htmlspecialchars($deepFormLink, ENT_QUOTES, 'UTF-8'); ?>" placeholder="https://example.com/">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label for="crowdDeepName" class="form-label"><?php echo __('Имя отправителя'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepName" value="<?php echo htmlspecialchars($deepFormName, ENT_QUOTES, 'UTF-8'); ?>">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label for="crowdDeepCompany" class="form-label"><?php echo __('Компания'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepCompany" value="<?php echo htmlspecialchars($deepFormCompany, ENT_QUOTES, 'UTF-8'); ?>">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label for="crowdDeepEmailUser" class="form-label"><?php echo __('Email (логин)'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepEmailUser" value="<?php echo htmlspecialchars($deepFormEmailUser, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label for="crowdDeepEmailDomain" class="form-label"><?php echo __('Email (домен)'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepEmailDomain" value="<?php echo htmlspecialchars($deepFormEmailDomain, ENT_QUOTES, 'UTF-8'); ?>" autocomplete="off">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label for="crowdDeepPhone" class="form-label"><?php echo __('Телефон'); ?></label>
+                                                    <input type="text" class="form-control" id="crowdDeepPhone" value="<?php echo htmlspecialchars($deepFormPhone, ENT_QUOTES, 'UTF-8'); ?>">
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <label for="crowdDeepTemplate" class="form-label"><?php echo __('Шаблон сообщения'); ?></label>
+                                                    <textarea class="form-control" id="crowdDeepTemplate" rows="4" placeholder="{{token}} {{link}}"><?php echo htmlspecialchars($deepFormTemplate, ENT_QUOTES, 'UTF-8'); ?></textarea>
+                                                    <div class="form-text"><?php echo __('Поддерживаются плейсхолдеры {{token}} и {{link}}.'); ?></div>
+                                                </div>
+                                                <div class="col-12 d-flex gap-2">
+                                                    <button type="button" class="btn btn-danger flex-grow-1" id="crowdDeepStart">
+                                                        <span class="label-text"><i class="bi bi-broadcast-pin me-1"></i><?php echo __('Запустить глубокую проверку'); ?></span>
+                                                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                                    </button>
+                                                    <button type="button" class="btn btn-outline-secondary" id="crowdDeepCancel" <?php echo $deepRunInProgress ? '' : 'disabled'; ?>>
+                                                        <span class="label-text"><i class="bi bi-stop-circle me-1"></i><?php echo __('Остановить'); ?></span>
+                                                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-lg-5">
+                                            <div class="crowd-status-card rounded-3 p-3" id="crowdDeepStatusCard">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <div>
+                                                        <div class="text-muted small"><?php echo __('Статус'); ?></div>
+                                                        <div class="fw-semibold" data-deep-status"><?php echo htmlspecialchars($deepRunStatusLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                    </div>
+                                                    <div class="text-end">
+                                                        <div class="text-muted small"><?php echo __('Диапазон'); ?></div>
+                                                        <div class="fw-semibold" data-deep-scope"><?php echo htmlspecialchars($deepRunScopeLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                    </div>
+                                                </div>
+                                                <div class="progress mb-2" style="height: 10px;">
+                                                    <div class="progress-bar bg-danger" id="crowdDeepProgressBar" role="progressbar" style="width: <?php echo (int)$deepRunProgress; ?>%;" aria-valuenow="<?php echo (int)$deepRunProgress; ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                                                </div>
+                                                <div class="d-flex justify-content-between small mb-2">
+                                                    <div><span data-deep-processed"><?php echo $deepRunProcessed; ?></span>/<span data-deep-total"><?php echo $deepRunTotal; ?></span></div>
+                                                    <div class="text-success"><i class="bi bi-check-circle me-1"></i><span data-deep-success"><?php echo $deepRunSuccess; ?></span></div>
+                                                    <div class="text-warning"><i class="bi bi-question-circle me-1"></i><span data-deep-partial"><?php echo $deepRunPartial; ?></span></div>
+                                                    <div class="text-danger"><i class="bi bi-x-circle me-1"></i><span data-deep-failed"><?php echo $deepRunFailed; ?></span></div>
+                                                    <div class="text-muted"><i class="bi bi-skip-forward-circle me-1"></i><span data-deep-skipped"><?php echo $deepRunSkipped; ?></span></div>
+                                                </div>
+                                                <hr>
+                                                <div class="row small g-2">
+                                                    <div class="col-sm-6">
+                                                        <div class="text-muted"><?php echo __('Запущено'); ?>:</div>
+                                                        <div data-deep-started"><?php echo htmlspecialchars($deepRunStartedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                    </div>
+                                                    <div class="col-sm-6">
+                                                        <div class="text-muted"><?php echo __('Завершено'); ?>:</div>
+                                                        <div data-deep-finished"><?php echo htmlspecialchars($deepRunFinishedAt, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                    </div>
+                                                    <div class="col-sm-12">
+                                                        <div class="text-muted"><?php echo __('Комментарий'); ?>:</div>
+                                                        <div data-deep-notes"><?php echo htmlspecialchars($deepRunNotes, ENT_QUOTES, 'UTF-8'); ?></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm border-0 mb-0" id="crowdDeepResultsCard" data-run-id="<?php echo $deepRunId ?: ''; ?>">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <h5 class="card-title mb-0 d-flex align-items-center gap-2">
+                                            <i class="bi bi-clipboard2-data text-danger"></i>
+                                            <span><?php echo __('Результаты глубокой проверки'); ?></span>
+                                        </h5>
+                                        <div class="small text-muted" data-deep-results-meta><?php echo $deepRunTotal > 0 ? sprintf(__('Последний запуск: %s записей'), number_format($deepRunTotal, 0, '.', ' ')) : __('Пока нет результатов'); ?></div>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped align-middle" id="crowdDeepResultsTable">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th><?php echo __('Время'); ?></th>
+                                                    <th><?php echo __('Статус'); ?></th>
+                                                    <th><?php echo __('URL'); ?></th>
+                                                    <th><?php echo __('Фрагмент'); ?></th>
+                                                    <th><?php echo __('Ошибка/Комментарий'); ?></th>
+                                                    <th><?php echo __('HTTP'); ?></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php if (empty($deepRecentItems)): ?>
+                                                    <tr>
+                                                        <td colspan="6" class="text-center text-muted py-3" data-deep-empty><?php echo __('Результатов пока нет.'); ?></td>
+                                                    </tr>
+                                                <?php else: ?>
+                                                    <?php foreach ($deepRecentItems as $item): ?>
+                                                        <?php
+                                                            $deepStatus = (string)($item['status'] ?? 'pending');
+                                                            $deepMeta = $crowdDeepStatusMeta[$deepStatus] ?? null;
+                                                            $deepBadgeClass = $deepMeta['class'] ?? 'badge bg-secondary';
+                                                            $deepBadgeLabel = $deepMeta['label'] ?? $deepStatus;
+                                                            $deepUrl = (string)($item['url'] ?? '');
+                                                            $evidenceUrl = (string)($item['evidence_url'] ?? '');
+                                                            $messageExcerpt = (string)($item['message_excerpt'] ?? '');
+                                                            $responseExcerpt = (string)($item['response_excerpt'] ?? '');
+                                                            $errorText = (string)($item['error'] ?? '');
+                                                            $createdAt = (string)($item['created_at'] ?? '');
+                                                        ?>
+                                                        <tr>
+                                                            <td><?php echo $createdAt !== '' ? htmlspecialchars($createdAt, ENT_QUOTES, 'UTF-8') : '—'; ?></td>
+                                                            <td><span class="badge <?php echo htmlspecialchars($deepBadgeClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($deepBadgeLabel, ENT_QUOTES, 'UTF-8'); ?></span></td>
+                                                            <td class="text-break">
+                                                                <?php if ($deepUrl !== ''): ?>
+                                                                    <?php $deepUrlShort = $pp_truncate($deepUrl, 30); ?>
+                                                                    <a href="<?php echo htmlspecialchars($deepUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" title="<?php echo htmlspecialchars($deepUrl, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($deepUrlShort, ENT_QUOTES, 'UTF-8'); ?></a>
+                                                                    <?php if ($evidenceUrl !== ''): ?>
+                                                                        <a href="<?php echo htmlspecialchars($evidenceUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="ms-1" title="<?php echo __('Открыть ответ'); ?>"><i class="bi bi-box-arrow-up-right"></i></a>
+                                                                    <?php endif; ?>
+                                                                <?php else: ?>
+                                                                    —
+                                                                <?php endif; ?>
+                                                            </td>
+                                                            <td class="small text-break"><?php echo $messageExcerpt !== '' ? htmlspecialchars($messageExcerpt, ENT_QUOTES, 'UTF-8') : ($responseExcerpt !== '' ? htmlspecialchars($responseExcerpt, ENT_QUOTES, 'UTF-8') : '—'); ?></td>
+                                                            <td class="small text-break"><?php echo $errorText !== '' ? htmlspecialchars($errorText, ENT_QUOTES, 'UTF-8') : '—'; ?></td>
+                                                            <td><?php echo isset($item['http_status']) && $item['http_status'] ? (int)$item['http_status'] : '—'; ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+    </div> <!-- /.checks row -->
 
     <div class="card shadow-sm border-0 mb-4">
         <div class="card-body">
@@ -598,6 +664,14 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             </form>
 
             <div class="d-flex flex-wrap gap-2 mb-3">
+                <form method="post" class="d-inline">
+                    <?php echo csrf_field(); ?>
+                    <button type="submit" name="crowd_delete_errors" value="1" class="btn btn-outline-warning btn-sm"><i class="bi bi-trash me-1"></i><?php echo __('Удалить ошибки'); ?></button>
+                </form>
+                <form method="post" class="d-inline" onsubmit="return confirm('<?php echo __('Удалить все ссылки?'); ?>');">
+                    <?php echo csrf_field(); ?>
+                    <button type="submit" name="crowd_clear_all" value="1" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash3 me-1"></i><?php echo __('Очистить всё'); ?></button>
+                </form>
                 <div class="ms-auto small text-muted align-self-center">
                     <?php echo __('Найдено записей'); ?>: <strong><?php echo (int)($crowdList['total'] ?? 0); ?></strong>
                 </div>
@@ -652,20 +726,19 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                     </th>
                                     <th><?php echo __('URL'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Статус'); ?></th>
-                                    <th class="text-nowrap"><?php echo __('Код'); ?></th>
+                                    <th class="text-nowrap"><?php echo __('Код / Проверка'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Глубокая проверка'); ?></th>
                                     <th><?php echo __('Ответ / Ошибка'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Язык'); ?></th>
                                     <th class="text-nowrap"><?php echo __('Регион'); ?></th>
                                     <th><?php echo __('Домен'); ?></th>
                                     <th><?php echo __('HTTP комментарий'); ?></th>
-                                    <th><?php echo __('HTTP проверка'); ?></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php if (empty($items)): ?>
                                     <tr>
-                                        <td colspan="11" class="text-center text-muted py-4"><?php echo __('Записей не найдено.'); ?></td>
+                                        <td colspan="10" class="text-center text-muted py-4"><?php echo __('Записей не найдено.'); ?></td>
                                     </tr>
                                 <?php else: ?>
                                     <?php foreach ($items as $row): ?>
@@ -682,11 +755,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                             $deepMeta = $crowdDeepStatusMeta[$deepStatus] ?? null;
                                             $deepBadgeClass = $deepMeta['class'] ?? 'badge bg-secondary';
                                             $deepBadgeLabel = $deepMeta['label'] ?? $deepStatus;
-                                            // Shorten verbose default label for pending deep check to keep table compact
-                                            if ($deepStatus === 'pending') {
-                                                $deepBadgeLabel = __('Нет глубокой проверки');
-                                            }
                                             $deepProcessing = !empty($row['deep_processing_run_id']);
+                                            $formRequired = (string)($row['form_required'] ?? '');
                                             $deepError = (string)($row['deep_error'] ?? '');
                                             $deepMessage = (string)($row['deep_message_excerpt'] ?? '');
                                             $deepEvidenceUrl = (string)($row['deep_evidence_url'] ?? '');
@@ -706,35 +776,26 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                                 <input type="checkbox" class="form-check-input" name="crowd_selected[]" value="<?php echo $linkId; ?>" data-crowd-checkbox <?php echo $checked ? 'checked' : ''; ?> aria-label="<?php echo __('Выбрать ссылку'); ?>">
                                             </td>
                                             <td>
+                                                <?php $rowUrl = (string)($row['url'] ?? ''); $rowUrlShort = $pp_truncate($rowUrl, 30); ?>
                                                 <div class="fw-semibold text-break">
-                                                    <?php
-                                                        $fullUrl = (string)($row['url'] ?? '');
-                                                        $displayUrl = $fullUrl;
-                                                        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
-                                                            if (mb_strlen($fullUrl) > 30) {
-                                                                $displayUrl = mb_substr($fullUrl, 0, 30) . '…';
-                                                            }
-                                                        } else {
-                                                            if (strlen($fullUrl) > 30) {
-                                                                $displayUrl = substr($fullUrl, 0, 30) . '…';
-                                                            }
-                                                        }
-                                                    ?>
-                                                    <a href="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES, 'UTF-8'); ?>" title="<?php echo htmlspecialchars($fullUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="link-primary">
-                                                        <?php echo htmlspecialchars($displayUrl, ENT_QUOTES, 'UTF-8'); ?>
+                                                    <a href="<?php echo htmlspecialchars($rowUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener" class="link-primary" title="<?php echo htmlspecialchars($rowUrl, ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <?php echo htmlspecialchars($rowUrlShort, ENT_QUOTES, 'UTF-8'); ?>
                                                     </a>
                                                 </div>
                                                 <div class="small text-muted">ID <?php echo $linkId; ?></div>
                                             </td>
                                             <td>
-                                                <span class="badge <?php echo htmlspecialchars($badgeClass, ENT_QUOTES, 'UTF-8'); ?>" data-crowd-status-badge><?php echo htmlspecialchars($badgeLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                                                <span class="badge <?php echo htmlspecialchars($badgeClass, ENT_QUOTES, 'UTF-8'); ?>" data-crowd-status-badge title="<?php echo htmlspecialchars($formRequired !== '' ? ('Textarea: есть; Обязательные: ' . $formRequired) : '—', ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($badgeLabel, ENT_QUOTES, 'UTF-8'); ?></span>
                                                 <?php if ($processing): ?>
                                                     <span class="spinner-border spinner-border-sm text-info ms-1" role="status" aria-hidden="true"></span>
                                                 <?php endif; ?>
                                             </td>
-                                            <td><?php echo $statusCode > 0 ? $statusCode : '—'; ?></td>
                                             <td>
-                                                <span class="badge <?php echo htmlspecialchars($deepBadgeClass, ENT_QUOTES, 'UTF-8'); ?>" data-deep-status-badge><?php echo htmlspecialchars($deepBadgeLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                                                <div><?php echo $statusCode > 0 ? $statusCode : '—'; ?></div>
+                                                <div class="small text-muted"><?php echo !empty($row['last_checked_at']) ? htmlspecialchars(date('Y-m-d H:i', strtotime((string)$row['last_checked_at'])), ENT_QUOTES, 'UTF-8') : '—'; ?></div>
+                                            </td>
+                                            <td>
+                                                <span class="badge <?php echo htmlspecialchars($deepBadgeClass, ENT_QUOTES, 'UTF-8'); ?>" data-deep-status-badge><?php echo htmlspecialchars($deepStatus === 'pending' ? __('Не запускалась') : $deepBadgeLabel, ENT_QUOTES, 'UTF-8'); ?></span>
                                                 <?php if ($deepProcessing): ?>
                                                     <span class="spinner-border spinner-border-sm text-danger ms-1" role="status" aria-hidden="true"></span>
                                                 <?php endif; ?>
@@ -756,9 +817,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                                             </td>
                                             <td class="text-uppercase"><?php echo $row['language'] ? htmlspecialchars((string)$row['language'], ENT_QUOTES, 'UTF-8') : '—'; ?></td>
                                             <td class="text-uppercase"><?php echo $row['region'] ? htmlspecialchars((string)$row['region'], ENT_QUOTES, 'UTF-8') : '—'; ?></td>
-                                            <td><?php echo htmlspecialchars((string)($row['domain'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td><?php $dom = (string)($row['domain'] ?? ''); $domShort = $pp_truncate($dom, 20); echo htmlspecialchars($domShort, ENT_QUOTES, 'UTF-8'); if ($dom !== '' && $domShort !== $dom) { echo ' <span class="text-muted" title="' . htmlspecialchars($dom, ENT_QUOTES, 'UTF-8') . '">…</span>'; } ?></td>
                                             <td class="text-break small">&nbsp;<?php echo $row['error'] ? htmlspecialchars((string)$row['error'], ENT_QUOTES, 'UTF-8') : '—'; ?></td>
-                                            <td><?php echo !empty($row['last_checked_at']) ? htmlspecialchars(date('Y-m-d H:i', strtotime((string)$row['last_checked_at'])), ENT_QUOTES, 'UTF-8') : '—'; ?></td>
+                                            
                                         </tr>
                                     <?php endforeach; ?>
                                 <?php endif; ?>
@@ -852,7 +913,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     const finishedEl = section.querySelector('[data-crowd-finished]');
     const notesEl = section.querySelector('[data-crowd-notes]');
     const selectAllBtns = section.querySelectorAll('[data-crowd-select]');
-    const masterCheckbox = section.querySelector('thead input[data-crowd-select="toggle"]');
     const checkboxes = section.querySelectorAll('input[data-crowd-checkbox]');
     const selectionCounter = section.querySelector('[data-crowd-selected-count]');
     const deleteBtn = section.querySelector('#crowdDeleteSelected');
@@ -862,6 +922,10 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     const headerCount = section.querySelector('[data-crowd-header-count]');
     const headerBar = section.querySelector('[data-crowd-progress-bar]');
     const headerBarFill = section.querySelector('[data-crowd-progress-header]');
+    const headerKind = section.querySelector('[data-crowd-header-kind]');
+    const tabsRoot = section.querySelector('#crowdTabs');
+    const tabButtons = tabsRoot ? tabsRoot.querySelectorAll('[data-crowd-tab]') : [];
+    const tabPanels = section.querySelectorAll('[data-crowd-tab-panel]');
 
     const deepApiBase = section.getAttribute('data-crowd-deep-api') || apiBase;
     const deepCard = section.querySelector('#crowdDeepCard');
@@ -890,20 +954,14 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     const deepStartedEl = section.querySelector('[data-deep-started]');
     const deepFinishedEl = section.querySelector('[data-deep-finished]');
     const deepNotesEl = section.querySelector('[data-deep-notes]');
-    const deepResultsTable = null;
-    const deepResultsBody = null;
-    const deepResultsMeta = null;
-    const tabsEl = section.querySelector('#crowdTabs');
-    const tabSimpleBtn = section.querySelector('#tab-simple');
-    const tabDeepBtn = section.querySelector('#tab-deep');
-    const runningBanner = section.querySelector('#crowdRunningBanner');
-    const runningBannerText = section.querySelector('#crowdRunningBannerText');
+    const deepResultsTable = section.querySelector('#crowdDeepResultsTable');
+    const deepResultsBody = deepResultsTable ? deepResultsTable.querySelector('tbody') : null;
+    const deepResultsMeta = section.querySelector('[data-deep-results-meta]');
 
     const labels = {
         selectSomething: <?php echo json_encode(__('Выберите хотя бы одну ссылку.'), JSON_UNESCAPED_UNICODE); ?>,
         startSuccess: <?php echo json_encode(__('Проверка запущена.'), JSON_UNESCAPED_UNICODE); ?>,
         alreadyRunning: <?php echo json_encode(__('Проверка уже выполняется.'), JSON_UNESCAPED_UNICODE); ?>,
-        noLinks: <?php echo json_encode(__('Нет ссылок для выбранного диапазона.'), JSON_UNESCAPED_UNICODE); ?>,
         cancelled: <?php echo json_encode(__('Остановка запроса отправлена.'), JSON_UNESCAPED_UNICODE); ?>,
         cancelIdle: <?php echo json_encode(__('Нет активных проверок.'), JSON_UNESCAPED_UNICODE); ?>,
         cancelFailed: <?php echo json_encode(__('Не удалось отменить проверку.'), JSON_UNESCAPED_UNICODE); ?>,
@@ -980,8 +1038,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     function toggleDeepButtons(runActive) {
-        // Keep Start enabled even if a run is active; backend will return alreadyRunning
-        if (deepStartBtn) deepStartBtn.disabled = false;
+        if (deepStartBtn) deepStartBtn.disabled = !!runActive;
         if (deepCancelBtn) deepCancelBtn.disabled = !runActive;
     }
 
@@ -994,33 +1051,120 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (spinner) spinner.classList.remove('d-none');
             if (label) label.classList.add('d-none');
         } else {
-            // Re-enable start button after request regardless of run state
-            btn.disabled = false;
+            if (!deepCard || deepCard.getAttribute('data-run-active') !== '1') {
+                btn.disabled = false;
+            }
             if (spinner) spinner.classList.add('d-none');
             if (label) label.classList.remove('d-none');
         }
     }
 
-    function fetchDeepResults() { /* removed: results table collapsed into shared table */ }
+    function renderDeepResults(items) {
+        if (!deepResultsBody) return;
+        deepResultsBody.innerHTML = '';
+        if (!items || !items.length) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 6;
+            cell.className = 'text-center text-muted py-3';
+            cell.textContent = deepLabels.noResults;
+            row.appendChild(cell);
+            deepResultsBody.appendChild(row);
+            return;
+        }
+        const truncate = (text, max = 30) => {
+            if (!text) return '';
+            if (text.length <= max) return text;
+            return text.slice(0, max) + '…';
+        };
+        items.forEach(item => {
+            const row = document.createElement('tr');
+            const createdAt = item.created_at || '—';
+            const status = item.status || 'pending';
+            const badgeLabel = deepLabels.statusMap[status] || status;
+            const badgeClass = (<?php echo json_encode($crowdDeepStatusClasses, JSON_UNESCAPED_UNICODE); ?>)[status] || 'badge bg-secondary';
+            const url = item.url || '';
+            const evidenceUrl = item.evidence_url || '';
+            const messageExcerpt = item.message_excerpt || item.response_excerpt || '';
+            const errorText = item.error || '';
+            const httpStatus = item.http_status || '';
 
-    function ensureActiveTabForRun() {
-        // If a deep run is active, switch to deep tab; if simple run active, switch to simple tab.
-        const deepActive = deepCard && deepCard.getAttribute('data-run-active') === '1';
-        const simpleActive = card && card.getAttribute('data-run-active') === '1';
-        if (deepActive && tabDeepBtn && !tabDeepBtn.classList.contains('active')) {
-            tabDeepBtn.click();
-        } else if (simpleActive && tabSimpleBtn && !tabSimpleBtn.classList.contains('active')) {
-            tabSimpleBtn.click();
-        }
-        if (runningBannerText) {
-            if (deepActive) {
-                runningBannerText.textContent = <?php echo json_encode(__('Сейчас идёт глубокая проверка публикаций'), JSON_UNESCAPED_UNICODE); ?>;
-            } else if (simpleActive) {
-                runningBannerText.textContent = <?php echo json_encode(__('Сейчас идёт быстрая проверка ссылок'), JSON_UNESCAPED_UNICODE); ?>;
+            const tdTime = document.createElement('td');
+            tdTime.textContent = createdAt;
+            row.appendChild(tdTime);
+
+            const tdStatus = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = badgeClass;
+            badge.textContent = badgeLabel;
+            tdStatus.appendChild(badge);
+            row.appendChild(tdStatus);
+
+            const tdUrl = document.createElement('td');
+            tdUrl.className = 'text-break';
+            if (url) {
+                const link = document.createElement('a');
+                link.href = url;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = truncate(url, 30);
+                link.title = url;
+                tdUrl.appendChild(link);
+                if (evidenceUrl) {
+                    const evidenceLink = document.createElement('a');
+                    evidenceLink.href = evidenceUrl;
+                    evidenceLink.target = '_blank';
+                    evidenceLink.rel = 'noopener';
+                    evidenceLink.className = 'ms-1';
+                    evidenceLink.title = '<?php echo addslashes(__('Открыть ответ')); ?>';
+                    evidenceLink.innerHTML = '<i class="bi bi-box-arrow-up-right"></i>';
+                    tdUrl.appendChild(evidenceLink);
+                }
+            } else {
+                tdUrl.textContent = '—';
             }
-        }
-        if (runningBanner) {
-            runningBanner.style.display = (deepActive || simpleActive) ? '' : 'none';
+            row.appendChild(tdUrl);
+
+            const tdMessage = document.createElement('td');
+            tdMessage.className = 'small text-break';
+            tdMessage.textContent = messageExcerpt || '—';
+            row.appendChild(tdMessage);
+
+            const tdError = document.createElement('td');
+            tdError.className = 'small text-break';
+            tdError.textContent = errorText || '—';
+            row.appendChild(tdError);
+
+            const tdHttp = document.createElement('td');
+            tdHttp.textContent = httpStatus ? String(httpStatus) : '—';
+            row.appendChild(tdHttp);
+
+            deepResultsBody.appendChild(row);
+        });
+    }
+
+    async function fetchDeepResults(runId, limit = 20) {
+        if (!deepApiBase || !runId) return;
+        try {
+            const res = await fetch(`${deepApiBase}?action=deep_results&run_id=${encodeURIComponent(runId)}&limit=${encodeURIComponent(limit)}`, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                if (!res.ok && data && data.error) {
+                    updateDeepMessage(data.error, 'warning');
+                }
+                return;
+            }
+            renderDeepResults(data.items || []);
+            if (deepResultsMeta) {
+                const total = data.total || 0;
+                deepResultsMeta.textContent = total ? `<?php echo __('Записей'); ?>: ${total}` : deepLabels.noResults;
+            }
+        } catch (err) {
+            updateDeepMessage(err && err.message ? err.message : 'Error', 'warning');
         }
     }
 
@@ -1034,8 +1178,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     function toggleButtons(runActive) {
-        // Keep Start enabled even if a run is active; backend will return alreadyRunning
-        if (startBtn) startBtn.disabled = false;
+        if (startBtn) startBtn.disabled = runActive;
         if (cancelBtn) cancelBtn.disabled = !runActive;
     }
 
@@ -1048,8 +1191,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (spinner) spinner.classList.remove('d-none');
             if (label) label.classList.add('d-none');
         } else {
-            // Re-enable start button after request regardless of run state
-            btn.disabled = false;
+            if (!card || card.getAttribute('data-run-active') !== '1') {
+                btn.disabled = false;
+            }
             if (spinner) spinner.classList.add('d-none');
             if (label) label.classList.remove('d-none');
         }
@@ -1061,12 +1205,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         selectionCounter.textContent = count;
         if (deleteBtn) {
             deleteBtn.disabled = count === 0;
-        }
-        // Update master checkbox state
-        if (masterCheckbox && checkboxes && checkboxes.length) {
-            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
-            masterCheckbox.checked = checkedCount > 0 && checkedCount === checkboxes.length;
-            masterCheckbox.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
         }
     }
 
@@ -1096,6 +1234,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (headerStatus) headerStatus.textContent = '—';
             if (headerPercent) headerPercent.textContent = '—';
             if (headerCount) headerCount.textContent = '—';
+            if (headerKind) headerKind.textContent = '—';
             if (headerBar) headerBar.setAttribute('aria-valuenow', '0');
             if (headerBarFill) headerBarFill.style.width = '0%';
             return;
@@ -1129,7 +1268,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             const pctText = (data.total_links || 0) > 0 ? ((data.progress_percent || 0) + '%') : '—';
             headerPercent.textContent = pctText;
         }
-        if (processedEl) processedEl.textContent = data.processed_count || 0;
+    if (processedEl) processedEl.textContent = data.processed_count || 0;
         if (totalEl) totalEl.textContent = data.total_links || 0;
         if (okEl) okEl.textContent = data.ok_count || 0;
         if (errorEl) errorEl.textContent = data.error_count || 0;
@@ -1146,6 +1285,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         if (headerStatus) {
             headerStatus.textContent = labels.statusMap[data.status] || data.status || '—';
         }
+        if (headerKind) {
+            headerKind.textContent = '<?php echo addslashes(__('Простая проверка')); ?>';
+        }
 
         if (!active && pollTimer) {
             clearTimeout(pollTimer);
@@ -1154,18 +1296,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         if (active && !pollTimer) {
             pollTimer = setTimeout(() => fetchStatus(currentRunId), 4000);
         }
-        // If no simple run is active and no deep run is active either, clear the header to avoid stale data
-        if (!active) {
-            const deepActiveNow = deepCard && deepCard.getAttribute('data-run-active') === '1';
-            if (!deepActiveNow) {
-                if (headerStatus) headerStatus.textContent = '—';
-                if (headerPercent) headerPercent.textContent = '—';
-                if (headerCount) headerCount.textContent = '—';
-                if (headerBar) headerBar.setAttribute('aria-valuenow', '0');
-                if (headerBarFill) headerBarFill.style.width = '0%';
-            }
-        }
-        ensureActiveTabForRun();
         if (active && data.stalled && messageBox && messageBox.textContent.trim() === '') {
             updateMessage(labels.stallWarning, 'warning');
         }
@@ -1199,7 +1329,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                     updateMessage(labels.autoStopped, 'info');
                 }
             }
-            ensureActiveTabForRun();
         } catch (err) {
             updateMessage(err && err.message ? err.message : 'Error', 'warning');
             pollTimer = setTimeout(() => fetchStatus(runId), 6000);
@@ -1232,16 +1361,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (deepStartedEl) deepStartedEl.textContent = '—';
             if (deepFinishedEl) deepFinishedEl.textContent = '—';
             if (deepNotesEl) deepNotesEl.textContent = deepLabels.noRuns || '—';
-            if (deepResultsMeta) {}
-            // clear header if simple run also idle
-            const simpleActiveNow = card && card.getAttribute('data-run-active') === '1';
-            if (!simpleActiveNow) {
-                if (headerStatus) headerStatus.textContent = '—';
-                if (headerPercent) headerPercent.textContent = '—';
-                if (headerCount) headerCount.textContent = '—';
-                if (headerBar) headerBar.setAttribute('aria-valuenow', '0');
-                if (headerBarFill) headerBarFill.style.width = '0%';
-            }
+            if (deepResultsMeta) deepResultsMeta.textContent = deepLabels.noResults || '—';
+            // If no deep data and simple run inactive, keep headerKind as is
+            renderDeepResults([]);
             return;
         }
         currentDeepRunId = data.id || 0;
@@ -1263,14 +1385,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             deepProgressBar.style.width = pct + '%';
             deepProgressBar.setAttribute('aria-valuenow', pct);
         }
-        // reflect deep progress in header when active
-        if (active) {
-            if (headerStatus) headerStatus.textContent = deepLabels.statusMap[data.status] || data.status || '—';
-            if (headerPercent) headerPercent.textContent = (data.total_links || 0) > 0 ? ((data.progress_percent || 0) + '%') : '—';
-            if (headerCount) headerCount.textContent = (data.total_links || 0) > 0 ? ((data.processed_count || 0) + '/' + (data.total_links || 0)) : '—';
-            if (headerBar) headerBar.setAttribute('aria-valuenow', pct);
-            if (headerBarFill) headerBarFill.style.width = pct + '%';
-        }
         if (deepProcessedEl) deepProcessedEl.textContent = data.processed_count || 0;
         if (deepTotalEl) deepTotalEl.textContent = data.total_links || 0;
         if (deepSuccessEl) deepSuccessEl.textContent = data.success_count || 0;
@@ -1280,6 +1394,33 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         if (deepStartedEl) deepStartedEl.textContent = data.started_at || '—';
         if (deepFinishedEl) deepFinishedEl.textContent = data.finished_at || '—';
         if (deepNotesEl) deepNotesEl.textContent = data.notes ? data.notes : '—';
+
+        // Update header to reflect deep run if active
+        if (headerKind) {
+            headerKind.textContent = '<?php echo addslashes(__('Глубокая проверка')); ?>';
+        }
+        if (headerStatus) {
+            headerStatus.textContent = deepLabels.statusMap[data.status] || data.status || '—';
+        }
+        if (headerPercent) {
+            const pctText = (data.total_links || 0) > 0 ? ((data.progress_percent || 0) + '%') : '—';
+            headerPercent.textContent = pctText;
+        }
+        if (headerCount) {
+            if ((data.total_links || 0) > 0) {
+                headerCount.textContent = (data.processed_count || 0) + '/' + (data.total_links || 0);
+            } else {
+                headerCount.textContent = '—';
+            }
+        }
+        if (headerBarFill) {
+            const pct = data.progress_percent || 0;
+            headerBarFill.style.width = pct + '%';
+        }
+        if (headerBar) {
+            const pct = data.progress_percent || 0;
+            headerBar.setAttribute('aria-valuenow', pct);
+        }
 
         if (deepPollTimer) {
             clearTimeout(deepPollTimer);
@@ -1298,7 +1439,9 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
                 updateDeepMessage(deepLabels.autoStopped, 'warning');
             }
         }
-        // results rendered in shared table
+        if (currentDeepRunId) {
+            fetchDeepResults(currentDeepRunId, 20);
+        }
     }
 
     async function fetchDeepStatus(runId) {
@@ -1318,7 +1461,6 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             if (data.run && data.run.in_progress) {
                 deepPollTimer = setTimeout(() => fetchDeepStatus(runId), 5000);
             }
-            ensureActiveTabForRun();
         } catch (err) {
             updateDeepMessage(err && err.message ? err.message : 'Error', 'warning');
             deepPollTimer = setTimeout(() => fetchDeepStatus(runId), 7000);
@@ -1350,10 +1492,7 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.ok === false) {
-                let msg = 'Error';
-                if (data && data.error) {
-                    msg = (data.error === 'NO_LINKS') ? labels.noLinks : data.error;
-                }
+                let msg = data && data.error ? data.error : 'Error';
                 updateMessage(msg, 'danger');
                 return;
             }
@@ -1547,9 +1686,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
 
     function handleSelectAction(action) {
         if (action === 'toggle') {
-            // Header master checkbox toggles all visible row checkboxes
-            const newState = masterCheckbox ? masterCheckbox.checked : !Array.from(checkboxes).every(cb => cb.checked);
-            checkboxes.forEach(cb => { cb.checked = newState; });
+            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+            checkboxes.forEach(cb => { cb.checked = !allChecked; });
         } else if (action === 'all') {
             checkboxes.forEach(cb => { cb.checked = true; });
         } else if (action === 'none') {
@@ -1559,17 +1697,10 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
 
     selectAllBtns.forEach(btn => {
-        // For header checkbox, use change event to capture checked state
-        if (btn === masterCheckbox) {
-            btn.addEventListener('change', function(){
-                handleSelectAction('toggle');
-            });
-        } else {
-            btn.addEventListener('click', function(e){
-                e.preventDefault();
-                handleSelectAction(this.getAttribute('data-crowd-select'));
-            });
-        }
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            handleSelectAction(this.getAttribute('data-crowd-select'));
+        });
     });
 
     checkboxes.forEach(cb => {
@@ -1603,6 +1734,42 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
         });
     }
 
+    // Tabs logic (simple/deep)
+    function showTab(kind) {
+        tabButtons.forEach(btn => {
+            const k = btn.getAttribute('data-crowd-tab');
+            if (k === kind) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+        tabPanels.forEach(panel => {
+            const k = panel.getAttribute('data-crowd-tab-panel');
+            if (k === kind) {
+                panel.classList.add('show');
+                panel.classList.add('active');
+            } else {
+                panel.classList.remove('show');
+                panel.classList.remove('active');
+            }
+        });
+        try { localStorage.setItem('pp-crowd-tab', kind); } catch(e) {}
+    }
+    if (tabButtons && tabButtons.length) {
+        tabButtons.forEach(btn => {
+            btn.addEventListener('click', () => showTab(btn.getAttribute('data-crowd-tab')));
+        });
+        let initialTab = 'simple';
+        try {
+            const saved = localStorage.getItem('pp-crowd-tab');
+            if (saved === 'deep' || saved === 'simple') { initialTab = saved; }
+        } catch(e) {}
+        // If deep is running, prefer deep tab
+        if (deepInitialActive) { initialTab = 'deep'; }
+        showTab(initialTab);
+    }
+
     toggleButtons(initialActive);
     toggleDeepButtons(deepInitialActive);
     updateCounts();
@@ -1611,7 +1778,8 @@ if ($deepFormTokenPrefix === '') { $deepFormTokenPrefix = (string)($crowdDeepDef
     }
     if (deepInitialActive && currentDeepRunId) {
         fetchDeepStatus(currentDeepRunId);
+    } else if (!deepInitialActive && currentDeepRunId) {
+        fetchDeepResults(currentDeepRunId, 20);
     }
-    ensureActiveTabForRun();
 })();
 </script>

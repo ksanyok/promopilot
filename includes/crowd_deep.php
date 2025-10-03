@@ -8,7 +8,8 @@ if (!function_exists('pp_crowd_deep_status_meta')) {
             return $cache;
         }
         $cache = [
-            'pending' => ['label' => __('Глубокая проверка не выполнялась'), 'class' => 'badge bg-secondary text-uppercase fw-normal'],
+            // Short, consistent label for the "not run" state
+            'pending' => ['label' => __('Не запускалась'), 'class' => 'badge bg-secondary text-uppercase fw-normal'],
             'queued' => ['label' => __('Ожидает глубокой проверки'), 'class' => 'badge bg-info text-dark'],
             'running' => ['label' => __('Глубокая проверка выполняется'), 'class' => 'badge bg-primary'],
             'success' => ['label' => __('Сообщение найдено'), 'class' => 'badge bg-success'],

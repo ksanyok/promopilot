@@ -418,6 +418,7 @@ function ensure_schema(): void {
             `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
             `status_code` SMALLINT NULL DEFAULT NULL,
             `error` TEXT NULL,
+            `form_required` TEXT NULL,
             `processing_run_id` INT NULL,
             `last_run_id` INT NULL,
             `deep_processing_run_id` INT NULL,
@@ -450,7 +451,8 @@ function ensure_schema(): void {
         $maybeAddCrowd('region', "ADD COLUMN `region` VARCHAR(16) NULL AFTER `language`");
         $maybeAddCrowd('status', "ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER `region`");
         $maybeAddCrowd('status_code', "ADD COLUMN `status_code` SMALLINT NULL DEFAULT NULL AFTER `status`");
-        $maybeAddCrowd('error', "ADD COLUMN `error` TEXT NULL AFTER `status_code`");
+    $maybeAddCrowd('error', "ADD COLUMN `error` TEXT NULL AFTER `status_code`");
+    $maybeAddCrowd('form_required', "ADD COLUMN `form_required` TEXT NULL AFTER `error`");
         $maybeAddCrowd('processing_run_id', "ADD COLUMN `processing_run_id` INT NULL AFTER `error`");
         $maybeAddCrowd('last_run_id', "ADD COLUMN `last_run_id` INT NULL AFTER `processing_run_id`");
         $maybeAddCrowd('deep_processing_run_id', "ADD COLUMN `deep_processing_run_id` INT NULL AFTER `last_run_id`");
