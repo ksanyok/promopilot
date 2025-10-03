@@ -879,6 +879,23 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .promotion-status-block.text-primary .promotion-progress-bar { background: linear-gradient(90deg, var(--primary), var(--accent)); }
 .promotion-progress-details { gap: 4px; }
 .promotion-progress-details div { font-size: .78rem; }
+.promotion-status-complete {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, var(--surface) 92%);
+  border: 1px solid color-mix(in srgb, var(--success) 24%, transparent 76%);
+  border-radius: var(--radius-xs);
+  padding: 10px 12px;
+  box-shadow: 0 6px 18px rgba(12, 56, 36, .22);
+}
+.promotion-status-complete .promotion-status-complete-text {
+  color: color-mix(in srgb, var(--text) 92%, var(--success) 8%);
+}
+.promotion-status-complete i { font-size: 1rem; }
 
 /* ===== Promotion report modal ===== */
 .promotion-report-wrapper { color: var(--text); }
@@ -1036,4 +1053,12 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 }
 :root[data-theme="light"] .promotion-flow-card.level-crowd {
   background: color-mix(in srgb, var(--accent) 14%, #fff 86%);
+}
+:root[data-theme="light"] .promotion-status-complete {
+  background: color-mix(in srgb, #d1fae5 60%, #fff 40%);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent 65%);
+  box-shadow: 0 6px 16px rgba(12, 56, 36, .12);
+}
+:root[data-theme="light"] .promotion-status-complete .promotion-status-complete-text {
+  color: color-mix(in srgb, var(--text) 85%, var(--success) 15%);
 }

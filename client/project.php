@@ -783,17 +783,26 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <div class="promotion-progress-details text-muted <?php echo empty($promotionDetails) ? 'd-none' : ''; ?>">
+                                                <div class="promotion-progress-details text-muted <?php echo ($promotionStatus === 'completed' || empty($promotionDetails)) ? 'd-none' : ''; ?>">
                                                     <?php foreach ($promotionDetails as $detail): ?>
                                                         <div><?php echo htmlspecialchars($detail); ?></div>
                                                     <?php endforeach; ?>
+                                                </div>
+                                                <div class="promotion-status-complete mt-2 <?php echo $promotionStatus === 'completed' ? '' : 'd-none'; ?>" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
+                                                    <i class="bi bi-patch-check-fill text-success"></i>
+                                                    <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
                                                 </div>
                                             </div>
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
                                             <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                                            <?php if ($promotionActive): ?>
-                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-promotion-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-run-id="<?php echo $promotionRunId ?: 0; ?>" title="<?php echo __('Остановить продвижение'); ?>"><i class="bi bi-stop-circle me-1"></i><span class="d-none d-lg-inline"><?php echo __('Остановить'); ?></span></button>
+                                            <?php if ($promotionStatus === 'completed'): ?>
+                                                <!-- Promotion finished: no further actions -->
+                                            <?php elseif ($promotionActive): ?>
+                                                <button type="button" class="btn btn-sm btn-publish me-1 action-promote disabled" disabled data-loading="1">
+                                                    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                                    <span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>
+                                                </button>
                                             <?php else: ?>
                                                 <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>">
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
@@ -1025,6 +1034,9 @@ document.addEventListener('DOMContentLoaded', function() {
         crowd: <?php echo json_encode(__('Крауд')); ?>
     };
 
+    const PROMOTION_COMPLETE_TEXT = <?php echo json_encode(__('Продвижение завершено')); ?>;
+    const PROMOTION_COMPLETE_TOOLTIP = <?php echo json_encode(__('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.')); ?>;
+
     const PROMOTION_REPORT_STRINGS = {
         root: <?php echo json_encode(__('Целевая страница')); ?>,
         level1: <?php echo json_encode(__('Уровень 1')); ?>,
@@ -1070,9 +1082,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const stage = promotion?.stage || tr.dataset.promotionStage || '';
         const progress = promotion?.progress || {};
         const runId = promotion?.run_id || tr.dataset.promotionRunId || '';
-        const levelDataRaw = promotion?.levels || {};
+    const levelDataRaw = promotion?.levels || {};
         const level1Data = levelDataRaw['1'] || levelDataRaw[1] || {};
         const level2Data = levelDataRaw['2'] || levelDataRaw[2] || {};
+    const progressWrapper = block.querySelector('.promotion-progress-visual');
+    const completeEl = block.querySelector('.promotion-status-complete');
+    const completeTextEl = completeEl?.querySelector('.promotion-status-complete-text');
     const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0) || 0;
     const level1Required = Number(level1Data.required ?? block.dataset.level1Required ?? tr.dataset.level1Required ?? progress?.target ?? progress?.total ?? 0) || 0;
     const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0) || 0;
@@ -1096,7 +1111,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         const countEl = block.querySelector('.promotion-progress-count');
         if (countEl) {
-            if (target > 0) {
+            if (target > 0 && status !== 'completed') {
                 countEl.textContent = `(${done} / ${target})`;
                 countEl.classList.remove('d-none');
             } else {
@@ -1115,6 +1130,27 @@ document.addEventListener('DOMContentLoaded', function() {
             block.classList.add('text-primary');
         }
 
+        if (progressWrapper) {
+            if (status === 'completed') {
+                progressWrapper.classList.add('d-none');
+            } else {
+                progressWrapper.classList.remove('d-none');
+            }
+        }
+
+        if (completeEl) {
+            if (status === 'completed') {
+                completeEl.classList.remove('d-none');
+                if (completeTextEl) { completeTextEl.textContent = PROMOTION_COMPLETE_TEXT; }
+                completeEl.setAttribute('title', PROMOTION_COMPLETE_TOOLTIP);
+                if (window.bootstrap && bootstrap.Tooltip) {
+                    try { bootstrap.Tooltip.getOrCreateInstance(completeEl); } catch (_) {}
+                }
+            } else {
+                completeEl.classList.add('d-none');
+            }
+        }
+
         const level1Total = level1Success;
         const level2Total = level2Success;
         const crowdData = promotion?.crowd || {};
@@ -1128,8 +1164,8 @@ document.addEventListener('DOMContentLoaded', function() {
         block.dataset.level2Required = String(level2Required);
         block.dataset.crowdPlanned = String(crowdPlanned);
 
-        const level1El = block.querySelector('.promotion-progress-level1');
-        const level2El = block.querySelector('.promotion-progress-level2');
+    const level1El = block.querySelector('.promotion-progress-level1');
+    const level2El = block.querySelector('.promotion-progress-level2');
 
         if (level1El) {
             const valueEl = level1El.querySelector('.promotion-progress-value');
@@ -1167,22 +1203,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const detailsEl = block.querySelector('.promotion-progress-details');
         if (detailsEl) {
-            const details = [];
-            if (level1Success > 0 || level1Required > 0) {
-                details.push(`${PROMOTION_DETAIL_LABELS.level1}: ${level1Success}${level1Required > 0 ? ' / ' + level1Required : ''}`);
-            }
-            if (level2Success > 0 || level2Required > 0) {
-                details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success}${level2Required > 0 ? ' / ' + level2Required : ''}`);
-            }
-            if (crowdPlanned > 0) {
-                details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
-            }
-            if (details.length) {
-                detailsEl.innerHTML = details.map(text => `<div>${escapeHtml(text)}</div>`).join('');
-                detailsEl.classList.remove('d-none');
-            } else {
+            if (status === 'completed') {
                 detailsEl.innerHTML = '';
                 detailsEl.classList.add('d-none');
+            } else {
+                const details = [];
+                if (level1Success > 0 || level1Required > 0) {
+                    details.push(`${PROMOTION_DETAIL_LABELS.level1}: ${level1Success}${level1Required > 0 ? ' / ' + level1Required : ''}`);
+                }
+                if (level2Success > 0 || level2Required > 0) {
+                    details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success}${level2Required > 0 ? ' / ' + level2Required : ''}`);
+                }
+                if (crowdPlanned > 0) {
+                    details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
+                }
+                if (details.length) {
+                    detailsEl.innerHTML = details.map(text => `<div>${escapeHtml(text)}</div>`).join('');
+                    detailsEl.classList.remove('d-none');
+                } else {
+                    detailsEl.innerHTML = '';
+                    detailsEl.classList.add('d-none');
+                }
             }
         }
 
@@ -1199,6 +1240,10 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.level1Required = String(level1Required);
         tr.dataset.level2Required = String(level2Required);
         tr.dataset.crowdPlanned = String(crowdPlanned);
+
+        if (typeof initTooltips === 'function') {
+            initTooltips(block);
+        }
     }
 
     // Update helper: reflect edited values into the row UI
@@ -1268,6 +1313,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const promotionRunId = tr.dataset.promotionRunId || '';
         const promotionReportReady = tr.dataset.promotionReportReady === '1';
         const promotionActive = isPromotionActiveStatus(promotionStatus);
+        const promotionFinished = promotionStatus === 'completed';
         const postUrl = tr.dataset.postUrl || '';
         const url = tr.querySelector('.url-cell .view-url')?.getAttribute('href') || '';
         const linkId = tr.getAttribute('data-id') || '';
@@ -1277,8 +1323,13 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<a href="' + escapeAttribute(postUrl) + '" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm me-1"><i class="bi bi-box-arrow-up-right me-1"></i><span class="d-none d-lg-inline"><?php echo __('Открыть'); ?></span></a>';
         }
 
-        if (promotionActive) {
-            html += '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-promotion-cancel" data-url="' + escapeAttribute(url) + '" data-run-id="' + escapeAttribute(promotionRunId) + '" title="<?php echo __('Остановить продвижение'); ?>"><i class="bi bi-stop-circle me-1"></i><span class="d-none d-lg-inline"><?php echo __('Остановить'); ?></span></button>';
+        if (promotionFinished) {
+            // no promote button when completed
+        } else if (promotionActive) {
+            html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote disabled" disabled data-loading="1">'
+                + '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>'
+                + '<span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>'
+                + '</button>';
         } else {
             html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="' + escapeAttribute(url) + '" data-id="' + escapeAttribute(linkId) + '"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
         }
@@ -2271,15 +2322,16 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </div>
                             </div>
                             <div class="promotion-progress-details text-muted d-none"></div>
+                            <div class="promotion-status-complete mt-2 d-none" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
+                                <i class="bi bi-patch-check-fill text-success"></i>
+                                <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
+                            </div>
                         </div>
                     </td>
                     <td class="text-end">
                         <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
                         <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="${escapeHtml(url)}" data-id="${String(newId)}">
                             <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
-                        </button>
-                        <button type="button" class="btn btn-outline-warning btn-sm me-1 action-promotion-cancel d-none" data-url="${escapeHtml(url)}" data-run-id="0">
-                            <i class="bi bi-stop-circle me-1"></i><span class="d-none d-lg-inline"><?php echo __('Остановить'); ?></span>
                         </button>
                         <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress d-none" data-run-id="0" data-url="${escapeHtml(url)}">
                             <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
@@ -2321,13 +2373,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
             btn.addEventListener('click', () => {
                 openPromotionReport(btn);
-            });
-        });
-        document.querySelectorAll('.action-promotion-cancel').forEach(btn => {
-            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                cancelPromotion(btn, url);
             });
         });
         document.querySelectorAll('.action-promotion-report').forEach(btn => {
