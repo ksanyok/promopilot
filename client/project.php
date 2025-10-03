@@ -586,9 +586,9 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                 </div>
 
                 <!-- Таблица ссылок -->
-                <div class="card section table-card" id="links-card">
-                    <div class="section-header">
-                        <div class="label"><i class="bi bi-list-task"></i><span><?php echo __('Ссылки'); ?></span> <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo __('Ссылки можно редактировать и удалять пока не началась публикация. После появления статуса \'В ожидании\' ссылка закрепляется.'); ?>"></i></div>
+                                <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                                <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
+                                <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
                         <div class="toolbar">
                             <span class="d-none d-md-inline small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Легенда статусов'); ?>">🟢 <?php echo __('Опубликована'); ?> · 🟡 <?php echo __('В ожидании'); ?> · ⚪ <?php echo __('Не опубликована'); ?></span>
                         </div>
@@ -633,6 +633,25 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         $promotionActive = in_array($promotionStatus, ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'], true);
                                         $promotionTotal = (int)($promotionProgress['total'] ?? 0);
                                         $promotionDone = (int)($promotionProgress['done'] ?? 0);
+                                        $promotionLevels = (is_array($promotionInfo) && isset($promotionInfo['levels']) && is_array($promotionInfo['levels'])) ? $promotionInfo['levels'] : [];
+                                        $level1Data = isset($promotionLevels[1]) && is_array($promotionLevels[1]) ? $promotionLevels[1] : [];
+                                        $level2Data = isset($promotionLevels[2]) && is_array($promotionLevels[2]) ? $promotionLevels[2] : [];
+                                        $level1Total = (int)($level1Data['total'] ?? 0);
+                                        $level1Success = (int)($level1Data['success'] ?? 0);
+                                        $level2Total = (int)($level2Data['total'] ?? 0);
+                                        $level2Success = (int)($level2Data['success'] ?? 0);
+                                        $crowdData = (is_array($promotionInfo) && isset($promotionInfo['crowd']) && is_array($promotionInfo['crowd'])) ? $promotionInfo['crowd'] : [];
+                                        $crowdPlanned = (int)($crowdData['planned'] ?? 0);
+                                        $promotionDetails = [];
+                                        if ($level1Total > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d / %d', __('Уровень 1'), $level1Success, $level1Total);
+                                        }
+                                        if ($level2Total > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d / %d', __('Уровень 2'), $level2Success, $level2Total);
+                                        }
+                                        if ($crowdPlanned > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d', __('Крауд'), $crowdPlanned);
+                                        }
                                         $promotionStatusLabel = '';
                                         switch ($promotionStatus) {
                                             case 'queued':
@@ -686,7 +705,12 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         data-promotion-run-id="<?php echo $promotionRunId ?: ''; ?>"
                                         data-promotion-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
                                         data-promotion-total="<?php echo $promotionTotal; ?>"
-                                        data-promotion-done="<?php echo $promotionDone; ?>">
+                                        data-promotion-done="<?php echo $promotionDone; ?>"
+                                        data-level1-total="<?php echo $level1Total; ?>"
+                                        data-level1-success="<?php echo $level1Success; ?>"
+                                        data-level2-total="<?php echo $level2Total; ?>"
+                                        data-level2-success="<?php echo $level2Success; ?>"
+                                        data-crowd-planned="<?php echo $crowdPlanned; ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
@@ -734,10 +758,20 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                  data-stage="<?php echo htmlspecialchars($promotionStage); ?>"
                                                  data-total="<?php echo $promotionTotal; ?>"
                                                  data-done="<?php echo $promotionDone; ?>"
-                                                 data-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>">
+                                                 data-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
+                                                 data-level1-total="<?php echo $level1Total; ?>"
+                                                 data-level1-success="<?php echo $level1Success; ?>"
+                                                 data-level2-total="<?php echo $level2Total; ?>"
+                                                 data-level2-success="<?php echo $level2Success; ?>"
+                                                 data-crowd-planned="<?php echo $crowdPlanned; ?>">
                                                 <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                                                 <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
                                                 <span class="promotion-progress-count ms-1 <?php echo $promotionTotal > 0 ? '' : 'd-none'; ?>"><?php echo $promotionTotal > 0 ? '(' . $promotionDone . ' / ' . $promotionTotal . ')' : ''; ?></span>
+                                                <div class="promotion-progress-details text-muted <?php echo empty($promotionDetails) ? 'd-none' : ''; ?>">
+                                                    <?php foreach ($promotionDetails as $detail): ?>
+                                                        <div><?php echo htmlspecialchars($detail); ?></div>
+                                                    <?php endforeach; ?>
+                                                </div>
                                             </div>
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
@@ -751,10 +785,6 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                 <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-flag-fill me-1"></i><span class="d-none d-lg-inline"><?php echo __('Ожидает проверки'); ?></span></button>
                                             <?php elseif ($status === 'pending' && !$promotionActive): ?>
                                                 <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
-                                            <?php elseif ($status === 'not_published'): ?>
-                                                <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>">
-                                                    <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span>
-                                                </button>
                                             <?php endif; ?>
 
                                             <?php if ($promotionActive): ?>
@@ -978,6 +1008,11 @@ document.addEventListener('DOMContentLoaded', function() {
         'cancelled': '<?php echo __('Отменено'); ?>',
         'idle': '<?php echo __('Не запущено'); ?>'
     };
+    const PROMOTION_DETAIL_LABELS = {
+        level1: <?php echo json_encode(__('Уровень 1')); ?>,
+        level2: <?php echo json_encode(__('Уровень 2')); ?>,
+        crowd: <?php echo json_encode(__('Крауд')); ?>
+    };
 
     function isPromotionActiveStatus(status) {
         return PROMOTION_ACTIVE_STATUSES.includes(status);
@@ -1031,12 +1066,54 @@ document.addEventListener('DOMContentLoaded', function() {
             block.classList.add('text-primary');
         }
 
+        const levels = promotion?.levels || {};
+        const level1Data = levels['1'] || levels[1] || {};
+        const level2Data = levels['2'] || levels[2] || {};
+        const level1Total = Number(level1Data.total ?? block.dataset.level1Total ?? tr.dataset.level1Total ?? 0);
+        const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0);
+        const level2Total = Number(level2Data.total ?? block.dataset.level2Total ?? tr.dataset.level2Total ?? 0);
+        const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0);
+        const crowdData = promotion?.crowd || {};
+        const crowdPlanned = Number(crowdData.planned ?? block.dataset.crowdPlanned ?? tr.dataset.crowdPlanned ?? 0);
+
+        block.dataset.level1Total = String(level1Total);
+        block.dataset.level1Success = String(level1Success);
+        block.dataset.level2Total = String(level2Total);
+        block.dataset.level2Success = String(level2Success);
+        block.dataset.crowdPlanned = String(crowdPlanned);
+
+        const detailsEl = block.querySelector('.promotion-progress-details');
+        if (detailsEl) {
+            const details = [];
+            if (level1Total > 0) {
+                details.push(`${PROMOTION_DETAIL_LABELS.level1}: ${level1Success} / ${level1Total}`);
+            }
+            if (level2Total > 0) {
+                details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success} / ${level2Total}`);
+            }
+            if (crowdPlanned > 0) {
+                details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
+            }
+            if (details.length) {
+                detailsEl.innerHTML = details.map(text => `<div>${escapeHtml(text)}</div>`).join('');
+                detailsEl.classList.remove('d-none');
+            } else {
+                detailsEl.innerHTML = '';
+                detailsEl.classList.add('d-none');
+            }
+        }
+
         tr.dataset.promotionStatus = status;
         tr.dataset.promotionStage = stage || '';
         tr.dataset.promotionRunId = runId ? String(runId) : '';
         tr.dataset.promotionReportReady = reportReady ? '1' : '0';
         tr.dataset.promotionDone = String(done);
         tr.dataset.promotionTotal = String(total);
+        tr.dataset.level1Total = String(level1Total);
+        tr.dataset.level1Success = String(level1Success);
+        tr.dataset.level2Total = String(level2Total);
+        tr.dataset.level2Success = String(level2Success);
+        tr.dataset.crowdPlanned = String(crowdPlanned);
     }
 
     // Update helper: reflect edited values into the row UI
@@ -1057,8 +1134,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (hostMuted) hostMuted.innerHTML = '<i class="bi bi-globe2 me-1"></i>' + escapeHtml(hostFromUrl(url));
             if (editUrl) editUrl.value = url;
-            const pubBtn = tr.querySelector('.action-publish');
-            if (pubBtn) { pubBtn.setAttribute('data-url', url); }
         }
         // Anchor
         if (anchorCell) {
@@ -1148,8 +1223,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 html += '<a href="' + escapeAttribute(postUrl) + '" target="_blank" rel="noopener" class="btn btn-outline-warning btn-sm me-1"><i class="bi bi-search me-1"></i><span class="d-none d-lg-inline"><?php echo __('Проверить'); ?></span></a>';
             }
             html += '<button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-flag-fill me-1"></i><span class="d-none d-lg-inline"><?php echo __('Ожидает проверки'); ?></span></button>';
-        } else if (status === 'not_published') {
-            html += '<button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="' + escapeAttribute(url) + '"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>';
         }
 
         if (promotionActive) {
@@ -1561,72 +1634,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function bindDynamicPublishButtons() {
-        document.querySelectorAll('.action-publish').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                sendPublishAction(btn, url, 'publish');
-            });
-        });
-        document.querySelectorAll('.action-cancel').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
-                sendPublishAction(btn, url, 'cancel');
-            });
-        });
-        document.querySelectorAll('.action-promote').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                startPromotion(btn, url);
-            });
-        });
-        document.querySelectorAll('.action-promotion-cancel').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                cancelPromotion(btn, url);
-            });
-        });
-        document.querySelectorAll('.action-promotion-report').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                openPromotionReport(btn);
-            });
-        });
-        // Bind analyze buttons
-        document.querySelectorAll('.action-analyze').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const tr = btn.closest('tr');
-                const linkEl = tr?.querySelector('.url-cell .view-url');
-                const url = linkEl ? linkEl.getAttribute('href') : '';
-                if (url) openAnalyzeModal(url);
-            });
-        });
-        // Bind show wish buttons
-        document.querySelectorAll('.action-show-wish').forEach(btn => {
-            if (btn.dataset.bound==='1') return;
-            btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const wish = btn.getAttribute('data-wish') || btn.closest('tr')?.querySelector('.view-wish')?.textContent || '';
-                openWishModal(wish);
-            });
-        });
-    }
-
-    // Initial bind
-    bindDynamicPublishButtons();
-
     // Add link button handler
     addLinkBtn.addEventListener('click', async function() {
         const url = newLinkInput.value.trim();
@@ -1687,6 +1694,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 tr.dataset.promotionReportReady = '0';
                 tr.dataset.promotionTotal = '0';
                 tr.dataset.promotionDone = '0';
+                tr.dataset.level1Total = '0';
+                tr.dataset.level1Success = '0';
+                tr.dataset.level2Total = '0';
+                tr.dataset.level2Success = '0';
+                tr.dataset.crowdPlanned = '0';
                 const pathDisp = pathFromUrl(url);
                 const hostDisp = hostFromUrl(url);
                 tr.innerHTML = `
@@ -1707,27 +1719,31 @@ document.addEventListener('DOMContentLoaded', function() {
                         </select>
                     </td>
                     <td class="wish-cell">
-                        <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
-                        <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
-                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
-                    </td>
-                    <td class="status-cell">
-                        <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
                         <div class="promotion-status-block small mt-2 text-muted"
                              data-run-id=""
                              data-status="idle"
                              data-stage=""
                              data-total="0"
                              data-done="0"
-                             data-report-ready="0">
+                             data-report-ready="0"
+                             data-level1-total="0"
+                             data-level1-success="0"
+                             data-level2-total="0"
+                             data-level2-success="0"
+                             data-crowd-planned="0">
                             <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                             <span class="promotion-status-label ms-1"><?php echo __('Не запущено'); ?></span>
+                            <span class="promotion-progress-count ms-1 d-none"></span>
+                            <div class="promotion-progress-details text-muted d-none"></div>
+                        </div>
+                             data-done="0"
+                             data-report-ready="0">
+                            <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                             <span class="promotion-progress-count ms-1 d-none"></span>
                         </div>
                     </td>
                     <td class="text-end">
                         <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                        <button type="button" class="btn btn-sm btn-publish me-1 action-publish" data-url="${escapeHtml(url)}"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Опубликовать'); ?></span></button>
                         <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="${escapeHtml(url)}" data-id="${String(newId)}">
                             <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
                         </button>
@@ -1760,14 +1776,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Extend binder to include edit/remove in addition to publish/cancel/analyze/wish
     function bindDynamicRowActions() {
-        // publish
-        document.querySelectorAll('.action-publish').forEach(btn => {
-            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                sendPublishAction(btn, url, 'publish');
-            });
-        });
         // cancel
         document.querySelectorAll('.action-cancel').forEach(btn => {
             if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
