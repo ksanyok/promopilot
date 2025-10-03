@@ -1033,11 +1033,10 @@ document.addEventListener('DOMContentLoaded', function() {
         level1Count: <?php echo json_encode(__('Успешных публикаций уровня 1')); ?>,
         level2Count: <?php echo json_encode(__('Успешных публикаций уровня 2')); ?>,
         uniqueNetworks: <?php echo json_encode(__('Уникальные сети')); ?>,
-        diagramTitle: <?php echo json_encode(__('Структура публикаций')); ?>,
-        diagramHelper: <?php echo json_encode(__('Диаграмма показывает связи между уровнями публикаций.')); ?>,
+    diagramTitle: <?php echo json_encode(__('Карта публикаций по уровням')); ?>,
+    diagramHelper: <?php echo json_encode(__('Выберите публикацию первого уровня, чтобы увидеть связанные материалы.')); ?>,
         exportJson: <?php echo json_encode(__('Экспорт JSON')); ?>,
         exportCsv: <?php echo json_encode(__('Экспорт CSV')); ?>,
-        exportPng: <?php echo json_encode(__('Экспорт PNG диаграммы')); ?>,
         exportTooltip: <?php echo json_encode(__('Сохраните отчет, чтобы отправить клиенту или сохранить для аудита.')); ?>,
         tableSource: <?php echo json_encode(__('Источник')); ?>,
         tableUrl: <?php echo json_encode(__('Ссылка')); ?>,
@@ -1053,9 +1052,7 @@ document.addEventListener('DOMContentLoaded', function() {
         filenamePrefix: <?php echo json_encode('promotion-report'); ?>
     };
 
-    let promotionReportSequence = 0;
     let promotionReportContext = null;
-    let promotionReportResizeBound = false;
 
     function isPromotionActiveStatus(status) {
         return PROMOTION_ACTIVE_STATUSES.includes(status);
@@ -1555,19 +1552,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderPromotionReport(report, meta = {}) {
-        promotionReportSequence += 1;
         const normalized = normalizePromotionReport(report || {});
         if (!normalized.hasData) {
             promotionReportContext = null;
             return `<div class="text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
         }
-        const diagramId = `promotion-report-diagram-${promotionReportSequence}`;
-        promotionReportContext = { diagramId, report: report || {}, normalized, meta };
+        promotionReportContext = { report: report || {}, normalized, meta, activeParentId: null };
         const summaryItems = [
             { label: PROMOTION_REPORT_STRINGS.level1Count, value: normalized.level1.length },
             { label: PROMOTION_REPORT_STRINGS.level2Count, value: normalized.level2.length },
             { label: PROMOTION_REPORT_STRINGS.uniqueNetworks, value: normalized.uniqueNetworks }
         ];
+        if (normalized.crowd.length) {
+            summaryItems.push({ label: PROMOTION_REPORT_STRINGS.crowdLinks, value: normalized.crowd.length });
+        }
         const summaryHtml = summaryItems.map(item => `
             <li class="promotion-report-summary-item">
                 <span class="label">${escapeHtml(item.label)}</span>
@@ -1577,24 +1575,27 @@ document.addEventListener('DOMContentLoaded', function() {
         const targetUrl = meta?.target || '';
         const targetLink = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>` : '—';
         const statusText = meta?.status ? escapeHtml(getPromotionStatusLabel(meta.status)) : '—';
+        const flowHtml = buildPromotionReportFlow(normalized, meta);
         const tablesHtml = buildPromotionReportTables(normalized, meta);
+        const totalNodes = normalized.level1.length + normalized.level2.length;
         return `
-            <div class="promotion-report-wrapper" data-diagram-id="${diagramId}">
+            <div class="promotion-report-wrapper" data-report-root>
                 <div class="promotion-report-toolbar d-flex flex-column flex-lg-row gap-2 align-items-lg-center justify-content-between mb-3">
                     <div class="text-muted small">${escapeHtml(PROMOTION_REPORT_STRINGS.exportTooltip)}</div>
                     <div class="btn-group btn-group-sm" role="group">
                         <button type="button" class="btn btn-outline-light promotion-report-export" data-format="json"><i class="bi bi-filetype-json me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportJson)}</button>
                         <button type="button" class="btn btn-outline-light promotion-report-export" data-format="csv"><i class="bi bi-table me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportCsv)}</button>
-                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="png"><i class="bi bi-image me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportPng)}</button>
                     </div>
                 </div>
                 <div class="promotion-report-grid mb-4">
                     <div class="promotion-report-visual promotion-report-panel">
                         <div class="d-flex align-items-center justify-content-between mb-2">
                             <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}</h6>
-                            <span class="badge bg-primary-subtle text-light-emphasis">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}: ${normalized.totalNodes}</span>
+                            <span class="badge bg-primary-subtle text-light-emphasis">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}: ${totalNodes}</span>
                         </div>
-                        <canvas id="${diagramId}" class="promotion-report-canvas" role="img" aria-label="${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}"></canvas>
+                        <div class="promotion-report-flow" data-report-flow>
+                            ${flowHtml}
+                        </div>
                         <p class="small text-muted mt-2 mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramHelper)}</p>
                     </div>
                     <div class="promotion-report-summary promotion-report-panel">
@@ -1617,19 +1618,31 @@ document.addEventListener('DOMContentLoaded', function() {
         const level1Raw = Array.isArray(report?.level1) ? report.level1 : [];
         const level2Raw = Array.isArray(report?.level2) ? report.level2 : [];
         const crowdRaw = Array.isArray(report?.crowd) ? report.crowd : [];
-        const level1 = level1Raw.filter(item => item && (item.url || item.target_url)).map(item => ({ ...item }));
+        const level1 = level1Raw
+            .filter(item => item && (item.url || item.target_url))
+            .map(item => ({ ...item }));
         const parentMap = new Map();
-        level1.forEach(node => parentMap.set(Number(node.id || node.node_id || 0), node));
-        const childrenMap = new Map();
-        const level2 = level2Raw.filter(item => item && (item.url || item.target_url)).map(item => {
-            const clone = { ...item };
-            const parentId = Number(clone.parent_id || clone.parentId || 0);
-            clone.parent_id = parentId;
-            if (!childrenMap.has(parentId)) { childrenMap.set(parentId, []); }
-            childrenMap.get(parentId).push(clone);
-            return clone;
+        level1.forEach(node => {
+            const nodeId = getReportNodeId(node);
+            node._id = nodeId;
+            parentMap.set(nodeId, node);
         });
-        const crowd = crowdRaw.filter(item => item && item.target_url).map(item => ({ ...item }));
+        const childrenMap = new Map();
+        const level2 = level2Raw
+            .filter(item => item && (item.url || item.target_url))
+            .map(item => {
+                const clone = { ...item };
+                const parentId = getReportParentId(clone);
+                const nodeId = getReportNodeId(clone);
+                clone._id = nodeId;
+                clone.parent_id = parentId;
+                if (!childrenMap.has(parentId)) { childrenMap.set(parentId, []); }
+                childrenMap.get(parentId).push(clone);
+                return clone;
+            });
+        const crowd = crowdRaw
+            .filter(item => item && item.target_url)
+            .map(item => ({ ...item }));
         const uniqueNetworks = new Set();
         level1.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
         level2.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
@@ -1641,8 +1654,204 @@ document.addEventListener('DOMContentLoaded', function() {
             childrenMap,
             parentMap,
             uniqueNetworks: uniqueNetworks.size,
-            totalNodes: level1.length + level2.length,
         };
+    }
+
+    function buildPromotionReportFlow(normalized, meta) {
+        const columns = [];
+        columns.push(buildPromotionFlowRoot(meta));
+        columns.push(buildPromotionFlowLevelColumn(normalized.level1, 1));
+        columns.push(buildPromotionFlowLevel2Column(normalized));
+        if (normalized.crowd.length) {
+            columns.push(buildPromotionFlowCrowdColumn(normalized.crowd));
+        }
+        return columns.join('');
+    }
+
+    function buildPromotionFlowRoot(meta) {
+        const targetUrl = meta?.target || '';
+        const host = getHostname(targetUrl);
+        const resetCard = `
+            <div class="promotion-flow-card is-root" role="button" tabindex="0" data-flow-reset="1">
+                <div class="card-title d-flex align-items-center gap-2">
+                    <span class="badge bg-primary-subtle text-light-emphasis">ROOT</span>
+                    <span class="text-truncate">${escapeHtml(PROMOTION_REPORT_STRINGS.root)}</span>
+                </div>
+                ${host ? `<div class="card-meta small text-muted">${escapeHtml(host)}</div>` : ''}
+            </div>`;
+        const linkHtml = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" class="small text-muted text-decoration-none" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>` : `<span class="small text-muted">—</span>`;
+        return `
+            <div class="promotion-flow-column" data-flow-column="root">
+                <div class="promotion-flow-header">
+                    <div class="title">${escapeHtml(PROMOTION_REPORT_STRINGS.root)}</div>
+                    ${linkHtml}
+                </div>
+                <div class="promotion-flow-body">
+                    ${resetCard}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionFlowLevelColumn(items, level) {
+        const label = level === 1 ? PROMOTION_REPORT_STRINGS.level1 : PROMOTION_REPORT_STRINGS.level2;
+        const clickable = level === 1;
+        let cards = items.map(node => buildPromotionFlowCard(node, level, { clickable })).join('');
+        if (!cards) {
+            cards = `<div class="promotion-flow-empty text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
+        }
+        return `
+            <div class="promotion-flow-column" data-flow-column="level${level}">
+                <div class="promotion-flow-header d-flex align-items-center justify-content-between">
+                    <div class="title">${escapeHtml(label)}</div>
+                    <span class="badge bg-secondary-subtle text-light-emphasis">${items.length}</span>
+                </div>
+                <div class="promotion-flow-body">
+                    ${cards}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionFlowLevel2Column(normalized) {
+        const groups = [];
+        const processed = new Set();
+        const renderGroup = (parentId, title, children) => {
+            const groupCards = children.map(child => buildPromotionFlowCard(child, 2, { clickable: false })).join('');
+            return `
+                <div class="promotion-flow-subgroup" data-parent-id="${escapeAttribute(parentId || '')}">
+                    <div class="subgroup-title small text-muted">${escapeHtml(title)}</div>
+                    ${groupCards}
+                </div>
+            `;
+        };
+        normalized.level1.forEach(parent => {
+            const parentId = getReportNodeId(parent);
+            const children = normalized.childrenMap.get(parentId) || [];
+            if (!children.length) { return; }
+            processed.add(parentId);
+            groups.push(renderGroup(parentId, parent.network || PROMOTION_REPORT_STRINGS.level1, children));
+        });
+        normalized.childrenMap.forEach((children, parentId) => {
+            if (processed.has(parentId)) { return; }
+            if (!children || !children.length) { return; }
+            const parentNode = normalized.parentMap.get(parentId);
+            let title = parentNode ? (parentNode.network || PROMOTION_REPORT_STRINGS.level1) : PROMOTION_REPORT_STRINGS.root;
+            if (!parentNode && parentId && parentId !== '0') {
+                title = `${PROMOTION_REPORT_STRINGS.level1} #${parentId}`;
+            }
+            groups.push(renderGroup(parentId, title, children));
+        });
+        const body = groups.length ? groups.join('') : `<div class="promotion-flow-empty text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
+        return `
+            <div class="promotion-flow-column" data-flow-column="level2">
+                <div class="promotion-flow-header d-flex align-items-center justify-content-between">
+                    <div class="title">${escapeHtml(PROMOTION_REPORT_STRINGS.level2)}</div>
+                    <span class="badge bg-secondary-subtle text-light-emphasis">${normalized.level2.length}</span>
+                </div>
+                <div class="promotion-flow-body">
+                    ${body}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionFlowCrowdColumn(items) {
+        const list = items.map(item => {
+            const url = item.target_url || '';
+            const label = formatFlowUrl(url);
+            const idLabel = item.crowd_link_id ? `#${escapeHtml(String(item.crowd_link_id))}` : '';
+            return `
+                <div class="promotion-flow-card level-crowd" data-level="crowd">
+                    <div class="card-title d-flex align-items-center justify-content-between">
+                        <span class="text-truncate">${escapeHtml(PROMOTION_REPORT_STRINGS.crowd)}</span>
+                        ${idLabel ? `<span class="badge bg-info-subtle text-light-emphasis">${idLabel}</span>` : ''}
+                    </div>
+                    ${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="card-link text-truncate" title="${escapeAttribute(url)}">${escapeHtml(label)}</a>` : `<span class="card-link text-muted">—</span>`}
+                </div>
+            `;
+        }).join('');
+        return `
+            <div class="promotion-flow-column" data-flow-column="crowd">
+                <div class="promotion-flow-header d-flex align-items-center justify-content-between">
+                    <div class="title">${escapeHtml(PROMOTION_REPORT_STRINGS.crowd)}</div>
+                    <span class="badge bg-secondary-subtle text-light-emphasis">${items.length}</span>
+                </div>
+                <div class="promotion-flow-body">
+                    ${list}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionFlowCard(node, level, options = {}) {
+        const clickable = options.clickable !== false;
+        const classes = ['promotion-flow-card', `level-${level}`];
+        if (clickable) { classes.push('is-clickable'); }
+        if (options.extraClass) { classes.push(options.extraClass); }
+        const nodeId = getReportNodeId(node);
+        const parentId = getReportParentId(node);
+        const url = node.url || node.target_url || '';
+        const label = formatFlowUrl(url);
+        const anchor = node.anchor ? String(node.anchor) : '';
+        const host = getHostname(url);
+        const attrs = [
+            `class="${classes.join(' ')}"`,
+            `data-node-id="${escapeAttribute(nodeId)}"`,
+            `data-level="${escapeAttribute(String(level))}"`
+        ];
+        if (clickable) {
+            attrs.push('role="button"');
+            attrs.push('tabindex="0"');
+        }
+        if (parentId) {
+            attrs.push(`data-parent-id="${escapeAttribute(parentId)}"`);
+        }
+        if (url) {
+            attrs.push(`data-url="${escapeAttribute(url)}"`);
+        }
+        if (node.network) {
+            attrs.push(`data-network="${escapeAttribute(String(node.network))}"`);
+        }
+        return `
+            <div ${attrs.join(' ')}>
+                <div class="card-title d-flex align-items-center justify-content-between gap-2">
+                    <span class="text-truncate">${escapeHtml(node.network || (level === 1 ? PROMOTION_REPORT_STRINGS.level1 : PROMOTION_REPORT_STRINGS.level2))}</span>
+                    <span class="badge bg-primary-subtle text-light-emphasis">L${level}</span>
+                </div>
+                ${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="card-link text-truncate" title="${escapeAttribute(url)}">${escapeHtml(label)}</a>` : `<span class="card-link text-muted">—</span>`}
+                ${anchor ? `<div class="card-meta small text-muted" title="${escapeAttribute(anchor)}">${escapeHtml(anchor)}</div>` : ''}
+                ${host ? `<div class="card-meta small text-muted">${escapeHtml(host)}</div>` : ''}
+            </div>
+        `;
+    }
+
+    function getReportNodeId(node) {
+        if (!node) { return ''; }
+        const raw = node.node_id ?? node.id ?? node.nodeId ?? '';
+        return raw !== undefined && raw !== null ? String(raw) : '';
+    }
+
+    function getReportParentId(node) {
+        if (!node) { return ''; }
+        const raw = node.parent_id ?? node.parentId ?? '';
+        return raw !== undefined && raw !== null ? String(raw) : '';
+    }
+
+    function formatFlowUrl(url, maxLen = 48) {
+        if (!url) { return ''; }
+        try {
+            const parsed = new URL(url);
+            const host = (parsed.hostname || '').replace(/^www\./i, '');
+            let path = parsed.pathname || '/';
+            if (path.length > maxLen) {
+                path = path.slice(0, Math.max(1, maxLen - 1)).trimEnd() + '…';
+            }
+            return `${host}${path}`;
+        } catch (_e) {
+            const trimmed = url.length > maxLen ? url.slice(0, Math.max(1, maxLen - 1)) + '…' : url;
+            return trimmed;
+        }
     }
 
     function buildPromotionReportTables(normalized, meta) {
@@ -1668,7 +1877,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const status = escapeHtml(item.status || 'success');
             let parent = '—';
             if (parentMap) {
-                const parentNode = parentMap.get(Number(item.parent_id || item.parentId || 0));
+                const parentId = getReportParentId(item);
+                const parentNode = parentMap.get(parentId);
                 if (parentNode) {
                     const parentUrl = parentNode.url || parentNode.target_url || '';
                     parent = parentUrl ? `<a href="${escapeAttribute(parentUrl)}" target="_blank" rel="noopener">${escapeHtml(parentUrl)}</a>` : '—';
@@ -1728,181 +1938,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function truncateLabel(text, maxLen = 28) {
-        const str = (text || '').trim();
-        if (str.length <= maxLen) { return str; }
-        return str.slice(0, Math.max(1, maxLen - 1)).trim() + '…';
-    }
-
-    function getReportPalette() {
-        const styles = getComputedStyle(document.documentElement);
-        const text = (styles.getPropertyValue('--text') || '#f3f4f6').trim() || '#f3f4f6';
-        const muted = (styles.getPropertyValue('--muted') || '#9ca3af').trim() || '#9ca3af';
-        const primary = (styles.getPropertyValue('--primary') || '#3b82f6').trim() || '#3b82f6';
-        const accent = (styles.getPropertyValue('--accent') || '#22d3ee').trim() || '#22d3ee';
-        const border = (styles.getPropertyValue('--border') || 'rgba(255,255,255,0.25)').trim() || 'rgba(255,255,255,0.25)';
-        const surface = (styles.getPropertyValue('--surface') || 'rgba(255,255,255,0.08)').trim() || 'rgba(255,255,255,0.08)';
-        const surface2 = (styles.getPropertyValue('--surface-2') || 'rgba(255,255,255,0.16)').trim() || 'rgba(255,255,255,0.16)';
-        return {
-            text,
-            muted,
-            line: accent ? `${accent}55` : 'rgba(34,211,238,0.45)',
-            nodeTop: surface,
-            nodeBottom: surface2,
-            nodeBorder: border,
-            nodeAltTop: 'rgba(59,130,246,0.18)',
-            nodeAltBottom: 'rgba(16,185,129,0.16)',
-            nodeAltBorder: 'rgba(125,211,252,0.6)',
-            rootFill: primary,
-            rootStroke: accent || primary,
-        };
-    }
-
-    function roundedRect(ctx, x, y, width, height, radius) {
-        const r = Math.min(radius, width / 2, height / 2);
-        ctx.beginPath();
-        ctx.moveTo(x + r, y);
-        ctx.arcTo(x + width, y, x + width, y + height, r);
-        ctx.arcTo(x + width, y + height, x, y + height, r);
-        ctx.arcTo(x, y + height, x, y, r);
-        ctx.arcTo(x, y, x + width, y, r);
-        ctx.closePath();
-    }
-
-    function drawReportNode(ctx, centerX, centerY, options = {}) {
-        const width = options.width || 180;
-        const height = options.height || 68;
-        const radius = options.radius || 18;
-        const left = centerX - width / 2;
-        const top = centerY - height / 2;
-        const gradient = ctx.createLinearGradient(left, top, left, top + height);
-        gradient.addColorStop(0, options.fillTop || 'rgba(255,255,255,0.12)');
-        gradient.addColorStop(1, options.fillBottom || 'rgba(255,255,255,0.05)');
-        roundedRect(ctx, left, top, width, height, radius);
-        ctx.fillStyle = gradient;
-        ctx.fill();
-        roundedRect(ctx, left, top, width, height, radius);
-        ctx.strokeStyle = options.stroke || 'rgba(255,255,255,0.25)';
-        ctx.lineWidth = options.strokeWidth || 1.4;
-        ctx.stroke();
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = options.textColor || '#ffffff';
-        ctx.font = '600 14px "Inter", "Segoe UI", sans-serif';
-        const label = truncateLabel(options.label || '', 28);
-        const hasSubtitle = !!options.subtitle;
-        ctx.fillText(label, centerX, hasSubtitle ? centerY - 10 : centerY);
-        if (hasSubtitle) {
-            ctx.fillStyle = options.subtitleColor || 'rgba(255,255,255,0.7)';
-            ctx.font = '500 12px "Inter", "Segoe UI", sans-serif';
-            ctx.fillText(truncateLabel(options.subtitle, 32), centerX, centerY + 16);
-        }
-    }
-
-    function drawPromotionReportDiagram(canvas, normalized, meta) {
-        if (!canvas || !normalized) { return; }
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { return; }
-        const palette = getReportPalette();
-        const nodeWidth = 180;
-        const nodeHeight = 70;
-        const rootHeight = 78;
-        const level1Spacing = 220;
-        const level2Spacing = 180;
-        const root = { x: 0, y: 70 };
-        const yLevel1 = normalized.level2.length ? 210 : 190;
-        const yLevel2 = 360;
-        let minX = root.x - nodeWidth / 2;
-        let maxX = root.x + nodeWidth / 2;
-        const level1Positions = normalized.level1.map((node, index) => {
-            const x = (index - (normalized.level1.length - 1) / 2) * level1Spacing;
-            minX = Math.min(minX, x - nodeWidth / 2);
-            maxX = Math.max(maxX, x + nodeWidth / 2);
-            return { node, x, y: yLevel1 };
-        });
-        const level2Positions = [];
-        level1Positions.forEach(pos => {
-            const parentId = Number(pos.node.id || pos.node.node_id || 0);
-            const children = normalized.childrenMap.get(parentId) || [];
-            children.forEach((child, idx) => {
-                const x = pos.x + (idx - (children.length - 1) / 2) * level2Spacing;
-                minX = Math.min(minX, x - nodeWidth / 2);
-                maxX = Math.max(maxX, x + nodeWidth / 2);
-                level2Positions.push({ node: child, x, y: yLevel2, parent: pos });
-            });
-        });
-        if (!normalized.level1.length) {
-            minX = Math.min(minX, -nodeWidth);
-            maxX = Math.max(maxX, nodeWidth);
-        }
-        const padding = 140;
-        const width = Math.max(620, (maxX - minX) + padding * 2);
-        const height = level2Positions.length ? 430 : 280;
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
-        canvas.width = Math.floor(width * dpr);
-        canvas.height = Math.floor(height * dpr);
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, width, height);
-        const offsetX = padding - minX;
-        const rootX = root.x + offsetX;
-        const rootY = root.y;
-        ctx.strokeStyle = palette.line;
-        ctx.lineWidth = 1.6;
-        level1Positions.forEach(pos => {
-            pos.drawX = pos.x + offsetX;
-            ctx.beginPath();
-            ctx.moveTo(rootX, rootY + rootHeight / 2);
-            ctx.lineTo(pos.drawX, pos.y - nodeHeight / 2);
-            ctx.stroke();
-        });
-        level2Positions.forEach(pos => {
-            pos.drawX = pos.x + offsetX;
-            const parentX = pos.parent.drawX ?? (pos.parent.x + offsetX);
-            ctx.beginPath();
-            ctx.moveTo(parentX, pos.parent.y + nodeHeight / 2);
-            ctx.lineTo(pos.drawX, pos.y - (nodeHeight - 6) / 2);
-            ctx.stroke();
-        });
-        drawReportNode(ctx, rootX, rootY, {
-            width: nodeWidth,
-            height: rootHeight,
-            label: PROMOTION_REPORT_STRINGS.root,
-            subtitle: getHostname(meta?.target),
-            fillTop: palette.rootFill,
-            fillBottom: palette.rootFill,
-            stroke: palette.rootStroke,
-            textColor: '#ffffff',
-            subtitleColor: 'rgba(255,255,255,0.85)'
-        });
-        level1Positions.forEach(pos => {
-            drawReportNode(ctx, pos.drawX, pos.y, {
-                width: nodeWidth,
-                height: nodeHeight,
-                label: truncateLabel((pos.node.network || PROMOTION_REPORT_STRINGS.level1 || '').toString().toUpperCase(), 26),
-                subtitle: getHostname(pos.node.url || pos.node.target_url || ''),
-                fillTop: palette.nodeTop,
-                fillBottom: palette.nodeBottom,
-                stroke: palette.nodeBorder,
-                textColor: palette.text,
-                subtitleColor: palette.muted
-            });
-        });
-        level2Positions.forEach(pos => {
-            drawReportNode(ctx, pos.drawX, pos.y, {
-                width: nodeWidth - 12,
-                height: nodeHeight - 8,
-                label: truncateLabel((pos.node.network || PROMOTION_REPORT_STRINGS.level2 || '').toString(), 24),
-                subtitle: getHostname(pos.node.url || pos.node.target_url || ''),
-                fillTop: palette.nodeAltTop,
-                fillBottom: palette.nodeAltBottom,
-                stroke: palette.nodeAltBorder,
-                textColor: palette.text,
-                subtitleColor: palette.muted
-            });
-        });
-    }
 
     function buildReportFilename(ext) {
         const stamp = new Date().toISOString().replace(/[:T]/g, '-').split('.')[0];
@@ -1959,7 +1994,8 @@ document.addEventListener('DOMContentLoaded', function() {
             ]);
         });
         context.normalized.level2.forEach(node => {
-            const parentNode = context.normalized.parentMap.get(Number(node.parent_id || node.parentId || 0));
+            const parentId = getReportParentId(node);
+            const parentNode = context.normalized.parentMap.get(parentId);
             const parentUrl = parentNode ? (parentNode.url || parentNode.target_url || '') : '';
             rows.push([
                 'level2',
@@ -1974,35 +2010,64 @@ document.addEventListener('DOMContentLoaded', function() {
         downloadPromotionReportFile(blob, buildReportFilename('csv'));
     }
 
-    function dataUrlToBlob(dataUrl) {
-        const parts = dataUrl.split(',');
-        const mimeMatch = parts[0].match(/:(.*?);/);
-        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
-        const binary = atob(parts[1]);
-        const len = binary.length;
-        const buffer = new Uint8Array(len);
-        for (let i = 0; i < len; i++) { buffer[i] = binary.charCodeAt(i); }
-        return new Blob([buffer], { type: mime });
-    }
-
-    function exportPromotionReportPNG(context, canvas) {
-        if (!context || !canvas) { return; }
-        if (canvas.toBlob) {
-            canvas.toBlob(blob => {
-                if (blob) { downloadPromotionReportFile(blob, buildReportFilename('png')); }
-            });
-        } else {
-            const dataUrl = canvas.toDataURL('image/png');
-            downloadPromotionReportFile(dataUrlToBlob(dataUrl), buildReportFilename('png'));
-        }
-    }
-
     function initPromotionReportInteractive(container) {
         if (!promotionReportContext || !container) { return; }
-        const canvas = container.querySelector(`#${promotionReportContext.diagramId}`);
-        if (canvas) {
-            drawPromotionReportDiagram(canvas, promotionReportContext.normalized, promotionReportContext.meta);
+        const flow = container.querySelector('[data-report-flow]');
+        const level1Cards = flow ? Array.from(flow.querySelectorAll('.promotion-flow-card.level-1')) : [];
+        const rootCard = flow ? flow.querySelector('.promotion-flow-card[data-flow-reset="1"]') : null;
+        const level2Groups = flow ? Array.from(flow.querySelectorAll('.promotion-flow-subgroup')) : [];
+        const level2Cards = flow ? Array.from(flow.querySelectorAll('.promotion-flow-card.level-2')) : [];
+
+        const setActiveParent = parentId => {
+            const active = parentId || '';
+            promotionReportContext.activeParentId = active || null;
+            level1Cards.forEach(card => {
+                const matches = active && card.dataset.nodeId === active;
+                card.classList.toggle('is-active', matches);
+            });
+            level2Groups.forEach(group => {
+                const matches = !active || group.dataset.parentId === active;
+                group.classList.toggle('is-hidden', !matches);
+            });
+            level2Cards.forEach(card => {
+                const matches = !active || card.dataset.parentId === active;
+                card.classList.toggle('is-dimmed', !matches);
+            });
+            if (flow) {
+                flow.classList.toggle('has-filter', Boolean(active));
+            }
+        };
+
+        const bindCardToggle = card => {
+            if (!card) { return; }
+            const nodeId = card.dataset.nodeId || '';
+            const toggle = () => {
+                if (!nodeId) { return; }
+                setActiveParent(promotionReportContext.activeParentId === nodeId ? null : nodeId);
+            };
+            card.addEventListener('click', toggle);
+            card.addEventListener('keydown', evt => {
+                if (evt.key === 'Enter' || evt.key === ' ') {
+                    evt.preventDefault();
+                    toggle();
+                }
+            });
+        };
+
+        if (rootCard) {
+            const reset = () => setActiveParent(null);
+            rootCard.addEventListener('click', reset);
+            rootCard.addEventListener('keydown', evt => {
+                if (evt.key === 'Enter' || evt.key === ' ') {
+                    evt.preventDefault();
+                    reset();
+                }
+            });
         }
+
+        level1Cards.forEach(bindCardToggle);
+        setActiveParent(null);
+
         container.querySelectorAll('.promotion-report-export').forEach(btn => {
             if (btn.dataset.bound === '1') { return; }
             btn.dataset.bound = '1';
@@ -2010,19 +2075,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 const format = btn.getAttribute('data-format');
                 if (format === 'json') { exportPromotionReportJSON(promotionReportContext); }
                 else if (format === 'csv') { exportPromotionReportCSV(promotionReportContext); }
-                else if (format === 'png') { exportPromotionReportPNG(promotionReportContext, canvas); }
             });
         });
-        if (!promotionReportResizeBound) {
-            promotionReportResizeBound = true;
-            window.addEventListener('resize', () => {
-                if (!promotionReportContext) { return; }
-                const activeCanvas = document.getElementById(promotionReportContext.diagramId);
-                if (activeCanvas) {
-                    drawPromotionReportDiagram(activeCanvas, promotionReportContext.normalized, promotionReportContext.meta);
-                }
-            });
-        }
     }
 
     async function openPromotionReport(btn) {

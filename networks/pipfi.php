@@ -5,7 +5,7 @@ return [
     'description' => 'p.ip.fi — короткие текстовые страницы через POST-запрос.',
     'handler' => __DIR__ . '/pipfi.js',
     'handler_type' => 'node',
-    'priority' => 10,
+    'priority' => 36,
     'level' => '2,3',
     'meta' => [
         'url' => 'https://p.ip.fi',

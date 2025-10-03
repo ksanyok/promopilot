@@ -906,7 +906,98 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 }
 .promotion-report-summary-item .label { color: var(--muted); }
 .promotion-report-summary-item .value { font-weight: 600; color: var(--text); }
-.promotion-report-canvas { width: 100%; height: auto; border-radius: var(--radius-xs); background: color-mix(in srgb, var(--surface) 70%, transparent 30%); border: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%); }
+.promotion-report-flow {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.promotion-flow-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.promotion-flow-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.promotion-flow-header .title {
+  font-weight: 600;
+  font-size: .9rem;
+}
+.promotion-flow-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 64px;
+}
+.promotion-flow-card {
+  border-radius: var(--radius-xs);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--surface) 85%, transparent 15%);
+  padding: 12px 14px;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease, background .2s ease;
+  min-height: 84px;
+}
+.promotion-flow-card.is-clickable { cursor: pointer; }
+.promotion-flow-card.is-clickable:hover {
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent 30%);
+  box-shadow: 0 8px 22px rgba(15,20,32,.18);
+  transform: translateY(-1px);
+}
+.promotion-flow-card.is-active {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent 40%);
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface) 84%);
+  box-shadow: 0 12px 28px rgba(15,20,32,.22);
+}
+.promotion-flow-card .card-title {
+  font-size: .84rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.promotion-flow-card .card-link {
+  display: block;
+  margin-top: 6px;
+  font-size: .78rem;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+.promotion-flow-card .card-link:hover { text-decoration: underline; }
+.promotion-flow-card .card-meta {
+  margin-top: 4px;
+  font-size: .75rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.promotion-flow-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.promotion-flow-subgroup + .promotion-flow-subgroup { margin-top: 6px; }
+.promotion-flow-subgroup .subgroup-title {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-size: .7rem;
+  color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+}
+.promotion-flow-subgroup.is-hidden { display: none; }
+.promotion-report-flow.has-filter .promotion-flow-card.level-2.is-dimmed { opacity: .35; }
+.promotion-flow-card.level-crowd {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+}
+.promotion-flow-empty {
+  font-size: .78rem;
+  color: var(--muted);
+  padding: 12px 0;
+}
 .promotion-report-section h6 { font-size: .9rem; letter-spacing: .2px; }
 .promotion-report-table { --bs-table-bg: transparent; }
 .promotion-report-table tbody tr td { vertical-align: middle; font-size: .82rem; }
@@ -931,4 +1022,14 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 :root[data-theme="light"] .promotion-report-panel {
   background: color-mix(in srgb, #fff 92%, var(--surface) 8%);
   box-shadow: 0 12px 26px rgba(15,20,32,.08);
+}
+:root[data-theme="light"] .promotion-flow-card {
+  background: color-mix(in srgb, #fff 94%, var(--surface) 6%);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent 40%);
+}
+:root[data-theme="light"] .promotion-flow-card.is-active {
+  background: color-mix(in srgb, var(--primary) 12%, #fff 88%);
+}
+:root[data-theme="light"] .promotion-flow-card.level-crowd {
+  background: color-mix(in srgb, var(--accent) 14%, #fff 86%);
 }

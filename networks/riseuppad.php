@@ -5,7 +5,7 @@ return [
     'description' => 'Riseup Pad — Etherpad для совместного редактирования без регистрации.',
     'handler' => __DIR__ . '/riseuppad.js',
     'handler_type' => 'node',
-    'priority' => 10,
+    'priority' => 79,
     'level' => '2,3',
     'meta' => [
         'url' => 'https://pad.riseup.net',
