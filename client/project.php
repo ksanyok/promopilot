@@ -632,22 +632,26 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         $promotionReportReady = !empty($promotionInfo['report_ready']);
                                         $promotionActive = in_array($promotionStatus, ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'], true);
                                         $promotionTotal = (int)($promotionProgress['total'] ?? 0);
+                                        $promotionTarget = (int)($promotionProgress['target'] ?? 0);
+                                        if ($promotionTarget <= 0) { $promotionTarget = $promotionTotal; }
                                         $promotionDone = (int)($promotionProgress['done'] ?? 0);
                                         $promotionLevels = (is_array($promotionInfo) && isset($promotionInfo['levels']) && is_array($promotionInfo['levels'])) ? $promotionInfo['levels'] : [];
                                         $level1Data = isset($promotionLevels[1]) && is_array($promotionLevels[1]) ? $promotionLevels[1] : [];
                                         $level2Data = isset($promotionLevels[2]) && is_array($promotionLevels[2]) ? $promotionLevels[2] : [];
                                         $level1Total = (int)($level1Data['total'] ?? 0);
                                         $level1Success = (int)($level1Data['success'] ?? 0);
+                                        $level1Required = (int)($level1Data['required'] ?? ($promotionTarget ?: 0));
                                         $level2Total = (int)($level2Data['total'] ?? 0);
                                         $level2Success = (int)($level2Data['success'] ?? 0);
+                                        $level2Required = (int)($level2Data['required'] ?? 0);
                                         $crowdData = (is_array($promotionInfo) && isset($promotionInfo['crowd']) && is_array($promotionInfo['crowd'])) ? $promotionInfo['crowd'] : [];
                                         $crowdPlanned = (int)($crowdData['planned'] ?? 0);
                                         $promotionDetails = [];
-                                        if ($level1Total > 0) {
-                                            $promotionDetails[] = sprintf('%s: %d / %d', __('Уровень 1'), $level1Success, $level1Total);
+                                        if ($level1Success > 0 || $level1Required > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 1'), $level1Success, $level1Required > 0 ? ' / ' . $level1Required : '');
                                         }
-                                        if ($level2Total > 0) {
-                                            $promotionDetails[] = sprintf('%s: %d / %d', __('Уровень 2'), $level2Success, $level2Total);
+                                        if ($level2Success > 0 || $level2Required > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 2'), $level2Success, $level2Required > 0 ? ' / ' . $level2Required : '');
                                         }
                                         if ($crowdPlanned > 0) {
                                             $promotionDetails[] = sprintf('%s: %d', __('Крауд'), $crowdPlanned);
@@ -704,12 +708,16 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         data-promotion-stage="<?php echo htmlspecialchars($promotionStage); ?>"
                                         data-promotion-run-id="<?php echo $promotionRunId ?: ''; ?>"
                                         data-promotion-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
-                                        data-promotion-total="<?php echo $promotionTotal; ?>"
+                                        data-promotion-total="<?php echo $promotionTarget; ?>"
                                         data-promotion-done="<?php echo $promotionDone; ?>"
+                                        data-promotion-target="<?php echo $promotionTarget; ?>"
+                                        data-promotion-attempted="<?php echo $promotionTotal; ?>"
                                         data-level1-total="<?php echo $level1Total; ?>"
                                         data-level1-success="<?php echo $level1Success; ?>"
+                                        data-level1-required="<?php echo $level1Required; ?>"
                                         data-level2-total="<?php echo $level2Total; ?>"
                                         data-level2-success="<?php echo $level2Success; ?>"
+                                        data-level2-required="<?php echo $level2Required; ?>"
                                         data-crowd-planned="<?php echo $crowdPlanned; ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
@@ -740,17 +748,41 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                  data-run-id="<?php echo $promotionRunId ?: ''; ?>"
                                                  data-status="<?php echo htmlspecialchars($promotionStatus); ?>"
                                                  data-stage="<?php echo htmlspecialchars($promotionStage); ?>"
-                                                 data-total="<?php echo $promotionTotal; ?>"
+                                                 data-total="<?php echo $promotionTarget; ?>"
                                                  data-done="<?php echo $promotionDone; ?>"
                                                  data-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
                                                  data-level1-total="<?php echo $level1Total; ?>"
                                                  data-level1-success="<?php echo $level1Success; ?>"
+                                                 data-level1-required="<?php echo $level1Required; ?>"
                                                  data-level2-total="<?php echo $level2Total; ?>"
                                                  data-level2-success="<?php echo $level2Success; ?>"
+                                                 data-level2-required="<?php echo $level2Required; ?>"
                                                  data-crowd-planned="<?php echo $crowdPlanned; ?>">
-                                                <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
-                                                <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
-                                                <span class="promotion-progress-count ms-1 <?php echo $promotionTotal > 0 ? '' : 'd-none'; ?>"><?php echo $promotionTotal > 0 ? '(' . $promotionDone . ' / ' . $promotionTotal . ')' : ''; ?></span>
+                                                <div class="promotion-status-top">
+                                                    <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
+                                                    <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
+                                                    <span class="promotion-progress-count ms-1 <?php echo $promotionTarget > 0 ? '' : 'd-none'; ?>"><?php echo $promotionTarget > 0 ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
+                                                </div>
+                                                <div class="promotion-progress-visual mt-2">
+                                                    <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
+                                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                                            <span><?php echo __('Уровень 1'); ?></span>
+                                                            <span class="promotion-progress-value">0 / 0</span>
+                                                        </div>
+                                                        <div class="progress progress-thin">
+                                                            <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
+                                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                                            <span><?php echo __('Уровень 2'); ?></span>
+                                                            <span class="promotion-progress-value">0 / 0</span>
+                                                        </div>
+                                                        <div class="progress progress-thin">
+                                                            <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                                 <div class="promotion-progress-details text-muted <?php echo empty($promotionDetails) ? 'd-none' : ''; ?>">
                                                     <?php foreach ($promotionDetails as $detail): ?>
                                                         <div><?php echo htmlspecialchars($detail); ?></div>
@@ -993,6 +1025,38 @@ document.addEventListener('DOMContentLoaded', function() {
         crowd: <?php echo json_encode(__('Крауд')); ?>
     };
 
+    const PROMOTION_REPORT_STRINGS = {
+        root: <?php echo json_encode(__('Целевая страница')); ?>,
+        level1: <?php echo json_encode(__('Уровень 1')); ?>,
+        level2: <?php echo json_encode(__('Уровень 2')); ?>,
+        crowd: <?php echo json_encode(__('Крауд')); ?>,
+        level1Count: <?php echo json_encode(__('Успешных публикаций уровня 1')); ?>,
+        level2Count: <?php echo json_encode(__('Успешных публикаций уровня 2')); ?>,
+        uniqueNetworks: <?php echo json_encode(__('Уникальные сети')); ?>,
+        diagramTitle: <?php echo json_encode(__('Структура публикаций')); ?>,
+        diagramHelper: <?php echo json_encode(__('Диаграмма показывает связи между уровнями публикаций.')); ?>,
+        exportJson: <?php echo json_encode(__('Экспорт JSON')); ?>,
+        exportCsv: <?php echo json_encode(__('Экспорт CSV')); ?>,
+        exportPng: <?php echo json_encode(__('Экспорт PNG диаграммы')); ?>,
+        exportTooltip: <?php echo json_encode(__('Сохраните отчет, чтобы отправить клиенту или сохранить для аудита.')); ?>,
+        tableSource: <?php echo json_encode(__('Источник')); ?>,
+        tableUrl: <?php echo json_encode(__('Ссылка')); ?>,
+        tableAnchor: <?php echo json_encode(__('Анкор')); ?>,
+        tableStatus: <?php echo json_encode(__('Статус')); ?>,
+        tableParent: <?php echo json_encode(__('Родитель')); ?>,
+        noData: <?php echo json_encode(__('Нет данных отчета.')); ?>,
+        summary: <?php echo json_encode(__('Сводка')); ?>,
+        totalLabel: <?php echo json_encode(__('Всего')); ?>,
+        targetLabel: <?php echo json_encode(__('Целевой URL')); ?>,
+        statusLabel: <?php echo json_encode(__('Статус')); ?>,
+        crowdLinks: <?php echo json_encode(__('Крауд ссылки')); ?>,
+        filenamePrefix: <?php echo json_encode('promotion-report'); ?>
+    };
+
+    let promotionReportSequence = 0;
+    let promotionReportContext = null;
+    let promotionReportResizeBound = false;
+
     function isPromotionActiveStatus(status) {
         return PROMOTION_ACTIVE_STATUSES.includes(status);
     }
@@ -1009,8 +1073,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const stage = promotion?.stage || tr.dataset.promotionStage || '';
         const progress = promotion?.progress || {};
         const runId = promotion?.run_id || tr.dataset.promotionRunId || '';
-        const done = Number(progress.done ?? tr.dataset.promotionDone ?? 0);
-        const total = Number(progress.total ?? tr.dataset.promotionTotal ?? 0);
+        const levelDataRaw = promotion?.levels || {};
+        const level1Data = levelDataRaw['1'] || levelDataRaw[1] || {};
+        const level2Data = levelDataRaw['2'] || levelDataRaw[2] || {};
+    const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0) || 0;
+    const level1Required = Number(level1Data.required ?? block.dataset.level1Required ?? tr.dataset.level1Required ?? progress?.target ?? progress?.total ?? 0) || 0;
+    const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0) || 0;
+    const level2Required = Number(level2Data.required ?? block.dataset.level2Required ?? tr.dataset.level2Required ?? 0) || 0;
+    const done = Number(progress.done ?? level1Success) || 0;
+    const targetRaw = progress.target ?? level1Required;
+    const target = Number((targetRaw !== undefined && targetRaw !== null) ? targetRaw : 0);
+    const total = target > 0 ? target : (Number(progress.total ?? level1Required ?? 0) || 0);
         const reportReady = Boolean(promotion?.report_ready || (status === 'completed') || tr.dataset.promotionReportReady === '1');
 
         block.dataset.status = status;
@@ -1026,8 +1099,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         const countEl = block.querySelector('.promotion-progress-count');
         if (countEl) {
-            if (total > 0) {
-                countEl.textContent = `(${done} / ${total})`;
+            if (target > 0) {
+                countEl.textContent = `(${done} / ${target})`;
                 countEl.classList.remove('d-none');
             } else {
                 countEl.textContent = '';
@@ -1045,13 +1118,8 @@ document.addEventListener('DOMContentLoaded', function() {
             block.classList.add('text-primary');
         }
 
-        const levels = promotion?.levels || {};
-        const level1Data = levels['1'] || levels[1] || {};
-        const level2Data = levels['2'] || levels[2] || {};
-        const level1Total = Number(level1Data.total ?? block.dataset.level1Total ?? tr.dataset.level1Total ?? 0);
-        const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0);
-        const level2Total = Number(level2Data.total ?? block.dataset.level2Total ?? tr.dataset.level2Total ?? 0);
-        const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0);
+        const level1Total = level1Success;
+        const level2Total = level2Success;
         const crowdData = promotion?.crowd || {};
         const crowdPlanned = Number(crowdData.planned ?? block.dataset.crowdPlanned ?? tr.dataset.crowdPlanned ?? 0);
 
@@ -1059,16 +1127,55 @@ document.addEventListener('DOMContentLoaded', function() {
         block.dataset.level1Success = String(level1Success);
         block.dataset.level2Total = String(level2Total);
         block.dataset.level2Success = String(level2Success);
+        block.dataset.level1Required = String(level1Required);
+        block.dataset.level2Required = String(level2Required);
         block.dataset.crowdPlanned = String(crowdPlanned);
+
+        const level1El = block.querySelector('.promotion-progress-level1');
+        const level2El = block.querySelector('.promotion-progress-level2');
+
+        if (level1El) {
+            const valueEl = level1El.querySelector('.promotion-progress-value');
+            const barEl = level1El.querySelector('.promotion-progress-bar');
+            const required = level1Required > 0 ? level1Required : level1Total;
+            if (required > 0 || level1Total > 0) {
+                level1El.classList.remove('d-none');
+                if (valueEl) { valueEl.textContent = required > 0 ? `${level1Success} / ${required}` : String(level1Success); }
+                if (barEl) {
+                    const pct = required > 0 ? Math.min(100, Math.round((level1Success / required) * 100)) : 100;
+                    barEl.style.width = `${pct}%`;
+                    barEl.setAttribute('aria-valuenow', String(pct));
+                }
+            } else {
+                level1El.classList.add('d-none');
+            }
+        }
+
+        if (level2El) {
+            const valueEl = level2El.querySelector('.promotion-progress-value');
+            const barEl = level2El.querySelector('.promotion-progress-bar');
+            if ((level2Required > 0 || level2Success > 0) && !Number.isNaN(level2Success)) {
+                level2El.classList.remove('d-none');
+                const required = level2Required > 0 ? level2Required : level2Success;
+                if (valueEl) { valueEl.textContent = required > 0 ? `${level2Success} / ${required}` : String(level2Success); }
+                if (barEl) {
+                    const pct = required > 0 ? Math.min(100, Math.round((level2Success / required) * 100)) : 100;
+                    barEl.style.width = `${pct}%`;
+                    barEl.setAttribute('aria-valuenow', String(pct));
+                }
+            } else {
+                level2El.classList.add('d-none');
+            }
+        }
 
         const detailsEl = block.querySelector('.promotion-progress-details');
         if (detailsEl) {
             const details = [];
-            if (level1Total > 0) {
-                details.push(`${PROMOTION_DETAIL_LABELS.level1}: ${level1Success} / ${level1Total}`);
+            if (level1Success > 0 || level1Required > 0) {
+                details.push(`${PROMOTION_DETAIL_LABELS.level1}: ${level1Success}${level1Required > 0 ? ' / ' + level1Required : ''}`);
             }
-            if (level2Total > 0) {
-                details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success} / ${level2Total}`);
+            if (level2Success > 0 || level2Required > 0) {
+                details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success}${level2Required > 0 ? ' / ' + level2Required : ''}`);
             }
             if (crowdPlanned > 0) {
                 details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
@@ -1092,6 +1199,8 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.level1Success = String(level1Success);
         tr.dataset.level2Total = String(level2Total);
         tr.dataset.level2Success = String(level2Success);
+        tr.dataset.level1Required = String(level1Required);
+        tr.dataset.level2Required = String(level2Required);
         tr.dataset.crowdPlanned = String(crowdPlanned);
     }
 
@@ -1445,36 +1554,475 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function renderPromotionReport(report) {
-        const sections = [];
-        const renderList = (items, title) => {
-            if (!Array.isArray(items) || !items.length) return;
-            const rows = items.map(item => {
-                const net = escapeHtml(item.network || item.crowd_link_id || '');
-                const url = escapeHtml(item.url || item.target_url || '');
-                const status = escapeHtml(item.status || '');
-                const link = url ? `<a href="${url}" target="_blank" rel="noopener">${url}</a>` : '<?php echo __('Нет данных'); ?>';
-                return `<tr><td class="text-nowrap">${net}</td><td>${link}</td><td class="text-nowrap">${status}</td></tr>`;
-            }).join('');
-            sections.push(`
-                <div class="mb-4">
-                    <h6 class="fw-semibold">${escapeHtml(title)}</h6>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                            <thead><tr><th><?php echo __('Источник'); ?></th><th><?php echo __('Ссылка'); ?></th><th><?php echo __('Статус'); ?></th></tr></thead>
-                            <tbody>${rows}</tbody>
-                        </table>
+    function renderPromotionReport(report, meta = {}) {
+        promotionReportSequence += 1;
+        const normalized = normalizePromotionReport(report || {});
+        if (!normalized.hasData) {
+            promotionReportContext = null;
+            return `<div class="text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
+        }
+        const diagramId = `promotion-report-diagram-${promotionReportSequence}`;
+        promotionReportContext = { diagramId, report: report || {}, normalized, meta };
+        const summaryItems = [
+            { label: PROMOTION_REPORT_STRINGS.level1Count, value: normalized.level1.length },
+            { label: PROMOTION_REPORT_STRINGS.level2Count, value: normalized.level2.length },
+            { label: PROMOTION_REPORT_STRINGS.uniqueNetworks, value: normalized.uniqueNetworks }
+        ];
+        const summaryHtml = summaryItems.map(item => `
+            <li class="promotion-report-summary-item">
+                <span class="label">${escapeHtml(item.label)}</span>
+                <span class="value">${escapeHtml(String(item.value))}</span>
+            </li>
+        `).join('');
+        const targetUrl = meta?.target || '';
+        const targetLink = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>` : '—';
+        const statusText = meta?.status ? escapeHtml(getPromotionStatusLabel(meta.status)) : '—';
+        const tablesHtml = buildPromotionReportTables(normalized, meta);
+        return `
+            <div class="promotion-report-wrapper" data-diagram-id="${diagramId}">
+                <div class="promotion-report-toolbar d-flex flex-column flex-lg-row gap-2 align-items-lg-center justify-content-between mb-3">
+                    <div class="text-muted small">${escapeHtml(PROMOTION_REPORT_STRINGS.exportTooltip)}</div>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="json"><i class="bi bi-filetype-json me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportJson)}</button>
+                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="csv"><i class="bi bi-table me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportCsv)}</button>
+                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="png"><i class="bi bi-image me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportPng)}</button>
                     </div>
                 </div>
-            `);
+                <div class="promotion-report-grid mb-4">
+                    <div class="promotion-report-visual promotion-report-panel">
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}</h6>
+                            <span class="badge bg-primary-subtle text-light-emphasis">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}: ${normalized.totalNodes}</span>
+                        </div>
+                        <canvas id="${diagramId}" class="promotion-report-canvas" role="img" aria-label="${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}"></canvas>
+                        <p class="small text-muted mt-2 mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramHelper)}</p>
+                    </div>
+                    <div class="promotion-report-summary promotion-report-panel">
+                        <h6 class="fw-semibold mb-3">${escapeHtml(PROMOTION_REPORT_STRINGS.summary)}</h6>
+                        <ul class="promotion-report-summary-list list-unstyled mb-3">
+                            ${summaryHtml}
+                        </ul>
+                        <div class="promotion-report-meta small text-muted">
+                            <div><strong>${escapeHtml(PROMOTION_REPORT_STRINGS.targetLabel)}:</strong> ${targetLink}</div>
+                            <div><strong>${escapeHtml(PROMOTION_REPORT_STRINGS.statusLabel)}:</strong> ${statusText}</div>
+                        </div>
+                    </div>
+                </div>
+                ${tablesHtml}
+            </div>
+        `;
+    }
+
+    function normalizePromotionReport(report) {
+        const level1Raw = Array.isArray(report?.level1) ? report.level1 : [];
+        const level2Raw = Array.isArray(report?.level2) ? report.level2 : [];
+        const crowdRaw = Array.isArray(report?.crowd) ? report.crowd : [];
+        const level1 = level1Raw.filter(item => item && (item.url || item.target_url)).map(item => ({ ...item }));
+        const parentMap = new Map();
+        level1.forEach(node => parentMap.set(Number(node.id || node.node_id || 0), node));
+        const childrenMap = new Map();
+        const level2 = level2Raw.filter(item => item && (item.url || item.target_url)).map(item => {
+            const clone = { ...item };
+            const parentId = Number(clone.parent_id || clone.parentId || 0);
+            clone.parent_id = parentId;
+            if (!childrenMap.has(parentId)) { childrenMap.set(parentId, []); }
+            childrenMap.get(parentId).push(clone);
+            return clone;
+        });
+        const crowd = crowdRaw.filter(item => item && item.target_url).map(item => ({ ...item }));
+        const uniqueNetworks = new Set();
+        level1.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
+        level2.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
+        return {
+            hasData: level1.length > 0 || level2.length > 0 || crowd.length > 0,
+            level1,
+            level2,
+            crowd,
+            childrenMap,
+            parentMap,
+            uniqueNetworks: uniqueNetworks.size,
+            totalNodes: level1.length + level2.length,
         };
-        renderList(report?.level1, '<?php echo __('Уровень 1'); ?>');
-        renderList(report?.level2, '<?php echo __('Уровень 2'); ?>');
-        renderList(report?.crowd, '<?php echo __('Крауд'); ?>');
-        if (!sections.length) {
-            return '<div class="text-muted"><?php echo __('Нет данных отчета.'); ?></div>';
+    }
+
+    function buildPromotionReportTables(normalized, meta) {
+        const sections = [];
+        if (normalized.level1.length) {
+            sections.push(buildPromotionReportLevelSection(normalized.level1, PROMOTION_REPORT_STRINGS.level1));
+        }
+        if (normalized.level2.length) {
+            sections.push(buildPromotionReportLevelSection(normalized.level2, PROMOTION_REPORT_STRINGS.level2, normalized.parentMap));
+        }
+        if (normalized.crowd.length) {
+            sections.push(buildPromotionReportCrowdSection(normalized.crowd));
         }
         return sections.join('');
+    }
+
+    function buildPromotionReportLevelSection(items, title, parentMap = null) {
+        const rows = items.map(item => {
+            const network = escapeHtml(item.network || '—');
+            const url = item.url || item.target_url || '';
+            const displayUrl = url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>` : '—';
+            const anchor = escapeHtml(item.anchor || '');
+            const status = escapeHtml(item.status || 'success');
+            let parent = '—';
+            if (parentMap) {
+                const parentNode = parentMap.get(Number(item.parent_id || item.parentId || 0));
+                if (parentNode) {
+                    const parentUrl = parentNode.url || parentNode.target_url || '';
+                    parent = parentUrl ? `<a href="${escapeAttribute(parentUrl)}" target="_blank" rel="noopener">${escapeHtml(parentUrl)}</a>` : '—';
+                }
+            }
+            return `
+                <tr>
+                    <td class="text-nowrap"><span class="badge bg-primary-subtle text-light-emphasis">${network}</span></td>
+                    <td>${displayUrl}</td>
+                    <td>${anchor || '—'}</td>
+                    ${parentMap ? `<td>${parent}</td>` : ''}
+                    <td class="text-nowrap"><span class="badge bg-success-subtle text-light-emphasis">${status}</span></td>
+                </tr>
+            `;
+        }).join('');
+        const headerCols = `
+            <th>${escapeHtml(PROMOTION_REPORT_STRINGS.tableSource)}</th>
+            <th>${escapeHtml(PROMOTION_REPORT_STRINGS.tableUrl)}</th>
+            <th>${escapeHtml(PROMOTION_REPORT_STRINGS.tableAnchor)}</th>
+            ${parentMap ? `<th>${escapeHtml(PROMOTION_REPORT_STRINGS.tableParent)}</th>` : ''}
+            <th>${escapeHtml(PROMOTION_REPORT_STRINGS.tableStatus)}</th>`;
+        return `
+            <div class="promotion-report-section mb-4">
+                <h6 class="fw-semibold mb-2">${escapeHtml(title)} (${items.length})</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped promotion-report-table align-middle">
+                        <thead><tr>${headerCols}</tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionReportCrowdSection(items) {
+        const rows = items.map(item => {
+            const target = item.target_url || '';
+            return `<li>${escapeHtml(String(item.crowd_link_id || ''))} → ${target ? `<a href="${escapeAttribute(target)}" target="_blank" rel="noopener">${escapeHtml(target)}</a>` : '—'}</li>`;
+        }).join('');
+        return `
+            <div class="promotion-report-section">
+                <h6 class="fw-semibold mb-2">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdLinks)} (${items.length})</h6>
+                <ul class="promotion-report-crowd list-unstyled mb-0">
+                    ${rows}
+                </ul>
+            </div>
+        `;
+    }
+
+    function getHostname(url) {
+        if (!url) return '';
+        try {
+            const host = new URL(url).hostname || '';
+            return host.replace(/^www\./i, '');
+        } catch (_e) {
+            return '';
+        }
+    }
+
+    function truncateLabel(text, maxLen = 28) {
+        const str = (text || '').trim();
+        if (str.length <= maxLen) { return str; }
+        return str.slice(0, Math.max(1, maxLen - 1)).trim() + '…';
+    }
+
+    function getReportPalette() {
+        const styles = getComputedStyle(document.documentElement);
+        const text = (styles.getPropertyValue('--text') || '#f3f4f6').trim() || '#f3f4f6';
+        const muted = (styles.getPropertyValue('--muted') || '#9ca3af').trim() || '#9ca3af';
+        const primary = (styles.getPropertyValue('--primary') || '#3b82f6').trim() || '#3b82f6';
+        const accent = (styles.getPropertyValue('--accent') || '#22d3ee').trim() || '#22d3ee';
+        const border = (styles.getPropertyValue('--border') || 'rgba(255,255,255,0.25)').trim() || 'rgba(255,255,255,0.25)';
+        const surface = (styles.getPropertyValue('--surface') || 'rgba(255,255,255,0.08)').trim() || 'rgba(255,255,255,0.08)';
+        const surface2 = (styles.getPropertyValue('--surface-2') || 'rgba(255,255,255,0.16)').trim() || 'rgba(255,255,255,0.16)';
+        return {
+            text,
+            muted,
+            line: accent ? `${accent}55` : 'rgba(34,211,238,0.45)',
+            nodeTop: surface,
+            nodeBottom: surface2,
+            nodeBorder: border,
+            nodeAltTop: 'rgba(59,130,246,0.18)',
+            nodeAltBottom: 'rgba(16,185,129,0.16)',
+            nodeAltBorder: 'rgba(125,211,252,0.6)',
+            rootFill: primary,
+            rootStroke: accent || primary,
+        };
+    }
+
+    function roundedRect(ctx, x, y, width, height, radius) {
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + width, y, x + width, y + height, r);
+        ctx.arcTo(x + width, y + height, x, y + height, r);
+        ctx.arcTo(x, y + height, x, y, r);
+        ctx.arcTo(x, y, x + width, y, r);
+        ctx.closePath();
+    }
+
+    function drawReportNode(ctx, centerX, centerY, options = {}) {
+        const width = options.width || 180;
+        const height = options.height || 68;
+        const radius = options.radius || 18;
+        const left = centerX - width / 2;
+        const top = centerY - height / 2;
+        const gradient = ctx.createLinearGradient(left, top, left, top + height);
+        gradient.addColorStop(0, options.fillTop || 'rgba(255,255,255,0.12)');
+        gradient.addColorStop(1, options.fillBottom || 'rgba(255,255,255,0.05)');
+        roundedRect(ctx, left, top, width, height, radius);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        roundedRect(ctx, left, top, width, height, radius);
+        ctx.strokeStyle = options.stroke || 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = options.strokeWidth || 1.4;
+        ctx.stroke();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = options.textColor || '#ffffff';
+        ctx.font = '600 14px "Inter", "Segoe UI", sans-serif';
+        const label = truncateLabel(options.label || '', 28);
+        const hasSubtitle = !!options.subtitle;
+        ctx.fillText(label, centerX, hasSubtitle ? centerY - 10 : centerY);
+        if (hasSubtitle) {
+            ctx.fillStyle = options.subtitleColor || 'rgba(255,255,255,0.7)';
+            ctx.font = '500 12px "Inter", "Segoe UI", sans-serif';
+            ctx.fillText(truncateLabel(options.subtitle, 32), centerX, centerY + 16);
+        }
+    }
+
+    function drawPromotionReportDiagram(canvas, normalized, meta) {
+        if (!canvas || !normalized) { return; }
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { return; }
+        const palette = getReportPalette();
+        const nodeWidth = 180;
+        const nodeHeight = 70;
+        const rootHeight = 78;
+        const level1Spacing = 220;
+        const level2Spacing = 180;
+        const root = { x: 0, y: 70 };
+        const yLevel1 = normalized.level2.length ? 210 : 190;
+        const yLevel2 = 360;
+        let minX = root.x - nodeWidth / 2;
+        let maxX = root.x + nodeWidth / 2;
+        const level1Positions = normalized.level1.map((node, index) => {
+            const x = (index - (normalized.level1.length - 1) / 2) * level1Spacing;
+            minX = Math.min(minX, x - nodeWidth / 2);
+            maxX = Math.max(maxX, x + nodeWidth / 2);
+            return { node, x, y: yLevel1 };
+        });
+        const level2Positions = [];
+        level1Positions.forEach(pos => {
+            const parentId = Number(pos.node.id || pos.node.node_id || 0);
+            const children = normalized.childrenMap.get(parentId) || [];
+            children.forEach((child, idx) => {
+                const x = pos.x + (idx - (children.length - 1) / 2) * level2Spacing;
+                minX = Math.min(minX, x - nodeWidth / 2);
+                maxX = Math.max(maxX, x + nodeWidth / 2);
+                level2Positions.push({ node: child, x, y: yLevel2, parent: pos });
+            });
+        });
+        if (!normalized.level1.length) {
+            minX = Math.min(minX, -nodeWidth);
+            maxX = Math.max(maxX, nodeWidth);
+        }
+        const padding = 140;
+        const width = Math.max(620, (maxX - minX) + padding * 2);
+        const height = level2Positions.length ? 430 : 280;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        const offsetX = padding - minX;
+        const rootX = root.x + offsetX;
+        const rootY = root.y;
+        ctx.strokeStyle = palette.line;
+        ctx.lineWidth = 1.6;
+        level1Positions.forEach(pos => {
+            pos.drawX = pos.x + offsetX;
+            ctx.beginPath();
+            ctx.moveTo(rootX, rootY + rootHeight / 2);
+            ctx.lineTo(pos.drawX, pos.y - nodeHeight / 2);
+            ctx.stroke();
+        });
+        level2Positions.forEach(pos => {
+            pos.drawX = pos.x + offsetX;
+            const parentX = pos.parent.drawX ?? (pos.parent.x + offsetX);
+            ctx.beginPath();
+            ctx.moveTo(parentX, pos.parent.y + nodeHeight / 2);
+            ctx.lineTo(pos.drawX, pos.y - (nodeHeight - 6) / 2);
+            ctx.stroke();
+        });
+        drawReportNode(ctx, rootX, rootY, {
+            width: nodeWidth,
+            height: rootHeight,
+            label: PROMOTION_REPORT_STRINGS.root,
+            subtitle: getHostname(meta?.target),
+            fillTop: palette.rootFill,
+            fillBottom: palette.rootFill,
+            stroke: palette.rootStroke,
+            textColor: '#ffffff',
+            subtitleColor: 'rgba(255,255,255,0.85)'
+        });
+        level1Positions.forEach(pos => {
+            drawReportNode(ctx, pos.drawX, pos.y, {
+                width: nodeWidth,
+                height: nodeHeight,
+                label: truncateLabel((pos.node.network || PROMOTION_REPORT_STRINGS.level1 || '').toString().toUpperCase(), 26),
+                subtitle: getHostname(pos.node.url || pos.node.target_url || ''),
+                fillTop: palette.nodeTop,
+                fillBottom: palette.nodeBottom,
+                stroke: palette.nodeBorder,
+                textColor: palette.text,
+                subtitleColor: palette.muted
+            });
+        });
+        level2Positions.forEach(pos => {
+            drawReportNode(ctx, pos.drawX, pos.y, {
+                width: nodeWidth - 12,
+                height: nodeHeight - 8,
+                label: truncateLabel((pos.node.network || PROMOTION_REPORT_STRINGS.level2 || '').toString(), 24),
+                subtitle: getHostname(pos.node.url || pos.node.target_url || ''),
+                fillTop: palette.nodeAltTop,
+                fillBottom: palette.nodeAltBottom,
+                stroke: palette.nodeAltBorder,
+                textColor: palette.text,
+                subtitleColor: palette.muted
+            });
+        });
+    }
+
+    function buildReportFilename(ext) {
+        const stamp = new Date().toISOString().replace(/[:T]/g, '-').split('.')[0];
+        return `${PROMOTION_REPORT_STRINGS.filenamePrefix}-${stamp}.${ext}`;
+    }
+
+    function downloadPromotionReportFile(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 750);
+    }
+
+    function exportPromotionReportJSON(context) {
+        if (!context) { return; }
+        const payload = {
+            generated_at: new Date().toISOString(),
+            meta: {
+                target: context.meta?.target || '',
+                status: context.meta?.status || '',
+                level1_count: context.normalized.level1.length,
+                level2_count: context.normalized.level2.length,
+                crowd_count: context.normalized.crowd.length,
+            },
+            report: context.report || {}
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        downloadPromotionReportFile(blob, buildReportFilename('json'));
+    }
+
+    function csvEscape(value) {
+        const str = String(value ?? '');
+        if (/[";\n]/.test(str)) {
+            return '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+    }
+
+    function exportPromotionReportCSV(context) {
+        if (!context) { return; }
+        const rows = [['level', 'network', 'url', 'anchor', 'parent_url']];
+        const target = context.meta?.target || '';
+        context.normalized.level1.forEach(node => {
+            rows.push([
+                'level1',
+                node.network || '',
+                node.url || node.target_url || '',
+                node.anchor || '',
+                target
+            ]);
+        });
+        context.normalized.level2.forEach(node => {
+            const parentNode = context.normalized.parentMap.get(Number(node.parent_id || node.parentId || 0));
+            const parentUrl = parentNode ? (parentNode.url || parentNode.target_url || '') : '';
+            rows.push([
+                'level2',
+                node.network || '',
+                node.url || node.target_url || '',
+                node.anchor || '',
+                parentUrl
+            ]);
+        });
+        const csv = rows.map(row => row.map(csvEscape).join(';')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        downloadPromotionReportFile(blob, buildReportFilename('csv'));
+    }
+
+    function dataUrlToBlob(dataUrl) {
+        const parts = dataUrl.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+        const binary = atob(parts[1]);
+        const len = binary.length;
+        const buffer = new Uint8Array(len);
+        for (let i = 0; i < len; i++) { buffer[i] = binary.charCodeAt(i); }
+        return new Blob([buffer], { type: mime });
+    }
+
+    function exportPromotionReportPNG(context, canvas) {
+        if (!context || !canvas) { return; }
+        if (canvas.toBlob) {
+            canvas.toBlob(blob => {
+                if (blob) { downloadPromotionReportFile(blob, buildReportFilename('png')); }
+            });
+        } else {
+            const dataUrl = canvas.toDataURL('image/png');
+            downloadPromotionReportFile(dataUrlToBlob(dataUrl), buildReportFilename('png'));
+        }
+    }
+
+    function initPromotionReportInteractive(container) {
+        if (!promotionReportContext || !container) { return; }
+        const canvas = container.querySelector(`#${promotionReportContext.diagramId}`);
+        if (canvas) {
+            drawPromotionReportDiagram(canvas, promotionReportContext.normalized, promotionReportContext.meta);
+        }
+        container.querySelectorAll('.promotion-report-export').forEach(btn => {
+            if (btn.dataset.bound === '1') { return; }
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', () => {
+                const format = btn.getAttribute('data-format');
+                if (format === 'json') { exportPromotionReportJSON(promotionReportContext); }
+                else if (format === 'csv') { exportPromotionReportCSV(promotionReportContext); }
+                else if (format === 'png') { exportPromotionReportPNG(promotionReportContext, canvas); }
+            });
+        });
+        if (!promotionReportResizeBound) {
+            promotionReportResizeBound = true;
+            window.addEventListener('resize', () => {
+                if (!promotionReportContext) { return; }
+                const activeCanvas = document.getElementById(promotionReportContext.diagramId);
+                if (activeCanvas) {
+                    drawPromotionReportDiagram(activeCanvas, promotionReportContext.normalized, promotionReportContext.meta);
+                }
+            });
+        }
     }
 
     async function openPromotionReport(btn) {
@@ -1498,7 +2046,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const modalEl = document.getElementById('promotionReportModal');
             const bodyEl = document.getElementById('promotionReportContent');
             if (!modalEl || !bodyEl) return;
-            bodyEl.innerHTML = renderPromotionReport(data.report || {});
+            bodyEl.innerHTML = renderPromotionReport(data.report || {}, { target: data.target_url || '', status: data.status || '' });
+            initPromotionReportInteractive(bodyEl);
             const modal = new bootstrap.Modal(modalEl);
             modal.show();
         } catch (e) {
@@ -1584,10 +2133,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 tr.dataset.promotionReportReady = '0';
                 tr.dataset.promotionTotal = '0';
                 tr.dataset.promotionDone = '0';
+                tr.dataset.promotionTarget = '0';
+                tr.dataset.promotionAttempted = '0';
                 tr.dataset.level1Total = '0';
                 tr.dataset.level1Success = '0';
+                tr.dataset.level1Required = '0';
                 tr.dataset.level2Total = '0';
                 tr.dataset.level2Success = '0';
+                tr.dataset.level2Required = '0';
                 tr.dataset.crowdPlanned = '0';
                 const pathDisp = pathFromUrl(url);
                 const hostDisp = hostFromUrl(url);
@@ -1618,17 +2171,41 @@ document.addEventListener('DOMContentLoaded', function() {
                              data-run-id=""
                              data-status="idle"
                              data-stage=""
-                             data-total="0"
+                        data-total="0"
                              data-done="0"
                              data-report-ready="0"
                              data-level1-total="0"
                              data-level1-success="0"
+                        data-level1-required="0"
                              data-level2-total="0"
                              data-level2-success="0"
+                        data-level2-required="0"
                              data-crowd-planned="0">
-                            <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
-                            <span class="promotion-status-label ms-1"><?php echo __('Не запущено'); ?></span>
-                            <span class="promotion-progress-count ms-1 d-none"></span>
+                            <div class="promotion-status-top">
+                                <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
+                                <span class="promotion-status-label ms-1"><?php echo __('Не запущено'); ?></span>
+                                <span class="promotion-progress-count ms-1 d-none"></span>
+                            </div>
+                            <div class="promotion-progress-visual mt-2">
+                                <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
+                                    <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                        <span><?php echo __('Уровень 1'); ?></span>
+                                        <span class="promotion-progress-value">0 / 0</span>
+                                    </div>
+                                    <div class="progress progress-thin">
+                                        <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                    </div>
+                                </div>
+                                <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
+                                    <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                        <span><?php echo __('Уровень 2'); ?></span>
+                                        <span class="promotion-progress-value">0 / 0</span>
+                                    </div>
+                                    <div class="progress progress-thin">
+                                        <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="promotion-progress-details text-muted d-none"></div>
                         </div>
                     </td>

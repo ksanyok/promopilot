@@ -862,3 +862,73 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .table-links .btn.btn-sm, .table-links .icon-btn { height: 36px !important; }
 .table-links .icon-btn { width: 36px !important; }
 .table-links .btn-publish.btn-sm { height: 36px !important; min-height: 36px !important; }
+
+/* ===== Promotion progress widget ===== */
+.promotion-progress-visual {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent 30%);
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent 20%);
+  border-radius: var(--radius-xs);
+  padding: 12px;
+  transition: border-color .2s ease, background .2s ease;
+}
+.promotion-progress-level + .promotion-progress-level { margin-top: 10px; }
+.promotion-progress-meta { color: var(--muted); font-weight: 500; letter-spacing: .2px; }
+.progress.progress-thin { height: 6px; background: color-mix(in srgb, var(--surface) 60%, transparent 40%); border-radius: 999px; overflow: hidden; }
+.progress-thin .promotion-progress-bar { border-radius: 999px; transition: width .35s ease; }
+.promotion-status-block.text-success .promotion-progress-bar { background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, #fff 20%)); }
+.promotion-status-block.text-primary .promotion-progress-bar { background: linear-gradient(90deg, var(--primary), var(--accent)); }
+.promotion-progress-details { gap: 4px; }
+.promotion-progress-details div { font-size: .78rem; }
+
+/* ===== Promotion report modal ===== */
+.promotion-report-wrapper { color: var(--text); }
+.promotion-report-toolbar .btn { border-color: color-mix(in srgb, var(--border) 80%, transparent 20%); }
+.promotion-report-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.promotion-report-panel {
+  background: color-mix(in srgb, var(--surface) 85%, transparent 15%);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent 20%);
+  border-radius: var(--radius-sm);
+  padding: 18px;
+  box-shadow: 0 14px 28px rgba(15,20,32,.18);
+}
+.promotion-report-panel h6 { font-size: .95rem; letter-spacing: .2px; }
+.promotion-report-summary-list { display: flex; flex-direction: column; gap: 10px; }
+.promotion-report-summary-item {
+  display: flex; align-items: center; justify-content: space-between;
+  background: color-mix(in srgb, var(--surface-2) 65%, transparent 35%);
+  border-radius: var(--radius-xs);
+  padding: 10px 14px;
+  font-size: .88rem;
+}
+.promotion-report-summary-item .label { color: var(--muted); }
+.promotion-report-summary-item .value { font-weight: 600; color: var(--text); }
+.promotion-report-canvas { width: 100%; height: auto; border-radius: var(--radius-xs); background: color-mix(in srgb, var(--surface) 70%, transparent 30%); border: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%); }
+.promotion-report-section h6 { font-size: .9rem; letter-spacing: .2px; }
+.promotion-report-table { --bs-table-bg: transparent; }
+.promotion-report-table tbody tr td { vertical-align: middle; font-size: .82rem; }
+.promotion-report-table .badge { font-weight: 600; letter-spacing: .3px; }
+.promotion-report-crowd li {
+  padding: 8px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent 20%);
+  font-size: .82rem;
+}
+.promotion-report-crowd li:last-child { border-bottom: none; }
+
+@media (max-width: 768px) {
+  .promotion-report-panel { padding: 16px; }
+  .promotion-report-toolbar .btn-group { width: 100%; justify-content: stretch; }
+  .promotion-report-toolbar .btn-group .btn { flex: 1 1 auto; }
+}
+
+:root[data-theme="light"] .promotion-progress-visual {
+  background: color-mix(in srgb, var(--surface-2) 55%, #fff 45%);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent 20%);
+}
+:root[data-theme="light"] .promotion-report-panel {
+  background: color-mix(in srgb, #fff 92%, var(--surface) 8%);
+  box-shadow: 0 12px 26px rgba(15,20,32,.08);
+}

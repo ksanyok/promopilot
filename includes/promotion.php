@@ -123,6 +123,12 @@ if (!function_exists('pp_promotion_start_run')) {
         }
         $active = pp_promotion_get_active_run($conn, $projectId, $url);
         if ($active) {
+            pp_promotion_log('promotion.run_reused', [
+                'project_id' => $projectId,
+                'target_url' => $url,
+                'run_id' => (int)$active['id'],
+                'status' => (string)($active['status'] ?? ''),
+            ]);
             $conn->close();
             return ['ok' => true, 'status' => 'running', 'run_id' => (int)$active['id']];
         }
@@ -206,7 +212,39 @@ if (!function_exists('pp_promotion_start_run')) {
             return ['ok' => false, 'error' => 'DB'];
         }
         $conn->close();
-        pp_promotion_launch_worker($runId);
+        if ($runId > 0) {
+            pp_promotion_log('promotion.run_created', [
+                'run_id' => $runId,
+                'project_id' => $projectId,
+                'link_id' => (int)$linkRow['id'],
+                'target_url' => $url,
+                'settings' => [
+                    'level1_count' => (int)($settings['level1_count'] ?? 0),
+                    'network_repeat_limit' => (int)($settings['network_repeat_limit'] ?? 0),
+                    'level2_enabled' => !empty($settings['level2_enabled']),
+                    'crowd_enabled' => !empty($settings['crowd_enabled']),
+                ],
+                'charged' => $chargedAmount,
+                'discount_percent' => $discountPercent,
+            ]);
+        }
+        $launched = pp_promotion_launch_worker($runId);
+        if (!$launched) {
+            pp_promotion_log('promotion.worker.launch_failed', [
+                'run_id' => $runId,
+                'project_id' => $projectId,
+                'target_url' => $url,
+            ]);
+        }
+        // Ensure immediate processing even if background launch is not supported in the environment
+        try {
+            pp_promotion_worker($runId, 10);
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.worker.inline_error', [
+                'run_id' => $runId,
+                'error' => $e->getMessage(),
+            ]);
+        }
         return ['ok' => true, 'status' => 'queued', 'run_id' => $runId, 'charged' => $chargedAmount, 'discount' => $discountPercent];
     }
 }
@@ -245,19 +283,31 @@ if (!function_exists('pp_promotion_launch_worker')) {
         $phpBinary = PHP_BINARY ?: 'php';
         $args = $runId ? ' ' . (int)$runId : '';
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        $success = false;
         if ($isWindows) {
             $cmd = 'start /B "" ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args;
             $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) { @pclose($handle); return true; }
-            return false;
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $success = true;
+            }
+            return $success;
         }
         $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args . ' > /dev/null 2>&1 &';
         if (function_exists('popen')) {
             $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) { @pclose($handle); return true; }
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $success = true;
+            }
         }
-        @exec($cmd);
-        return true;
+        if (!$success) {
+            $execResult = @exec($cmd, $output, $status);
+            if ($status === 0) {
+                $success = true;
+            }
+        }
+        return $success;
     }
 }
 
@@ -284,13 +334,18 @@ if (!function_exists('pp_promotion_fetch_project')) {
 }
 
 if (!function_exists('pp_promotion_pick_networks')) {
-    function pp_promotion_pick_networks(int $level, int $count, array $project, array $usage = []): array {
+    function pp_promotion_pick_networks(int $level, int $count, array $project, array &$usage): array {
+        $count = (int)$count;
+        if ($count <= 0) { return []; }
+
         $networks = pp_get_networks(true, false);
-        $region = trim((string)($project['region'] ?? ''));
-        $topic = trim((string)($project['topic'] ?? ''));
+        $region = strtolower(trim((string)($project['region'] ?? '')));
+        $topic = strtolower(trim((string)($project['topic'] ?? '')));
         $levelStr = (string)$level;
-        $scored = [];
-        $usageLimit = (int)(pp_promotion_settings()['network_repeat_limit'] ?? 2);
+        $usageLimit = (int)(pp_promotion_settings()['network_repeat_limit'] ?? 0);
+        if ($usageLimit < 0) { $usageLimit = 0; }
+
+        $catalog = [];
         foreach ($networks as $net) {
             $levelsRaw = (string)($net['level'] ?? '');
             if ($levelsRaw !== '') {
@@ -300,54 +355,107 @@ if (!function_exists('pp_promotion_pick_networks')) {
                 // networks without explicit level only suitable for level 1 by default
                 continue;
             }
-            $slug = (string)$net['slug'];
-            $used = (int)($usage[$slug] ?? 0);
-            if ($usageLimit > 0 && $used >= $usageLimit) { continue; }
-            $score = (int)($net['priority'] ?? 0);
+            $slug = (string)($net['slug'] ?? '');
+            if ($slug === '') { continue; }
+            if (!isset($usage[$slug])) { $usage[$slug] = 0; }
+            $baseScore = (int)($net['priority'] ?? 0);
+            $metaRegions = [];
+            if (!empty($net['regions']) && is_array($net['regions'])) {
+                $metaRegions = array_map(static function($item) { return strtolower(trim((string)$item)); }, $net['regions']);
+            }
+            $metaTopics = [];
+            if (!empty($net['topics']) && is_array($net['topics'])) {
+                $metaTopics = array_map(static function($item) { return strtolower(trim((string)$item)); }, $net['topics']);
+            }
             if ($region !== '') {
-                $metaRegions = $net['regions'] ?? [];
-                if (is_array($metaRegions) && !empty($metaRegions)) {
-                    if (in_array($region, $metaRegions, true)) { $score += 2000; }
-                    elseif (in_array('global', array_map('strtolower', $metaRegions), true)) { $score += 500; }
-                }
+                if (in_array($region, $metaRegions, true)) { $baseScore += 2000; }
+                elseif (in_array('global', $metaRegions, true)) { $baseScore += 500; }
             }
             if ($topic !== '') {
-                $metaTopics = $net['topics'] ?? [];
-                if (is_array($metaTopics) && !empty($metaTopics)) {
-                    if (in_array($topic, $metaTopics, true)) { $score += 1200; }
-                }
+                if (in_array($topic, $metaTopics, true)) { $baseScore += 1200; }
             }
-            $score += random_int(0, 250);
-            $scored[] = ['net' => $net, 'score' => $score];
+            $catalog[$slug] = [
+                'network' => $net,
+                'baseScore' => $baseScore,
+                'regions' => $metaRegions,
+                'topics' => $metaTopics,
+            ];
         }
-        if (empty($scored)) { return []; }
-        usort($scored, static function(array $a, array $b) {
-            if ($a['score'] === $b['score']) { return strcmp($a['net']['slug'], $b['net']['slug']); }
-            return $a['score'] < $b['score'] ? 1 : -1;
-        });
+
         $selected = [];
-        foreach ($scored as $item) {
-            if (count($selected) >= $count) { break; }
-            $selected[] = $item['net'];
+        for ($i = 0; $i < $count; $i++) {
+            $candidates = [];
+            foreach ($catalog as $slug => $meta) {
+                $used = (int)($usage[$slug] ?? 0);
+                if ($usageLimit > 0 && $used >= $usageLimit) { continue; }
+                $score = $meta['baseScore'];
+                if ($used > 0) { $score -= $used * 250; }
+                try {
+                    $score += random_int(0, 250);
+                } catch (Throwable $e) {
+                    $score += mt_rand(0, 250);
+                }
+                $candidates[] = ['slug' => $slug, 'score' => $score, 'network' => $meta['network']];
+            }
+            if (empty($candidates)) { break; }
+            usort($candidates, static function(array $a, array $b) {
+                if ($a['score'] === $b['score']) { return strcmp($a['slug'], $b['slug']); }
+                return $a['score'] < $b['score'] ? 1 : -1;
+            });
+            $choice = $candidates[0];
+            $selected[] = $choice['network'];
+            $usage[$choice['slug']] = (int)($usage[$choice['slug']] ?? 0) + 1;
         }
+
         return $selected;
     }
 }
 
 if (!function_exists('pp_promotion_update_progress')) {
     function pp_promotion_update_progress(mysqli $conn, int $runId): void {
-        $counts = ['total' => 0, 'done' => 0, 'failed' => 0];
-        if ($res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_nodes WHERE run_id = ' . (int)$runId . ' GROUP BY status')) {
+        $levelCounters = [];
+        if ($res = @$conn->query('SELECT level, status, COUNT(*) AS c FROM promotion_nodes WHERE run_id = ' . (int)$runId . ' GROUP BY level, status')) {
             while ($row = $res->fetch_assoc()) {
+                $level = (int)($row['level'] ?? 0);
                 $status = (string)($row['status'] ?? '');
                 $count = (int)($row['c'] ?? 0);
-                $counts['total'] += $count;
-                if (in_array($status, ['success','completed'], true)) { $counts['done'] += $count; }
-                elseif (in_array($status, ['failed','cancelled'], true)) { $counts['failed'] += $count; }
+                if (!isset($levelCounters[$level])) {
+                    $levelCounters[$level] = ['attempted' => 0, 'success' => 0, 'failed' => 0];
+                }
+                $levelCounters[$level]['attempted'] += $count;
+                if (in_array($status, ['success','completed'], true)) {
+                    $levelCounters[$level]['success'] += $count;
+                } elseif (in_array($status, ['failed','cancelled'], true)) {
+                    $levelCounters[$level]['failed'] += $count;
+                }
             }
             $res->free();
         }
-        @$conn->query('UPDATE promotion_runs SET progress_total=' . (int)$counts['total'] . ', progress_done=' . (int)$counts['done'] . ', updated_at=CURRENT_TIMESTAMP WHERE id=' . (int)$runId . ' LIMIT 1');
+
+        $level1Success = (int)($levelCounters[1]['success'] ?? 0);
+        $level1Required = null;
+
+        if ($resSettings = @$conn->query('SELECT settings_snapshot FROM promotion_runs WHERE id = ' . (int)$runId . ' LIMIT 1')) {
+            if ($row = $resSettings->fetch_assoc()) {
+                $snapshot = [];
+                if (!empty($row['settings_snapshot'])) {
+                    $decoded = json_decode((string)$row['settings_snapshot'], true);
+                    if (is_array($decoded)) { $snapshot = $decoded; }
+                }
+                $level1Required = isset($snapshot['level1_count']) ? (int)$snapshot['level1_count'] : null;
+            }
+            $resSettings->free();
+        }
+
+        if ($level1Required === null || $level1Required <= 0) {
+            $defaults = pp_promotion_get_level_requirements();
+            $level1Required = (int)($defaults[1]['count'] ?? 5);
+        }
+
+        $progressDone = min($level1Success, $level1Required);
+        $progressTotal = $level1Required;
+
+        @$conn->query('UPDATE promotion_runs SET progress_total=' . (int)$progressTotal . ', progress_done=' . (int)$progressDone . ', updated_at=CURRENT_TIMESTAMP WHERE id=' . (int)$runId . ' LIMIT 1');
     }
 }
 
@@ -368,14 +476,58 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
                 'parentUrl' => $node['parent_url'] ?? null,
                 'projectName' => (string)($project['name'] ?? ''),
             ],
+            'target' => [
+                'url' => $targetUrl,
+                'anchor' => $anchor,
+                'language' => $language,
+                'wish' => $wish,
+            ],
+            'project' => [
+                'id' => $projectId,
+                'region' => $project['region'] ?? null,
+                'topic' => $project['topic'] ?? null,
+                'language' => $project['language'] ?? null,
+            ],
+            'network' => [
+                'slug' => $networkSlug,
+                'level' => (int)$node['level'],
+            ],
         ];
         $payloadJson = json_encode($jobPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
         if ($payloadJson === false) { $payloadJson = '{}'; }
-        $stmt = $conn->prepare('INSERT INTO publications (project_id, page_url, anchor, network, status, enqueued_by_user_id, job_payload) VALUES (?, ?, ?, ?, \'queued\', ?, ?)');
+        static $hasJobPayloadColumn = null;
+        if ($hasJobPayloadColumn === null) {
+            $hasJobPayloadColumn = false;
+            if ($res = @$conn->query("SHOW COLUMNS FROM publications LIKE 'job_payload'")) {
+                if ($res->num_rows > 0) { $hasJobPayloadColumn = true; }
+                $res->free();
+            }
+            pp_promotion_log('promotion.publications.job_payload_column', ['present' => $hasJobPayloadColumn]);
+        }
+        if ($hasJobPayloadColumn) {
+            $stmt = $conn->prepare('INSERT INTO publications (project_id, page_url, anchor, network, status, enqueued_by_user_id, job_payload) VALUES (?, ?, ?, ?, \'queued\', ?, ?)');
+        } else {
+            $stmt = $conn->prepare('INSERT INTO publications (project_id, page_url, anchor, network, status, enqueued_by_user_id) VALUES (?, ?, ?, ?, \'queued\', ?)');
+        }
         if (!$stmt) { return false; }
         $userId = (int)$node['initiated_by'];
-        $stmt->bind_param('isssis', $projectId, $targetUrl, $anchor, $networkSlug, $userId, $payloadJson);
-        if (!$stmt->execute()) { $stmt->close(); return false; }
+        if ($hasJobPayloadColumn) {
+            $stmt->bind_param('isssis', $projectId, $targetUrl, $anchor, $networkSlug, $userId, $payloadJson);
+        } else {
+            $stmt->bind_param('isssi', $projectId, $targetUrl, $anchor, $networkSlug, $userId);
+        }
+        if (!$stmt->execute()) {
+            pp_promotion_log('promotion.publication_queue_failed', [
+                'run_id' => $runId,
+                'node_id' => (int)$node['id'],
+                'level' => (int)$node['level'],
+                'network' => $networkSlug,
+                'target_url' => $targetUrl,
+                'error' => 'DB_INSERT_FAILED',
+            ]);
+            $stmt->close();
+            return false;
+        }
         $publicationId = (int)$conn->insert_id;
         $stmt->close();
         $update = $conn->prepare('UPDATE promotion_nodes SET publication_id=?, status=\'queued\', queued_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1');
@@ -384,6 +536,32 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             $update->bind_param('ii', $publicationId, $nodeId);
             $update->execute();
             $update->close();
+        }
+        pp_promotion_log('promotion.publication_queued', [
+            'run_id' => $runId,
+            'project_id' => $projectId,
+            'node_id' => (int)$node['id'],
+            'publication_id' => $publicationId,
+            'level' => (int)$node['level'],
+            'network' => $networkSlug,
+            'target_url' => $targetUrl,
+            'anchor' => $anchor,
+            'language' => $language,
+            'requirements' => [
+                'min_length' => $requirements['min_len'] ?? null,
+                'max_length' => $requirements['max_len'] ?? null,
+            ],
+        ]);
+        if (function_exists('pp_run_queue_worker')) {
+            try {
+                @pp_run_queue_worker(1);
+            } catch (Throwable $e) {
+                pp_promotion_log('promotion.queue_worker_error', [
+                    'run_id' => $runId,
+                    'publication_id' => $publicationId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
         try {
             $conn2 = @connect_db();
@@ -448,9 +626,33 @@ if (!function_exists('pp_promotion_process_run')) {
             $usage = [];
             $nets = pp_promotion_pick_networks(1, $count, $project, $usage);
             if (empty($nets)) {
+                pp_promotion_log('promotion.level1.networks_missing', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'target_url' => $run['target_url'],
+                    'requested' => $count,
+                    'region' => $project['region'] ?? null,
+                    'topic' => $project['topic'] ?? null,
+                ]);
                 @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='NO_NETWORKS_L1', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
+            $selectedSlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $nets);
+            $usageSnapshot = [];
+            foreach ($selectedSlugs as $slug) {
+                if ($slug === '') { continue; }
+                $usageSnapshot[$slug] = (int)($usage[$slug] ?? 0);
+            }
+            pp_promotion_log('promotion.level1.networks_selected', [
+                'run_id' => $runId,
+                'project_id' => $projectId,
+                'target_url' => $run['target_url'],
+                'requested' => $count,
+                'selected' => $selectedSlugs,
+                'usage' => $usageSnapshot,
+                'region' => $project['region'] ?? null,
+                'topic' => $project['topic'] ?? null,
+            ]);
             $created = 0;
             foreach ($nets as $net) {
                 $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 1, ?, ?, ?, \'pending\', ?)');
@@ -492,6 +694,80 @@ if (!function_exists('pp_promotion_process_run')) {
                 $res->free();
             }
             if ($pending > 0) { return; }
+            $requiredLevel1 = max(1, (int)($requirements[1]['count'] ?? 1));
+            if ($success < $requiredLevel1) {
+                $needed = $requiredLevel1 - $success;
+                $usage = [];
+                if ($usageRes = @$conn->query('SELECT network_slug, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=1 GROUP BY network_slug')) {
+                    while ($u = $usageRes->fetch_assoc()) {
+                        $slug = (string)($u['network_slug'] ?? '');
+                        if ($slug === '') { continue; }
+                        $usage[$slug] = (int)($u['c'] ?? 0);
+                    }
+                    $usageRes->free();
+                }
+                $netsRetry = pp_promotion_pick_networks(1, $needed, $project, $usage);
+                if (empty($netsRetry)) {
+                    pp_promotion_log('promotion.level1.retry_exhausted', [
+                        'run_id' => $runId,
+                        'project_id' => $projectId,
+                        'target_url' => $run['target_url'],
+                        'needed' => $needed,
+                        'success' => $success,
+                        'failed' => $failed,
+                    ]);
+                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                    return;
+                }
+                $retrySlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $netsRetry);
+                pp_promotion_log('promotion.level1.retry_scheduled', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'target_url' => $run['target_url'],
+                    'needed' => $needed,
+                    'selected' => $retrySlugs,
+                ]);
+                $newNodeIds = [];
+                foreach ($netsRetry as $net) {
+                    $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 1, ?, ?, ?, \'pending\', ?)');
+                    if ($stmt) {
+                        $anchor = (string)($linkRow['anchor'] ?? '');
+                        if ($anchor === '') { $anchor = $project['name'] ?? __('Материал'); }
+                        $initiated = (int)$run['initiated_by'];
+                        $stmt->bind_param('isssi', $runId, $run['target_url'], $net['slug'], $anchor, $initiated);
+                        if ($stmt->execute()) {
+                            $newNodeIds[] = (int)$conn->insert_id;
+                        }
+                        $stmt->close();
+                    }
+                }
+                if (!empty($newNodeIds)) {
+                    $idsList = implode(',', array_map('intval', $newNodeIds));
+                    if ($idsList !== '') {
+                        $sql = 'SELECT * FROM promotion_nodes WHERE id IN (' . $idsList . ')';
+                        if ($resNew = @$conn->query($sql)) {
+                            while ($node = $resNew->fetch_assoc()) {
+                                $node['parent_url'] = $run['target_url'];
+                                $node['initiated_by'] = $run['initiated_by'];
+                                $node['level'] = 1;
+                                $node['target_url'] = $run['target_url'];
+                                pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[1]['min_len'], 'max_len' => $requirements[1]['max_len'], 'level' => 1]);
+                            }
+                            $resNew->free();
+                        }
+                    }
+                    pp_promotion_update_progress($conn, $runId);
+                    return;
+                }
+                // fallback if no nodes were created
+                pp_promotion_log('promotion.level1.retry_insert_failed', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'needed' => $needed,
+                ]);
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSERT_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                return;
+            }
             if ($success === 0) {
                 @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
@@ -523,6 +799,23 @@ if (!function_exists('pp_promotion_process_run')) {
             foreach ($nodesL1 as $parentNode) {
                 $nets = pp_promotion_pick_networks(2, $perParent, $project, $usage);
                 if (empty($nets)) { continue; }
+                $selectedSlugsL2 = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $nets);
+                $usageSnapshotL2 = [];
+                foreach ($selectedSlugsL2 as $slug) {
+                    if ($slug === '') { continue; }
+                    $usageSnapshotL2[$slug] = (int)($usage[$slug] ?? 0);
+                }
+                pp_promotion_log('promotion.level2.networks_selected', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'parent_node_id' => (int)$parentNode['id'],
+                    'target_url' => $parentNode['result_url'],
+                    'requested' => $perParent,
+                    'selected' => $selectedSlugsL2,
+                    'usage' => $usageSnapshotL2,
+                    'region' => $project['region'] ?? null,
+                    'topic' => $project['topic'] ?? null,
+                ]);
                 foreach ($nets as $net) {
                     $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, parent_id, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 2, ?, ?, ?, ?, \'pending\', ?)');
                     if ($stmt) {
@@ -635,8 +928,18 @@ if (!function_exists('pp_promotion_worker')) {
     function pp_promotion_worker(?int $specificRunId = null, int $maxIterations = 20): void {
         if (function_exists('session_write_close')) { @session_write_close(); }
         @ignore_user_abort(true);
-        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
-        if (!$conn) { return; }
+        pp_promotion_log('promotion.worker.start', [
+            'specific_run_id' => $specificRunId,
+            'max_iterations' => $maxIterations,
+        ]);
+        try { $conn = @connect_db(); } catch (Throwable $e) {
+            pp_promotion_log('promotion.worker.db_error', ['error' => $e->getMessage()]);
+            return;
+        }
+        if (!$conn) {
+            pp_promotion_log('promotion.worker.db_unavailable', []);
+            return;
+        }
         for ($i = 0; $i < $maxIterations; $i++) {
             $run = null;
             if ($specificRunId) {
@@ -687,6 +990,15 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
             $stmt2->close();
         }
         pp_promotion_update_progress($conn, $runId);
+        pp_promotion_log('promotion.publication_update', [
+            'run_id' => $runId,
+            'node_id' => $nodeId,
+            'publication_id' => $publicationId,
+            'new_status' => $statusUpdate,
+            'original_status' => $status,
+            'post_url' => $postUrl,
+            'error' => $error,
+        ]);
         $conn->close();
     }
 }
@@ -703,18 +1015,59 @@ if (!function_exists('pp_promotion_get_status')) {
         $stmt->close();
         if (!$run) { $conn->close(); return ['ok' => true, 'status' => 'idle']; }
         $runId = (int)$run['id'];
-        $levels = [1 => ['total' => 0, 'success' => 0, 'failed' => 0], 2 => ['total' => 0, 'success' => 0, 'failed' => 0]];
+
+        $settingsSnapshot = [];
+        if (!empty($run['settings_snapshot'])) {
+            $decoded = json_decode((string)$run['settings_snapshot'], true);
+            if (is_array($decoded)) { $settingsSnapshot = $decoded; }
+        }
+        $requirements = pp_promotion_get_level_requirements();
+        $level1Required = isset($settingsSnapshot['level1_count']) ? (int)$settingsSnapshot['level1_count'] : (int)($requirements[1]['count'] ?? 5);
+        if ($level1Required <= 0) { $level1Required = (int)($requirements[1]['count'] ?? 5); }
+        $level2PerParent = isset($settingsSnapshot['level2_per_level1']) ? (int)$settingsSnapshot['level2_per_level1'] : (int)($requirements[2]['per_parent'] ?? 0);
+        if ($level2PerParent < 0) { $level2PerParent = 0; }
+
+        $levels = [
+            1 => ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => $level1Required],
+            2 => ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => 0],
+        ];
         if ($res = @$conn->query('SELECT level, status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' GROUP BY level, status')) {
             while ($row = $res->fetch_assoc()) {
                 $lvl = (int)$row['level'];
-                if (!isset($levels[$lvl])) { $levels[$lvl] = ['total' => 0, 'success' => 0, 'failed' => 0]; }
-                $levels[$lvl]['total'] += (int)$row['c'];
+                if (!isset($levels[$lvl])) {
+                    $levels[$lvl] = ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => 0];
+                }
+                $count = (int)$row['c'];
+                $levels[$lvl]['attempted'] += $count;
                 $statusNode = (string)$row['status'];
-                if (in_array($statusNode, ['success','completed'], true)) { $levels[$lvl]['success'] += (int)$row['c']; }
-                elseif (in_array($statusNode, ['failed','cancelled'], true)) { $levels[$lvl]['failed'] += (int)$row['c']; }
+                if (in_array($statusNode, ['success','completed'], true)) { $levels[$lvl]['success'] += $count; }
+                elseif (in_array($statusNode, ['failed','cancelled'], true)) { $levels[$lvl]['failed'] += $count; }
             }
             $res->free();
         }
+        $level1Success = (int)($levels[1]['success'] ?? 0);
+        $levels[1]['total'] = $level1Success;
+        if (!isset($levels[1]['required']) || $levels[1]['required'] <= 0) {
+            $levels[1]['required'] = $level1Required;
+        }
+        $expectedLevel2 = 0;
+        if ($level2PerParent > 0 && $level1Success > 0) {
+            $expectedLevel2 = $level2PerParent * $level1Success;
+        }
+        if (!isset($levels[2])) {
+            $levels[2] = ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => $expectedLevel2];
+        }
+        $levels[2]['total'] = (int)($levels[2]['success'] ?? 0);
+        $levels[2]['required'] = $expectedLevel2;
+        foreach ($levels as $lvl => &$info) {
+            if (!isset($info['attempted'])) { $info['attempted'] = $info['success'] + $info['failed']; }
+            if (!isset($info['required']) || $info['required'] < 0) { $info['required'] = 0; }
+            $info['failed'] = (int)$info['failed'];
+            $info['success'] = (int)$info['success'];
+            $info['total'] = (int)$info['total'];
+            $info['attempted'] = (int)$info['attempted'];
+        }
+        unset($info);
         $crowdCount = 0;
         if ($res = @$conn->query('SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId)) {
             if ($row = $res->fetch_assoc()) { $crowdCount = (int)$row['c']; }
@@ -725,7 +1078,7 @@ if (!function_exists('pp_promotion_get_status')) {
             'ok' => true,
             'status' => (string)$run['status'],
             'stage' => (string)$run['stage'],
-            'progress' => ['done' => (int)$run['progress_done'], 'total' => (int)$run['progress_total']],
+            'progress' => ['done' => (int)$run['progress_done'], 'total' => (int)$run['progress_total'], 'target' => $level1Required],
             'levels' => $levels,
             'crowd' => ['planned' => $crowdCount],
             'run_id' => $runId,
@@ -743,12 +1096,20 @@ if (!function_exists('pp_promotion_get_status')) {
 if (!function_exists('pp_promotion_build_report')) {
     function pp_promotion_build_report(mysqli $conn, int $runId): array {
         $report = ['level1' => [], 'level2' => [], 'crowd' => []];
-        if ($res = @$conn->query('SELECT level, network_slug, result_url, status FROM promotion_nodes WHERE run_id=' . $runId . ' ORDER BY level ASC, id ASC')) {
+        if ($res = @$conn->query('SELECT id, parent_id, level, network_slug, result_url, status, anchor_text, target_url FROM promotion_nodes WHERE run_id=' . $runId . ' ORDER BY level ASC, id ASC')) {
             while ($row = $res->fetch_assoc()) {
+                $status = (string)($row['status'] ?? '');
+                if (!in_array($status, ['success', 'completed'], true)) {
+                    continue;
+                }
                 $entry = [
+                    'id' => (int)$row['id'],
+                    'parent_id' => isset($row['parent_id']) ? (int)$row['parent_id'] : null,
                     'network' => (string)$row['network_slug'],
                     'url' => (string)$row['result_url'],
-                    'status' => (string)$row['status'],
+                    'status' => $status,
+                    'anchor' => (string)$row['anchor_text'],
+                    'target_url' => (string)$row['target_url'],
                 ];
                 if ((int)$row['level'] === 1) { $report['level1'][] = $entry; }
                 elseif ((int)$row['level'] === 2) { $report['level2'][] = $entry; }

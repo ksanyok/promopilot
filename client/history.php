@@ -50,28 +50,35 @@ if ($stmt = $conn->prepare("SELECT DISTINCT network FROM publications WHERE proj
 // Fetch publications with optional filters
 $publications = [];
 if ($network !== '' && $q !== '') {
-    $like = '%' . $q . '%';
-    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
-                             FROM publications
-                             WHERE project_id = ? AND network = ? AND (anchor LIKE ? OR page_url LIKE ? OR post_url LIKE ? OR published_by LIKE ?)
-                             ORDER BY created_at DESC, id DESC");
-    $stmt->bind_param('isssss', $id, $network, $like, $like, $like, $like);
+  $like = '%' . $q . '%';
+  $stmt = $conn->prepare("SELECT p.id, p.created_at, p.network, p.published_by, p.anchor, p.page_url, p.post_url, pn.level AS promotion_level
+               FROM publications p
+               LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
+               WHERE p.project_id = ? AND p.network = ? AND (p.anchor LIKE ? OR p.page_url LIKE ? OR p.post_url LIKE ? OR p.published_by LIKE ?)
+               ORDER BY p.created_at DESC, p.id DESC");
+  $stmt->bind_param('isssss', $id, $network, $like, $like, $like, $like);
 } elseif ($network !== '') {
-    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
-                             FROM publications
-                             WHERE project_id = ? AND network = ?
-                             ORDER BY created_at DESC, id DESC");
-    $stmt->bind_param('is', $id, $network);
+  $stmt = $conn->prepare("SELECT p.id, p.created_at, p.network, p.published_by, p.anchor, p.page_url, p.post_url, pn.level AS promotion_level
+               FROM publications p
+               LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
+               WHERE p.project_id = ? AND p.network = ?
+               ORDER BY p.created_at DESC, p.id DESC");
+  $stmt->bind_param('is', $id, $network);
 } elseif ($q !== '') {
     $like = '%' . $q . '%';
-    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url
-                             FROM publications
-                             WHERE project_id = ? AND (anchor LIKE ? OR page_url LIKE ? OR post_url LIKE ? OR published_by LIKE ?)
-                             ORDER BY created_at DESC, id DESC");
-    $stmt->bind_param('issss', $id, $like, $like, $like, $like);
+  $stmt = $conn->prepare("SELECT p.id, p.created_at, p.network, p.published_by, p.anchor, p.page_url, p.post_url, pn.level AS promotion_level
+               FROM publications p
+               LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
+               WHERE p.project_id = ? AND (p.anchor LIKE ? OR p.page_url LIKE ? OR p.post_url LIKE ? OR p.published_by LIKE ?)
+               ORDER BY p.created_at DESC, p.id DESC");
+  $stmt->bind_param('issss', $id, $like, $like, $like, $like);
 } else {
-    $stmt = $conn->prepare("SELECT id, created_at, network, published_by, anchor, page_url, post_url FROM publications WHERE project_id = ? ORDER BY created_at DESC, id DESC");
-    $stmt->bind_param('i', $id);
+  $stmt = $conn->prepare("SELECT p.id, p.created_at, p.network, p.published_by, p.anchor, p.page_url, p.post_url, pn.level AS promotion_level
+               FROM publications p
+               LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
+               WHERE p.project_id = ?
+               ORDER BY p.created_at DESC, p.id DESC");
+  $stmt->bind_param('i', $id);
 }
 
 $stmt->execute();
@@ -148,6 +155,7 @@ include __DIR__ . '/../includes/client_sidebar.php';
               <th style="width:60px;">#</th>
               <th><?php echo __('Дата'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Время регистрации публикации в системе.'); ?>"></i></th>
               <th><?php echo __('Сеть'); ?> <i class="bi bi-question-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Тип площадки / группа ресурсов.'); ?>"></i></th>
+              <th><?php echo __('Уровень'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('На каком уровне продвижения была размещена статья.'); ?>"></i></th>
               <th><?php echo __('Опубликовано'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Сервис или оператор разместивший запись.'); ?>"></i></th>
               <th><?php echo __('Анкор'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Текст ссылки использованный в публикации (если применимо).'); ?>"></i></th>
               <th><?php echo __('Страница'); ?> <i class="bi bi-info-circle small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Целевая страница проекта, на которую ведёт публикация.'); ?>"></i></th>
@@ -160,6 +168,9 @@ include __DIR__ . '/../includes/client_sidebar.php';
               <td data-label="#"><?php echo $i + 1; ?></td>
               <td data-label="<?php echo __('Дата'); ?>"><?php echo htmlspecialchars($row['created_at']); ?></td>
               <td data-label="<?php echo __('Сеть'); ?>"><?php echo htmlspecialchars($row['network']); ?></td>
+              <td data-label="<?php echo __('Уровень'); ?>">
+                <?php $lvl = isset($row['promotion_level']) ? (int)$row['promotion_level'] : 0; echo $lvl > 0 ? $lvl : '—'; ?>
+              </td>
               <td data-label="<?php echo __('Опубликовано'); ?>"><?php echo htmlspecialchars($row['published_by']); ?></td>
               <td data-label="<?php echo __('Анкор'); ?>"><?php echo htmlspecialchars($row['anchor']); ?></td>
               <td data-label="<?php echo __('Страница'); ?>" class="url-cell">
