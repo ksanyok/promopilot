@@ -687,7 +687,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                                 $promotionStatusLabel = $promotionStatus === 'idle' ? __('Не запущено') : ucfirst($promotionStatus);
                                                 break;
                                         }
-                                        $canEdit = ($status === 'not_published') && !$promotionActive;
+                                        $canEdit = !$promotionActive;
                                         $pu = @parse_url($url);
                                         $hostDisp = $pp_normalize_host($pu['host'] ?? '');
                                         $pathDisp = (string)($pu['path'] ?? '/');
@@ -736,22 +736,6 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$linkId; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($fullWish); ?></textarea>
                                         </td>
                                         <td data-label="<?php echo __('Статус'); ?>" class="status-cell">
-                                            <?php if ($status === 'published'): ?>
-                                                <span class="badge badge-success"><?php echo __('Опубликована'); ?></span>
-                                                <?php if (!empty($postUrl)): ?>
-                                                    <div class="small mt-1"><a href="<?php echo htmlspecialchars($postUrl); ?>" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>
-                                                <?php endif; ?>
-                                                <?php if (!empty($networkSlug)): ?>
-                                                    <div class="text-muted small"><?php echo __('Сеть'); ?>: <?php echo htmlspecialchars($networkSlug); ?></div>
-                                                <?php endif; ?>
-                                            <?php elseif ($status === 'pending'): ?>
-                                                <span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>
-                                                <?php if (!empty($networkSlug)): ?>
-                                                    <div class="text-muted small"><?php echo __('Сеть'); ?>: <?php echo htmlspecialchars($networkSlug); ?></div>
-                                                <?php endif; ?>
-                                            <?php else: ?>
-                                                <span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>
-                                            <?php endif; ?>
                                             <div class="promotion-status-block small mt-2 <?php echo $promotionStatus === 'idle' ? 'text-muted' : 'text-primary'; ?>"
                                                  data-run-id="<?php echo $promotionRunId ?: ''; ?>"
                                                  data-status="<?php echo htmlspecialchars($promotionStatus); ?>"
@@ -776,22 +760,17 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
                                             <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                                            <?php if ($status === 'published' && !empty($postUrl)): ?>
-                                                <a href="<?php echo htmlspecialchars($postUrl); ?>" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm me-1"><i class="bi bi-box-arrow-up-right me-1"></i><span class="d-none d-lg-inline"><?php echo __('Открыть'); ?></span></a>
-                                            <?php elseif ($status === 'manual_review'): ?>
-                                                <?php if (!empty($postUrl)): ?>
-                                                    <a href="<?php echo htmlspecialchars($postUrl); ?>" target="_blank" rel="noopener" class="btn btn-outline-warning btn-sm me-1"><i class="bi bi-search me-1"></i><span class="d-none d-lg-inline"><?php echo __('Проверить'); ?></span></a>
-                                                <?php endif; ?>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-flag-fill me-1"></i><span class="d-none d-lg-inline"><?php echo __('Ожидает проверки'); ?></span></button>
-                                            <?php elseif ($status === 'pending' && !$promotionActive): ?>
-                                                <button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>
-                                            <?php endif; ?>
-
                                             <?php if ($promotionActive): ?>
                                                 <button type="button" class="btn btn-outline-warning btn-sm me-1 action-promotion-cancel" data-url="<?php echo htmlspecialchars($url); ?>" data-run-id="<?php echo $promotionRunId ?: 0; ?>" title="<?php echo __('Остановить продвижение'); ?>"><i class="bi bi-stop-circle me-1"></i><span class="d-none d-lg-inline"><?php echo __('Остановить'); ?></span></button>
                                             <?php else: ?>
                                                 <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>">
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
+                                                </button>
+                                            <?php endif; ?>
+
+                                            <?php if ($promotionRunId > 0): ?>
+                                                <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Промежуточный отчет'); ?>">
+                                                    <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
                                                 </button>
                                             <?php endif; ?>
 
@@ -802,7 +781,7 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                             <?php if ($canEdit): ?>
                                                 <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
                                                 <button type="button" class="icon-btn action-remove" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                                            <?php elseif ($status === 'pending' || $promotionActive): ?>
+                                            <?php elseif ($promotionActive): ?>
                                                 <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>
                                             <?php endif; ?>
                                         </td>
@@ -1167,44 +1146,18 @@ document.addEventListener('DOMContentLoaded', function() {
         const promotionBlock = statusCell.querySelector('.promotion-status-block');
         const postUrl = payload.post_url || tr.dataset.postUrl || '';
         const networkLabel = payload.network_title || payload.network || tr.dataset.network || '';
-        let html = '';
-        if (status === 'published') {
-            html += '<span class="badge badge-success"><?php echo __('Опубликована'); ?></span>';
-            if (postUrl) {
-                html += '<div class="small mt-1"><a href="' + escapeHtml(postUrl) + '" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>';
-            }
-            if (networkLabel) {
-                html += '<div class="text-muted small"><?php echo __('Сеть'); ?>: ' + escapeHtml(networkLabel) + '</div>';
-            }
-        } else if (status === 'manual_review') {
-            html += '<span class="badge bg-warning text-dark"><?php echo __('Требует проверки'); ?></span>';
-            if (postUrl) {
-                html += '<div class="small mt-1"><a href="' + escapeHtml(postUrl) + '" target="_blank" rel="noopener"><?php echo __('Открыть материал'); ?></a></div>';
-            }
-            html += '<div class="text-muted small mt-1"><?php echo __('Ссылка найдена, но текст не обнаружен. Нужна ручная проверка.'); ?></div>';
-            if (networkLabel) {
-                html += '<div class="text-muted small mt-1"><?php echo __('Сеть'); ?>: ' + escapeHtml(networkLabel) + '</div>';
-            }
-        } else if (status === 'pending') {
-            html += '<span class="badge badge-warning"><?php echo __('В ожидании'); ?></span>';
-            if (networkLabel) {
-                html += '<div class="text-muted small"><?php echo __('Сеть'); ?>: ' + escapeHtml(networkLabel) + '</div>';
-            }
-        } else {
-            html += '<span class="badge badge-secondary"><?php echo __('Не опубликована'); ?></span>';
-        }
-        statusCell.innerHTML = html;
+        statusCell.innerHTML = '';
         if (promotionBlock) {
             statusCell.appendChild(promotionBlock);
         }
         tr.dataset.postUrl = postUrl || '';
         tr.dataset.network = networkLabel || '';
+        tr.dataset.publicationStatus = status || tr.dataset.publicationStatus || 'not_published';
     }
 
     function refreshActionsCell(tr) {
         const actionsCell = tr.querySelector('td.text-end');
         if (!actionsCell) return;
-        const status = tr.dataset.publicationStatus || 'not_published';
         const promotionStatus = tr.dataset.promotionStatus || 'idle';
         const promotionRunId = tr.dataset.promotionRunId || '';
         const promotionReportReady = tr.dataset.promotionReportReady === '1';
@@ -1214,15 +1167,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const linkId = tr.getAttribute('data-id') || '';
         let html = '<button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>';
 
-        if (status === 'published' && postUrl) {
+        if (postUrl) {
             html += '<a href="' + escapeAttribute(postUrl) + '" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm me-1"><i class="bi bi-box-arrow-up-right me-1"></i><span class="d-none d-lg-inline"><?php echo __('Открыть'); ?></span></a>';
-        } else if (status === 'pending' && !promotionActive) {
-            html += '<button type="button" class="btn btn-outline-warning btn-sm me-1 action-cancel" data-url="' + escapeAttribute(url) + '" data-id="' + escapeAttribute(linkId) + '" title="<?php echo __('Отменить публикацию'); ?>"><i class="bi bi-arrow-counterclockwise me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отменить'); ?></span></button>';
-        } else if (status === 'manual_review') {
-            if (postUrl) {
-                html += '<a href="' + escapeAttribute(postUrl) + '" target="_blank" rel="noopener" class="btn btn-outline-warning btn-sm me-1"><i class="bi bi-search me-1"></i><span class="d-none d-lg-inline"><?php echo __('Проверить'); ?></span></a>';
-            }
-            html += '<button type="button" class="btn btn-outline-secondary btn-sm me-1" disabled><i class="bi bi-flag-fill me-1"></i><span class="d-none d-lg-inline"><?php echo __('Ожидает проверки'); ?></span></button>';
         }
 
         if (promotionActive) {
@@ -1231,15 +1177,19 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="' + escapeAttribute(url) + '" data-id="' + escapeAttribute(linkId) + '"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
         }
 
+        if (promotionRunId) {
+            html += '<button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Промежуточный отчет'); ?>"><i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span></button>';
+        }
+
         if (promotionReportReady && promotionRunId) {
             html += '<button type="button" class="btn btn-outline-success btn-sm me-1 action-promotion-report" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Скачать отчет'); ?>"><i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span></button>';
         }
 
-        const canEdit = (status === 'not_published') && !promotionActive;
+        const canEdit = !promotionActive;
         if (canEdit) {
             html += '<button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>';
             html += '<button type="button" class="icon-btn action-remove" data-id="' + escapeAttribute(linkId) + '" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>';
-        } else if (status === 'pending' || promotionActive) {
+        } else if (promotionActive) {
             html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактировать'); ?>"><i class="bi bi-lock"></i></button>';
         }
 
@@ -1422,54 +1372,6 @@ document.addEventListener('DOMContentLoaded', function() {
     let PP_PAGE_UNLOADING = false;
     window.addEventListener('beforeunload', () => { PP_PAGE_UNLOADING = true; });
 
-    async function sendPublishAction(btn, url, action) {
-        const csrf = getCsrfToken();
-        if (!csrf) { alert('CSRF missing'); return; }
-        if (!url) { alert('<?php echo __('Сначала сохраните проект чтобы опубликовать новую ссылку.'); ?>'); return; }
-        setButtonLoading(btn, true);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
-        try {
-            const formData = new FormData();
-            formData.append('csrf_token', csrf);
-            formData.append('project_id', PROJECT_ID);
-            formData.append('url', url);
-            formData.append('action', action);
-            const res = await fetch('<?php echo pp_url('public/publish_link.php'); ?>', { method: 'POST', body: formData, credentials: 'same-origin', signal: controller.signal });
-            clearTimeout(timeoutId);
-            const data = await res.json().catch(()=>({ok:false,error:'BAD_JSON'}));
-            if (!data.ok) {
-                let msg = data.error || 'ERROR';
-                const map = {
-                    'ALREADY_PUBLISHED':'<?php echo __('Уже опубликована'); ?>',
-                    'DB_ERROR':'<?php echo __('Ошибка базы данных'); ?>',
-                    'PROJECT_NOT_FOUND':'<?php echo __('Проект не найден'); ?>',
-                    'FORBIDDEN':'<?php echo __('Нет прав'); ?>',
-                    'NOT_PENDING':'<?php echo __('Не в ожидании'); ?>',
-                    'BAD_ACTION':'<?php echo __('Неверное действие'); ?>',
-                    'NO_ENABLED_NETWORKS':'<?php echo __('Нет доступных сетей публикации. Проверьте настройки.'); ?>',
-                    'MISSING_OPENAI_KEY':'<?php echo __('Укажите OpenAI API Key в настройках.'); ?>',
-                    'NETWORK_ERROR':'<?php echo __('Ошибка при публикации через сеть'); ?>',
-                    'URL_NOT_IN_PROJECT':'<?php echo __('Ссылка отсутствует в проекте'); ?>'
-                };
-                if (map[msg]) msg = map[msg];
-                if (data.error === 'NETWORK_ERROR' && data.details) {
-                    msg += ' (' + data.details + ')';
-                }
-                alert('<?php echo __('Ошибка'); ?>: ' + msg);
-                return;
-            }
-            updateRowUI(url, data.status, data);
-        } catch (e) {
-            if (PP_PAGE_UNLOADING) { /* suppress alerts on navigation */ }
-            else if (e.name === 'AbortError') { alert('<?php echo __('Таймаут запроса'); ?>'); }
-            else { alert('<?php echo __('Сетевая ошибка'); ?>'); }
-        } finally {
-            clearTimeout(timeoutId);
-            setButtonLoading(btn, false);
-        }
-    }
-
     async function startPromotion(btn, url) {
         const csrf = getCsrfToken();
         if (!csrf) { alert('CSRF missing'); return; }
@@ -1619,18 +1521,6 @@ document.addEventListener('DOMContentLoaded', function() {
             refreshStatusCell(tr, status, payload);
             if (promotionData) { updatePromotionBlock(tr, promotionData); }
             refreshActionsCell(tr);
-
-            // Adjust edit/remove availability based on new state
-            const canEdit = (status === 'not_published') && !isPromotionActiveStatus(tr.dataset.promotionStatus || 'idle');
-            tr.querySelectorAll('.action-edit, .action-remove').forEach(btn => {
-                if (canEdit) {
-                    btn.classList.remove('disabled');
-                    btn.removeAttribute('disabled');
-                } else {
-                    btn.classList.add('disabled');
-                    btn.setAttribute('disabled', 'disabled');
-                }
-            });
         });
     }
 
@@ -1719,6 +1609,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         </select>
                     </td>
                     <td class="wish-cell">
+                        <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                        <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
+                        <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
+                    </td>
+                    <td class="status-cell">
                         <div class="promotion-status-block small mt-2 text-muted"
                              data-run-id=""
                              data-status="idle"
@@ -1736,11 +1631,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             <span class="promotion-progress-count ms-1 d-none"></span>
                             <div class="promotion-progress-details text-muted d-none"></div>
                         </div>
-                             data-done="0"
-                             data-report-ready="0">
-                            <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
-                            <span class="promotion-progress-count ms-1 d-none"></span>
-                        </div>
                     </td>
                     <td class="text-end">
                         <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
@@ -1749,6 +1639,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         </button>
                         <button type="button" class="btn btn-outline-warning btn-sm me-1 action-promotion-cancel d-none" data-url="${escapeHtml(url)}" data-run-id="0">
                             <i class="bi bi-stop-circle me-1"></i><span class="d-none d-lg-inline"><?php echo __('Остановить'); ?></span>
+                        </button>
+                        <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress d-none" data-run-id="0" data-url="${escapeHtml(url)}">
+                            <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
                         </button>
                         <button type="button" class="btn btn-outline-success btn-sm me-1 action-promotion-report d-none" data-run-id="0" data-url="${escapeHtml(url)}">
                             <i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span>
@@ -1774,22 +1667,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Extend binder to include edit/remove in addition to publish/cancel/analyze/wish
+    // Extend binder to include promote/cancel/report/analyze/wish/edit/remove
     function bindDynamicRowActions() {
-        // cancel
-        document.querySelectorAll('.action-cancel').forEach(btn => {
-            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
-            btn.addEventListener('click', () => {
-                const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                if (!confirm('<?php echo __('Отменить публикацию ссылки?'); ?>')) return;
-                sendPublishAction(btn, url, 'cancel');
-            });
-        });
         document.querySelectorAll('.action-promote').forEach(btn => {
             if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
             btn.addEventListener('click', () => {
                 const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
                 startPromotion(btn, url);
+            });
+        });
+        document.querySelectorAll('.action-promotion-progress').forEach(btn => {
+            if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
+            btn.addEventListener('click', () => {
+                openPromotionReport(btn);
             });
         });
         document.querySelectorAll('.action-promotion-cancel').forEach(btn => {
@@ -1843,25 +1733,24 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const rows = document.querySelectorAll('table.table-links tbody tr');
             for (const tr of rows) {
-                const statusCell = tr.querySelector('.status-cell');
                 const linkEl = tr.querySelector('.url-cell .view-url');
-                if (!statusCell || !linkEl) continue;
-                if (statusCell.textContent.includes('<?php echo __('В ожидании'); ?>') || statusCell.textContent.includes('queued') || statusCell.textContent.includes('pending')) {
-                    const url = linkEl.getAttribute('href');
-                    const fd = new URLSearchParams();
-                    fd.set('project_id', String(PROJECT_ID));
-                    fd.set('url', url);
-                    const res = await fetch('<?php echo pp_url('public/publication_status.php'); ?>?' + fd.toString(), { credentials:'same-origin' });
-                    const data = await res.json().catch(()=>null);
-                    if (!data || !data.ok) continue;
-                    if (data.status === 'published') {
-                        updateRowUI(url, 'published', data);
-                    } else if (data.status === 'manual_review') {
-                        updateRowUI(url, 'manual_review', data);
-                    } else if (data.status === 'failed') {
-                        // Reset to not_published to allow retry; optionally show error via tooltip
-                        updateRowUI(url, 'not_published', {});
-                    }
+                if (!linkEl) continue;
+                const currentStatus = tr.dataset.publicationStatus || 'not_published';
+                if (currentStatus !== 'pending') continue;
+                const url = linkEl.getAttribute('href');
+                const fd = new URLSearchParams();
+                fd.set('project_id', String(PROJECT_ID));
+                fd.set('url', url);
+                const res = await fetch('<?php echo pp_url('public/publication_status.php'); ?>?' + fd.toString(), { credentials:'same-origin' });
+                const data = await res.json().catch(()=>null);
+                if (!data || !data.ok) continue;
+                if (data.status === 'published') {
+                    updateRowUI(url, 'published', data);
+                } else if (data.status === 'manual_review') {
+                    updateRowUI(url, 'manual_review', data);
+                } else if (data.status === 'failed') {
+                    // Reset to not_published to allow retry; optionally show error via tooltip
+                    updateRowUI(url, 'not_published', {});
                 }
             }
         } catch (_e) { /* ignore */ }
