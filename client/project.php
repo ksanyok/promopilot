@@ -490,8 +490,8 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                 <div class="card-body">
                     <div class="project-hero__layout">
                         <div class="project-hero__main">
-                            <div class="project-hero__heading d-flex align-items-start justify-content-between gap-3 flex-wrap">
-                                <div>
+                            <div class="project-hero__heading">
+                                <div class="project-hero__heading-left">
                                     <div class="title d-flex align-items-center gap-2 flex-wrap">
                                         <span class="project-hero__title-text" title="<?php echo htmlspecialchars($project['name']); ?>"><?php echo htmlspecialchars($project['name']); ?></span>
                                         <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#projectInfoModal" title="<?php echo __('Редактировать основную информацию'); ?>">
@@ -501,8 +501,16 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                     </div>
                                     <div class="subtitle">@<?php echo htmlspecialchars($project['username']); ?></div>
                                 </div>
-                                <div class="project-hero__id text-end">
-                                    <span class="chip" data-bs-toggle="tooltip" title="<?php echo __('Внутренний идентификатор проекта'); ?>"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
+                                <div class="project-hero__heading-right">
+                                    <div class="project-hero__actions">
+                                        <button type="button" class="btn btn-primary project-hero__action-add" data-bs-toggle="modal" data-bs-target="#addLinkModal">
+                                            <i class="bi bi-plus-lg"></i><span><?php echo __('Добавить ссылку'); ?></span>
+                                        </button>
+                                        <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-light project-hero__action-history" data-bs-toggle="tooltip" title="<?php echo __('История'); ?>">
+                                            <i class="bi bi-clock-history"></i>
+                                        </a>
+                                        <span class="chip" data-bs-toggle="tooltip" title="<?php echo __('Внутренний идентификатор проекта'); ?>"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
+                                    </div>
                                 </div>
                             </div>
                             <div class="meta-list">
@@ -582,14 +590,6 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                     <?php endif; ?>
                                 </div>
                             <?php endif; ?>
-                            <div class="project-hero__cta">
-                                <button type="button" class="btn btn-primary project-hero__cta-btn" data-bs-toggle="modal" data-bs-target="#addLinkModal">
-                                    <i class="bi bi-plus-lg"></i><span><?php echo __('Добавить ссылку'); ?></span>
-                                </button>
-                                <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-light project-hero__cta-btn">
-                                    <i class="bi bi-clock-history"></i><span><?php echo __('История'); ?></span>
-                                </a>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -1115,6 +1115,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (wishModalEl && wishModalEl.parentElement !== document.body) { document.body.appendChild(wishModalEl); }
     const promotionReportModalEl = document.getElementById('promotionReportModal');
     if (promotionReportModalEl && promotionReportModalEl.parentElement !== document.body) { document.body.appendChild(promotionReportModalEl); }
+    const addLinkModalEl = document.getElementById('addLinkModal');
+    if (addLinkModalEl && addLinkModalEl.parentElement !== document.body) { document.body.appendChild(addLinkModalEl); }
 
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
@@ -1128,7 +1130,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
 
-    const addLinkModalEl = document.getElementById('addLinkModal');
     if (addLinkModalEl && window.bootstrap) {
         addLinkModalEl.addEventListener('shown.bs.modal', () => {
             if (newLinkInput) {
