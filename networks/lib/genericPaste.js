@@ -33,6 +33,16 @@ function createGenericPastePublisher(config) {
     const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
     const apiKey = jobOptions.openaiApiKey || openaiApiKey;
     const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
+    const rawArticle = jobOptions.article || {};
+    const cascade = {
+      level: rawArticle.level ?? null,
+      parentUrl: rawArticle.parentUrl || jobOptions.parentUrl || null,
+      parentContext: rawArticle.parentContext || jobOptions.parentContext || null,
+      ancestorTrail: Array.isArray(rawArticle.ancestorTrail)
+        ? rawArticle.ancestorTrail
+        : (Array.isArray(jobOptions.ancestorTrail) ? jobOptions.ancestorTrail : []),
+    };
+
     const job = {
       pageUrl,
       anchorText,
@@ -41,7 +51,8 @@ function createGenericPastePublisher(config) {
       aiProvider: provider,
       wish: jobOptions.wish || wish,
       meta,
-      testMode: !!jobOptions.testMode
+      testMode: !!jobOptions.testMode,
+      cascade,
     };
 
     logLine('Publish start', { slug, pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });

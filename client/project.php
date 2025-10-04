@@ -1197,47 +1197,50 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                             </div>
                                         </td>
                                         <td class="text-end" data-label="<?php echo __('Действия'); ?>">
-                                            <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                                            <?php if ($promotionStatus === 'completed'): ?>
-                                                <!-- Promotion finished: no further actions -->
-                                            <?php elseif ($promotionActive): ?>
-                                                <button type="button" class="btn btn-sm btn-publish me-1 action-promote disabled" disabled data-loading="1">
-                                                    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                                                    <span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>
-                                                </button>
-                                            <?php else: ?>
-                                                <button type="button"
-                                                        class="btn btn-sm btn-publish me-1 action-promote"
-                                                        data-url="<?php echo htmlspecialchars($url); ?>"
-                                                        data-id="<?php echo (int)$linkId; ?>"
-                                                        data-charge-amount="<?php echo htmlspecialchars($promotionChargeAmountAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-charge-formatted="<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-charge-base="<?php echo htmlspecialchars($promotionChargeBaseAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-charge-base-formatted="<?php echo htmlspecialchars($promotionBaseFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-charge-savings="<?php echo htmlspecialchars($promotionChargeSavingsAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-charge-savings-formatted="<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                        data-discount-percent="<?php echo htmlspecialchars($promotionDiscountPercentAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
-                                                    <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
-                                                </button>
-                                            <?php endif; ?>
+                                            <div class="link-actions d-flex flex-wrap justify-content-end gap-2">
+                                                <button type="button" class="icon-btn action-analyze" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
+                                                <?php if ($promotionStatus === 'completed'): ?>
+                                                    <!-- Promotion finished: no further actions -->
+                                                <?php elseif ($promotionActive): ?>
+                                                    <div class="link-actions-progress d-flex flex-column align-items-stretch gap-2">
+                                                        <button type="button" class="btn btn-sm btn-publish btn-progress-running w-100" disabled data-loading="1">
+                                                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                                            <span class="label d-none d-md-inline"><?php echo __('В процессе'); ?></span>
+                                                        </button>
+                                                        <?php if ($promotionRunId > 0): ?>
+                                                            <button type="button" class="btn btn-outline-info btn-sm action-promotion-progress link-actions-progress-btn w-100" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Промежуточный отчет'); ?>">
+                                                                <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
+                                                            </button>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-publish action-promote"
+                                                            data-url="<?php echo htmlspecialchars($url); ?>"
+                                                            data-id="<?php echo (int)$linkId; ?>"
+                                                            data-charge-amount="<?php echo htmlspecialchars($promotionChargeAmountAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-charge-formatted="<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-charge-base="<?php echo htmlspecialchars($promotionChargeBaseAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-charge-base-formatted="<?php echo htmlspecialchars($promotionBaseFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-charge-savings="<?php echo htmlspecialchars($promotionChargeSavingsAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-charge-savings-formatted="<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                            data-discount-percent="<?php echo htmlspecialchars($promotionDiscountPercentAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                                        <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
+                                                    </button>
+                                                <?php endif; ?>
 
-                                            <?php if ($promotionRunId > 0 && $promotionActive): ?>
-                                                <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Промежуточный отчет'); ?>">
-                                                    <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
-                                                </button>
-                                            <?php endif; ?>
+                                                <?php if ($promotionReportReady && $promotionRunId > 0): ?>
+                                                    <button type="button" class="btn btn-outline-success btn-sm action-promotion-report" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Скачать отчет'); ?>"><i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span></button>
+                                                <?php endif; ?>
 
-                                            <?php if ($promotionReportReady && $promotionRunId > 0): ?>
-                                                <button type="button" class="btn btn-outline-success btn-sm me-1 action-promotion-report" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Скачать отчет'); ?>"><i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span></button>
-                                            <?php endif; ?>
-
-                                            <?php if ($canEdit): ?>
-                                                <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                                                <button type="button" class="icon-btn action-remove" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                                            <?php else: ?>
-                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактирование доступно до запуска продвижения.'); ?>"><i class="bi bi-lock"></i></button>
-                                                <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Удаление доступно до запуска продвижения.'); ?>"><i class="bi bi-trash"></i></button>
-                                            <?php endif; ?>
+                                                <?php if ($canEdit): ?>
+                                                    <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                                                    <button type="button" class="icon-btn action-remove" data-id="<?php echo (int)$linkId; ?>" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                                                <?php else: ?>
+                                                    <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактирование доступно до запуска продвижения.'); ?>"><i class="bi bi-lock"></i></button>
+                                                    <button type="button" class="icon-btn disabled" disabled title="<?php echo __('Удаление доступно до запуска продвижения.'); ?>"><i class="bi bi-trash"></i></button>
+                                                <?php endif; ?>
+                                            </div>
                                         </td>
                                     </tr>
                                     <?php endforeach; ?>
@@ -1724,65 +1727,65 @@ document.addEventListener('DOMContentLoaded', function() {
         if (newLinkInput && normalized) newLinkInput.setAttribute('placeholder', 'https://' + normalized + '/...');
     }
 
-    function makeHidden(name, value) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = name;
-        input.value = value;
-        return input;
-    }
+    function refreshActionsCell(tr) {
+        const actionsCell = tr.querySelector('td.text-end');
+        if (!actionsCell) return;
+        const promotionStatus = tr.dataset.promotionStatus || 'idle';
+        const promotionRunId = tr.dataset.promotionRunId || '';
+        const promotionReportReady = tr.dataset.promotionReportReady === '1';
+        const promotionActive = isPromotionActiveStatus(promotionStatus);
+        const promotionFinished = promotionStatus === 'completed';
+        const url = tr.querySelector('.url-cell .view-url')?.getAttribute('href') || '';
+        const linkId = tr.getAttribute('data-id') || '';
+        const canEdit = promotionStatus === 'idle';
 
-    // Create the links table if it doesn't exist (when first link is added)
-    function ensureLinksTable() {
-        if (linksTbody) return linksTbody;
-        const empty = document.querySelector('#links-card .card-body .empty-state');
-        const cardBody = document.querySelector('#links-card .card-body');
-        if (!cardBody) return null;
-        const wrapper = document.createElement('div');
-        wrapper.className = 'table-responsive';
-        wrapper.innerHTML = `
-            <table class="table table-striped table-hover table-sm align-middle table-links">
-                <thead>
-                    <tr>
-                        <th style="width:44px;">#</th>
-                        <th><?php echo __('Ссылка'); ?></th>
-                        <th><?php echo __('Анкор'); ?></th>
-                        <th><?php echo __('Язык'); ?></th>
-                        <th><?php echo __('Пожелание'); ?></th>
-                        <th><?php echo __('Статус'); ?></th>
-                        <th class="text-end" style="width:200px;">&nbsp;</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>`;
-        if (empty) empty.replaceWith(wrapper); else cardBody.prepend(wrapper);
-        linksTable = wrapper.querySelector('table');
-        linksTbody = linksTable.querySelector('tbody');
-        return linksTbody;
-    }
+        let html = '<div class="link-actions d-flex flex-wrap justify-content-end gap-2">';
+        html += '<button type="button" class="icon-btn action-analyze" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>';
 
-    function refreshRowNumbers() {
-        if (!linksTbody) return;
-        let i = 1;
-        linksTbody.querySelectorAll('tr').forEach(tr => {
-            const cell = tr.querySelector('td');
-            if (cell) cell.textContent = i++;
-        });
-    }
-
-    function setButtonLoading(btn, loading) {
-        if (!btn) return;
-        if (loading) {
-            btn.dataset.originalHtml = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>' + (btn.dataset.loadingText || btn.textContent.trim());
-        } else {
-            if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
-            btn.disabled = false;
+        if (!promotionFinished) {
+            if (promotionActive) {
+                html += '<div class="link-actions-progress d-flex flex-column align-items-stretch gap-2">'
+                    + '<button type="button" class="btn btn-sm btn-publish btn-progress-running w-100" disabled data-loading="1">'
+                    + '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>'
+                    + '<span class="label d-none d-md-inline"><?php echo __('В процессе'); ?></span>'
+                    + '</button>';
+                if (promotionRunId) {
+                    html += '<button type="button" class="btn btn-outline-info btn-sm action-promotion-progress link-actions-progress-btn w-100" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Промежуточный отчет'); ?>"><i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span></button>';
+                }
+                html += '</div>';
+            } else {
+                html += '<button type="button" class="btn btn-sm btn-publish action-promote"'
+                    + ' data-url="' + escapeAttribute(url) + '"'
+                    + ' data-id="' + escapeAttribute(linkId) + '"'
+                    + ' data-charge-amount="' + escapeAttribute(String(PROMOTION_CHARGE_AMOUNT)) + '"'
+                    + ' data-charge-formatted="' + escapeAttribute(PROMOTION_CHARGE_AMOUNT_FORMATTED) + '"'
+                    + ' data-charge-base="' + escapeAttribute(String(PROMOTION_CHARGE_BASE)) + '"'
+                    + ' data-charge-base-formatted="' + escapeAttribute(PROMOTION_CHARGE_BASE_FORMATTED) + '"'
+                    + ' data-charge-savings="' + escapeAttribute(String(PROMOTION_CHARGE_SAVINGS)) + '"'
+                    + ' data-charge-savings-formatted="' + escapeAttribute(PROMOTION_CHARGE_SAVINGS_FORMATTED) + '"'
+                    + ' data-discount-percent="' + escapeAttribute(String(PROMOTION_DISCOUNT_PERCENT)) + '">'
+                    + '<i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
+            }
         }
-    }
 
-    const PROMOTION_ACTIVE_STATUSES = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+        if (promotionReportReady && promotionRunId) {
+            html += '<button type="button" class="btn btn-outline-success btn-sm action-promotion-report" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Скачать отчет'); ?>"><i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span></button>';
+        }
+
+        if (canEdit) {
+            html += '<button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>';
+            html += '<button type="button" class="icon-btn action-remove" data-id="' + escapeAttribute(linkId) + '" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>';
+        } else {
+            html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Редактирование доступно до запуска продвижения.'); ?>"><i class="bi bi-lock"></i></button>';
+            html += '<button type="button" class="icon-btn disabled" disabled title="<?php echo __('Удаление доступно до запуска продвижения.'); ?>"><i class="bi bi-trash"></i></button>';
+        }
+
+        html += '</div>';
+
+        actionsCell.innerHTML = html;
+        bindDynamicRowActions();
+        recalcPromotionStats();
+    }
     const PROMOTION_STATUS_LABELS = {
         'queued': '<?php echo __('Уровень 1 выполняется'); ?>',
         'running': '<?php echo __('Уровень 1 выполняется'); ?>',

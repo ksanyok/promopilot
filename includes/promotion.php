@@ -23,6 +23,272 @@ if (!function_exists('pp_promotion_log')) {
     }
 }
 
+if (!function_exists('pp_promotion_fetch_article_html')) {
+    function pp_promotion_fetch_article_html(string $url, int $timeoutSeconds = 12, int $maxBytes = 262144): ?string {
+        $url = trim($url);
+        if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+        $maxBytes = max(10240, $maxBytes);
+        $timeoutSeconds = max(3, min(30, $timeoutSeconds));
+        $buffer = '';
+        $fetchWithCurl = static function() use ($url, $timeoutSeconds, $maxBytes, &$buffer): ?string {
+            if (!function_exists('curl_init')) { return null; }
+            $ch = @curl_init($url);
+            if (!$ch) { return null; }
+            $userAgent = 'PromoPilotBot/1.0 (+https://promopilot.ai)';
+            @curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => false,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+                CURLOPT_TIMEOUT => $timeoutSeconds,
+                CURLOPT_CONNECTTIMEOUT => min(6, $timeoutSeconds),
+                CURLOPT_USERAGENT => $userAgent,
+                CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_ENCODING => 'gzip,deflate',
+                CURLOPT_WRITEFUNCTION => static function($ch, $chunk) use (&$buffer, $maxBytes) {
+                    if (!is_string($chunk) || $chunk === '') { return 0; }
+                    $remaining = $maxBytes - strlen($buffer);
+                    if ($remaining <= 0) { return 0; }
+                    $buffer .= substr($chunk, 0, $remaining);
+                    return strlen($chunk);
+                },
+            ]);
+            $ok = @curl_exec($ch);
+            $status = (int)@curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            @curl_close($ch);
+            if ($ok === false || $status >= 400 || $status === 0) {
+                return null;
+            }
+            return $buffer !== '' ? $buffer : null;
+        };
+        $html = $fetchWithCurl();
+        if ($html !== null) { return $html; }
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => "User-Agent: PromoPilotBot/1.0 (+https://promopilot.ai)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n",
+                'timeout' => $timeoutSeconds,
+            ],
+            'https' => [
+                'method' => 'GET',
+                'header' => "User-Agent: PromoPilotBot/1.0 (+https://promopilot.ai)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n",
+                'timeout' => $timeoutSeconds,
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+            ],
+        ]);
+        $handle = @fopen($url, 'rb', false, $context);
+        if (!$handle) { return null; }
+        $data = '';
+        while (!feof($handle) && strlen($data) < $maxBytes) {
+            $chunk = @fread($handle, min(8192, $maxBytes - strlen($data)));
+            if ($chunk === false) { break; }
+            $data .= $chunk;
+        }
+        @fclose($handle);
+        return $data !== '' ? $data : null;
+    }
+}
+
+if (!function_exists('pp_promotion_clean_text')) {
+    function pp_promotion_clean_text(string $text): string {
+        $decoded = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $collapsed = preg_replace('~\s+~u', ' ', $decoded ?? '');
+        return trim($collapsed ?? '');
+    }
+}
+
+if (!function_exists('pp_promotion_extract_keywords')) {
+    function pp_promotion_extract_keywords(string $text, int $limit = 8): array {
+        $limit = max(1, min(16, $limit));
+        $normalized = mb_strtolower($text, 'UTF-8');
+        $words = preg_split('~[^\p{L}\p{N}]+~u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($words) || empty($words)) { return []; }
+        $stopwords = [
+            'ru' => ['ещё','ещё','это','оно','она','они','они','который','где','когда','как','для','или','если','только','также','теперь','по','при','без','над','под','через','к','от','до','из','что','чтобы','про','эти','подобно','между','между','есть','был','будет','так','его','её','могут','может'],
+            'en' => ['the','and','that','with','from','this','there','their','which','about','into','after','before','where','when','will','would','should','could','have','been','being','just','than','then','them','they','your','yours','ours','over','such','only','some','most','more','very','also'],
+        ];
+        $genericStop = array_merge($stopwords['ru'], $stopwords['en'], ['http','https','www','com','net','org']);
+        $counts = [];
+        foreach ($words as $word) {
+            if ($word === '' || mb_strlen($word, 'UTF-8') < 4) { continue; }
+            if (in_array($word, $genericStop, true)) { continue; }
+            if (!isset($counts[$word])) { $counts[$word] = 0; }
+            $counts[$word]++;
+        }
+        if (empty($counts)) { return []; }
+        arsort($counts);
+        return array_slice(array_keys($counts), 0, $limit);
+    }
+}
+
+if (!function_exists('pp_promotion_compact_context')) {
+    function pp_promotion_compact_context($context): ?array {
+        if (!is_array($context)) { return null; }
+        $summary = isset($context['summary']) ? (string)$context['summary'] : '';
+        if ($summary !== '') {
+            if (function_exists('mb_strlen')) {
+                if (mb_strlen($summary, 'UTF-8') > 600) {
+                    $summary = rtrim(mb_substr($summary, 0, 600, 'UTF-8')) . '…';
+                }
+            } elseif (strlen($summary) > 600) {
+                $summary = rtrim(substr($summary, 0, 600)) . '…';
+            }
+        }
+        $headings = [];
+        if (!empty($context['headings']) && is_array($context['headings'])) {
+            foreach ($context['headings'] as $heading) {
+                $headingText = trim((string)$heading);
+                if ($headingText === '') { continue; }
+                $headings[] = $headingText;
+                if (count($headings) >= 5) { break; }
+            }
+        }
+        $keywords = [];
+        if (!empty($context['keywords']) && is_array($context['keywords'])) {
+            foreach ($context['keywords'] as $word) {
+                $wordText = trim((string)$word);
+                if ($wordText === '') { continue; }
+                $keywords[] = $wordText;
+                if (count($keywords) >= 8) { break; }
+            }
+        }
+        return [
+            'url' => (string)($context['url'] ?? ''),
+            'title' => trim((string)($context['title'] ?? '')),
+            'description' => trim((string)($context['description'] ?? '')),
+            'summary' => $summary,
+            'headings' => $headings,
+            'keywords' => $keywords,
+            'language' => trim((string)($context['language'] ?? '')),
+        ];
+    }
+}
+
+if (!function_exists('pp_promotion_get_article_context')) {
+    function pp_promotion_get_article_context(string $url): ?array {
+        static $cache = [];
+        $normalizedUrl = trim($url);
+        if ($normalizedUrl === '' || !filter_var($normalizedUrl, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+        if (array_key_exists($normalizedUrl, $cache)) {
+            return $cache[$normalizedUrl];
+        }
+        $html = pp_promotion_fetch_article_html($normalizedUrl);
+        if ($html === null) {
+            $cache[$normalizedUrl] = null;
+            return null;
+        }
+        if (!function_exists('mb_detect_encoding')) {
+            $encoding = null;
+        } else {
+            $encoding = @mb_detect_encoding($html, ['UTF-8', 'Windows-1251', 'ISO-8859-1', 'ISO-8859-15', 'CP1252'], true) ?: null;
+        }
+        if ($encoding && strtoupper($encoding) !== 'UTF-8') {
+            $converted = @mb_convert_encoding($html, 'UTF-8', $encoding);
+            if (is_string($converted) && $converted !== '') {
+                $html = $converted;
+            }
+        }
+        $fullContext = ['url' => $normalizedUrl, 'title' => '', 'description' => '', 'summary' => '', 'keywords' => [], 'headings' => [], 'language' => ''];
+        if (trim($html) === '') {
+            $cache[$normalizedUrl] = pp_promotion_compact_context($fullContext);
+            return $cache[$normalizedUrl];
+        }
+        if (!class_exists('DOMDocument')) {
+            $text = strip_tags($html);
+            $text = pp_promotion_clean_text($text);
+            $fullContext['summary'] = function_exists('mb_substr') ? mb_substr($text, 0, 480, 'UTF-8') : substr($text, 0, 480);
+            $fullContext['keywords'] = pp_promotion_extract_keywords($text);
+            $cache[$normalizedUrl] = pp_promotion_compact_context($fullContext);
+            return $cache[$normalizedUrl];
+        }
+        $htmlWrapper = '<!DOCTYPE html><html>' . $html . '</html>';
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        @$dom->loadHTML($htmlWrapper);
+        libxml_clear_errors();
+        $xpath = new DOMXPath($dom);
+
+        $lang = '';
+        $langNode = $xpath->query('//html/@lang')->item(0);
+        if ($langNode) { $lang = trim((string)$langNode->nodeValue); }
+        if ($lang === '') {
+            $metaLang = $xpath->query('//meta[@http-equiv="content-language" or translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="language"]/@content')->item(0);
+            if ($metaLang) { $lang = trim((string)$metaLang->nodeValue); }
+        }
+
+        $title = '';
+        $ogTitle = $xpath->query('//meta[translate(@property,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:title" or translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="title"]/@content')->item(0);
+        if ($ogTitle) { $title = pp_promotion_clean_text($ogTitle->nodeValue ?? ''); }
+        if ($title === '') {
+            $titleNode = $xpath->query('//title')->item(0);
+            if ($titleNode) { $title = pp_promotion_clean_text($titleNode->textContent ?? ''); }
+        }
+        if ($title === '') {
+            $h1 = $xpath->query('//h1')->item(0);
+            if ($h1) { $title = pp_promotion_clean_text($h1->textContent ?? ''); }
+        }
+
+        $description = '';
+        $metaDesc = $xpath->query('//meta[translate(@name,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="description" or translate(@property,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")="og:description"]/@content')->item(0);
+        if ($metaDesc) { $description = pp_promotion_clean_text($metaDesc->nodeValue ?? ''); }
+
+        $paragraphs = [];
+        $nodes = $xpath->query('//p | //li[(normalize-space(text()) != "") and not(ancestor::nav)]');
+        foreach ($nodes as $node) {
+            $text = pp_promotion_clean_text($node->textContent ?? '');
+            if ($text === '') { continue; }
+            $paragraphs[] = $text;
+            if (count($paragraphs) >= 10) { break; }
+        }
+        if (empty($paragraphs)) {
+            $fallbackNodes = $xpath->query('//div[contains(@class,"article") or contains(@class,"content")]//text()');
+            $buffer = [];
+            foreach ($fallbackNodes as $node) {
+                $text = pp_promotion_clean_text($node->textContent ?? '');
+                if ($text === '') { continue; }
+                $buffer[] = $text;
+                if (count($buffer) >= 10) { break; }
+            }
+            $paragraphs = $buffer;
+        }
+
+        $summaryPieces = array_slice($paragraphs, 0, 3);
+        $summary = trim(implode(' ', $summaryPieces));
+        if ($summary === '' && !empty($paragraphs)) {
+            $summary = trim($paragraphs[0]);
+        }
+
+        $headingNodes = $xpath->query('//h1 | //h2 | //h3');
+        $headings = [];
+        foreach ($headingNodes as $hNode) {
+            $text = pp_promotion_clean_text($hNode->textContent ?? '');
+            if ($text === '') { continue; }
+            $headings[] = $text;
+            if (count($headings) >= 6) { break; }
+        }
+
+        $fullText = implode(' ', array_slice($paragraphs, 0, 12));
+        $keywords = pp_promotion_extract_keywords($fullText);
+
+        $fullContext['title'] = $title;
+        $fullContext['description'] = $description;
+        $fullContext['summary'] = $summary;
+        $fullContext['keywords'] = $keywords;
+        $fullContext['headings'] = $headings;
+        $fullContext['language'] = $lang;
+
+        $compact = pp_promotion_compact_context($fullContext);
+        $cache[$normalizedUrl] = $compact;
+        return $compact;
+    }
+}
+
 if (!function_exists('pp_promotion_settings')) {
     function pp_promotion_settings(): array {
         static $cache = null;
@@ -504,7 +770,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
                 'minLength' => $requirements['min_len'] ?? 2000,
                 'maxLength' => $requirements['max_len'] ?? 3200,
                 'level' => (int)$node['level'],
-                'parentUrl' => $node['parent_url'] ?? null,
+                'parentUrl' => $requirements['parent_url'] ?? ($node['parent_url'] ?? null),
                 'projectName' => (string)($project['name'] ?? ''),
             ],
             'target' => [
@@ -524,6 +790,25 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
                 'level' => (int)$node['level'],
             ],
         ];
+        $parentContext = $requirements['parent_context'] ?? null;
+        if ($parentContext) {
+            $parentContextCompact = pp_promotion_compact_context($parentContext);
+            if ($parentContextCompact) {
+                $jobPayload['article']['parentContext'] = $parentContextCompact;
+            }
+        }
+        $ancestorTrailRaw = $requirements['ancestor_trail'] ?? [];
+        if (is_array($ancestorTrailRaw) && !empty($ancestorTrailRaw)) {
+            $trail = [];
+            foreach ($ancestorTrailRaw as $item) {
+                $compact = pp_promotion_compact_context($item);
+                if ($compact) { $trail[] = $compact; }
+                if (count($trail) >= 6) { break; }
+            }
+            if (!empty($trail)) {
+                $jobPayload['article']['ancestorTrail'] = $trail;
+            }
+        }
         $payloadJson = json_encode($jobPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
         if ($payloadJson === false) { $payloadJson = '{}'; }
         static $hasJobPayloadColumn = null;
@@ -826,6 +1111,13 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
             $usage = [];
+            $level1Contexts = [];
+            foreach ($nodesL1 as $parentNode) {
+                $ctx = pp_promotion_get_article_context((string)$parentNode['result_url']);
+                if ($ctx) {
+                    $level1Contexts[(int)$parentNode['id']] = $ctx;
+                }
+            }
             $created = 0;
             foreach ($nodesL1 as $parentNode) {
                 $nets = pp_promotion_pick_networks(2, $perParent, $project, $usage);
@@ -863,7 +1155,17 @@ if (!function_exists('pp_promotion_process_run')) {
             if ($res2) {
                 while ($node = $res2->fetch_assoc()) {
                     $node['initiated_by'] = $run['initiated_by'];
-                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[2]['min_len'], 'max_len' => $requirements[2]['max_len'], 'level' => 2, 'parent_url' => $node['parent_url']]);
+                    $parentCtx = $level1Contexts[(int)($node['parent_id'] ?? 0)] ?? null;
+                    $trail = [];
+                    if ($parentCtx) { $trail[] = $parentCtx; }
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                        'min_len' => $requirements[2]['min_len'],
+                        'max_len' => $requirements[2]['max_len'],
+                        'level' => 2,
+                        'parent_url' => $node['parent_url'],
+                        'parent_context' => $parentCtx,
+                        'ancestor_trail' => $trail,
+                    ]);
                 }
                 $res2->free();
             }
@@ -898,7 +1200,7 @@ if (!function_exists('pp_promotion_process_run')) {
         if ($stage === 'pending_level3') {
             $perParent = (int)($requirements[3]['per_parent'] ?? 0);
             $level2Nodes = [];
-            $res = @$conn->query('SELECT id, result_url FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 AND status IN (\'success\',\'completed\')');
+            $res = @$conn->query('SELECT id, parent_id, result_url FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 AND status IN (\'success\',\'completed\')');
             if ($res) {
                 while ($row = $res->fetch_assoc()) {
                     $url = trim((string)$row['result_url']);
@@ -911,6 +1213,34 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
             $usage = [];
+            $level2Contexts = [];
+            $level1IdsNeeded = [];
+            $level2ParentMap = [];
+            foreach ($level2Nodes as $parentNode) {
+                $ctx = pp_promotion_get_article_context((string)$parentNode['result_url']);
+                if ($ctx) { $level2Contexts[(int)$parentNode['id']] = $ctx; }
+                $pid = (int)($parentNode['parent_id'] ?? 0);
+                if ($pid > 0) {
+                    $level1IdsNeeded[$pid] = $pid;
+                    $level2ParentMap[(int)$parentNode['id']] = $pid;
+                }
+            }
+            $level1Contexts = [];
+            if (!empty($level1IdsNeeded)) {
+                $idsList = implode(',', array_map('intval', array_values($level1IdsNeeded)));
+                if ($idsList !== '') {
+                    $resLvl1 = @$conn->query('SELECT id, result_url FROM promotion_nodes WHERE id IN (' . $idsList . ')');
+                    if ($resLvl1) {
+                        while ($row = $resLvl1->fetch_assoc()) {
+                            $ctx = pp_promotion_get_article_context((string)$row['result_url']);
+                            if ($ctx) {
+                                $level1Contexts[(int)$row['id']] = $ctx;
+                            }
+                        }
+                        $resLvl1->free();
+                    }
+                }
+            }
             foreach ($level2Nodes as $parentNode) {
                 $nets = pp_promotion_pick_networks(3, $perParent, $project, $usage);
                 if (empty($nets)) { continue; }
@@ -945,7 +1275,22 @@ if (!function_exists('pp_promotion_process_run')) {
             if ($res3) {
                 while ($node = $res3->fetch_assoc()) {
                     $node['initiated_by'] = $run['initiated_by'];
-                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[3]['min_len'], 'max_len' => $requirements[3]['max_len'], 'level' => 3, 'parent_url' => $node['parent_url']]);
+                    $parentId = (int)($node['parent_id'] ?? 0);
+                    $parentCtx = $level2Contexts[$parentId] ?? null;
+                    $trail = [];
+                    $level1ParentId = $level2ParentMap[$parentId] ?? null;
+                    if ($level1ParentId && isset($level1Contexts[$level1ParentId])) {
+                        $trail[] = $level1Contexts[$level1ParentId];
+                    }
+                    if ($parentCtx) { $trail[] = $parentCtx; }
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                        'min_len' => $requirements[3]['min_len'],
+                        'max_len' => $requirements[3]['max_len'],
+                        'level' => 3,
+                        'parent_url' => $node['parent_url'],
+                        'parent_context' => $parentCtx,
+                        'ancestor_trail' => $trail,
+                    ]);
                 }
                 $res3->free();
             }

@@ -35,7 +35,18 @@ if (!function_exists('pp_process_publication_job')) {
         if (function_exists('session_write_close')) { @session_write_close(); }
         try { $conn = @connect_db(); } catch (Throwable $e) { return; }
         if (!$conn) return;
-        $stmt = $conn->prepare('SELECT p.id, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1');
+            static $hasJobPayloadColumn = null;
+            if ($hasJobPayloadColumn === null) {
+                $hasJobPayloadColumn = false;
+                if ($res = @$conn->query("SHOW COLUMNS FROM publications LIKE 'job_payload'")) {
+                    if ($res->num_rows > 0) { $hasJobPayloadColumn = true; }
+                    $res->free();
+                }
+            }
+            $selectSql = 'SELECT p.id, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish';
+            if ($hasJobPayloadColumn) { $selectSql .= ', p.job_payload'; }
+            $selectSql .= ' FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1';
+            $stmt = $conn->prepare($selectSql);
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $pubId); $stmt->execute(); $row = $stmt->get_result()->fetch_assoc(); $stmt->close(); if (!$row) { $conn->close(); return; }
         if (!in_array($row['status'], ['queued','running'], true)) { $conn->close(); return; }
@@ -49,7 +60,40 @@ if (!function_exists('pp_process_publication_job')) {
         $openaiKey = trim((string)get_setting('openai_api_key', '')); $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
         if ($aiProvider === 'openai' && $openaiKey === '') { $err = 'MISSING_OPENAI_KEY'; $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1"); if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); } $conn->close(); return; }
         $pageMeta = null; if ($pm = $conn->prepare('SELECT lang, region, title, description FROM page_meta WHERE project_id = ? AND (page_url = ? OR final_url = ?) ORDER BY updated_at DESC, id DESC LIMIT 1')) { $pm->bind_param('iss', $projectId, $url, $url); if ($pm->execute()) { $m = $pm->get_result()->fetch_assoc(); if ($m) { $pageMeta = ['lang' => (string)($m['lang'] ?? ''), 'region' => (string)($m['region'] ?? ''), 'title' => (string)($m['title'] ?? ''), 'description' => (string)($m['description'] ?? ''), ]; } } $pm->close(); }
-    $job = ['url' => $url, 'anchor' => $anchor, 'language' => $linkLanguage, 'wish' => $linkWish, 'projectId' => $projectId, 'projectName' => $projectName, 'openaiApiKey' => $openaiKey, 'openaiModel' => $openaiModel, 'aiProvider' => $aiProvider, 'waitBetweenCallsMs' => 5000, 'pubId' => $pubId, 'page_meta' => $pageMeta, 'captcha' => ['provider' => (string)get_setting('captcha_provider', 'none'), 'apiKey' => (string)get_setting('captcha_api_key', ''), 'fallback' => ['provider' => (string)get_setting('captcha_fallback_provider', 'none'), 'apiKey' => (string)get_setting('captcha_fallback_api_key', ''),],], ];
+        $jobPayload = [];
+        if ($hasJobPayloadColumn && !empty($row['job_payload'])) {
+            $decodedPayload = json_decode((string)$row['job_payload'], true);
+            if (is_array($decodedPayload)) { $jobPayload = $decodedPayload; }
+        }
+
+        $jobBase = [
+            'url' => $url,
+            'pageUrl' => $url,
+            'anchor' => $anchor,
+            'language' => $linkLanguage,
+            'wish' => $linkWish,
+            'projectId' => $projectId,
+            'projectName' => $projectName,
+            'openaiApiKey' => $openaiKey,
+            'openaiModel' => $openaiModel,
+            'aiProvider' => $aiProvider,
+            'waitBetweenCallsMs' => 5000,
+            'pubId' => $pubId,
+            'captcha' => [
+                'provider' => (string)get_setting('captcha_provider', 'none'),
+                'apiKey' => (string)get_setting('captcha_api_key', ''),
+                'fallback' => [
+                    'provider' => (string)get_setting('captcha_fallback_provider', 'none'),
+                    'apiKey' => (string)get_setting('captcha_fallback_api_key', ''),
+                ],
+            ],
+        ];
+
+        $job = is_array($jobPayload) ? $jobPayload : [];
+        $job = array_replace_recursive($job, $jobBase);
+        if (!isset($job['page_meta']) || empty($job['page_meta'])) { $job['page_meta'] = $pageMeta; }
+        if (!isset($job['meta']) || empty($job['meta'])) { $job['meta'] = $pageMeta; }
+        if (!isset($job['language']) || $job['language'] === '') { $job['language'] = $linkLanguage; }
         $result = pp_publish_via_network($network, $job, 480);
         if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
             $errText = 'NETWORK_ERROR'; $details = ''; if (is_array($result)) { $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? ''))); }

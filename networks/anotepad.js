@@ -145,6 +145,14 @@ async function publishToAnotepad(pageUrl, anchorText, language, openaiApiKey, ai
 
   logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
+  const rawArticle = jobOptions.article || {};
+  const cascade = {
+    level: rawArticle.level ?? null,
+    parentUrl: rawArticle.parentUrl || jobOptions.parentUrl || null,
+    parentContext: rawArticle.parentContext || jobOptions.parentContext || null,
+    ancestorTrail: Array.isArray(rawArticle.ancestorTrail) ? rawArticle.ancestorTrail : (Array.isArray(jobOptions.ancestorTrail) ? jobOptions.ancestorTrail : []),
+  };
+
   const articleJob = {
     pageUrl,
     anchorText,
@@ -154,6 +162,7 @@ async function publishToAnotepad(pageUrl, anchorText, language, openaiApiKey, ai
     wish: jobOptions.wish || wish,
     meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
     testMode: !!jobOptions.testMode,
+    cascade,
   };
 
   const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)

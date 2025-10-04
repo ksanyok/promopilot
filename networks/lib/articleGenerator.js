@@ -4,6 +4,68 @@ const { generateText, cleanLLMOutput } = require('../ai_client');
 const { htmlToPlainText } = require('./contentFormats');
 const { prepareTextSample } = require('./verification');
 
+function normalizeContextArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const title = String(item.title || '').trim();
+      const summary = String(item.summary || '').trim();
+      const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean).map((kw) => String(kw).trim()).filter(Boolean).slice(0, 8) : [];
+      const description = String(item.description || '').trim();
+      if (!title && !summary && keywords.length === 0 && !description) {
+        return null;
+      }
+      return {
+        url: String(item.url || '').trim(),
+        title,
+        summary,
+        description,
+        keywords,
+        language: String(item.language || '').trim(),
+        headings: Array.isArray(item.headings) ? item.headings.filter(Boolean).map((h) => String(h).trim()).filter(Boolean).slice(0, 6) : [],
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildCascadeGuidance(cascade, language) {
+  if (!cascade || typeof cascade !== 'object') {
+    return { intro: '', bullets: [], reminder: '', titleReminder: '' };
+  }
+  const isRu = String(language || '').toLowerCase().startsWith('ru');
+  const intro = isRu ? 'Контекст предыдущих уровней:' : 'Context from previous levels:';
+  const summaryLabel = isRu ? 'Суть' : 'Focus';
+  const keywordsLabel = isRu ? 'Ключевые темы' : 'Key topics';
+  const titleLabel = isRu ? 'Заголовок' : 'Title';
+  const bullet = isRu ? '—' : '-';
+  const reminder = isRu
+    ? 'Опирайся на эти материалы: подчеркни связь с родительской статьёй, используй схожие темы и упомяни исходные выводы.'
+    : 'Use these materials to stay aligned with the parent article, reinforce shared themes, and reference prior conclusions naturally.';
+  const titleReminder = isRu
+    ? 'Заголовок должен отражать связь с темой родительской статьи.'
+    : 'Title should reflect the connection to the parent article topic.';
+
+  const trail = normalizeContextArray(cascade.ancestorTrail);
+  const parentContext = cascade.parentContext ? normalizeContextArray([cascade.parentContext]) : [];
+  const contexts = trail.length ? trail : parentContext;
+  const bullets = contexts.slice(0, 5).map((ctx, index) => {
+    const parts = [];
+    if (ctx.title) parts.push(`${titleLabel}: ${ctx.title}`);
+    if (ctx.summary) parts.push(`${summaryLabel}: ${ctx.summary}`);
+    if (!ctx.summary && ctx.description) parts.push(`${summaryLabel}: ${ctx.description}`);
+    if (ctx.keywords && ctx.keywords.length) parts.push(`${keywordsLabel}: ${ctx.keywords.slice(0, 6).join(', ')}`);
+    return `${bullet} ${parts.join('; ')}`;
+  });
+
+  return {
+    intro: bullets.length ? intro : '',
+    bullets,
+    reminder: bullets.length ? reminder : '',
+    titleReminder: bullets.length ? titleReminder : '',
+  };
+}
+
 function analyzeLinks(html, url, anchor) {
   try {
     const str = String(html || '');
@@ -101,7 +163,7 @@ function buildDiagnosticArticle(pageUrl, anchorText) {
   };
 }
 
-async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta, testMode }, logLine) {
+async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta, testMode, cascade }, logLine) {
   const pageMeta = meta || {};
   const pageLang = language || pageMeta.lang || 'ru';
   const topicTitle = (pageMeta.title || '').toString().trim();
@@ -109,6 +171,7 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const region = (pageMeta.region || '').toString().trim();
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
   const isTest = !!testMode;
+  const cascadeInfo = buildCascadeGuidance(cascade, pageLang);
 
   if (isTest) {
     const preset = buildDiagnosticArticle(pageUrl, anchorText);
@@ -134,10 +197,14 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   };
 
   const prompts = {
-    title: `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
-      `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
+    title:
+      `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
+      `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.` +
+      (cascadeInfo.titleReminder ? `\n${cascadeInfo.titleReminder}` : ''),
     content:
       `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
+      (cascadeInfo.intro ? `${cascadeInfo.intro}\n${cascadeInfo.bullets.join('\n')}\n` : '') +
+      (cascadeInfo.reminder ? `${cascadeInfo.reminder}\n` : '') +
       `Требования:\n` +
       `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
       `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
