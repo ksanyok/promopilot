@@ -2,17 +2,21 @@
 require_once __DIR__ . '/init.php';
 // Fetch current client user short info for navbar avatar/name
 $pp_nav_user = null;
+$pp_nav_balance = null;
 if (is_logged_in()) {
     try {
         $conn = connect_db();
         $uid = (int)($_SESSION['user_id'] ?? 0);
         if ($uid > 0) {
-            $st = $conn->prepare("SELECT username, full_name, avatar, google_picture FROM users WHERE id = ? LIMIT 1");
+            $st = $conn->prepare("SELECT username, full_name, avatar, google_picture, balance FROM users WHERE id = ? LIMIT 1");
             if ($st) {
                 $st->bind_param('i', $uid);
                 $st->execute();
                 $r = $st->get_result();
                 $pp_nav_user = $r->fetch_assoc() ?: null;
+                if ($pp_nav_user && !is_admin()) {
+                    $pp_nav_balance = format_currency((float)($pp_nav_user['balance'] ?? 0));
+                }
                 $st->close();
             }
         }
@@ -54,6 +58,15 @@ if (is_logged_in()) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
+                        <?php endif; ?>
+                        <?php if ($pp_nav_balance !== null): ?>
+                            <li class="nav-item">
+                                <span class="nav-balance-chip" title="<?php echo __('Баланс'); ?>">
+                                    <i class="bi bi-lightning-charge"></i>
+                                    <span class="nav-balance-chip__label"><?php echo __('Баланс'); ?></span>
+                                    <span class="nav-balance-chip__value"><?php echo htmlspecialchars($pp_nav_balance); ?></span>
+                                </span>
+                            </li>
                         <?php endif; ?>
                         <?php 
                             $dispName = '';
