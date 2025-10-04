@@ -3,6 +3,9 @@ require_once __DIR__ . '/init.php';
 // Fetch current client user short info for navbar avatar/name
 $pp_nav_user = null;
 $pp_nav_balance = null;
+$pp_nav_balance_raw = null;
+$pp_nav_balance_locale = null;
+$pp_nav_balance_currency = null;
 if (is_logged_in()) {
     try {
         $conn = connect_db();
@@ -15,13 +18,26 @@ if (is_logged_in()) {
                 $r = $st->get_result();
                 $pp_nav_user = $r->fetch_assoc() ?: null;
                 if ($pp_nav_user && !is_admin()) {
-                    $pp_nav_balance = format_currency((float)($pp_nav_user['balance'] ?? 0));
+                    $pp_nav_balance_raw = (float)($pp_nav_user['balance'] ?? 0);
+                    $pp_nav_balance = format_currency($pp_nav_balance_raw);
                 }
                 $st->close();
             }
         }
         $conn->close();
     } catch (Throwable $e) { /* ignore */ }
+}
+
+if ($pp_nav_balance !== null) {
+    $rawLocale = isset($current_lang) && $current_lang === 'en' ? 'en-US' : 'ru-RU';
+    $pp_nav_balance_locale = $rawLocale;
+    $pp_nav_balance_currency = 'RUB';
+    $symbolCandidate = trim(preg_replace('/[0-9\s.,-]/u', '', (string)$pp_nav_balance));
+    if ($symbolCandidate === '$') { $pp_nav_balance_currency = 'USD'; }
+    elseif ($symbolCandidate === '€') { $pp_nav_balance_currency = 'EUR'; }
+    elseif (strcasecmp($symbolCandidate, '₴') === 0) { $pp_nav_balance_currency = 'UAH'; }
+    elseif (strcasecmp($symbolCandidate, '₸') === 0) { $pp_nav_balance_currency = 'KZT'; }
+    elseif ($symbolCandidate === '₽' || $symbolCandidate === 'р' || $symbolCandidate === 'руб') { $pp_nav_balance_currency = 'RUB'; }
 }
 ?>
 <!DOCTYPE html>
@@ -36,6 +52,9 @@ if (is_logged_in()) {
     <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
     <meta name="csrf-token" content="<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
     <script>window.CSRF_TOKEN = '<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8"); ?>';</script>
+    <?php if (!is_admin() && $pp_nav_balance_raw !== null): ?>
+    <script>window.PP_BALANCE = <?php echo json_encode((float)$pp_nav_balance_raw); ?>;</script>
+    <?php endif; ?>
     <?php $ppBase = function_exists('pp_guess_base_url') ? pp_guess_base_url() : ''; ?>
     <link rel="stylesheet" href="<?php echo htmlspecialchars($ppBase . '/assets/css/admin.css'); ?>">
 </head>
@@ -64,7 +83,13 @@ if (is_logged_in()) {
                                 <a class="nav-balance-chip" href="<?php echo pp_url('client/balance.php'); ?>" title="<?php echo __('Баланс'); ?>">
                                     <i class="bi bi-lightning-charge"></i>
                                     <span class="nav-balance-chip__label"><?php echo __('Баланс'); ?></span>
-                                    <span class="nav-balance-chip__value"><?php echo htmlspecialchars($pp_nav_balance); ?></span>
+                                                                        <span class="nav-balance-chip__value"
+                                                                                    data-balance-target
+                                                                                    data-balance-raw="<?php echo htmlspecialchars(number_format((float)$pp_nav_balance_raw, 2, '.', ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                                                    data-balance-locale="<?php echo htmlspecialchars($pp_nav_balance_locale ?? 'ru-RU', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                                                    data-balance-currency="<?php echo htmlspecialchars($pp_nav_balance_currency ?? 'RUB', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                                                                <?php echo htmlspecialchars($pp_nav_balance); ?>
+                                                                        </span>
                                 </a>
                             </li>
                         <?php endif; ?>

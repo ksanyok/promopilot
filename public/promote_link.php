@@ -115,5 +115,18 @@ $response = [
     'promotion' => $status,
 ];
 
+if (array_key_exists('charged', $result)) {
+    $response['charged'] = (float)$result['charged'];
+}
+if (array_key_exists('discount', $result)) {
+    $response['discount'] = (float)$result['discount'];
+}
+if (array_key_exists('balance_after', $result)) {
+    $response['balance_after'] = (float)$result['balance_after'];
+}
+if (!empty($result['balance_after_formatted'])) {
+    $response['balance_after_formatted'] = (string)$result['balance_after_formatted'];
+}
+
 echo json_encode($response, JSON_UNESCAPED_UNICODE);
 exit;

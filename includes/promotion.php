@@ -165,6 +165,7 @@ if (!function_exists('pp_promotion_start_run')) {
             $balance = (float)$userRow['balance'];
             $discountPercent = max(0.0, min(100.0, (float)($userRow['promotion_discount'] ?? 0)));
             $chargedAmount = max(0.0, round($basePrice * (1 - $discountPercent / 100), 2));
+            $balanceAfter = $balance;
 
             if ($chargedAmount > 0 && ($balance + 1e-6) < $chargedAmount) {
                 $conn->rollback();
@@ -187,6 +188,7 @@ if (!function_exists('pp_promotion_start_run')) {
                     return ['ok' => false, 'error' => 'DB'];
                 }
                 $upd->close();
+                $balanceAfter = max(0.0, round($balance - $chargedAmount, 2));
             }
 
             $stmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent) VALUES (?, ?, ?, \'queued\', \'pending_level1\', ?, ?, ?, ?)');
@@ -245,7 +247,16 @@ if (!function_exists('pp_promotion_start_run')) {
                 'error' => $e->getMessage(),
             ]);
         }
-        return ['ok' => true, 'status' => 'queued', 'run_id' => $runId, 'charged' => $chargedAmount, 'discount' => $discountPercent];
+        $balanceAfterFormatted = function_exists('format_currency') ? format_currency($balanceAfter) : number_format($balanceAfter, 2, '.', '');
+        return [
+            'ok' => true,
+            'status' => 'queued',
+            'run_id' => $runId,
+            'charged' => $chargedAmount,
+            'discount' => $discountPercent,
+            'balance_after' => $balanceAfter,
+            'balance_after_formatted' => $balanceAfterFormatted,
+        ];
     }
 }
 

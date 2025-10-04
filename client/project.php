@@ -9,7 +9,7 @@ $id = (int)($_GET['id'] ?? 0);
 $user_id = $_SESSION['user_id'];
 
 $conn = connect_db();
-$stmt = $conn->prepare("SELECT p.*, u.username FROM projects p JOIN users u ON p.user_id = u.id WHERE p.id = ?");
+$stmt = $conn->prepare("SELECT p.*, u.username, u.promotion_discount, u.balance FROM projects p JOIN users u ON p.user_id = u.id WHERE p.id = ?");
 $stmt->bind_param("i", $id);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -24,6 +24,22 @@ if ($result->num_rows == 0) {
 
 $project = $result->fetch_assoc();
 $stmt->close();
+
+$promotionSettings = function_exists('pp_promotion_settings') ? pp_promotion_settings() : [];
+$promotionBasePrice = max(0.0, (float)($promotionSettings['price_per_link'] ?? 0));
+$userPromotionDiscount = max(0.0, min(100.0, (float)($project['promotion_discount'] ?? 0)));
+$promotionChargeAmount = max(0.0, round($promotionBasePrice * (1 - $userPromotionDiscount / 100), 2));
+$promotionChargeFormatted = format_currency($promotionChargeAmount);
+$promotionBaseFormatted = format_currency($promotionBasePrice);
+$promotionChargeSavings = max(0.0, round($promotionBasePrice - $promotionChargeAmount, 2));
+$promotionChargeSavingsFormatted = format_currency($promotionChargeSavings);
+$promotionChargeAmountAttr = number_format($promotionChargeAmount, 2, '.', '');
+$promotionChargeBaseAttr = number_format($promotionBasePrice, 2, '.', '');
+$promotionChargeSavingsAttr = number_format($promotionChargeSavings, 2, '.', '');
+$promotionDiscountPercentAttr = rtrim(rtrim(number_format($userPromotionDiscount, 4, '.', ''), '0'), '.');
+if ($promotionDiscountPercentAttr === '') { $promotionDiscountPercentAttr = '0'; }
+$currentUserBalance = (float)($project['balance'] ?? 0);
+$currentUserBalanceFormatted = format_currency($currentUserBalance);
 
 // Build taxonomy (regions/topics) from enabled networks for selectors
 $taxonomy = pp_get_network_taxonomy(true);
@@ -1162,7 +1178,17 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                     <span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>
                                                 </button>
                                             <?php else: ?>
-                                                <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="<?php echo htmlspecialchars($url); ?>" data-id="<?php echo (int)$linkId; ?>">
+                                                <button type="button"
+                                                        class="btn btn-sm btn-publish me-1 action-promote"
+                                                        data-url="<?php echo htmlspecialchars($url); ?>"
+                                                        data-id="<?php echo (int)$linkId; ?>"
+                                                        data-charge-amount="<?php echo htmlspecialchars($promotionChargeAmountAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-charge-formatted="<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-charge-base="<?php echo htmlspecialchars($promotionChargeBaseAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-charge-base-formatted="<?php echo htmlspecialchars($promotionBaseFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-charge-savings="<?php echo htmlspecialchars($promotionChargeSavingsAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-charge-savings-formatted="<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                        data-discount-percent="<?php echo htmlspecialchars($promotionDiscountPercentAttr, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                                                     <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
                                                 </button>
                                             <?php endif; ?>
@@ -1287,6 +1313,59 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
     </div>
 </div>
 
+<!-- Promotion Confirmation Modal -->
+<div class="modal fade modal-fixed-center" id="promotionConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запуск продвижения'); ?></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+                    <div>
+                        <p class="mb-2 fw-semibold"><?php echo __('Вы собираетесь запустить продвижение для ссылки:'); ?></p>
+                        <a href="#" target="_blank" rel="noopener" class="text-break" data-promotion-link><?php echo __('Ваша ссылка'); ?></a>
+                    </div>
+                </div>
+                <p class="mb-2 text-muted"><?php echo __('Перед подтверждением обратите внимание:'); ?></p>
+                <ul class="mb-4 ps-3">
+                    <li><?php echo __('Процесс запускается сразу после подтверждения и его невозможно отменить.'); ?></li>
+                    <li><?php echo __('Несмотря на защиту сценариями сервиса, продвижение может влиять на поисковые позиции — ответственность за запуск несёт владелец проекта.'); ?></li>
+                </ul>
+                <div class="promotion-confirm-amount card bg-dark border-secondary-subtle mb-3">
+                    <div class="card-body">
+                        <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-md-between gap-3">
+                            <div>
+                                <div class="text-muted small text-uppercase fw-semibold mb-1"><?php echo __('К списанию'); ?></div>
+                                <div class="fs-4 fw-semibold" data-promotion-charge-amount><?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                            </div>
+                            <div class="text-muted small<?php echo ($userPromotionDiscount > 0) ? '' : ' d-none'; ?>" data-promotion-discount-block>
+                                <span><?php echo __('Включена скидка'); ?>: <span data-promotion-discount-value><?php echo htmlspecialchars(number_format($userPromotionDiscount, ($userPromotionDiscount > 0 && $userPromotionDiscount < 1) ? 2 : 0, ',', '')); ?></span>%</span><br>
+                                <span><?php echo __('Базовая стоимость'); ?>: <span data-promotion-charge-base><?php echo htmlspecialchars($promotionBaseFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></span>
+                            </div>
+                            <div class="text-success small<?php echo ($promotionChargeSavings > 0) ? '' : ' d-none'; ?>" data-promotion-savings-block>
+                                <?php echo __('Экономия'); ?>: <span data-promotion-charge-savings><?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="small text-muted mb-0">
+                    <i class="bi bi-wallet2 me-1"></i><?php echo __('Текущий баланс'); ?>: <span><?php echo htmlspecialchars($currentUserBalanceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span><br>
+                    <i class="bi bi-check-circle me-1"></i><?php echo __('Сумма будет списана немедленно, возврат средств невозможен.'); ?>
+                </div>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Отмена'); ?></button>
+                <button type="button" class="btn btn-gradient" id="promotionConfirmAccept">
+                    <i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Подтверждаю и запускаю'); ?>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // Initialize Bootstrap tooltips
 (function(){
@@ -1309,6 +1388,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (promotionReportModalEl && promotionReportModalEl.parentElement !== document.body) { document.body.appendChild(promotionReportModalEl); }
     const addLinkModalEl = document.getElementById('addLinkModal');
     if (addLinkModalEl && addLinkModalEl.parentElement !== document.body) { document.body.appendChild(addLinkModalEl); }
+    const promotionConfirmModalEl = document.getElementById('promotionConfirmModal');
+    if (promotionConfirmModalEl && promotionConfirmModalEl.parentElement !== document.body) { document.body.appendChild(promotionConfirmModalEl); }
 
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
@@ -1333,6 +1414,63 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
     const PROJECT_HOST = '<?php echo htmlspecialchars($pp_normalize_host($project['domain_host'] ?? '')); ?>';
+    const PROMOTION_CHARGE_AMOUNT = <?php echo json_encode($promotionChargeAmount); ?>;
+    const PROMOTION_CHARGE_AMOUNT_FORMATTED = '<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
+    const PROMOTION_CHARGE_BASE = <?php echo json_encode($promotionBasePrice); ?>;
+    const PROMOTION_CHARGE_BASE_FORMATTED = '<?php echo htmlspecialchars($promotionBaseFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
+    const PROMOTION_DISCOUNT_PERCENT = <?php echo json_encode($userPromotionDiscount); ?>;
+    const PROMOTION_CHARGE_SAVINGS = <?php echo json_encode($promotionChargeSavings); ?>;
+    const PROMOTION_CHARGE_SAVINGS_FORMATTED = '<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
+
+    const navBalanceValueEl = document.querySelector('[data-balance-target]');
+    const navBalanceLocale = navBalanceValueEl?.dataset.balanceLocale || document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
+    const navBalanceCurrency = navBalanceValueEl?.dataset.balanceCurrency || 'RUB';
+    let CURRENT_USER_BALANCE_RAW = (typeof window.PP_BALANCE === 'number' && !Number.isNaN(window.PP_BALANCE))
+        ? window.PP_BALANCE
+        : (navBalanceValueEl ? parseFloat(navBalanceValueEl.dataset.balanceRaw || 'NaN') : NaN);
+
+    function updateClientBalance(rawAmount, formattedText) {
+        if (!navBalanceValueEl) { return; }
+        if (typeof rawAmount === 'number' && !Number.isNaN(rawAmount)) {
+            CURRENT_USER_BALANCE_RAW = rawAmount;
+            window.PP_BALANCE = rawAmount;
+            navBalanceValueEl.dataset.balanceRaw = rawAmount.toFixed(2);
+        }
+        if ((typeof formattedText !== 'string' || formattedText.length === 0) && typeof rawAmount === 'number' && !Number.isNaN(rawAmount)) {
+            try {
+                formattedText = new Intl.NumberFormat(navBalanceLocale, { style: 'currency', currency: navBalanceCurrency }).format(rawAmount);
+            } catch (e) {
+                formattedText = rawAmount.toFixed(2);
+            }
+        }
+        if (typeof formattedText === 'string' && formattedText.length > 0) {
+            navBalanceValueEl.textContent = formattedText;
+        }
+    }
+
+    let promotionConfirmContext = null;
+    const promotionConfirmAmountEl = document.querySelector('[data-promotion-charge-amount]');
+    const promotionConfirmUrlEl = document.querySelector('[data-promotion-link]');
+    const promotionConfirmDiscountBlock = document.querySelector('[data-promotion-discount-block]');
+    const promotionConfirmDiscountValue = document.querySelector('[data-promotion-discount-value]');
+    const promotionConfirmBaseEl = document.querySelector('[data-promotion-charge-base]');
+    const promotionConfirmSavingsBlock = document.querySelector('[data-promotion-savings-block]');
+    const promotionConfirmSavingsValue = document.querySelector('[data-promotion-charge-savings]');
+    const promotionConfirmAcceptBtn = document.getElementById('promotionConfirmAccept');
+
+    const getPromotionConfirmModalInstance = () => {
+        if (!promotionConfirmModalEl || !window.bootstrap) { return null; }
+        return bootstrap.Modal.getOrCreateInstance(promotionConfirmModalEl);
+    };
+
+    if (promotionConfirmModalEl && window.bootstrap) {
+        promotionConfirmModalEl.addEventListener('hidden.bs.modal', () => {
+            promotionConfirmContext = null;
+            if (promotionConfirmAcceptBtn) {
+                promotionConfirmAcceptBtn.disabled = false;
+            }
+        });
+    }
     let CURRENT_PROJECT_HOST = PROJECT_HOST;
 
     // New: references for links table (may not exist initially)
@@ -1986,7 +2124,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 + '<span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>'
                 + '</button>';
         } else {
-            html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="' + escapeAttribute(url) + '" data-id="' + escapeAttribute(linkId) + '"><i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
+            html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote"'
+                + ' data-url="' + escapeAttribute(url) + '"'
+                + ' data-id="' + escapeAttribute(linkId) + '"'
+                + ' data-charge-amount="' + escapeAttribute(String(PROMOTION_CHARGE_AMOUNT)) + '"'
+                + ' data-charge-formatted="' + escapeAttribute(PROMOTION_CHARGE_AMOUNT_FORMATTED) + '"'
+                + ' data-charge-base="' + escapeAttribute(String(PROMOTION_CHARGE_BASE)) + '"'
+                + ' data-charge-base-formatted="' + escapeAttribute(PROMOTION_CHARGE_BASE_FORMATTED) + '"'
+                + ' data-charge-savings="' + escapeAttribute(String(PROMOTION_CHARGE_SAVINGS)) + '"'
+                + ' data-charge-savings-formatted="' + escapeAttribute(PROMOTION_CHARGE_SAVINGS_FORMATTED) + '"'
+                + ' data-discount-percent="' + escapeAttribute(String(PROMOTION_DISCOUNT_PERCENT)) + '">'
+                + '<i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span></button>';
         }
 
         if (promotionRunId && promotionActive) {
@@ -2226,6 +2374,24 @@ document.addEventListener('DOMContentLoaded', function() {
             if (tr) {
                 updatePromotionBlock(tr, data.promotion || data);
                 refreshActionsCell(tr);
+            }
+            const chargedAmount = Number(
+                data.charged ?? data.charge ?? data.promotion?.charge?.amount ?? 0
+            ) || 0;
+            if (typeof data.balance_after === 'number' || typeof data.balance_after_formatted === 'string') {
+                updateClientBalance(
+                    typeof data.balance_after === 'number' ? data.balance_after : NaN,
+                    typeof data.balance_after_formatted === 'string' ? data.balance_after_formatted : ''
+                );
+            } else if (data.balance && typeof data.balance === 'object') {
+                updateClientBalance(
+                    typeof data.balance.amount === 'number' ? data.balance.amount : parseFloat(data.balance.amount || NaN),
+                    data.balance.formatted || ''
+                );
+            } else if (typeof data.balance === 'number') {
+                updateClientBalance(data.balance, '');
+            } else if (!Number.isNaN(chargedAmount) && chargedAmount > 0 && typeof CURRENT_USER_BALANCE_RAW === 'number' && !Number.isNaN(CURRENT_USER_BALANCE_RAW)) {
+                updateClientBalance(Math.max(0, CURRENT_USER_BALANCE_RAW - chargedAmount), '');
             }
             await pollPromotionStatusesOnce();
         } catch (e) {
@@ -2998,7 +3164,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     </td>
                     <td class="text-end">
                         <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                        <button type="button" class="btn btn-sm btn-publish me-1 action-promote" data-url="${escapeHtml(url)}" data-id="${String(newId)}">
+            <button type="button" class="btn btn-sm btn-publish me-1 action-promote"
+                data-url="${escapeHtml(url)}"
+                data-id="${String(newId)}"
+                data-charge-amount="${escapeHtml(String(PROMOTION_CHARGE_AMOUNT))}"
+                data-charge-formatted="${escapeHtml(PROMOTION_CHARGE_AMOUNT_FORMATTED)}"
+                data-charge-base="${escapeHtml(String(PROMOTION_CHARGE_BASE))}"
+                data-charge-base-formatted="${escapeHtml(PROMOTION_CHARGE_BASE_FORMATTED)}"
+                data-charge-savings="${escapeHtml(String(PROMOTION_CHARGE_SAVINGS))}"
+                data-charge-savings-formatted="${escapeHtml(PROMOTION_CHARGE_SAVINGS_FORMATTED)}"
+                data-discount-percent="${escapeHtml(String(PROMOTION_DISCOUNT_PERCENT))}">
                             <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
                         </button>
                         <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress d-none" data-run-id="0" data-url="${escapeHtml(url)}">
@@ -3039,13 +3214,82 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    function openPromotionConfirm(btn, url) {
+        const modalInstance = getPromotionConfirmModalInstance();
+        if (!promotionConfirmModalEl || !modalInstance) {
+            startPromotion(btn, url);
+            return;
+        }
+        const chargeFormatted = btn?.getAttribute('data-charge-formatted') || PROMOTION_CHARGE_AMOUNT_FORMATTED;
+        const chargeBaseFormatted = btn?.getAttribute('data-charge-base-formatted') || PROMOTION_CHARGE_BASE_FORMATTED;
+    const chargeSavingsFormatted = btn?.getAttribute('data-charge-savings-formatted') || PROMOTION_CHARGE_SAVINGS_FORMATTED;
+    const chargeSavingsRaw = Number((btn?.getAttribute('data-charge-savings') ?? PROMOTION_CHARGE_SAVINGS) || 0);
+        const discountPercentAttribute = btn?.getAttribute('data-discount-percent');
+        const discountPercent = Number(discountPercentAttribute !== null ? discountPercentAttribute : (PROMOTION_DISCOUNT_PERCENT || 0));
+        promotionConfirmContext = { btn, url };
+        if (promotionConfirmAmountEl) {
+            promotionConfirmAmountEl.textContent = chargeFormatted;
+        }
+        if (promotionConfirmBaseEl) {
+            promotionConfirmBaseEl.textContent = chargeBaseFormatted;
+        }
+        if (promotionConfirmUrlEl) {
+            promotionConfirmUrlEl.textContent = url;
+            promotionConfirmUrlEl.setAttribute('href', url);
+        }
+        if (promotionConfirmDiscountBlock) {
+            if (discountPercent > 0.0001) {
+                promotionConfirmDiscountBlock.classList.remove('d-none');
+                if (promotionConfirmDiscountValue) {
+                    const percentText = discountPercent % 1 === 0 ? discountPercent.toFixed(0) : discountPercent.toFixed(2);
+                    promotionConfirmDiscountValue.textContent = percentText.replace('.', ',');
+                }
+            } else {
+                promotionConfirmDiscountBlock.classList.add('d-none');
+            }
+        }
+        if (promotionConfirmSavingsBlock) {
+            if (chargeSavingsRaw > 0.0001) {
+                promotionConfirmSavingsBlock.classList.remove('d-none');
+                if (promotionConfirmSavingsValue) {
+                    promotionConfirmSavingsValue.textContent = chargeSavingsFormatted;
+                }
+            } else {
+                promotionConfirmSavingsBlock.classList.add('d-none');
+            }
+        }
+        promotionConfirmAcceptBtn?.classList.remove('disabled');
+        if (promotionConfirmAcceptBtn) {
+            promotionConfirmAcceptBtn.disabled = false;
+        }
+        modalInstance.show();
+    }
+
+    if (promotionConfirmAcceptBtn) {
+        promotionConfirmAcceptBtn.addEventListener('click', async () => {
+            if (!promotionConfirmContext) {
+                getPromotionConfirmModalInstance()?.hide();
+                return;
+            }
+            const { btn, url } = promotionConfirmContext;
+            promotionConfirmAcceptBtn.disabled = true;
+            getPromotionConfirmModalInstance()?.hide();
+            promotionConfirmContext = null;
+            try {
+                await startPromotion(btn, url);
+            } finally {
+                promotionConfirmAcceptBtn.disabled = false;
+            }
+        });
+    }
+
     // Extend binder to include promote/cancel/report/analyze/wish/edit/remove
     function bindDynamicRowActions() {
         document.querySelectorAll('.action-promote').forEach(btn => {
             if (btn.dataset.bound==='1') return; btn.dataset.bound='1';
             btn.addEventListener('click', () => {
                 const url = btn.getAttribute('data-url') || (btn.closest('tr')?.querySelector('.url-cell .view-url')?.getAttribute('href')) || '';
-                startPromotion(btn, url);
+                openPromotionConfirm(btn, url);
             });
         });
         document.querySelectorAll('.action-promotion-progress').forEach(btn => {

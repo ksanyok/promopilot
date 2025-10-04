@@ -21,6 +21,7 @@ $creationTips = [
 ];
 $creationTipsAttr = htmlspecialchars(implode('|', $creationTips), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $creationTipInitial = htmlspecialchars($creationTips[0] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$project_id = 0;
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {
@@ -48,7 +49,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt->bind_param("issss", $user_id, $name, $description, $region, $topic);
             if ($stmt->execute()) {
                 $project_id = $stmt->insert_id;
-                $message = __('Проект добавлен!') . ' <a href="' . pp_url('client/client.php') . '">' . __('Вернуться к дашборду') . '</a>';
                 // Добавим первую ссылку и глобальные пожелания в отдельную таблицу project_links
                 $host = '';
                 if ($first_url) {
@@ -103,6 +103,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
     }
+}
+
+if (!empty($project_id)) {
+    $_SESSION['pp_client_flash'] = [
+        'type' => 'success',
+        'text' => sprintf(__('Проект «%s» создан. Переходим к настройке ссылок.'), $name)
+    ];
+    redirect('client/project.php?id=' . (int)$project_id);
+    exit;
 }
 
 $pp_container = false;
