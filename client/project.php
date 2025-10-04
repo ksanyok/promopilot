@@ -492,8 +492,8 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                         <div class="project-hero__main">
                             <div class="project-hero__heading d-flex align-items-start justify-content-between gap-3 flex-wrap">
                                 <div>
-                                    <div class="title d-flex align-items-center gap-2">
-                                        <span><?php echo htmlspecialchars($project['name']); ?></span>
+                                    <div class="title d-flex align-items-center gap-2 flex-wrap">
+                                        <span class="project-hero__title-text" title="<?php echo htmlspecialchars($project['name']); ?>"><?php echo htmlspecialchars($project['name']); ?></span>
                                         <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#projectInfoModal" title="<?php echo __('Редактировать основную информацию'); ?>">
                                             <i class="bi bi-pencil-square"></i>
                                         </button>
@@ -582,6 +582,14 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                     <?php endif; ?>
                                 </div>
                             <?php endif; ?>
+                            <div class="project-hero__cta">
+                                <button type="button" class="btn btn-primary project-hero__cta-btn" data-bs-toggle="modal" data-bs-target="#addLinkModal">
+                                    <i class="bi bi-plus-lg"></i><span><?php echo __('Добавить ссылку'); ?></span>
+                                </button>
+                                <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-light project-hero__cta-btn">
+                                    <i class="bi bi-clock-history"></i><span><?php echo __('История'); ?></span>
+                                </a>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -707,47 +715,65 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                 <input type="hidden" name="update_project" value="1" />
                 <!-- Скрытое глобальное пожелание для синхронизации -->
                 <input type="hidden" id="global_wishes" name="wishes" value="<?php echo htmlspecialchars($project['wishes'] ?? ''); ?>" />
-                <!-- Добавление ссылки -->
-                <div class="card section link-adder-card mb-3">
-                    <div class="section-header">
-                        <div class="label"><i class="bi bi-link-45deg"></i><span><?php echo __('Добавить ссылку'); ?></span></div>
-                        <div class="toolbar">
-                            <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-primary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-2 align-items-stretch mb-3">
-                            <div class="col-lg-5"><input type="url" name="new_link" class="form-control" placeholder="<?php echo !empty($project['domain_host']) ? htmlspecialchars('https://' . $project['domain_host'] . '/...') : __('URL'); ?> *"></div>
-                            <div class="col-lg-3"><input type="text" name="new_anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>"></div>
-                            <div class="col-lg-2">
-                                <select name="new_language" class="form-select">
-                                    <?php $opts = array_merge(['auto'], $pp_lang_codes); $def = 'auto'; foreach ($opts as $l): ?>
-                                        <option value="<?php echo htmlspecialchars($l); ?>" <?php echo ($def===$l?'selected':''); ?>><?php echo strtoupper($l); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
+                <!-- Модалка добавления ссылки -->
+                <div class="modal fade" id="addLinkModal" tabindex="-1" aria-labelledby="addLinkModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="addLinkModalLabel"><i class="bi bi-link-45deg me-2"></i><?php echo __('Добавить ссылку'); ?></h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
                             </div>
-                            <div class="col-lg-2 d-grid">
-                                <button type="button" id="add-link" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
+                            <div class="modal-body">
+                                <div class="row g-3 align-items-stretch mb-3">
+                                    <div class="col-12 col-lg-6">
+                                        <label class="form-label visually-hidden" for="new_link_input"><?php echo __('URL'); ?></label>
+                                        <input type="url" name="new_link" id="new_link_input" class="form-control" placeholder="<?php echo !empty($project['domain_host']) ? htmlspecialchars('https://' . $project['domain_host'] . '/...') : __('URL'); ?> *">
+                                    </div>
+                                    <div class="col-12 col-lg-4">
+                                        <label class="form-label visually-hidden" for="new_anchor_input"><?php echo __('Анкор'); ?></label>
+                                        <input type="text" name="new_anchor" id="new_anchor_input" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                                    </div>
+                                    <div class="col-12 col-lg-2">
+                                        <label class="form-label visually-hidden" for="new_language_select"><?php echo __('Язык'); ?></label>
+                                        <select name="new_language" id="new_language_select" class="form-select">
+                                            <?php $opts = array_merge(['auto'], $pp_lang_codes); $def = 'auto'; foreach ($opts as $l): ?>
+                                                <option value="<?php echo htmlspecialchars($l); ?>" <?php echo ($def===$l?'selected':''); ?>><?php echo strtoupper($l); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                </div>
+                                <?php if (!empty($project['domain_host'])): ?>
+                                <div class="small text-muted mb-3" id="domain-hint"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
+                                <?php else: ?>
+                                <div class="small text-muted mb-3" id="domain-hint" style="display:none"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"></code></div>
+                                <?php endif; ?>
+                                <div class="mb-3">
+                                    <label class="form-label mb-1" for="new_wish"><?php echo __('Пожелание для этой ссылки'); ?></label>
+                                    <textarea name="new_wish" id="new_wish" rows="3" class="form-control" placeholder="<?php echo __('Если нужно индивидуальное ТЗ (иначе можно использовать глобальное)'); ?>"></textarea>
+                                    <div class="form-check mt-2">
+                                        <input class="form-check-input" type="checkbox" id="use_global_wish">
+                                        <label class="form-check-label" for="use_global_wish"><?php echo __('Использовать глобальное пожелание проекта'); ?></label>
+                                    </div>
+                                </div>
+                                <div id="added-hidden"></div>
+                            </div>
+                            <div class="modal-footer justify-content-between flex-wrap gap-2">
+                                <div class="d-flex align-items-center gap-2 small text-muted">
+                                    <i class="bi bi-clock-history"></i>
+                                    <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="text-decoration-none fw-semibold"><?php echo __('История'); ?></a>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+                                    <button type="button" id="add-link" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
+                                </div>
                             </div>
                         </div>
-                        <?php if (!empty($project['domain_host'])): ?>
-                        <div class="small text-muted mb-3" id="domain-hint"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
-                        <?php else: ?>
-                        <div class="small text-muted mb-3" id="domain-hint" style="display:none"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"></code></div>
-                        <?php endif; ?>
-                        <div class="mb-3">
-                            <label class="form-label mb-1"><?php echo __('Пожелание для этой ссылки'); ?></label>
-                            <textarea name="new_wish" id="new_wish" rows="3" class="form-control" placeholder="<?php echo __('Если нужно индивидуальное ТЗ (иначе можно использовать глобальное)'); ?>"></textarea>
-                            <div class="form-check mt-2">
-                                <input class="form-check-input" type="checkbox" id="use_global_wish">
-                                <label class="form-check-label" for="use_global_wish"><?php echo __('Использовать глобальное пожелание проекта'); ?></label>
-                            </div>
-                        </div>
-                        <div id="added-hidden"></div>
-                        <!-- Кнопка сохранения больше не нужна: автосохранение при добавлении -->
                     </div>
                 </div>
         <!-- Таблица ссылок -->
+                <div class="card section mb-3" id="links-card">
+                    <div class="section-header">
+                        <div class="label"><i class="bi bi-diagram-3"></i><span><?php echo __('Ссылки проекта'); ?></span></div>
                         <div class="toolbar status-toolbar d-flex flex-wrap align-items-center gap-3">
                             <div class="status-legend small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Статусы продвижения'); ?>">
                                 <span><span class="legend-dot legend-dot-idle"></span><?php echo __('Продвижение не запускалось'); ?></span>
@@ -1101,6 +1127,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const useGlobal = form.querySelector('#use_global_wish');
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
+
+    const addLinkModalEl = document.getElementById('addLinkModal');
+    if (addLinkModalEl && window.bootstrap) {
+        addLinkModalEl.addEventListener('shown.bs.modal', () => {
+            if (newLinkInput) {
+                newLinkInput.focus();
+                newLinkInput.select();
+            }
+        });
+    }
 
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
     const PROJECT_HOST = '<?php echo htmlspecialchars($pp_normalize_host($project['domain_host'] ?? '')); ?>';
@@ -2786,6 +2822,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 bindDynamicRowActions();
                 initTooltips(tr);
                 recalcPromotionStats();
+            }
+
+            if (window.bootstrap) {
+                const addLinkModalEl = document.getElementById('addLinkModal');
+                if (addLinkModalEl && addLinkModalEl.classList.contains('show')) {
+                    const modalInstance = bootstrap.Modal.getInstance(addLinkModalEl);
+                    if (modalInstance) {
+                        modalInstance.hide();
+                    }
+                }
             }
 
             // Очистим поля

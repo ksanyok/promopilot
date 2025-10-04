@@ -873,6 +873,57 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   box-shadow: 0 18px 32px rgba(9,14,28,.28);
   letter-spacing: .4px;
 }
+.project-hero__title-text {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: clamp(180px, 45vw, 640px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+.project-hero__cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin-top: 1rem;
+}
+.project-hero__cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .65rem 1.15rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  box-shadow: 0 18px 30px rgba(12, 16, 30, .22);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.project-hero__cta-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 24px 40px rgba(12, 16, 30, .26);
+}
+.project-hero__cta .btn-outline-light {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.32);
+  color: #f8f9fa;
+}
+.project-hero__cta .btn-outline-light:hover {
+  background: rgba(255,255,255,.18);
+  color: #fff;
+}
+@media (max-width: 767.98px) {
+  .project-hero__title-text {
+    max-width: 100%;
+  }
+  .project-hero__cta-btn {
+    flex: 1 1 100%;
+    justify-content: center;
+    box-shadow: 0 14px 28px rgba(12, 16, 30, .16);
+  }
+}
 .meta-list { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 12px 0 0; }
 .meta-item { display:flex; align-items:center; gap:8px; color: var(--muted); font-weight:600; }
 .meta-item .bi { color: var(--primary); }
@@ -1642,6 +1693,15 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   background: color-mix(in srgb, #fff 92%, var(--surface) 8%);
   border-color: color-mix(in srgb, var(--border) 60%, transparent 40%);
   box-shadow: 0 18px 32px rgba(15,20,32,.12);
+}
+:root[data-theme="light"] .project-hero__cta .btn-outline-light {
+  background: color-mix(in srgb, #fff 90%, var(--surface) 10%);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent 40%);
+  color: var(--text);
+}
+:root[data-theme="light"] .project-hero__cta .btn-outline-light:hover {
+  background: color-mix(in srgb, var(--surface-2) 10%, #fff 90%);
+  color: var(--primary);
 }
 
 :root[data-theme="light"] .promotion-progress-visual {

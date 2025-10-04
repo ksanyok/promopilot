@@ -143,6 +143,7 @@ $lang = [
     'Редактирование доступно до запуска продвижения.' => 'Editing is available until the promotion is started.',
     'Удаление доступно до запуска продвижения.' => 'Deletion is available until the promotion is started.',
     'Ссылок нет.' => 'No links.',
+    'Ссылки проекта' => 'Project links',
     'Ссылок' => 'Links',
     'Настройки проекта' => 'Project settings',
     'Настройки продвижения' => 'Promotion settings',
