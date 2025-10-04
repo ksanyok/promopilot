@@ -60,7 +60,25 @@ if (empty($project['primary_url'])) {
     $project['primary_url'] = $links[0]['url'] ?? null;
 }
 $projectPrimaryUrl = pp_project_primary_url($project, $project['primary_url'] ?? null);
-$projectPreviewUrl = pp_project_preview_url($project, $projectPrimaryUrl);
+$projectPreviewDescriptor = pp_project_preview_descriptor($project);
+$projectPreviewUrl = pp_project_preview_url($project, $projectPrimaryUrl, ['cache_bust' => true]);
+$projectPreviewExists = !empty($projectPreviewDescriptor['exists']);
+$projectPreviewUpdatedAt = $projectPreviewExists ? (int)($projectPreviewDescriptor['modified_at'] ?? 0) : 0;
+$projectPreviewUpdatedHuman = $projectPreviewUpdatedAt ? date('d.m.Y H:i', $projectPreviewUpdatedAt) : null;
+$projectPreviewStale = pp_project_preview_is_stale($projectPreviewDescriptor, 259200);
+$projectPreviewShouldAuto = !$projectPreviewExists || $projectPreviewStale;
+$projectPreviewStatusKey = 'pending';
+if (!$projectPreviewExists) {
+    $projectPreviewStatusKey = 'pending';
+    $projectPreviewStatusText = __('Скрин еще не готов');
+} elseif ($projectPreviewStale) {
+    $projectPreviewStatusKey = 'warning';
+    $projectPreviewStatusText = $projectPreviewUpdatedHuman ? sprintf(__('Скрин обновлен давно: %s'), $projectPreviewUpdatedHuman) : __('Скрин обновлен давно');
+} else {
+    $projectPreviewStatusKey = 'ok';
+    $projectPreviewStatusText = $projectPreviewUpdatedHuman ? sprintf(__('Скрин обновлен %s'), $projectPreviewUpdatedHuman) : __('Скрин обновлен');
+}
+$projectPreviewStatusIcon = $projectPreviewStatusKey === 'ok' ? 'bi-check-circle' : ($projectPreviewStatusKey === 'warning' ? 'bi-exclamation-triangle' : 'bi-camera');
 $projectPrimaryHost = trim((string)($project['domain_host'] ?? ''));
 if ($projectPrimaryHost === '' && $projectPrimaryUrl) {
     $parsedHost = parse_url($projectPrimaryUrl, PHP_URL_HOST);
@@ -516,22 +534,49 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <div class="mt-2 small text-muted"><i class="bi bi-stars me-1"></i><span class="text-truncate d-inline-block" style="max-width:100%" title="<?php echo htmlspecialchars($project['wishes']); ?>"><?php echo htmlspecialchars(mb_substr($project['wishes'],0,160)); ?><?php echo mb_strlen($project['wishes'])>160?'…':''; ?></span></div>
                             <?php endif; ?>
                         </div>
-                        <div class="project-hero__preview">
+                    <div class="project-hero__preview" data-project-preview
+                             data-project-id="<?php echo (int)$project['id']; ?>"
+                             data-endpoint="<?php echo htmlspecialchars(pp_url('public/project_preview.php')); ?>"
+                             data-csrf="<?php echo htmlspecialchars(get_csrf_token()); ?>"
+                             data-auto-refresh="<?php echo $projectPreviewShouldAuto ? '1' : '0'; ?>"
+                             data-preview-updated-at="<?php echo $projectPreviewUpdatedAt; ?>"
+                        data-preview-updated-human="<?php echo htmlspecialchars($projectPreviewUpdatedHuman ?? ''); ?>"
+                        data-has-preview="<?php echo $projectPreviewExists ? '1' : '0'; ?>"
+                             data-preview-alt="<?php echo htmlspecialchars($project['name']); ?>"
+                        data-text-success="<?php echo htmlspecialchars(__('Скрин обновлен %s')); ?>"
+                        data-text-warning="<?php echo htmlspecialchars(__('Скрин обновлен давно: %s')); ?>"
+                        data-text-pending="<?php echo htmlspecialchars(__('Скрин еще не готов')); ?>"
+                        data-text-error="<?php echo htmlspecialchars(__('Не удалось обновить скрин')); ?>"
+                        data-text-processing="<?php echo htmlspecialchars(__('Обновляем превью...')); ?>">
                             <div class="project-hero__preview-frame">
                                 <?php if (!empty($projectPreviewUrl)): ?>
-                                    <img src="<?php echo htmlspecialchars($projectPreviewUrl); ?>" alt="<?php echo htmlspecialchars($project['name']); ?>" class="project-hero__screenshot" loading="lazy" decoding="async">
+                                    <img src="<?php echo htmlspecialchars($projectPreviewUrl); ?>" alt="<?php echo htmlspecialchars($project['name']); ?>" class="project-hero__screenshot" loading="lazy" decoding="async" data-preview-image>
                                 <?php else: ?>
-                                    <div class="project-hero__screenshot project-hero__screenshot--placeholder"><span><?php echo htmlspecialchars($projectInitial); ?></span></div>
+                                    <div class="project-hero__screenshot project-hero__screenshot--placeholder" data-preview-placeholder><span><?php echo htmlspecialchars($projectInitial); ?></span></div>
                                 <?php endif; ?>
                                 <span class="project-hero__preview-glow"></span>
                             </div>
-                            <?php if (!empty($projectPrimaryUrl)): ?>
-                                <a href="<?php echo htmlspecialchars($projectPrimaryUrl); ?>" class="btn btn-sm btn-gradient project-hero__visit" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Перейти на сайт'); ?></a>
-                            <?php endif; ?>
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <button type="button" class="project-hero__refresh btn btn-sm" data-action="refresh-preview">
+                                    <span class="label-default"><i class="bi bi-arrow-repeat"></i><?php echo __('Обновить превью'); ?></span>
+                                    <span class="label-loading">
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                        <?php echo __('Обновление...'); ?>
+                                    </span>
+                                </button>
+                                <div class="project-hero__preview-status small" data-preview-status data-status="<?php echo htmlspecialchars($projectPreviewStatusKey); ?>">
+                                    <i class="bi <?php echo htmlspecialchars($projectPreviewStatusIcon); ?>"></i>
+                                    <span data-preview-status-text><?php echo htmlspecialchars($projectPreviewStatusText); ?></span>
+                                </div>
+                            </div>
                             <?php if ($projectPrimaryHost !== ''): ?>
                                 <div class="project-hero__domain small text-muted">
                                     <?php if (!empty($projectFaviconUrl)): ?><img src="<?php echo htmlspecialchars($projectFaviconUrl); ?>" alt="favicon" loading="lazy"><?php endif; ?>
-                                    <span><?php echo htmlspecialchars($projectPrimaryHost); ?></span>
+                                    <?php if (!empty($projectPrimaryUrl)): ?>
+                                        <a href="<?php echo htmlspecialchars($projectPrimaryUrl); ?>" target="_blank" rel="noopener" class="text-decoration-none text-reset fw-semibold"><?php echo htmlspecialchars($projectPrimaryHost); ?></a>
+                                    <?php else: ?>
+                                        <span><?php echo htmlspecialchars($projectPrimaryHost); ?></span>
+                                    <?php endif; ?>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -1061,6 +1106,171 @@ document.addEventListener('DOMContentLoaded', function() {
     // New: references for links table (may not exist initially)
     let linksTable = document.querySelector('.table-links');
     let linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
+
+    // Project preview automation
+    const previewWrapper = document.querySelector('[data-project-preview]');
+    if (previewWrapper) {
+        const previewEndpoint = previewWrapper.dataset.endpoint || '';
+        const previewCsrf = previewWrapper.dataset.csrf || '';
+        const previewAuto = previewWrapper.dataset.autoRefresh === '1';
+        let previewImage = previewWrapper.querySelector('[data-preview-image]');
+        const previewPlaceholder = previewWrapper.querySelector('[data-preview-placeholder]');
+        const previewButton = previewWrapper.querySelector('[data-action="refresh-preview"]');
+        const previewStatus = previewWrapper.querySelector('[data-preview-status]');
+        const previewStatusText = previewStatus ? previewStatus.querySelector('[data-preview-status-text]') : null;
+        const previewStatusIcon = previewStatus ? previewStatus.querySelector('i') : null;
+        let previewBusy = false;
+
+        const PREVIEW_LOCALE = document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
+
+        const STATUS_ICONS = {
+            ok: 'bi-check-circle',
+            warning: 'bi-exclamation-triangle',
+            pending: 'bi-camera',
+            error: 'bi-exclamation-triangle',
+            processing: 'bi-hourglass-split'
+        };
+
+        const TEXT_TEMPLATES = {
+            success: previewWrapper.dataset.textSuccess || '',
+            warning: previewWrapper.dataset.textWarning || '',
+            pending: previewWrapper.dataset.textPending || '',
+            error: previewWrapper.dataset.textError || '',
+            processing: previewWrapper.dataset.textProcessing || ''
+        };
+
+        const applyTemplate = (template, value) => {
+            if (!template) return value || '';
+            if (template.includes('%s')) {
+                return template.replace('%s', value || '');
+            }
+            return template;
+        };
+
+        const formatHuman = (unixSeconds) => {
+            const ts = Number(unixSeconds || 0);
+            if (!ts) return '';
+            try {
+                const dt = new Date(ts * 1000);
+                return new Intl.DateTimeFormat(PREVIEW_LOCALE, {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                }).format(dt);
+            } catch (_) {
+                return '';
+            }
+        };
+
+        const updateStatus = (statusKey, options = {}) => {
+            if (!previewStatus) return;
+            const key = statusKey || 'pending';
+            const iconClass = STATUS_ICONS[key] || STATUS_ICONS.pending;
+            if (previewStatusIcon) {
+                previewStatusIcon.className = 'bi ' + iconClass;
+            }
+            const text = options.text || TEXT_TEMPLATES.pending;
+            if (previewStatusText) {
+                previewStatusText.textContent = text;
+            }
+            previewStatus.dataset.status = key;
+        };
+
+        const togglePreviewLoading = (state) => {
+            if (!previewButton) return;
+            previewButton.classList.toggle('is-loading', !!state);
+            previewButton.disabled = !!state;
+        };
+
+        const handleSuccess = (data) => {
+            if (data.preview_url) {
+                if (previewImage) {
+                    previewImage.src = data.preview_url;
+                } else {
+                    const img = document.createElement('img');
+                    img.src = data.preview_url;
+                    img.alt = previewWrapper.dataset.previewAlt || '';
+                    img.loading = 'lazy';
+                    img.decoding = 'async';
+                    img.className = 'project-hero__screenshot';
+                    img.setAttribute('data-preview-image', '1');
+                    const frame = previewWrapper.querySelector('.project-hero__preview-frame');
+                    if (frame) {
+                        if (previewPlaceholder) {
+                            previewPlaceholder.replaceWith(img);
+                        } else {
+                            frame.prepend(img);
+                        }
+                    }
+                    previewImage = img;
+                }
+            }
+
+            previewWrapper.dataset.hasPreview = '1';
+            if (typeof data.modified_at !== 'undefined') {
+                previewWrapper.dataset.previewUpdatedAt = String(data.modified_at || '');
+            }
+            if (typeof data.modified_human !== 'undefined') {
+                previewWrapper.dataset.previewUpdatedHuman = String(data.modified_human || '');
+            }
+            previewWrapper.dataset.autoRefresh = '0';
+
+            const human = (data.modified_human || '').toString() || formatHuman(data.modified_at) || previewWrapper.dataset.previewUpdatedHuman || '';
+            const text = human ? applyTemplate(TEXT_TEMPLATES.success, human) : TEXT_TEMPLATES.success || TEXT_TEMPLATES.pending;
+            updateStatus('ok', { text });
+        };
+
+        const handleError = (errorMessage) => {
+            const human = previewWrapper.dataset.previewUpdatedHuman || '';
+            let text = TEXT_TEMPLATES.error || errorMessage || 'Error';
+            if (human && TEXT_TEMPLATES.warning) {
+                text = applyTemplate(TEXT_TEMPLATES.warning, human);
+            }
+            updateStatus('error', { text });
+        };
+
+        const refreshPreview = async (force) => {
+            if (!previewEndpoint || previewBusy) return;
+            previewBusy = true;
+            togglePreviewLoading(true);
+            const processingText = TEXT_TEMPLATES.processing || TEXT_TEMPLATES.pending;
+            updateStatus('processing', { text: processingText });
+
+            try {
+                const formData = new FormData();
+                formData.append('project_id', String(previewWrapper.dataset.projectId || PROJECT_ID));
+                if (previewCsrf) {
+                    formData.append('csrf_token', previewCsrf);
+                }
+                if (force) {
+                    formData.append('force', '1');
+                }
+                const response = await fetch(previewEndpoint, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok || !payload || !payload.ok) {
+                    const message = payload && payload.error ? payload.error : 'REQUEST_FAILED';
+                    handleError(message);
+                    return;
+                }
+                handleSuccess(payload);
+            } catch (err) {
+                handleError(String(err && err.message ? err.message : err));
+            } finally {
+                togglePreviewLoading(false);
+                previewBusy = false;
+            }
+        };
+
+        if (previewButton) {
+            previewButton.addEventListener('click', () => refreshPreview(true));
+        }
+        if (previewAuto) {
+            window.setTimeout(() => refreshPreview(false), 400);
+        }
+    }
 
     // Expose server language codes list to JS
     const LANG_CODES = <?php echo json_encode(array_values($pp_lang_codes)); ?>;

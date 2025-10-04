@@ -65,7 +65,7 @@ while ($row = $projectsResult->fetch_assoc()) {
         $host = parse_url($resolvedPrimaryUrl, PHP_URL_HOST);
         if (!empty($host)) { $row['domain_host'] = $host; }
     }
-    $row['preview_url'] = pp_project_preview_url($row, $primaryRaw !== '' ? $primaryRaw : null);
+    $row['preview_url'] = pp_project_preview_url($row, $primaryRaw !== '' ? $primaryRaw : null, ['cache_bust' => true]);
     $row['favicon_url'] = $row['domain_host'] !== '' ? ('https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode($row['domain_host'])) : null;
     $createdAt = $row['created_at'] ?? null;
     $lastPromotion = $row['last_promotion_at'] ?? null;
@@ -185,6 +185,7 @@ $pp_container = false;
                     $projectDescription = htmlspecialchars(mb_strlen($projectDescription) > 160 ? mb_substr($projectDescription, 0, 160) . '…' : $projectDescription);
                     $projectUrl = pp_url('client/project.php?id=' . $projectId);
                     $historyUrl = pp_url('client/history.php?id=' . $projectId);
+                    $editUrl = $projectUrl . '#project-form';
                     $language = !empty($project['language']) ? strtoupper(htmlspecialchars($project['language'])) : null;
                     $region = !empty($project['region']) ? htmlspecialchars($project['region']) : null;
                     $topic = !empty($project['topic']) ? htmlspecialchars($project['topic']) : null;
@@ -259,12 +260,10 @@ $pp_container = false;
                         </div>
                         <div class="dashboard-project-card__footer d-flex align-items-center justify-content-between gap-2">
                             <span class="dashboard-project-card__activity text-muted small"><i class="bi bi-activity me-1"></i><?php echo $lastActivity; ?></span>
-                            <div class="dashboard-project-card__actions d-flex gap-2">
-                                <?php if ($projectPrimaryUrl): ?>
-                                <a href="<?php echo $projectPrimaryUrl; ?>" class="btn btn-sm btn-outline-light" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Перейти на сайт'); ?></a>
-                                <?php endif; ?>
-                                <a href="<?php echo $projectUrl; ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-folder2-open me-1"></i><?php echo __('Открыть проект'); ?></a>
-                                <a href="<?php echo $historyUrl; ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock-history"></i></a>
+                            <div class="dashboard-project-card__actions d-flex gap-2 flex-wrap justify-content-end">
+                                <a href="<?php echo $projectUrl; ?>" class="btn btn-sm btn-primary"><i class="bi bi-folder2-open me-1"></i><?php echo __('Открыть проект'); ?></a>
+                                <a href="<?php echo $editUrl; ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil-square me-1"></i><?php echo __('Редактировать'); ?></a>
+                                <a href="<?php echo $historyUrl; ?>" class="btn btn-sm btn-outline-secondary btn-icon" title="<?php echo __('История'); ?>"><i class="bi bi-clock-history"></i></a>
                             </div>
                         </div>
                     </div>

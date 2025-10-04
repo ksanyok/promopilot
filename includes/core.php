@@ -156,12 +156,70 @@ if (!function_exists('pp_project_primary_url')) {
     }
 }
 
+if (!function_exists('pp_project_preview_storage')) {
+    function pp_project_preview_storage(array $project): ?array {
+        if (!defined('PP_ROOT_PATH')) { return null; }
+        $projectId = (int)($project['id'] ?? 0);
+        if ($projectId <= 0) { return null; }
+        $dir = rtrim(PP_ROOT_PATH, '/') . '/public/media/previews';
+        $filename = $projectId . '.webp';
+        $path = $dir . '/' . $filename;
+        $baseUrl = pp_guess_base_url() . '/public/media/previews';
+        return [
+            'id' => $projectId,
+            'dir' => $dir,
+            'filename' => $filename,
+            'path' => $path,
+            'url' => rtrim($baseUrl, '/') . '/' . rawurlencode($filename),
+        ];
+    }
+}
+
+if (!function_exists('pp_project_preview_descriptor')) {
+    function pp_project_preview_descriptor(array $project): array {
+        $storage = pp_project_preview_storage($project);
+        if (!$storage) {
+            return ['exists' => false];
+        }
+        clearstatcache(true, $storage['path']);
+        $exists = is_file($storage['path']);
+        $modifiedAt = $exists ? @filemtime($storage['path']) : null;
+        $size = $exists ? (@filesize($storage['path']) ?: 0) : 0;
+        return array_merge($storage, [
+            'exists' => $exists,
+            'modified_at' => $modifiedAt ?: null,
+            'filesize' => $size,
+        ]);
+    }
+}
+
+if (!function_exists('pp_project_preview_is_stale')) {
+    function pp_project_preview_is_stale(array $descriptor, int $maxAgeSeconds = 259200): bool {
+        if (empty($descriptor['exists'])) { return true; }
+        $modifiedAt = (int)($descriptor['modified_at'] ?? 0);
+        if ($modifiedAt <= 0) { return true; }
+        return (time() - $modifiedAt) > max(60, $maxAgeSeconds);
+    }
+}
+
 if (!function_exists('pp_project_preview_url')) {
     function pp_project_preview_url(array $project, ?string $fallbackUrl = null, array $options = []): ?string {
+        $descriptor = pp_project_preview_descriptor($project);
+        $preferLocal = array_key_exists('prefer_local', $options) ? (bool)$options['prefer_local'] : true;
+        $cacheBust = array_key_exists('cache_bust', $options) ? (bool)$options['cache_bust'] : true;
+
+        if ($preferLocal && !empty($descriptor['exists'])) {
+            $url = $descriptor['url'];
+            if ($cacheBust && !empty($descriptor['modified_at'])) {
+                $url .= (strpos($url, '?') === false ? '?' : '&') . 'v=' . (int)$descriptor['modified_at'];
+            }
+            return $url;
+        }
+
         $targetUrl = $options['force_url'] ?? pp_project_primary_url($project, $fallbackUrl);
         if (!$targetUrl) { return null; }
 
-    $provider = $options['provider'] ?? (defined('PP_SITE_PREVIEW_PROVIDER') ? constant('PP_SITE_PREVIEW_PROVIDER') : (getenv('PP_SITE_PREVIEW_PROVIDER') ?: 'https://image.thum.io/get/noanimate/width/1100/crop/700'));
+        $provider = $options['provider'] ?? (defined('PP_SITE_PREVIEW_PROVIDER') ? constant('PP_SITE_PREVIEW_PROVIDER') : (getenv('PP_SITE_PREVIEW_PROVIDER') ?: 'https://image.thum.io/get/noanimate/width/1100/crop/700'));
         if (!$provider) { return null; }
         if (is_string($provider) && strtolower(trim($provider)) === 'disabled') { return null; }
 
@@ -172,6 +230,71 @@ if (!function_exists('pp_project_preview_url')) {
 
         $provider = rtrim((string)$provider, '/');
         return $provider . '/' . $encoded;
+    }
+}
+
+if (!function_exists('pp_capture_project_preview')) {
+    function pp_capture_project_preview(array $project, array $options = []): array {
+        $storage = pp_project_preview_storage($project);
+        if (!$storage) {
+            return ['ok' => false, 'error' => 'INVALID_PROJECT'];
+        }
+
+        if (!is_dir($storage['dir'])) {
+            @mkdir($storage['dir'], 0775, true);
+        }
+        if (!is_dir($storage['dir']) || !is_writable($storage['dir'])) {
+            return ['ok' => false, 'error' => 'STORAGE_NOT_WRITABLE'];
+        }
+
+        $targetUrl = $options['force_url'] ?? pp_project_primary_url($project, $options['fallback_url'] ?? null);
+        if (!$targetUrl) {
+            return ['ok' => false, 'error' => 'TARGET_URL_MISSING'];
+        }
+
+        if (!empty($options['force']) && is_file($storage['path'])) {
+            @unlink($storage['path']);
+        }
+
+        $job = [
+            'targetUrl' => $targetUrl,
+            'outputPath' => $storage['path'],
+            'viewport' => [
+                'width' => (int)($options['width'] ?? 1280),
+                'height' => (int)($options['height'] ?? 720),
+                'deviceScaleFactor' => (float)($options['device_scale_factor'] ?? 1.2),
+            ],
+            'waitUntil' => $options['wait_until'] ?? 'networkidle2',
+            'timeoutMs' => (int)($options['timeout_ms'] ?? 60000),
+            'delayMs' => (int)($options['delay_ms'] ?? 1500),
+            'fullPage' => (bool)($options['full_page'] ?? false),
+            'omitBackground' => (bool)($options['omit_background'] ?? true),
+            'imageType' => $options['image_type'] ?? 'webp',
+            'quality' => (int)($options['quality'] ?? 82),
+        ];
+
+        $timeoutSeconds = (int)($options['timeout_seconds'] ?? 150);
+        $script = rtrim(PP_ROOT_PATH, '/') . '/scripts/project_preview.js';
+        $result = pp_run_node_script($script, $job, $timeoutSeconds);
+        if (empty($result['ok'])) {
+            return array_merge(['ok' => false], $result);
+        }
+
+        clearstatcache(true, $storage['path']);
+        $descriptor = pp_project_preview_descriptor($project);
+        if (empty($descriptor['exists'])) {
+            return ['ok' => false, 'error' => 'PREVIEW_NOT_GENERATED'];
+        }
+        @chmod($descriptor['path'], 0644);
+
+        return [
+            'ok' => true,
+            'path' => $descriptor['path'],
+            'url' => pp_project_preview_url($project, $targetUrl, ['cache_bust' => true]),
+            'modified_at' => $descriptor['modified_at'],
+            'filesize' => $descriptor['filesize'],
+            'result' => $result,
+        ];
     }
 }
 
