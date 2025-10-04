@@ -717,15 +717,22 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                 <!-- Скрытое глобальное пожелание для синхронизации -->
                 <input type="hidden" id="global_wishes" name="wishes" value="<?php echo htmlspecialchars($project['wishes'] ?? ''); ?>" />
                 <!-- Модалка добавления ссылки -->
-                <div class="modal fade" id="addLinkModal" tabindex="-1" aria-labelledby="addLinkModalLabel" aria-hidden="true">
+                <div class="modal fade modal-glass" id="addLinkModal" tabindex="-1" aria-labelledby="addLinkModalLabel" aria-hidden="true">
                     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-                        <div class="modal-content">
-                            <div class="modal-header">
+                        <div class="modal-content modal-content--glass">
+                            <div class="modal-header modal-header--glass">
                                 <h5 class="modal-title" id="addLinkModalLabel"><i class="bi bi-link-45deg me-2"></i><?php echo __('Добавить ссылку'); ?></h5>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
                             </div>
-                            <div class="modal-body">
-                                <div class="row g-3 align-items-stretch mb-3">
+                            <div class="modal-body modal-body--glass">
+                                <div class="modal-intro d-flex align-items-start gap-3 mb-4">
+                                    <div class="modal-intro__icon"><i class="bi bi-stars"></i></div>
+                                    <div>
+                                        <div class="fw-semibold"><?php echo __('Укажите страницу внутри проекта'); ?></div>
+                                        <p class="text-muted small mb-0"><?php echo __('Мы проверим домен, сохраним анкор и сформируем индивидуальное пожелание для команды.'); ?></p>
+                                    </div>
+                                </div>
+                                <div class="row g-3 modal-field-grid align-items-stretch mb-3">
                                     <div class="col-12 col-lg-6">
                                         <label class="form-label visually-hidden" for="new_link_input"><?php echo __('URL'); ?></label>
                                         <input type="url" name="new_link" id="new_link_input" class="form-control" placeholder="<?php echo !empty($project['domain_host']) ? htmlspecialchars('https://' . $project['domain_host'] . '/...') : __('URL'); ?> *">
@@ -736,7 +743,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                     </div>
                                     <div class="col-12 col-lg-2">
                                         <label class="form-label visually-hidden" for="new_language_select"><?php echo __('Язык'); ?></label>
-                                        <select name="new_language" id="new_language_select" class="form-select">
+                                        <select name="new_language" id="new_language_select" class="form-select" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('AUTO попытается определить язык автоматически.'); ?>">
                                             <?php $opts = array_merge(['auto'], $pp_lang_codes); $def = 'auto'; foreach ($opts as $l): ?>
                                                 <option value="<?php echo htmlspecialchars($l); ?>" <?php echo ($def===$l?'selected':''); ?>><?php echo strtoupper($l); ?></option>
                                             <?php endforeach; ?>
@@ -744,9 +751,9 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                     </div>
                                 </div>
                                 <?php if (!empty($project['domain_host'])): ?>
-                                <div class="small text-muted mb-3" id="domain-hint"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
+                                <div class="modal-domain note note--warning mb-3" id="domain-hint"><i class="bi bi-shield-lock me-2"></i><span><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>:</span> <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
                                 <?php else: ?>
-                                <div class="small text-muted mb-3" id="domain-hint" style="display:none"><i class="bi bi-shield-lock me-1"></i><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>: <code id="domain-host-code"></code></div>
+                                <div class="modal-domain note note--warning mb-3" id="domain-hint" style="display:none"><i class="bi bi-shield-lock me-2"></i><span><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>:</span> <code id="domain-host-code"></code></div>
                                 <?php endif; ?>
                                 <div class="mb-3">
                                     <label class="form-label mb-1" for="new_wish"><?php echo __('Пожелание для этой ссылки'); ?></label>
@@ -755,10 +762,11 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         <input class="form-check-input" type="checkbox" id="use_global_wish">
                                         <label class="form-check-label" for="use_global_wish"><?php echo __('Использовать глобальное пожелание проекта'); ?></label>
                                     </div>
+                                    <div class="form-helper small text-muted mt-2"><i class="bi bi-pencil"></i> <?php echo __('Опишите тональность, ключевые мысли или ограничения для этой публикации.'); ?></div>
                                 </div>
                                 <div id="added-hidden"></div>
                             </div>
-                            <div class="modal-footer justify-content-between flex-wrap gap-2">
+                            <div class="modal-footer modal-footer--glass justify-content-between flex-wrap gap-3">
                                 <div class="d-flex align-items-center gap-2 small text-muted">
                                     <i class="bi bi-clock-history"></i>
                                     <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="text-decoration-none fw-semibold"><?php echo __('История'); ?></a>
