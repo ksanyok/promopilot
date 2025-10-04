@@ -94,6 +94,75 @@ $pp_normalize_host = function(?string $host): string {
     return $h;
 };
 
+// Collect current promotion statuses for project links (used in deletion guard and summary)
+$promotionStatusByUrl = [];
+if (function_exists('pp_promotion_get_status')) {
+    foreach ($links as $item) {
+        $linkUrl = (string)($item['url'] ?? '');
+        if ($linkUrl === '') { continue; }
+        $stat = pp_promotion_get_status((int)$project['id'], $linkUrl);
+        if (is_array($stat) && !empty($stat['ok'])) {
+            $promotionStatusByUrl[$linkUrl] = $stat;
+        }
+    }
+}
+
+$canDeleteProject = true;
+if (!empty($links)) {
+    foreach ($links as $item) {
+        $linkUrl = (string)($item['url'] ?? '');
+        $status = 'idle';
+        if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
+            $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
+        }
+        if ($status !== 'idle') {
+            $canDeleteProject = false;
+            break;
+        }
+    }
+}
+
+// Gather promotion status summary early to reuse in POST handlers and rendering
+$promotionStatusByUrl = [];
+if (function_exists('pp_promotion_get_status')) {
+    foreach ($links as $item) {
+        $linkUrl = (string)($item['url'] ?? '');
+        if ($linkUrl === '') { continue; }
+        $stat = pp_promotion_get_status((int)$project['id'], $linkUrl);
+        if (is_array($stat) && !empty($stat['ok'])) {
+            $promotionStatusByUrl[$linkUrl] = $stat;
+        }
+    }
+}
+
+$promotionSummary = [
+    'total' => count($links),
+    'active' => 0,
+    'completed' => 0,
+    'idle' => 0,
+    'issues' => 0,
+];
+$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'];
+$promotionIssueStates = ['failed','cancelled'];
+foreach ($links as $item) {
+    $linkUrl = (string)($item['url'] ?? '');
+    $status = 'idle';
+    if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
+        $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
+    }
+    if (in_array($status, $promotionActiveStates, true)) {
+        $promotionSummary['active']++;
+    } elseif ($status === 'completed') {
+        $promotionSummary['completed']++;
+    } elseif (in_array($status, $promotionIssueStates, true)) {
+        $promotionSummary['issues']++;
+    } else {
+        $promotionSummary['idle']++;
+    }
+}
+
+$canDeleteProject = ($promotionSummary['total'] === 0) || ($promotionSummary['idle'] === $promotionSummary['total']);
+
 // Проверить доступ: админ или владелец
 if (!is_admin() && $project['user_id'] != $user_id) {
     include '../includes/header.php';
@@ -517,18 +586,6 @@ try {
         $conn->close();
     }
 } catch (Throwable $e) { /* ignore */ }
-
-$promotionStatusByUrl = [];
-if (function_exists('pp_promotion_get_status')) {
-    foreach ($links as $item) {
-        $linkUrl = (string)($item['url'] ?? '');
-        if ($linkUrl === '') { continue; }
-        $stat = pp_promotion_get_status((int)$project['id'], $linkUrl);
-        if (is_array($stat) && !empty($stat['ok'])) {
-            $promotionStatusByUrl[$linkUrl] = $stat;
-        }
-    }
-}
 
 $promotionSummary = [
     'total' => count($links),
