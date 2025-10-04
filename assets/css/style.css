@@ -25,7 +25,7 @@
   --radius-xs: 10px;
   --sidebar-width: 280px;
   --navbar-h: 78px;
-  --footer-h: 80px;
+  --footer-h: 120px;
 
   /* Glassmorphism helpers */
   --glass-bg: rgba(17, 24, 39, 0.74);
@@ -154,8 +154,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .navbar-dark .navbar-toggler-icon { filter: drop-shadow(0 0 1px rgba(0,0,0,.6)); }
 
 /* Theme toggle */
-.theme-toggle.btn { border: 1px solid var(--border) !important; background: var(--surface); color: var(--text); }
-.theme-toggle.btn:hover { background: var(--surface-2); color: var(--primary); }
 
 /* Navbar avatar and dropdown polish */
 .navbar .nav-avatar {
@@ -172,7 +170,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   position: fixed;
   top: calc(var(--navbar-h) + 24px);
   left: 0;
-  bottom: 24px;
+  bottom: calc(var(--footer-h) + 24px);
   width: var(--sidebar-width);
   padding: 22px 18px 28px;
   margin-left: 24px;
@@ -324,8 +322,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
 .badge-secondary { background: rgba(255,255,255,.18); color: var(--text); border: 1px solid var(--border); }
 
 /* Controls */
-.theme-toggle { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 999px; padding: 6px 10px; line-height: 1; box-shadow: var(--shadow); }
-.theme-toggle:hover { background: var(--surface-2); }
 
 /* Footer */
 .footer {

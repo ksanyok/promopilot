@@ -109,11 +109,6 @@ if (is_logged_in()) {
                             <a href="<?php echo pp_url('public/set_lang.php?lang=en'); ?>" class="btn btn-outline-light btn-sm <?php echo ($current_lang == 'en') ? 'active' : ''; ?>" title="English" <?php echo ($current_lang == 'en') ? 'aria-current="true"' : ''; ?>>EN</a>
                         </div>
                     </li>
-                    <li class="nav-item ms-lg-2">
-                        <button id="themeToggle" type="button" class="btn btn-sm theme-toggle" title="<?php echo __('Переключить тему'); ?>" aria-label="<?php echo __('Переключить тему'); ?>" aria-pressed="false">
-                            <i class="bi bi-moon-stars"></i>
-                        </button>
-                    </li>
                 </ul>
             </div>
         </div>
