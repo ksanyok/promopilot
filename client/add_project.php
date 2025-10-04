@@ -136,18 +136,18 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                 <div class="flex-grow-1">
                     <h2 class="mb-2 d-flex align-items-center gap-2">
                         <?php echo __('Добавить новый проект'); ?>
-                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="right" title="<?php echo __('Создайте карточку проекта, чтобы подключить ссылки и запустить каскады продвижения.'); ?>"></i>
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="right" title="<?php echo __('Проект создаётся на основе главной страницы: мы проверим переадресации, подтянем метаданные и попросим ИИ подготовить краткое описание. Настройки можно отредактировать перед сохранением.'); ?>"></i>
                     </h2>
                     <p class="text-muted mb-0">
-                        <?php echo __('Мы автоматически проанализируем первую ссылку, сформируем визуальный предпросмотр и подскажем лучшие площадки для размещения. Заполните обязательные поля, а дополнительные помогут команде сделать продвижение точнее.'); ?>
+                        <?php echo __('Укажите главную страницу — мы соберём данные, подберём название и подготовим карточку проекта.'); ?>
                     </p>
                 </div>
                 <div class="add-project-hero__meta text-start text-lg-end">
                     <div class="small text-uppercase text-muted mb-1 fw-semibold"><?php echo __('Советы'); ?></div>
                     <ul class="list-unstyled small text-muted add-project-hero__list mb-0">
-                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Используйте основную страницу или лендинг.'); ?></li>
-                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Уточните тематику и регион: это ускорит подбор площадок.'); ?></li>
-                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Запишите пожелания для текстов и ссылок — их увидят редакторы.'); ?></li>
+                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Используйте главную или посадочную страницу, доступную без авторизации.'); ?></li>
+                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Проверьте, что выбранная страница открывается быстро и корректно.'); ?></li>
+                        <li><i class="bi bi-check-circle-fill text-success me-1"></i><?php echo __('Подготовьте пожелания по стилю и тону — они помогут авторам на всех уровнях.'); ?></li>
                     </ul>
                 </div>
             </div>
@@ -156,119 +156,220 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
         <div class="add-project-body">
             <div class="card add-project-card">
                 <div class="card-body">
-                    <form method="post" class="add-project-form">
+                    <form method="post" class="add-project-form" novalidate>
                         <?php echo csrf_field(); ?>
+                        <input type="hidden" name="wizard_step" value="1" data-step-state>
+                        <input type="hidden" name="brief_payload" id="project-brief-payload" value="">
 
-                        <div class="form-section">
-                            <div class="section-heading">
-                                <span class="section-icon"><i class="bi bi-journal-text"></i></span>
-                                <div>
-                                    <h3><?php echo __('Основная информация'); ?></h3>
-                                    <p class="text-muted mb-0"><?php echo __('Опишите проект и укажите базовую ссылку, с которой мы начнём продвижение.'); ?></p>
+                        <div class="project-stepper" data-stepper data-current-step="1">
+                            <div class="project-stepper__item is-active" data-step="1" aria-current="step">
+                                <div class="project-stepper__circle">1</div>
+                                <div class="project-stepper__meta">
+                                    <div class="project-stepper__title"><?php echo __('Шаг 1'); ?></div>
+                                    <div class="project-stepper__subtitle"><?php echo __('Анализ сайта'); ?></div>
                                 </div>
                             </div>
-                            <div class="section-grid">
-                                <div class="form-floating">
-                                    <input type="text" name="name" id="project-name" class="form-control" placeholder="<?php echo __('Название'); ?>" required>
-                                    <label for="project-name"><?php echo __('Название проекта'); ?> *</label>
-                                    <div class="form-helper"><?php echo __('Например, «PromoPilot AI Tools» или «Тестовый лендинг продукта».'); ?></div>
-                                </div>
-                                <div class="form-floating">
-                                    <input type="url" name="first_url" id="project-url" class="form-control" placeholder="https://example.com" required>
-                                    <label for="project-url"><?php echo __('Главная целевая страница (URL)'); ?> *</label>
-                                    <div class="form-helper"><?php echo __('Убедитесь, что страница открывается без авторизации.'); ?></div>
+                            <div class="project-stepper__connector" aria-hidden="true"></div>
+                            <div class="project-stepper__item is-locked" data-step="2">
+                                <div class="project-stepper__circle">2</div>
+                                <div class="project-stepper__meta">
+                                    <div class="project-stepper__title"><?php echo __('Шаг 2'); ?></div>
+                                    <div class="project-stepper__subtitle"><?php echo __('Редактирование проекта'); ?></div>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="form-section">
-                            <div class="section-heading">
-                                <span class="section-icon"><i class="bi bi-link-45deg"></i></span>
-                                <div>
-                                    <h3><?php echo __('Первая ссылка и язык'); ?></h3>
-                                    <p class="text-muted mb-0"><?php echo __('Заполните данные, которые будут использоваться для стартовой публикации и анализа анкоров.'); ?></p>
+                        <div class="step-panels">
+                            <div class="step-panel is-active" data-step-panel="1">
+                                <div class="step-panel__header">
+                                    <div>
+                                        <div class="small text-uppercase text-info fw-semibold mb-1"><?php echo __('Шаг 1'); ?></div>
+                                        <h3 class="mb-1"><?php echo __('Анализ сайта'); ?></h3>
+                                        <p class="step-panel__intro mb-0"><?php echo __('Укажите главный URL — мы проверим доступность, соберём метаданные и сформируем краткий бриф.'); ?></p>
+                                    </div>
+                                </div>
+                                <div class="row g-4 align-items-start">
+                                    <div class="col-lg-7">
+                                        <div class="form-floating">
+                                            <input type="url" name="first_url" id="project-homepage" class="form-control" placeholder="https://example.com" required>
+                                            <label for="project-homepage"><?php echo __('Главная страница (URL)'); ?> *</label>
+                                            <div class="form-helper"><?php echo __('Используйте главную или посадочную страницу, доступную без авторизации.'); ?></div>
+                                        </div>
+                                    </div>
+                                    <div class="col-lg-5">
+                                        <div class="analysis-actions">
+                                            <button type="button"
+                                                    class="btn btn-gradient btn-lg w-100"
+                                                    data-action="fetch-project-brief"
+                                                    data-endpoint="<?php echo htmlspecialchars(pp_url('public/analyze_url.php'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                    data-label-default="<?php echo htmlspecialchars(__('Проанализировать сайт'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                    data-label-loading="<?php echo htmlspecialchars(__('Анализируем…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                                <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true" data-loading-spinner></span>
+                                                <span data-label-text><?php echo __('Проанализировать сайт'); ?></span>
+                                            </button>
+                                            <div class="analysis-actions__hint"><?php echo __('Название, описание и язык заполнятся автоматически. Вы сможете отредактировать данные перед сохранением.'); ?></div>
+                                            <button type="button" class="btn-link-light" data-action="step-proceed-manual">
+                                                <i class="bi bi-pencil-square"></i>
+                                                <?php echo __('Перейти к редактированию вручную'); ?>
+                                            </button>
+                                            <div class="analysis-actions__hint"><?php echo __('Если сайт закрыт от ботов, заполните данные вручную.'); ?></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="analysis-feedback mt-4"
+                                     role="status"
+                                     aria-live="polite"
+                                     data-analysis-feedback
+                                     data-text-idle="<?php echo htmlspecialchars(__('Укажите адрес и запустите анализ.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-loading="<?php echo htmlspecialchars(__('Анализируем страницу, это может занять до минуты…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-success="<?php echo htmlspecialchars(__('Анализ завершён. Переходим ко второму шагу.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-error="<?php echo htmlspecialchars(__('Не удалось провести анализ. Проверьте URL и попробуйте ещё раз.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-manual="<?php echo htmlspecialchars(__('Вы перешли к редактированию без анализа. Заполните данные вручную.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                    <?php echo __('Укажите адрес и запустите анализ.'); ?>
                                 </div>
                             </div>
-                            <div class="section-grid">
-                                <div class="form-floating">
-                                    <input type="text" name="first_anchor" id="project-anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
-                                    <label for="project-anchor"><?php echo __('Анкор первой ссылки'); ?></label>
-                                    <div class="form-helper"><?php echo __('Оставьте пустым, если хотите подобрать анкор позже.'); ?></div>
-                                </div>
-                                <div class="form-floating">
-                                    <select name="first_language" id="project-language" class="form-select">
-                                        <option value="ru">Русский</option>
-                                        <option value="en">English</option>
-                                        <option value="es">Español</option>
-                                        <option value="fr">Français</option>
-                                        <option value="de">Deutsch</option>
-                                    </select>
-                                    <label for="project-language"><?php echo __('Язык первой ссылки'); ?></label>
-                                    <div class="form-helper"><?php echo __('Выберите язык контента, на котором должна появиться публикация.'); ?></div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div class="form-section">
-                            <div class="section-heading">
-                                <span class="section-icon"><i class="bi bi-globe"></i></span>
-                                <div>
-                                    <h3><?php echo __('Таргетинг проекта'); ?></h3>
-                                    <p class="text-muted mb-0"><?php echo __('Тематика и регион помогают алгоритму точнее подобрать площадки.'); ?></p>
+                            <div class="step-panel d-none" data-step-panel="2">
+                                <div class="step-panel__header">
+                                    <div>
+                                        <div class="small text-uppercase text-info fw-semibold mb-1"><?php echo __('Шаг 2'); ?></div>
+                                        <h3 class="mb-1"><?php echo __('Редактирование проекта'); ?></h3>
+                                        <p class="step-panel__intro mb-0"><?php echo __('Проверьте данные и скорректируйте их перед созданием проекта.'); ?></p>
+                                    </div>
+                                    <button type="button" class="btn btn-outline-light" data-action="step-back">
+                                        <i class="bi bi-arrow-left-short me-1"></i>
+                                        <?php echo __('Назад к анализу'); ?>
+                                    </button>
                                 </div>
-                            </div>
-                            <div class="section-grid">
-                                <div class="form-floating">
-                                    <select name="region" id="project-region" class="form-select">
-                                        <?php foreach ($availableRegions as $r): ?>
-                                            <option value="<?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <label for="project-region"><?php echo __('Регион проекта'); ?></label>
-                                    <div class="form-helper"><?php echo __('Где находится ваша аудитория или бизнес.'); ?></div>
-                                </div>
-                                <div class="form-floating">
-                                    <select name="topic" id="project-topic" class="form-select">
-                                        <?php foreach ($availableTopics as $t): ?>
-                                            <option value="<?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <label for="project-topic"><?php echo __('Тематика проекта'); ?></label>
-                                    <div class="form-helper"><?php echo __('Помогает отфильтровать площадки по релевантным нишам.'); ?></div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div class="form-section">
-                            <div class="section-heading">
-                                <span class="section-icon"><i class="bi bi-chat-dots"></i></span>
-                                <div>
-                                    <h3><?php echo __('Пожелания и заметки'); ?></h3>
-                                    <p class="text-muted mb-0"><?php echo __('Передайте инструкции авторам: стиль, ограничения, ключевые сообщения.'); ?></p>
+                                <div class="project-brief-card d-none" data-brief-result>
+                                    <div class="card-body">
+                                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                            <span class="badge bg-secondary"
+                                                  data-brief-status
+                                                  data-status-default="<?php echo htmlspecialchars(__('Результаты анализа'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                  data-status-loading="<?php echo htmlspecialchars(__('Проводим анализ…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                  data-status-success="<?php echo htmlspecialchars(__('Анализ завершён: данные обновлены.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                  data-status-error="<?php echo htmlspecialchars(__('Не удалось получить данные. Попробуйте ещё раз или заполните поля вручную.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                                <?php echo __('Результаты анализа'); ?>
+                                            </span>
+                                        </div>
+                                        <div class="project-brief-meta">
+                                            <div>
+                                                <div class="project-brief-meta__label"><?php echo __('Заголовок страницы'); ?></div>
+                                                <div class="project-brief-meta__value" data-brief-meta-title>—</div>
+                                            </div>
+                                            <div>
+                                                <div class="project-brief-meta__label"><?php echo __('Описание страницы'); ?></div>
+                                                <div class="project-brief-meta__value" data-brief-meta-description>—</div>
+                                            </div>
+                                            <div>
+                                                <div class="project-brief-meta__label"><?php echo __('Определённый язык'); ?></div>
+                                                <div class="project-brief-meta__value" data-brief-meta-lang>—</div>
+                                            </div>
+                                            <div>
+                                                <div class="project-brief-meta__label"><?php echo __('Hreflang варианты'); ?></div>
+                                                <div class="project-brief-meta__value" data-brief-meta-hreflang>—</div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="section-grid section-grid--single">
-                                <div class="form-floating">
-                                    <textarea name="wishes" id="project-wishes" class="form-control" style="height: 140px" placeholder="<?php echo __('Стиль, тематика, ограничения по бренду, типы анкоров...'); ?>"></textarea>
-                                    <label for="project-wishes"><?php echo __('Глобальные пожелания (опционально)'); ?></label>
-                                    <div class="form-helper"><?php echo __('Эти заметки появятся при добавлении каждой новой ссылки.'); ?></div>
-                                </div>
-                                <div class="form-floating">
-                                    <textarea name="description" id="project-description" class="form-control" style="height: 120px" placeholder="<?php echo __('Краткий контекст проекта'); ?>"></textarea>
-                                    <label for="project-description"><?php echo __('Описание (опционально)'); ?></label>
-                                    <div class="form-helper"><?php echo __('Для внутреннего пользования: подскажите команде, что важно знать.'); ?></div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div class="form-submit">
-                            <button type="submit" class="btn btn-gradient btn-lg w-100">
-                                <i class="bi bi-magic me-2"></i>
-                                <?php echo __('Создать проект и перейти к ссылкам'); ?>
-                            </button>
-                            <div class="text-muted small mt-2 d-flex align-items-center gap-2">
-                                <i class="bi bi-shield-check text-success"></i>
-                                <span><?php echo __('Мы автоматически сохраним историю изменений и подготовим превью для проверки.'); ?></span>
+                                <div class="form-section">
+                                    <div class="section-heading">
+                                        <span class="section-icon"><i class="bi bi-journal-text"></i></span>
+                                        <div>
+                                            <h3><?php echo __('Название проекта'); ?></h3>
+                                            <p class="text-muted mb-0"><?php echo __('Название и описание проекта можно скорректировать после автоматического анализа.'); ?></p>
+                                        </div>
+                                    </div>
+                                    <div class="section-grid">
+                                        <div class="form-floating">
+                                            <input type="text" name="name" id="project-name" class="form-control" placeholder="<?php echo __('Название проекта'); ?>" required>
+                                            <label for="project-name"><?php echo __('Название проекта'); ?> *</label>
+                                            <div class="form-helper"><?php echo __('Автоматически подставим найденный заголовок страницы или предложим вариант через ИИ.'); ?></div>
+                                        </div>
+                                        <div class="form-floating">
+                                            <input type="text" name="first_anchor" id="project-anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                                            <label for="project-anchor"><?php echo __('Анкор первой ссылки'); ?></label>
+                                            <div class="form-helper"><?php echo __('Оставьте пустым, если хотите подобрать анкор позже.'); ?></div>
+                                        </div>
+                                    </div>
+                                    <div class="form-floating">
+                                        <textarea name="description" id="project-description" class="form-control" style="height: 140px" placeholder="<?php echo __('Описание'); ?>"></textarea>
+                                        <label for="project-description"><?php echo __('Описание (опционально)'); ?></label>
+                                        <div class="form-helper"><?php echo __('Короткое резюме поможет команде быстрее понять задачи проекта.'); ?></div>
+                                    </div>
+                                </div>
+
+                                <div class="form-section">
+                                    <div class="section-heading">
+                                        <span class="section-icon"><i class="bi bi-translate"></i></span>
+                                        <div>
+                                            <h3><?php echo __('Язык и таргетинг'); ?></h3>
+                                            <p class="text-muted mb-0"><?php echo __('Определим язык автоматически, но вы можете выбрать другой. Регион и тематика помогают подобрать площадки.'); ?></p>
+                                        </div>
+                                    </div>
+                                    <div class="section-grid">
+                                        <div class="form-floating">
+                                            <select name="first_language" id="project-language" class="form-select">
+                                                <option value="ru">Русский</option>
+                                                <option value="en">English</option>
+                                                <option value="es">Español</option>
+                                                <option value="fr">Français</option>
+                                                <option value="de">Deutsch</option>
+                                            </select>
+                                            <label for="project-language"><?php echo __('Основной язык проекта'); ?></label>
+                                            <div class="form-helper"><?php echo __('Используется по умолчанию при подготовке материалов.'); ?></div>
+                                        </div>
+                                        <div class="form-floating">
+                                            <select name="region" id="project-region" class="form-select">
+                                                <?php foreach ($availableRegions as $r): ?>
+                                                    <option value="<?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($r, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <label for="project-region"><?php echo __('Регион проекта'); ?></label>
+                                            <div class="form-helper"><?php echo __('Где находится ваша ключевая аудитория.'); ?></div>
+                                        </div>
+                                        <div class="form-floating">
+                                            <select name="topic" id="project-topic" class="form-select">
+                                                <?php foreach ($availableTopics as $t): ?>
+                                                    <option value="<?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($t, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <label for="project-topic"><?php echo __('Тематика проекта'); ?></label>
+                                            <div class="form-helper"><?php echo __('Используется для приоритизации подходящих сетей и сценариев.'); ?></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-section">
+                                    <div class="section-heading">
+                                        <span class="section-icon"><i class="bi bi-chat-dots"></i></span>
+                                        <div>
+                                            <h3><?php echo __('Пожелания и заметки'); ?></h3>
+                                            <p class="text-muted mb-0"><?php echo __('Поделитесь инструкциями по стилю, ограничениям и ключевым сообщениям — они попадут к авторам на всех уровнях.'); ?></p>
+                                        </div>
+                                    </div>
+                                    <div class="section-grid section-grid--single">
+                                        <div class="form-floating">
+                                            <textarea name="wishes" id="project-wishes" class="form-control" style="height: 140px" placeholder="<?php echo __('Стиль, тематика, ограничения по бренду, типы анкоров...'); ?>"></textarea>
+                                            <label for="project-wishes"><?php echo __('Глобальные пожелания (опционально)'); ?></label>
+                                            <div class="form-helper"><?php echo __('Эти заметки появятся при добавлении новых ссылок и запуске каскадов.'); ?></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-submit">
+                                    <button type="submit" class="btn btn-gradient btn-lg w-100">
+                                        <i class="bi bi-magic me-2"></i>
+                                        <?php echo __('Создать проект и перейти к настройкам'); ?>
+                                    </button>
+                                    <div class="text-muted small mt-2 d-flex align-items-center gap-2">
+                                        <i class="bi bi-shield-check text-success"></i>
+                                        <span><?php echo __('Мы сохраним анализ страницы, сформируем превью и подготовим рабочее пространство.'); ?></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </form>
@@ -280,16 +381,16 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     <h4 class="mb-3 d-flex align-items-center gap-2"><i class="bi bi-lightbulb"></i><?php echo __('Памятка для старта'); ?></h4>
                     <ul class="add-project-aside__list">
                         <li>
-                            <div class="title"><?php echo __('Соберите базовые ссылки'); ?></div>
-                            <p><?php echo __('Если у вас несколько страниц, добавьте их в проект позже и запланируйте каскады по этапам.'); ?></p>
+                            <div class="title"><?php echo __('Подготовьте структуру ссылок'); ?></div>
+                            <p><?php echo __('После создания проекта добавьте посадочные страницы по приоритету и разбейте их на этапы продвижения.'); ?></p>
                         </li>
                         <li>
                             <div class="title"><?php echo __('Проверьте индексацию'); ?></div>
-                            <p><?php echo __('Страница должна быть открыта поисковым ботам, иначе публикации не дадут эффект.'); ?></p>
+                            <p><?php echo __('Главная страница и ключевые разделы должны быть доступны поисковым ботам и без авторизации.'); ?></p>
                         </li>
                         <li>
-                            <div class="title"><?php echo __('Делитесь результатами'); ?></div>
-                            <p><?php echo __('История запусков и отчёты будут доступны в проекте — возвращайтесь проверять метрики.'); ?></p>
+                            <div class="title"><?php echo __('Обновляйте пожелания'); ?></div>
+                            <p><?php echo __('Актуализируйте бриф перед запуском новых каскадов, чтобы команда учитывала свежие акценты.'); ?></p>
                         </li>
                     </ul>
                     <div class="add-project-aside__footer">

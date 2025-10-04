@@ -18,33 +18,39 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf()) {
 $projectId = (int)($_POST['project_id'] ?? 0);
 $url = trim((string)($_POST['url'] ?? ''));
 $shouldSave = isset($_POST['save']) && (string)$_POST['save'] !== '0' && (string)$_POST['save'] !== '';
-if (!$projectId || !$url || !filter_var($url, FILTER_VALIDATE_URL)) {
+if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
     $response(['ok' => false, 'error' => 'INVALID_INPUT']);
 }
 
-// Fetch project and check permissions
-$conn = connect_db();
-$stmt = $conn->prepare('SELECT id, user_id, domain_host FROM projects WHERE id = ?');
-$stmt->bind_param('i', $projectId);
-$stmt->execute();
-$project = $stmt->get_result()->fetch_assoc();
-$stmt->close();
-if (!$project) { $conn->close(); $response(['ok' => false, 'error' => 'PROJECT_NOT_FOUND']); }
-if (!is_admin() && (int)$project['user_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
-    $conn->close();
-    $response(['ok' => false, 'error' => 'FORBIDDEN']);
-}
+$shouldSave = $shouldSave && $projectId > 0;
+$project = null;
+$projectHost = '';
 
-// Enforce same-domain restriction
-$normHost = function($h) { $h = strtolower((string)$h); return (strpos($h, 'www.') === 0) ? substr($h, 4) : $h; };
-$projectHost = $normHost($project['domain_host'] ?? '');
-$targetHost = $normHost(parse_url($url, PHP_URL_HOST) ?: '');
-if ($projectHost && $targetHost && $projectHost !== $targetHost) {
-    $conn->close();
-    $response(['ok' => false, 'error' => 'DOMAIN_MISMATCH']);
-}
+if ($projectId > 0) {
+    // Fetch project and check permissions
+    $conn = connect_db();
+    $stmt = $conn->prepare('SELECT id, user_id, domain_host FROM projects WHERE id = ?');
+    $stmt->bind_param('i', $projectId);
+    $stmt->execute();
+    $project = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$project) { $conn->close(); $response(['ok' => false, 'error' => 'PROJECT_NOT_FOUND']); }
+    if (!is_admin() && (int)$project['user_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
+        $conn->close();
+        $response(['ok' => false, 'error' => 'FORBIDDEN']);
+    }
 
-$conn->close();
+    // Enforce same-domain restriction
+    $normHost = function($h) { $h = strtolower((string)$h); return (strpos($h, 'www.') === 0) ? substr($h, 4) : $h; };
+    $projectHost = $normHost($project['domain_host'] ?? '');
+    $targetHost = $normHost(parse_url($url, PHP_URL_HOST) ?: '');
+    if ($projectHost && $targetHost && $projectHost !== $targetHost) {
+        $conn->close();
+        $response(['ok' => false, 'error' => 'DOMAIN_MISMATCH']);
+    }
+
+    $conn->close();
+}
 
 try {
     if (!function_exists('pp_analyze_url_data')) {

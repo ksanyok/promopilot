@@ -388,6 +388,480 @@ document.addEventListener('DOMContentLoaded', function() {
     // Project creation preloader overlay
     const projectCreateForm = document.querySelector('form.add-project-form');
     const projectCreateOverlay = document.getElementById('project-create-overlay');
+
+    if (projectCreateForm) {
+        const analyzeButton = projectCreateForm.querySelector('[data-action="fetch-project-brief"]');
+        const homepageInput = projectCreateForm.querySelector('#project-homepage');
+        const payloadInput = projectCreateForm.querySelector('#project-brief-payload');
+        const csrfInput = projectCreateForm.querySelector('input[name="csrf_token"]');
+        const nameInput = projectCreateForm.querySelector('#project-name');
+        const descriptionInput = projectCreateForm.querySelector('#project-description');
+        const languageSelect = projectCreateForm.querySelector('#project-language');
+        const resultCard = projectCreateForm.querySelector('[data-brief-result]');
+        const statusBadge = resultCard ? resultCard.querySelector('[data-brief-status]') : null;
+        const metaTitle = resultCard ? resultCard.querySelector('[data-brief-meta-title]') : null;
+        const metaDescription = resultCard ? resultCard.querySelector('[data-brief-meta-description]') : null;
+        const metaLang = resultCard ? resultCard.querySelector('[data-brief-meta-lang]') : null;
+        const metaHreflang = resultCard ? resultCard.querySelector('[data-brief-meta-hreflang]') : null;
+
+        const stepStateInput = projectCreateForm.querySelector('[data-step-state]');
+        const stepper = projectCreateForm.querySelector('[data-stepper]');
+        const stepPanels = projectCreateForm.querySelectorAll('[data-step-panel]');
+        const analysisFeedback = projectCreateForm.querySelector('[data-analysis-feedback]');
+        const manualProceedButton = projectCreateForm.querySelector('[data-action="step-proceed-manual"]');
+        const stepBackButton = projectCreateForm.querySelector('[data-action="step-back"]');
+
+        let unlockedSteps = new Set([1]);
+        let currentStep = 1;
+
+        const setButtonLoading = (isLoading) => {
+            if (!analyzeButton) { return; }
+            analyzeButton.dataset.loading = isLoading ? '1' : '0';
+            const labelText = analyzeButton.querySelector('[data-label-text]');
+            const spinner = analyzeButton.querySelector('[data-loading-spinner]');
+            const labelKey = isLoading ? 'labelLoading' : 'labelDefault';
+            if (labelText) {
+                const text = analyzeButton.dataset[labelKey] || labelText.textContent;
+                if (text) { labelText.textContent = text; }
+            }
+            if (spinner) {
+                spinner.classList.toggle('d-none', !isLoading);
+            }
+            analyzeButton.classList.toggle('disabled', isLoading);
+            analyzeButton.toggleAttribute('disabled', isLoading);
+        };
+
+        const updateAnalyzeButtonState = () => {
+            if (!analyzeButton) { return; }
+            if (analyzeButton.dataset.loading === '1') { return; }
+            const endpoint = analyzeButton.dataset.endpoint;
+            const value = homepageInput ? homepageInput.value.trim() : '';
+            const isEnabled = !!endpoint && value.length > 4;
+            analyzeButton.classList.toggle('disabled', !isEnabled);
+            analyzeButton.toggleAttribute('disabled', !isEnabled);
+        };
+
+        const toggleResultVisibility = (forceVisible) => {
+            if (!resultCard) { return; }
+            if (forceVisible) {
+                resultCard.classList.remove('d-none');
+            } else {
+                resultCard.classList.add('d-none');
+            }
+        };
+
+        const setCardState = (state) => {
+            if (!resultCard) { return; }
+            if (!state) {
+                resultCard.removeAttribute('data-state');
+            } else {
+                resultCard.setAttribute('data-state', state);
+            }
+        };
+
+        const setStatus = (mode) => {
+            if (!statusBadge) { return; }
+            const map = {
+                Default: 'bg-secondary',
+                Loading: 'bg-info',
+                Success: 'bg-success',
+                Error: 'bg-danger'
+            };
+            const normalized = Object.prototype.hasOwnProperty.call(map, mode) ? mode : 'Default';
+            const key = `status${normalized}`;
+            const text = statusBadge.dataset[key];
+            if (text) { statusBadge.textContent = text; }
+            statusBadge.classList.remove('bg-secondary','bg-success','bg-danger','bg-info');
+            statusBadge.classList.add(map[normalized]);
+        };
+
+        const resetMetaPreview = () => {
+            if (metaTitle) { metaTitle.textContent = '—'; }
+            if (metaDescription) { metaDescription.textContent = '—'; }
+            if (metaLang) { metaLang.textContent = '—'; }
+            if (metaHreflang) { metaHreflang.textContent = '—'; }
+        };
+
+        const setAnalysisFeedback = (state) => {
+            if (!analysisFeedback) { return; }
+            const normalized = (state || 'idle').toLowerCase();
+            const key = 'text' + normalized.charAt(0).toUpperCase() + normalized.slice(1);
+            const fallback = analysisFeedback.dataset.textIdle || '';
+            const text = analysisFeedback.dataset[key] || fallback;
+            analysisFeedback.textContent = text || fallback;
+            if (normalized === 'idle') {
+                delete analysisFeedback.dataset.state;
+            } else {
+                analysisFeedback.dataset.state = normalized;
+            }
+        };
+
+        const updateStepStateInput = () => {
+            if (!stepStateInput) { return; }
+            stepStateInput.value = String(currentStep);
+        };
+
+        const updateStepperUI = () => {
+            if (!stepper) { return; }
+            const items = stepper.querySelectorAll('[data-step]');
+            items.forEach(item => {
+                const stepValue = parseInt(item.dataset.step, 10) || 0;
+                const isUnlocked = unlockedSteps.has(stepValue);
+                const isCurrent = stepValue === currentStep;
+                item.classList.toggle('is-active', isCurrent);
+                item.classList.toggle('is-complete', stepValue < currentStep);
+                item.classList.toggle('is-locked', !isUnlocked);
+                item.classList.toggle('is-available', isUnlocked && !isCurrent);
+                if (isCurrent) {
+                    item.setAttribute('aria-current', 'step');
+                } else {
+                    item.removeAttribute('aria-current');
+                }
+            });
+            stepper.dataset.currentStep = String(currentStep);
+        };
+
+        const showPanelForStep = (step) => {
+            if (!stepPanels || !stepPanels.length) { return; }
+            const value = Number(step) || 1;
+            stepPanels.forEach(panel => {
+                const panelStep = parseInt(panel.getAttribute('data-step-panel'), 10) || 0;
+                const isActive = panelStep === value;
+                panel.classList.toggle('is-active', isActive);
+                panel.classList.toggle('d-none', !isActive);
+            });
+        };
+
+        const goToStep = (step, options = {}) => {
+            const target = Number(step) || 1;
+            if (!unlockedSteps.has(target)) { return; }
+            currentStep = target;
+            updateStepStateInput();
+            updateStepperUI();
+            showPanelForStep(target);
+            if (target === 1) {
+                updateAnalyzeButtonState();
+            }
+            if (options && options.focusSelector) {
+                const focusElement = projectCreateForm.querySelector(options.focusSelector);
+                if (focusElement && typeof focusElement.focus === 'function') {
+                    window.setTimeout(() => {
+                        try { focusElement.focus({ preventScroll: true }); }
+                        catch (_) { focusElement.focus(); }
+                    }, 120);
+                }
+            }
+        };
+
+        const unlockStep = (step) => {
+            const value = Number(step) || 0;
+            if (!value) { return; }
+            if (!unlockedSteps.has(value)) {
+                unlockedSteps.add(value);
+                updateStepperUI();
+            }
+        };
+
+        const resetSteps = (options = {}) => {
+            unlockedSteps = new Set([1]);
+            setAnalysisFeedback('idle');
+            toggleResultVisibility(false);
+            setCardState(null);
+            setStatus('Default');
+            resetMetaPreview();
+            goToStep(1, options);
+        };
+
+        const initAutofillTracking = (input) => {
+            if (!input) { return; }
+            const update = () => {
+                input.dataset.fillState = input.value.trim() === '' ? 'auto' : 'user';
+            };
+            update();
+            input.addEventListener('input', update);
+        };
+
+        const setAutofillValue = (input, value) => {
+            if (!input) { return; }
+            const state = input.dataset.fillState;
+            if (state === 'user' && input.value.trim() !== '') { return; }
+            input.value = value || '';
+            input.dataset.fillState = input.value.trim() === '' ? 'auto' : 'auto';
+        };
+
+        const initSelectTracking = (select) => {
+            if (!select) { return; }
+            select.dataset.fillState = select.value ? 'auto' : 'auto';
+            select.addEventListener('change', () => {
+                select.dataset.fillState = select.value ? 'user' : 'auto';
+            });
+        };
+
+        const setSelectValue = (select, value) => {
+            if (!select || !value) { return; }
+            const state = select.dataset.fillState;
+            if (state === 'user' && select.value && select.value !== value) { return; }
+            const exists = Array.from(select.options).some(opt => opt.value === value);
+            if (!exists) {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = value.toUpperCase();
+                select.appendChild(option);
+            }
+            select.value = value;
+            select.dataset.fillState = 'auto';
+        };
+
+        const extractText = (value) => {
+            if (typeof value === 'string') { return value; }
+            if (Array.isArray(value)) {
+                const first = value.find(item => typeof item === 'string' && item.trim() !== '');
+                return typeof first === 'string' ? first : '';
+            }
+            if (value && typeof value === 'object') {
+                const keys = ['text','content','title'];
+                for (const key of keys) {
+                    if (typeof value[key] === 'string' && value[key].trim() !== '') {
+                        return value[key];
+                    }
+                }
+            }
+            return '';
+        };
+
+        const getMetaValue = (meta, keys) => {
+            if (!meta || typeof meta !== 'object') { return ''; }
+            for (const key of keys) {
+                const parts = key.split('.');
+                let current = meta;
+                for (const part of parts) {
+                    if (current && typeof current === 'object') {
+                        current = current[part];
+                    } else {
+                        current = undefined;
+                        break;
+                    }
+                }
+                const text = extractText(current);
+                if (text) { return text.trim(); }
+            }
+            return '';
+        };
+
+        const formatHreflang = (meta) => {
+            if (!meta || typeof meta !== 'object') { return ''; }
+            const hreflang = Array.isArray(meta.hreflang) ? meta.hreflang : [];
+            if (!hreflang.length) { return ''; }
+            const result = hreflang
+                .map(item => {
+                    if (!item || typeof item !== 'object') { return ''; }
+                    const code = extractText(item.hreflang || item.lang || item.code);
+                    return code ? code.toUpperCase() : '';
+                })
+                .filter(Boolean);
+            return result.slice(0, 6).join(', ');
+        };
+
+        const truncate = (text, maxLength = 260) => {
+            if (!text) { return ''; }
+            if (text.length <= maxLength) { return text; }
+            return `${text.slice(0, maxLength - 1).trim()}…`;
+        };
+
+        const setMetaPreview = (meta, data) => {
+            if (metaTitle) {
+                const title = getMetaValue(meta, ['title','og_title','open_graph.title','twitter.title']) || extractText(data && data.name);
+                metaTitle.textContent = title || '—';
+            }
+            if (metaDescription) {
+                const desc = getMetaValue(meta, ['description','og_description','open_graph.description','twitter.description']) || extractText(data && data.description);
+                metaDescription.textContent = desc ? truncate(desc, 320) : '—';
+            }
+            if (metaLang) {
+                const lang = (meta && (meta.lang || getMetaValue(meta, ['language']))) || (data && data.language) || '';
+                metaLang.textContent = lang ? lang.toString().toUpperCase() : '—';
+            }
+            if (metaHreflang) {
+                const list = formatHreflang(meta);
+                metaHreflang.textContent = list || '—';
+            }
+        };
+
+        const friendlyErrorMessage = (code) => {
+            switch ((code || '').toUpperCase()) {
+                case 'INVALID_URL':
+                    return 'Сервер отклонил URL. Проверьте адрес.';
+                case 'FORBIDDEN':
+                    return 'Недостаточно прав для анализа. Обновите страницу.';
+                case 'CSRF_FAILED':
+                    return 'Сессия устарела. Обновите страницу и попробуйте снова.';
+                case 'METHOD_NOT_ALLOWED':
+                    return 'Метод запроса не поддерживается.';
+                case 'ANALYSIS_FAILED':
+                default:
+                    return 'Не удалось провести анализ. Попробуйте ещё раз.';
+            }
+        };
+
+        const handleAnalysisError = (errorMessage) => {
+            setCardState('error');
+            setStatus('Error');
+            resetMetaPreview();
+            if (metaDescription) {
+                const message = errorMessage ? friendlyErrorMessage(errorMessage) : friendlyErrorMessage('ANALYSIS_FAILED');
+                metaDescription.textContent = truncate(message, 320);
+            }
+            if (payloadInput) {
+                payloadInput.value = '';
+            }
+            setAnalysisFeedback('error');
+            toggleResultVisibility(false);
+            goToStep(1, { focusSelector: '#project-homepage' });
+        };
+
+        const runAnalysis = async () => {
+            if (!analyzeButton || analyzeButton.dataset.loading === '1') { return; }
+            const endpoint = analyzeButton.dataset.endpoint;
+            const url = homepageInput ? homepageInput.value.trim() : '';
+            if (!endpoint || !url) { return; }
+
+            setAnalysisFeedback('loading');
+            toggleResultVisibility(false);
+            setCardState('loading');
+            setStatus('Loading');
+            resetMetaPreview();
+            if (payloadInput) { payloadInput.value = ''; }
+            setButtonLoading(true);
+
+            const body = new URLSearchParams();
+            body.append('url', url);
+            if (csrfInput && csrfInput.value) {
+                body.append('csrf_token', csrfInput.value);
+            }
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: body.toString(),
+                    credentials: 'same-origin'
+                });
+
+                const json = await response.json().catch(() => null);
+                if (!response.ok || !json || !json.ok) {
+                    const message = json && json.error ? json.error : response.statusText;
+                    throw new Error(message || 'ANALYSIS_FAILED');
+                }
+
+                const data = json.data || {};
+                const meta = data.meta || {};
+
+                if (payloadInput) {
+                    payloadInput.value = JSON.stringify(data);
+                }
+                if (nameInput) {
+                    setAutofillValue(nameInput, extractText(data.name));
+                }
+                if (descriptionInput) {
+                    setAutofillValue(descriptionInput, extractText(data.description));
+                }
+                if (languageSelect) {
+                    const lang = extractText(data.language);
+                    if (lang) {
+                        const normalized = lang.toLowerCase();
+                        const base = normalized.split(/[-_]/)[0] || normalized;
+                        const hasExact = Array.from(languageSelect.options).some(opt => opt.value === normalized);
+                        const target = hasExact ? normalized : base;
+                        setSelectValue(languageSelect, target);
+                    }
+                }
+
+                setMetaPreview(meta, data);
+                setCardState('success');
+                setStatus('Success');
+                toggleResultVisibility(true);
+                setAnalysisFeedback('success');
+                unlockStep(2);
+                goToStep(2, { focusSelector: '#project-name' });
+            } catch (error) {
+                const message = error && error.message ? error.message : 'ANALYSIS_FAILED';
+                handleAnalysisError(message);
+            } finally {
+                setButtonLoading(false);
+                if (!prefersReducedMotion && currentStep === 2 && resultCard && !resultCard.classList.contains('d-none')) {
+                    try {
+                        resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } catch (_) {
+                        resultCard.scrollIntoView();
+                    }
+                }
+            }
+        };
+
+        if (analyzeButton) {
+            setButtonLoading(false);
+            analyzeButton.addEventListener('click', runAnalysis);
+        }
+
+        if (manualProceedButton) {
+            manualProceedButton.addEventListener('click', () => {
+                if (payloadInput) { payloadInput.value = ''; }
+                setCardState(null);
+                setStatus('Default');
+                resetMetaPreview();
+                toggleResultVisibility(false);
+                unlockStep(2);
+                setAnalysisFeedback('manual');
+                goToStep(2, { focusSelector: '#project-name' });
+            });
+        }
+
+        if (stepBackButton) {
+            stepBackButton.addEventListener('click', () => {
+                goToStep(1, { focusSelector: '#project-homepage' });
+            });
+        }
+
+        if (homepageInput) {
+            initAutofillTracking(homepageInput);
+            let lastHomepageValue = homepageInput.value.trim();
+            const resetPayload = () => {
+                if (payloadInput) { payloadInput.value = ''; }
+                resetSteps();
+                lastHomepageValue = homepageInput.value.trim();
+                updateAnalyzeButtonState();
+            };
+            homepageInput.addEventListener('input', () => {
+                updateAnalyzeButtonState();
+                if (!homepageInput.value.trim()) {
+                    resetPayload();
+                }
+            });
+            homepageInput.addEventListener('change', () => {
+                const currentValue = homepageInput.value.trim();
+                if (currentValue === lastHomepageValue) { return; }
+                resetPayload();
+                if (currentValue) {
+                    setAnalysisFeedback('idle');
+                }
+            });
+            updateAnalyzeButtonState();
+        }
+
+        initAutofillTracking(nameInput);
+        initAutofillTracking(descriptionInput);
+        initSelectTracking(languageSelect);
+
+        if (statusBadge) { setStatus('Default'); }
+        resetMetaPreview();
+        toggleResultVisibility(false);
+        setAnalysisFeedback('idle');
+        updateStepperUI();
+        showPanelForStep(currentStep);
+        updateStepStateInput();
+        updateAnalyzeButtonState();
+    }
+
     if (projectCreateForm && projectCreateOverlay) {
         const tipTarget = projectCreateOverlay.querySelector('[data-tip-text]');
         const submitButton = projectCreateForm.querySelector('[type="submit"]');
