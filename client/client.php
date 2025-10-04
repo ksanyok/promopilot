@@ -206,14 +206,19 @@ $pp_container = false;
                     <div class="dashboard-project-card h-100">
                         <div class="dashboard-project-card__media">
                             <div class="dashboard-project-card__media-inner">
-                                <?php if ($projectPreviewUrl): ?>
-                                    <img src="<?php echo $projectPreviewUrl; ?>" alt="<?php echo $projectName; ?>" loading="lazy" decoding="async" class="dashboard-project-card__screenshot">
-                                <?php else: ?>
-                                    <div class="dashboard-project-card__screenshot dashboard-project-card__screenshot--placeholder">
-                                        <span><?php echo htmlspecialchars($projectInitial); ?></span>
-                                    </div>
-                                <?php endif; ?>
+                                <a href="<?php echo $projectUrl; ?>" class="dashboard-project-card__media-link" aria-label="<?php echo __('Открыть проект'); ?>">
+                                    <?php if ($projectPreviewUrl): ?>
+                                        <img src="<?php echo $projectPreviewUrl; ?>" alt="<?php echo $projectName; ?>" loading="lazy" decoding="async" class="dashboard-project-card__screenshot">
+                                    <?php else: ?>
+                                        <div class="dashboard-project-card__screenshot dashboard-project-card__screenshot--placeholder">
+                                            <span><?php echo htmlspecialchars($projectInitial); ?></span>
+                                        </div>
+                                    <?php endif; ?>
+                                </a>
                                 <span class="dashboard-project-card__media-glow"></span>
+                                <a href="<?php echo $editUrl; ?>" class="dashboard-project-card__edit" title="<?php echo __('Редактировать'); ?>" aria-label="<?php echo __('Редактировать'); ?>">
+                                    <i class="bi bi-pencil-square"></i>
+                                </a>
                             </div>
                             <?php if ($projectDomainHost !== ''): ?>
                                 <div class="dashboard-project-card__domain">
@@ -262,7 +267,6 @@ $pp_container = false;
                             <span class="dashboard-project-card__activity text-muted small"><i class="bi bi-activity me-1"></i><?php echo $lastActivity; ?></span>
                             <div class="dashboard-project-card__actions d-flex gap-2 flex-wrap justify-content-end">
                                 <a href="<?php echo $projectUrl; ?>" class="btn btn-sm btn-primary"><i class="bi bi-folder2-open me-1"></i><?php echo __('Открыть проект'); ?></a>
-                                <a href="<?php echo $editUrl; ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil-square me-1"></i><?php echo __('Редактировать'); ?></a>
                                 <a href="<?php echo $historyUrl; ?>" class="btn btn-sm btn-outline-secondary btn-icon" title="<?php echo __('История'); ?>"><i class="bi bi-clock-history"></i></a>
                             </div>
                         </div>
