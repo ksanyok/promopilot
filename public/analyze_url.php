@@ -53,19 +53,75 @@ if ($projectId > 0) {
 }
 
 try {
-    if (!function_exists('pp_analyze_url_data')) {
-        $response(['ok' => false, 'error' => 'ANALYZER_MISSING']);
+    $meta = null;
+    $brief = null;
+
+    if (function_exists('pp_project_brief_prepare_initial')) {
+        try {
+            $brief = pp_project_brief_prepare_initial($url);
+            if (is_array($brief)) {
+                $metaCandidate = $brief['meta'] ?? null;
+                if (is_array($metaCandidate)) {
+                    $meta = $metaCandidate;
+                }
+            }
+        } catch (Throwable $e) {
+            $brief = null;
+        }
     }
-    $data = pp_analyze_url_data($url);
-    if (!$data) {
+
+    if ($meta === null) {
+        if (!function_exists('pp_analyze_url_data')) {
+            $response(['ok' => false, 'error' => 'ANALYZER_MISSING']);
+        }
+        $meta = pp_analyze_url_data($url);
+    }
+
+    if (!$meta) {
         $response(['ok' => false, 'error' => 'FETCH_OR_PARSE_FAILED']);
     }
 
-    if ($shouldSave && function_exists('pp_save_page_meta')) {
-        @pp_save_page_meta($projectId, $url, $data);
+    $suggestedName = '';
+    $suggestedDescription = '';
+    $suggestedLanguage = '';
+    if (is_array($brief)) {
+        $suggestedName = trim((string)($brief['name'] ?? ''));
+        $suggestedDescription = trim((string)($brief['description'] ?? ''));
+        $suggestedLanguage = trim((string)($brief['language'] ?? ''));
     }
 
-    $response(['ok' => true, 'data' => $data]);
+    if ($suggestedName === '' && isset($meta['title'])) {
+        $suggestedName = trim((string)$meta['title']);
+    }
+    if ($suggestedDescription === '' && isset($meta['description'])) {
+        $suggestedDescription = trim((string)$meta['description']);
+    }
+    if ($suggestedLanguage === '' && isset($meta['lang'])) {
+        $suggestedLanguage = trim((string)$meta['lang']);
+    }
+
+    $payload = is_array($meta) ? $meta : [];
+    $payload['meta'] = $meta;
+    if ($suggestedName !== '') { $payload['suggested_name'] = $suggestedName; }
+    if ($suggestedDescription !== '') { $payload['suggested_description'] = $suggestedDescription; }
+    if ($suggestedLanguage !== '') { $payload['suggested_language'] = $suggestedLanguage; }
+    $payload['language'] = $suggestedLanguage;
+    $payload['name_suggested_by_ai'] = $suggestedName;
+    $payload['description_suggested_by_ai'] = $suggestedDescription;
+    if (is_array($brief)) {
+        $payload['brief'] = [
+            'name' => $brief['name'] ?? '',
+            'description' => $brief['description'] ?? '',
+            'language' => $brief['language'] ?? '',
+            'ai' => $brief['ai'] ?? null,
+        ];
+    }
+
+    if ($shouldSave && function_exists('pp_save_page_meta')) {
+        @pp_save_page_meta($projectId, $url, $meta);
+    }
+
+    $response(['ok' => true, 'data' => $payload]);
 } catch (Throwable $e) {
     $response(['ok' => false, 'error' => 'EXCEPTION', 'details' => $e->getMessage()]);
 }

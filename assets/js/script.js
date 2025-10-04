@@ -397,6 +397,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const nameInput = projectCreateForm.querySelector('#project-name');
         const descriptionInput = projectCreateForm.querySelector('#project-description');
         const languageSelect = projectCreateForm.querySelector('#project-language');
+        const regionSelect = projectCreateForm.querySelector('#project-region');
+        const topicSelect = projectCreateForm.querySelector('#project-topic');
         const resultCard = projectCreateForm.querySelector('[data-brief-result]');
         const statusBadge = resultCard ? resultCard.querySelector('[data-brief-status]') : null;
         const metaTitle = resultCard ? resultCard.querySelector('[data-brief-meta-title]') : null;
@@ -586,29 +588,38 @@ document.addEventListener('DOMContentLoaded', function() {
             const state = input.dataset.fillState;
             if (state === 'user' && input.value.trim() !== '') { return; }
             input.value = value || '';
-            input.dataset.fillState = input.value.trim() === '' ? 'auto' : 'auto';
+            input.dataset.fillState = 'auto';
         };
 
         const initSelectTracking = (select) => {
             if (!select) { return; }
-            select.dataset.fillState = select.value ? 'auto' : 'auto';
+            select.dataset.fillState = 'auto';
             select.addEventListener('change', () => {
                 select.dataset.fillState = select.value ? 'user' : 'auto';
             });
         };
 
-        const setSelectValue = (select, value) => {
+        const setSelectValue = (select, value, options = {}) => {
             if (!select || !value) { return; }
             const state = select.dataset.fillState;
             if (state === 'user' && select.value && select.value !== value) { return; }
-            const exists = Array.from(select.options).some(opt => opt.value === value);
-            if (!exists) {
+            const opts = typeof options === 'object' && options !== null ? options : {};
+            const allowCreate = Boolean(opts.allowCreate);
+            const labelOverride = typeof opts.label === 'string' && opts.label.trim() !== '' ? opts.label.trim() : null;
+            const normalized = String(value).trim();
+            if (!normalized) { return; }
+            const optionsList = Array.from(select.options);
+            const exactOption = optionsList.find(opt => opt.value === normalized);
+            const caseOption = exactOption || optionsList.find(opt => opt.value.toLowerCase() === normalized.toLowerCase());
+            const targetValue = caseOption ? caseOption.value : normalized;
+            if (!caseOption && !allowCreate) { return; }
+            if (!caseOption && allowCreate) {
                 const option = document.createElement('option');
-                option.value = value;
-                option.textContent = value.toUpperCase();
+                option.value = targetValue;
+                option.textContent = labelOverride || targetValue.toUpperCase();
                 select.appendChild(option);
             }
-            select.value = value;
+            select.value = targetValue;
             select.dataset.fillState = 'auto';
         };
 
@@ -624,6 +635,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (typeof value[key] === 'string' && value[key].trim() !== '') {
                         return value[key];
                     }
+                }
+            }
+            return '';
+        };
+
+        const pickString = (...candidates) => {
+            for (const candidate of candidates) {
+                const text = extractText(candidate);
+                if (typeof text === 'string') {
+                    const trimmed = text.trim();
+                    if (trimmed !== '') { return trimmed; }
                 }
             }
             return '';
@@ -660,6 +682,45 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .filter(Boolean);
             return result.slice(0, 6).join(', ');
+        };
+
+        const findFirstAvailable = (select, candidates, fallback) => {
+            if (!select) { return ''; }
+            const values = Array.from(select.options).map(opt => opt.value);
+            if (Array.isArray(candidates)) {
+                for (const candidate of candidates) {
+                    if (values.includes(candidate)) { return candidate; }
+                }
+            }
+            if (fallback && values.includes(fallback)) { return fallback; }
+            return values[0] || '';
+        };
+
+        const applyTargetingDefaults = (languageCode, meta) => {
+            const lang = (languageCode || '').toLowerCase();
+            const metaRegion = meta && typeof meta.region === 'string' ? meta.region : '';
+            if (regionSelect) {
+                const candidates = [];
+                if (metaRegion) { candidates.push(metaRegion); }
+                if (lang === 'ru') {
+                    candidates.push('RU', 'CIS');
+                }
+                candidates.push('Global');
+                const targetRegion = findFirstAvailable(regionSelect, candidates, 'Global');
+                if (targetRegion) {
+                    setSelectValue(regionSelect, targetRegion, { allowCreate: false });
+                }
+            }
+            if (topicSelect) {
+                const metaTopic = meta && typeof meta.topic === 'string' ? meta.topic : '';
+                const topics = [];
+                if (metaTopic) { topics.push(metaTopic); }
+                topics.push('General');
+                const targetTopic = findFirstAvailable(topicSelect, topics, 'General');
+                if (targetTopic) {
+                    setSelectValue(topicSelect, targetTopic, { allowCreate: false });
+                }
+            }
         };
 
         const truncate = (text, maxLength = 260) => {
@@ -754,29 +815,40 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 const data = json.data || {};
-                const meta = data.meta || {};
+                const meta = (data.meta && typeof data.meta === 'object') ? data.meta : {};
+                const brief = (data.brief && typeof data.brief === 'object') ? data.brief : {};
 
                 if (payloadInput) {
                     payloadInput.value = JSON.stringify(data);
                 }
+
+                const suggestedName = pickString(data.suggested_name, data.name_suggested_by_ai, brief.name, data.name, meta.title);
+                const suggestedDescription = pickString(data.suggested_description, data.description_suggested_by_ai, brief.description, data.description, meta.description);
+                const suggestedLanguage = pickString(data.suggested_language, data.language, brief.language, data.lang, meta.lang);
+
                 if (nameInput) {
-                    setAutofillValue(nameInput, extractText(data.name));
+                    setAutofillValue(nameInput, suggestedName);
                 }
                 if (descriptionInput) {
-                    setAutofillValue(descriptionInput, extractText(data.description));
+                    setAutofillValue(descriptionInput, suggestedDescription);
                 }
-                if (languageSelect) {
-                    const lang = extractText(data.language);
-                    if (lang) {
-                        const normalized = lang.toLowerCase();
-                        const base = normalized.split(/[-_]/)[0] || normalized;
-                        const hasExact = Array.from(languageSelect.options).some(opt => opt.value === normalized);
-                        const target = hasExact ? normalized : base;
-                        setSelectValue(languageSelect, target);
-                    }
+                if (languageSelect && suggestedLanguage) {
+                    const normalized = suggestedLanguage.toLowerCase();
+                    const base = normalized.split(/[-_]/)[0] || normalized;
+                    const optionsList = Array.from(languageSelect.options).map(opt => opt.value);
+                    const hasExact = optionsList.includes(normalized);
+                    const hasBase = optionsList.includes(base);
+                    const target = hasExact ? normalized : (hasBase ? base : normalized);
+                    setSelectValue(languageSelect, target, { allowCreate: true, label: (target || '').toUpperCase() });
                 }
 
-                setMetaPreview(meta, data);
+                applyTargetingDefaults(suggestedLanguage, meta);
+
+                setMetaPreview(meta, {
+                    name: suggestedName,
+                    description: suggestedDescription,
+                    language: suggestedLanguage
+                });
                 setCardState('success');
                 setStatus('Success');
                 toggleResultVisibility(true);
@@ -851,6 +923,8 @@ document.addEventListener('DOMContentLoaded', function() {
         initAutofillTracking(nameInput);
         initAutofillTracking(descriptionInput);
         initSelectTracking(languageSelect);
+        initSelectTracking(regionSelect);
+        initSelectTracking(topicSelect);
 
         if (statusBadge) { setStatus('Default'); }
         resetMetaPreview();
