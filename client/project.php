@@ -470,6 +470,7 @@ $pp_container = false;
 $pp_container_class = '';
 // Provide current project context for sidebar highlighting (optional)
 $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['name']];
+$GLOBALS['pp_layout_has_sidebar'] = true;
 
 ?>
 

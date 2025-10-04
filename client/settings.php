@@ -127,6 +127,7 @@ $conn->close();
 
 // UI flags
 $pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
 
 include __DIR__ . '/../includes/header.php';
 include __DIR__ . '/../includes/client_sidebar.php';

@@ -104,6 +104,7 @@ $formatActivity = static function (?string $timestamp) {
 
 $firstProjectId = !empty($projectsData) ? (int)$projectsData[0]['id'] : null;
 $pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
 ?>
 
 <?php include '../includes/header.php'; ?>

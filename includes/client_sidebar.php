@@ -3,6 +3,8 @@
 // Expects optional $pp_current_project = ['id' => int, 'name' => string]
 if (!function_exists('pp_url')) { require_once __DIR__ . '/init.php'; }
 
+$GLOBALS['pp_layout_has_sidebar'] = true;
+
 $balanceText = '';
 if (is_logged_in() && !is_admin()) {
     $uid = (int)($_SESSION['user_id'] ?? 0);

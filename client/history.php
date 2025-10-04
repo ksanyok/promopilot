@@ -86,6 +86,7 @@ $r = $stmt->get_result();
 while ($row = $r->fetch_assoc()) { $publications[] = $row; }
 $stmt->close();
 $conn->close();
+$GLOBALS['pp_layout_has_sidebar'] = true;
 
 include '../includes/header.php';
 include __DIR__ . '/../includes/client_sidebar.php';

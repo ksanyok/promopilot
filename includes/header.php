@@ -113,7 +113,13 @@ if (is_logged_in()) {
             </div>
         </div>
     </nav>
-    <main class="page-wrap">
+    <?php
+    $pp_page_wrap_classes = ['page-wrap'];
+    if (!empty($GLOBALS['pp_layout_has_sidebar'])) {
+        $pp_page_wrap_classes[] = 'layout-has-sidebar';
+    }
+    ?>
+    <main class="<?php echo implode(' ', $pp_page_wrap_classes); ?>">
     <?php 
     $useContainer = isset($pp_container) ? (bool)$pp_container : !is_admin();
     $pp_container_class = isset($pp_container_class) && is_string($pp_container_class) ? trim($pp_container_class) : 'container';

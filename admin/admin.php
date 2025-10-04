@@ -404,6 +404,8 @@ $crowdDeepStatusData = pp_crowd_deep_get_status();
 $crowdDeepCurrentRun = ($crowdDeepStatusData['ok'] ?? false) ? ($crowdDeepStatusData['run'] ?? null) : null;
 $crowdDeepStatusError = ($crowdDeepStatusData['ok'] ?? false) ? null : ($crowdDeepStatusData['error'] ?? null);
 $crowdDeepRecentResults = pp_crowd_deep_get_recent_results($crowdDeepCurrentRun['id'] ?? null, 15);
+
+$GLOBALS['pp_layout_has_sidebar'] = true;
 ?>
 
 <?php include '../includes/header.php'; ?>

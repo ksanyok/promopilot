@@ -77,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 }
 
 $pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
 ?>
 
 <?php include '../includes/header.php'; ?>
