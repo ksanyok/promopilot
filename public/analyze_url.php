@@ -102,12 +102,15 @@ try {
 
     $payload = is_array($meta) ? $meta : [];
     $payload['meta'] = $meta;
+    $payload['name'] = $suggestedName;
+    $payload['description'] = $suggestedDescription;
+    $payload['language'] = $suggestedLanguage;
     if ($suggestedName !== '') { $payload['suggested_name'] = $suggestedName; }
     if ($suggestedDescription !== '') { $payload['suggested_description'] = $suggestedDescription; }
     if ($suggestedLanguage !== '') { $payload['suggested_language'] = $suggestedLanguage; }
-    $payload['language'] = $suggestedLanguage;
     $payload['name_suggested_by_ai'] = $suggestedName;
     $payload['description_suggested_by_ai'] = $suggestedDescription;
+    $payload['suggested_language_by_ai'] = $suggestedLanguage;
     if (is_array($brief)) {
         $payload['brief'] = [
             'name' => $brief['name'] ?? '',

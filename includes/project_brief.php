@@ -29,20 +29,37 @@ if (!function_exists('pp_project_brief_prepare_ai_payload')) {
         $url = trim((string)($options['url'] ?? ''));
         $meta = is_array($options['meta'] ?? null) ? $options['meta'] : [];
         $lang = pp_detect_language_from_meta($meta);
-        $langLabel = strtoupper($lang);
-        $desc = trim((string)($meta['description'] ?? ''));
+        $langLabel = strtoupper($lang ?: 'RU');
+
         $title = trim((string)($meta['title'] ?? ''));
+        $desc = trim((string)($meta['description'] ?? ''));
         $region = trim((string)($meta['region'] ?? ''));
+        $finalUrl = trim((string)($meta['final_url'] ?? $url));
+
         $promptPieces = [];
-        $promptPieces[] = "URL: {$url}";
-        if ($title !== '') { $promptPieces[] = 'Title: ' . $title; }
-        if ($desc !== '') { $promptPieces[] = 'Description: ' . $desc; }
-        if ($region !== '') { $promptPieces[] = 'Region: ' . $region; }
+        if ($finalUrl !== '') { $promptPieces[] = 'URL: ' . $finalUrl; }
+        if ($title !== '') { $promptPieces[] = 'Meta title: ' . $title; }
+        if ($desc !== '') { $promptPieces[] = 'Meta description: ' . $desc; }
+        if (!empty($meta['hreflang']) && is_array($meta['hreflang'])) {
+            $variants = array_slice(array_filter(array_map(static function ($item) {
+                if (!is_array($item)) { return null; }
+                $code = trim((string)($item['hreflang'] ?? $item['lang'] ?? ''));
+                $href = trim((string)($item['href'] ?? ''));
+                if ($code === '' || $href === '') { return null; }
+                return strtoupper($code) . ' → ' . $href;
+            }, $meta['hreflang'])), 0, 6);
+            if (!empty($variants)) {
+                $promptPieces[] = 'Hreflang: ' . implode('; ', $variants);
+            }
+        }
+        if ($region !== '') { $promptPieces[] = 'Region hint: ' . strtoupper($region); }
         $prompt = implode("\n", $promptPieces);
-        $systemPrompt = 'You are PromoPilot assistant generating concise project briefs.';
-        $userPrompt = "Проанализируй сайт и предложи название и краткое описание проекта на языке {$langLabel}.";
-        if ($prompt !== '') { $userPrompt .= "\n\n" . $prompt; }
-        $userPrompt .= "\n\nВерни JSON с ключами: name (<=80 символов), description (<=240 символов).";
+
+        $systemPrompt = 'You are PromoPilot assistant. You craft ultra-short project names and concise briefs for marketing managers.';
+        $userPrompt = "Проанализируй сайт и подготовь предложение на языке {$langLabel}. Сформируй лаконичное название проекта (до 20 символов, без кавычек и эмодзи) и одно короткое описание (до 200 символов).";
+        if ($prompt !== '') { $userPrompt .= "\n\nДанные страницы:\n" . $prompt; }
+        $userPrompt .= "\n\nВерни ответ строго в JSON без форматирования и комментариев с ключами: name, description. Название и описание должны быть на языке {$langLabel}.";
+
         return [
             'language' => $lang,
             'system' => $systemPrompt,
@@ -89,6 +106,15 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
             $name = trim((string)($json['name'] ?? ''));
             $description = trim((string)($json['description'] ?? ''));
             if ($name === '') { $name = $options['meta']['title'] ?? ''; }
+            $truncate = static function (string $value, int $limit): string {
+                if ($value === '') { return ''; }
+                if (function_exists('mb_substr')) {
+                    return trim(mb_substr($value, 0, $limit, 'UTF-8'));
+                }
+                return trim(substr($value, 0, $limit));
+            };
+            $name = $truncate($name, 20);
+            $description = $truncate($description !== '' ? $description : ($options['meta']['description'] ?? ''), 240);
             return ['name' => $name, 'description' => $description];
         } catch (Throwable $e) {
             return null;
@@ -171,24 +197,41 @@ if (!function_exists('pp_project_brief_prepare_initial')) {
     function pp_project_brief_prepare_initial(string $url): array {
         $analysis = pp_project_brief_analyze_site($url);
         $meta = $analysis['meta'] ?? [];
-        $lang = $analysis['lang'] ?? 'ru';
-        $name = $analysis['name'] ?? '';
-        $description = $analysis['description'] ?? '';
-        $ai = null;
-        if ($name === '' || $description === '') {
-            $ai = pp_project_brief_generate_from_ai([
-                'url' => $url,
-                'meta' => $meta,
-            ]);
-            if (is_array($ai)) {
-                if ($name === '' && !empty($ai['name'])) { $name = $ai['name']; }
-                if ($description === '' && !empty($ai['description'])) { $description = $ai['description']; }
+        $detectedLang = $analysis['lang'] ?? 'ru';
+        $fallbackTitle = trim((string)($analysis['name'] ?? ($meta['title'] ?? '')));
+        $fallbackDescription = trim((string)($analysis['description'] ?? ($meta['description'] ?? '')));
+
+        $ai = pp_project_brief_generate_from_ai([
+            'url' => $url,
+            'meta' => $meta,
+        ]);
+
+        $truncate = static function (string $value, int $limit) {
+            if ($value === '') { return ''; }
+            if (function_exists('mb_substr')) {
+                return trim(mb_substr($value, 0, $limit, 'UTF-8'));
             }
+            return trim(substr($value, 0, $limit));
+        };
+
+        $name = $ai['name'] ?? '';
+        $description = $ai['description'] ?? '';
+
+        if ($name === '') { $name = $fallbackTitle; }
+        if ($description === '') { $description = $fallbackDescription; }
+
+        $name = $truncate($name, 20);
+        $description = $truncate($description, 240);
+
+        if ($name === '' && $url !== '') {
+            $host = pp_project_brief_extract_domain($url);
+            if ($host !== '') { $name = $truncate($host, 20); }
         }
+
         return [
             'name' => $name,
             'description' => $description,
-            'language' => $lang,
+            'language' => $detectedLang,
             'meta' => $meta,
             'ai' => $ai,
         ];

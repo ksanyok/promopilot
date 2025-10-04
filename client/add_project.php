@@ -29,9 +29,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } else {
         $name = trim($_POST['name']);
         $description = trim($_POST['description'] ?? ''); // теперь необязательное
-        $first_url = trim($_POST['first_url'] ?? '');
-        $first_anchor = trim($_POST['first_anchor'] ?? '');
-        $first_language = trim($_POST['first_language'] ?? 'ru');
+    $first_url = trim($_POST['first_url'] ?? '');
+    $language = strtolower(trim((string)($_POST['language'] ?? 'ru')));
+    if ($language === '' || !preg_match('~^[a-z]{2,5}$~', $language)) { $language = 'ru'; }
         $global_wishes = trim($_POST['wishes'] ?? '');
         $region = trim((string)($_POST['region'] ?? ''));
         $topic = trim((string)($_POST['topic'] ?? ''));
@@ -45,25 +45,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         } else {
             $conn = connect_db();
             // Insert project with region/topic
-            $stmt = $conn->prepare("INSERT INTO projects (user_id, name, description, region, topic) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("issss", $user_id, $name, $description, $region, $topic);
+            $stmt = $conn->prepare("INSERT INTO projects (user_id, name, description, language, region, topic) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("isssss", $user_id, $name, $description, $language, $region, $topic);
             if ($stmt->execute()) {
                 $project_id = $stmt->insert_id;
-                // Добавим первую ссылку и глобальные пожелания в отдельную таблицу project_links
+                // Подготовим данные по домену и сохраним пожелания
                 $host = '';
                 if ($first_url) {
                     // Нормализуем и сохраним домен проекта (только хост, без www.)
                     $host = strtolower((string)parse_url($first_url, PHP_URL_HOST));
                     if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
-
-                    // Вставка ссылки
-                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
-                    if ($ins) {
-                        $emptyWish = '';
-                        $ins->bind_param('issss', $project_id, $first_url, $first_anchor, $first_language, $emptyWish);
-                        $ins->execute();
-                        $ins->close();
-                    }
 
                     // Анализ микроразметки и сохранение в page_meta (best-effort)
                     try {
@@ -87,6 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         'id' => $project_id,
                         'user_id' => $user_id,
                         'name' => $name,
+                        'language' => $language,
                         'domain_host' => $host,
                         'primary_url' => $first_url,
                     ];
@@ -283,16 +275,11 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                             <p class="text-muted mb-0"><?php echo __('Название и описание проекта можно скорректировать после автоматического анализа.'); ?></p>
                                         </div>
                                     </div>
-                                    <div class="section-grid">
+                                    <div class="section-grid section-grid--single">
                                         <div class="form-floating">
                                             <input type="text" name="name" id="project-name" class="form-control" placeholder="<?php echo __('Название проекта'); ?>" required>
                                             <label for="project-name"><?php echo __('Название проекта'); ?> *</label>
-                                            <div class="form-helper"><?php echo __('Автоматически подставим найденный заголовок страницы или предложим вариант через ИИ.'); ?></div>
-                                        </div>
-                                        <div class="form-floating">
-                                            <input type="text" name="first_anchor" id="project-anchor" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
-                                            <label for="project-anchor"><?php echo __('Анкор первой ссылки'); ?></label>
-                                            <div class="form-helper"><?php echo __('Оставьте пустым, если хотите подобрать анкор позже.'); ?></div>
+                                            <div class="form-helper"><?php echo __('Автоматически подставим найденный заголовок страницы или предложим вариант через ИИ. Название не должно превышать 20 символов.'); ?></div>
                                         </div>
                                     </div>
                                     <div class="form-floating">
@@ -312,7 +299,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                     </div>
                                     <div class="section-grid">
                                         <div class="form-floating">
-                                            <select name="first_language" id="project-language" class="form-select">
+                                            <select name="language" id="project-language" class="form-select">
                                                 <option value="ru">Русский</option>
                                                 <option value="en">English</option>
                                                 <option value="es">Español</option>
@@ -353,7 +340,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                     </div>
                                     <div class="section-grid section-grid--single">
                                         <div class="form-floating">
-                                            <textarea name="wishes" id="project-wishes" class="form-control" style="height: 140px" placeholder="<?php echo __('Стиль, тематика, ограничения по бренду, типы анкоров...'); ?>"></textarea>
+                                            <textarea name="wishes" id="project-wishes" class="form-control" style="height: 140px" placeholder="<?php echo __('Стиль, тематика, ограничения по бренду, ключевые сообщения...'); ?>"></textarea>
                                             <label for="project-wishes"><?php echo __('Глобальные пожелания (опционально)'); ?></label>
                                             <div class="form-helper"><?php echo __('Эти заметки появятся при добавлении новых ссылок и запуске каскадов.'); ?></div>
                                         </div>
