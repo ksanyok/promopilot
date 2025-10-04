@@ -131,6 +131,9 @@ if (is_logged_in()) {
     if (!empty($GLOBALS['pp_layout_has_sidebar'])) {
         $pp_page_wrap_classes[] = 'layout-has-sidebar';
     }
+    if (isset($pp_container_class) && is_string($pp_container_class) && strpos($pp_container_class, 'static-page') !== false) {
+        $pp_page_wrap_classes[] = 'layout-static';
+    }
     ?>
     <main class="<?php echo implode(' ', $pp_page_wrap_classes); ?>">
     <?php 

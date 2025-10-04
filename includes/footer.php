@@ -55,8 +55,12 @@
     ];
     $isAdmin = is_admin();
     $showUpdateButton = $isAdmin || isset($_SESSION['admin_user_id']);
+    $footerClasses = ['footer', 'pp-footer'];
+    if (!empty($pp_container_class) && strpos((string)$pp_container_class, 'static-page') !== false) {
+        $footerClasses[] = 'static-page-footer';
+    }
 ?>
-    <footer class="footer pp-footer" id="app-footer">
+    <footer class="<?php echo implode(' ', $footerClasses); ?>" id="app-footer">
         <div class="footer__inner pp-footer__inner">
             <div class="pp-footer__column pp-footer__column--primary">
                 <div class="pp-footer__logo-row">
