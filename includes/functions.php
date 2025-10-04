@@ -20,6 +20,7 @@ require_once __DIR__ . '/networks.php';        // Networks registry and utilitie
 require_once __DIR__ . '/crowd_links.php';     // Crowd marketing links management
 require_once __DIR__ . '/crowd_deep.php';      // Crowd deep submission verification
 require_once __DIR__ . '/page_meta.php';       // Page meta + URL analysis helpers
+require_once __DIR__ . '/project_brief.php';   // Project brief (AI-assisted naming)
 require_once __DIR__ . '/publication_queue.php'; // Publication queue processing
 require_once __DIR__ . '/update.php';          // Version and update checks
 
@@ -90,6 +91,9 @@ function ensure_schema(): void {
         // New: domain restriction host
         if (!isset($projectsCols['domain_host'])) {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `domain_host` VARCHAR(190) NULL AFTER `wishes`");
+        }
+        if (!isset($projectsCols['homepage_url'])) {
+            @$conn->query("ALTER TABLE `projects` ADD COLUMN `homepage_url` TEXT NULL AFTER `domain_host`");
         }
         if (!isset($projectsCols['region'])) {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `region` VARCHAR(100) NULL");
