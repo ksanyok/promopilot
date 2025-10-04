@@ -2615,6 +2615,67 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
   font-size: .82rem;
 }
 .promotion-report-crowd li:last-child { border-bottom: none; }
+.promotion-report-tabs { margin-bottom: 18px; }
+.promotion-report-tablist { display: flex; gap: 10px; flex-wrap: wrap; }
+.promotion-report-tablist .nav-link {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--surface) 90%, transparent 10%);
+  color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
+  padding: 6px 18px;
+  transition: all .2s ease;
+}
+.promotion-report-tablist .nav-link:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent 60%);
+}
+.promotion-report-tablist .nav-link.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  box-shadow: 0 10px 24px rgba(15,20,32,.24);
+}
+.promotion-report-tabcontent .tab-pane { padding-top: 12px; }
+.promotion-report-overview-meta dl { row-gap: 6px; }
+.promotion-report-overview-dl dt { font-weight: 600; }
+.promotion-report-overview-card { display: flex; flex-direction: column; gap: 8px; min-height: 150px; }
+.promotion-report-overview-metric { font-size: 2.2rem; font-weight: 600; line-height: 1.2; color: var(--text); }
+.promotion-report-ratios { display: flex; flex-direction: column; gap: 12px; }
+.promotion-report-ratio-list { display: flex; flex-direction: column; gap: 10px; }
+.promotion-report-ratio-item .ratio-label { font-weight: 600; color: var(--text); }
+.promotion-report-ratio-item .ratio-number { font-size: 1.1rem; font-weight: 600; margin-right: 6px; }
+.promotion-report-ratio-item .ratio-detail { font-size: .82rem; }
+.promotion-report-tree .accordion-button {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--surface) 92%, transparent 8%);
+  box-shadow: none;
+}
+.promotion-report-tree .accordion-button:not(.collapsed) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface) 86%);
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 30%, transparent 70%);
+}
+.promotion-report-tree .accordion-body {
+  background: color-mix(in srgb, var(--surface) 90%, transparent 10%);
+  border-radius: var(--radius-xs);
+}
+.promotion-report-tree-level { display: flex; flex-direction: column; gap: 12px; }
+.promotion-report-tree-level3 { gap: 10px; }
+.promotion-report-tree-node {
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent 20%);
+  padding-bottom: 10px;
+}
+.promotion-report-tree-node:last-child { border-bottom: none; }
+.promotion-report-tree-node-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: .85rem;
+}
+.promotion-report-tree-node-head a { color: var(--accent); text-decoration: none; }
+.promotion-report-tree-node-head a:hover { text-decoration: underline; }
+.promotion-report-tree-level3 .promotion-report-tree-node-head { font-size: .8rem; }
+.promotion-report-tree-meta { font-size: .82rem; }
 
 @media (max-width: 768px) {
   .promotion-report-panel { padding: 16px; }

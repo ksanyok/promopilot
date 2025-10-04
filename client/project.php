@@ -1452,6 +1452,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const PROMOTION_DISCOUNT_PERCENT = <?php echo json_encode($userPromotionDiscount); ?>;
     const PROMOTION_CHARGE_SAVINGS = <?php echo json_encode($promotionChargeSavings); ?>;
     const PROMOTION_CHARGE_SAVINGS_FORMATTED = '<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
+    const PROMOTION_ACTIVE_STATUSES = <?php echo json_encode($promotionActiveStates); ?>;
 
     const navBalanceValueEl = document.querySelector('[data-balance-target]');
     const navBalanceLocale = navBalanceValueEl?.dataset.balanceLocale || document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
@@ -1476,6 +1477,33 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (typeof formattedText === 'string' && formattedText.length > 0) {
             navBalanceValueEl.textContent = formattedText;
+        }
+    }
+
+    function setButtonLoading(btn, loading) {
+        if (!btn) { return; }
+        const spinnerMarkup = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>';
+        if (loading) {
+            if (!btn.dataset.originalHtml) {
+                btn.dataset.originalHtml = btn.innerHTML;
+            }
+            if (!btn.dataset.loadingLabel && btn.hasAttribute('data-loading-label')) {
+                btn.dataset.loadingLabel = btn.getAttribute('data-loading-label') || '';
+            }
+            const label = btn.dataset.loadingLabel ? `<span class="btn-loading-label">${btn.dataset.loadingLabel}</span>` : btn.dataset.originalHtml;
+            btn.innerHTML = spinnerMarkup + label;
+            btn.disabled = true;
+            btn.classList.add('is-loading');
+        } else {
+            btn.disabled = false;
+            btn.classList.remove('is-loading');
+            if (btn.dataset.originalHtml) {
+                btn.innerHTML = btn.dataset.originalHtml;
+            }
+            delete btn.dataset.originalHtml;
+            if (btn.dataset.loadingLabel) {
+                delete btn.dataset.loadingLabel;
+            }
         }
     }
 
@@ -1824,6 +1852,20 @@ document.addEventListener('DOMContentLoaded', function() {
         uniqueNetworks: <?php echo json_encode(__('Уникальные сети')); ?>,
     diagramTitle: <?php echo json_encode(__('Карта публикаций по уровням')); ?>,
     diagramHelper: <?php echo json_encode(__('Выберите публикацию первого уровня, чтобы увидеть связанные материалы.')); ?>,
+        tabOverview: <?php echo json_encode(__('Обзор')); ?>,
+        tabCascade: <?php echo json_encode(__('Каскад')); ?>,
+        tabDetails: <?php echo json_encode(__('Таблицы')); ?>,
+        overviewTitle: <?php echo json_encode(__('Быстрый обзор')); ?>,
+        overviewLead: <?php echo json_encode(__('Ключевые цифры по каскаду и статусу.')); ?>,
+        overviewNetworksLabel: <?php echo json_encode(__('Сетей')); ?>,
+        overviewCrowdHint: <?php echo json_encode(__('Крауд-задач опубликовано')); ?>,
+        ratioTitle: <?php echo json_encode(__('Отношение уровней')); ?>,
+        ratioLevel2: <?php echo json_encode(__('Уровень 2 к уровню 1')); ?>,
+        ratioLevel3: <?php echo json_encode(__('Уровень 3 к уровню 2')); ?>,
+        ratioFallback: <?php echo json_encode(__('Нет данных для расчета.')); ?>,
+        treeTitle: <?php echo json_encode(__('Структура каскада')); ?>,
+        treeHelper: <?php echo json_encode(__('Разверните карточку уровня 1, чтобы увидеть вложенные публикации.')); ?>,
+        treeEmpty: <?php echo json_encode(__('Для этого уровня нет вложенных публикаций.')); ?>,
         exportJson: <?php echo json_encode(__('Экспорт JSON')); ?>,
         exportCsv: <?php echo json_encode(__('Экспорт CSV')); ?>,
         exportTooltip: <?php echo json_encode(__('Сохраните отчет, чтобы отправить клиенту или сохранить для аудита.')); ?>,
@@ -2487,60 +2529,66 @@ document.addEventListener('DOMContentLoaded', function() {
             promotionReportContext = null;
             return `<div class="text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
         }
-        promotionReportContext = { report: report || {}, normalized, meta, activeParentId: null };
-        const summaryItems = [
-            { label: PROMOTION_REPORT_STRINGS.level1Count, value: normalized.level1.length },
-            { label: PROMOTION_REPORT_STRINGS.level2Count, value: normalized.level2.length },
-            { label: PROMOTION_REPORT_STRINGS.level3Count, value: normalized.level3.length },
-            { label: PROMOTION_REPORT_STRINGS.uniqueNetworks, value: normalized.uniqueNetworks }
-        ];
-        if (normalized.crowd.length) {
-            summaryItems.push({ label: PROMOTION_REPORT_STRINGS.crowdLinks, value: normalized.crowd.length });
-        }
-        const summaryHtml = summaryItems.map(item => `
-            <li class="promotion-report-summary-item">
-                <span class="label">${escapeHtml(item.label)}</span>
-                <span class="value">${escapeHtml(String(item.value))}</span>
-            </li>
-        `).join('');
+        const uid = 'pr' + Math.random().toString(36).slice(2, 8);
+        const totalNodes = normalized.level1.length + normalized.level2.length + normalized.level3.length;
         const targetUrl = meta?.target || '';
-        const targetLink = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>` : '—';
         const statusText = meta?.status ? escapeHtml(getPromotionStatusLabel(meta.status)) : '—';
+
+        promotionReportContext = { report: report || {}, normalized, meta, activeParentId: null, uid };
+
+        const toolbar = `
+            <div class="promotion-report-toolbar d-flex flex-column flex-lg-row gap-2 align-items-lg-center justify-content-between mb-3">
+                <div class="text-muted small">${escapeHtml(PROMOTION_REPORT_STRINGS.exportTooltip)}</div>
+                <div class="btn-group btn-group-sm" role="group">
+                    <button type="button" class="btn btn-outline-light promotion-report-export" data-format="json"><i class="bi bi-filetype-json me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportJson)}</button>
+                    <button type="button" class="btn btn-outline-light promotion-report-export" data-format="csv"><i class="bi bi-table me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportCsv)}</button>
+                </div>
+            </div>`;
+
+        const overviewHtml = buildPromotionReportOverview(normalized, {
+            targetUrl,
+            statusText,
+            totalNodes
+        });
         const flowHtml = buildPromotionReportFlow(normalized, meta);
         const tablesHtml = buildPromotionReportTables(normalized, meta);
-        const totalNodes = normalized.level1.length + normalized.level2.length + normalized.level3.length;
+
         return `
             <div class="promotion-report-wrapper" data-report-root>
-                <div class="promotion-report-toolbar d-flex flex-column flex-lg-row gap-2 align-items-lg-center justify-content-between mb-3">
-                    <div class="text-muted small">${escapeHtml(PROMOTION_REPORT_STRINGS.exportTooltip)}</div>
-                    <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="json"><i class="bi bi-filetype-json me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportJson)}</button>
-                        <button type="button" class="btn btn-outline-light promotion-report-export" data-format="csv"><i class="bi bi-table me-1"></i>${escapeHtml(PROMOTION_REPORT_STRINGS.exportCsv)}</button>
+                ${toolbar}
+                <div class="promotion-report-tabs">
+                    <ul class="nav nav-pills promotion-report-tablist" id="promotionReportTabs-${uid}" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="promotionReportOverview-tab-${uid}" data-bs-toggle="tab" data-bs-target="#promotionReportOverview-${uid}" type="button" role="tab" aria-controls="promotionReportOverview-${uid}" aria-selected="true">${escapeHtml(PROMOTION_REPORT_STRINGS.tabOverview)}</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="promotionReportCascade-tab-${uid}" data-bs-toggle="tab" data-bs-target="#promotionReportCascade-${uid}" type="button" role="tab" aria-controls="promotionReportCascade-${uid}" aria-selected="false">${escapeHtml(PROMOTION_REPORT_STRINGS.tabCascade)}</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="promotionReportDetails-tab-${uid}" data-bs-toggle="tab" data-bs-target="#promotionReportDetails-${uid}" type="button" role="tab" aria-controls="promotionReportDetails-${uid}" aria-selected="false">${escapeHtml(PROMOTION_REPORT_STRINGS.tabDetails)}</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content promotion-report-tabcontent" id="promotionReportTabsContent-${uid}">
+                        <div class="tab-pane fade show active" id="promotionReportOverview-${uid}" role="tabpanel" aria-labelledby="promotionReportOverview-tab-${uid}">
+                            ${overviewHtml}
+                        </div>
+                        <div class="tab-pane fade" id="promotionReportCascade-${uid}" role="tabpanel" aria-labelledby="promotionReportCascade-tab-${uid}">
+                            <div class="promotion-report-panel">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}</h6>
+                                    <span class="badge bg-primary-subtle text-light-emphasis">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}: ${totalNodes}</span>
+                                </div>
+                                <div class="promotion-report-flow" data-report-flow>
+                                    ${flowHtml}
+                                </div>
+                                <p class="small text-muted mt-2 mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramHelper)}</p>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="promotionReportDetails-${uid}" role="tabpanel" aria-labelledby="promotionReportDetails-tab-${uid}">
+                            ${tablesHtml}
+                        </div>
                     </div>
                 </div>
-                <div class="promotion-report-grid mb-4">
-                    <div class="promotion-report-visual promotion-report-panel">
-                        <div class="d-flex align-items-center justify-content-between mb-2">
-                            <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramTitle)}</h6>
-                            <span class="badge bg-primary-subtle text-light-emphasis">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}: ${totalNodes}</span>
-                        </div>
-                        <div class="promotion-report-flow" data-report-flow>
-                            ${flowHtml}
-                        </div>
-                        <p class="small text-muted mt-2 mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.diagramHelper)}</p>
-                    </div>
-                    <div class="promotion-report-summary promotion-report-panel">
-                        <h6 class="fw-semibold mb-3">${escapeHtml(PROMOTION_REPORT_STRINGS.summary)}</h6>
-                        <ul class="promotion-report-summary-list list-unstyled mb-3">
-                            ${summaryHtml}
-                        </ul>
-                        <div class="promotion-report-meta small text-muted">
-                            <div><strong>${escapeHtml(PROMOTION_REPORT_STRINGS.targetLabel)}:</strong> ${targetLink}</div>
-                            <div><strong>${escapeHtml(PROMOTION_REPORT_STRINGS.statusLabel)}:</strong> ${statusText}</div>
-                        </div>
-                    </div>
-                </div>
-                ${tablesHtml}
             </div>
         `;
     }
@@ -2620,6 +2668,236 @@ document.addEventListener('DOMContentLoaded', function() {
             level3ByParent,
             uniqueNetworks: uniqueNetworks.size,
         };
+    }
+
+    function buildPromotionReportOverview(normalized, meta = {}) {
+        const targetUrl = meta.targetUrl || '';
+        const statusText = meta.statusText || '—';
+        const totalNodes = typeof meta.totalNodes === 'number' ? meta.totalNodes : (normalized.level1.length + normalized.level2.length + normalized.level3.length);
+        const targetLink = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(truncateMiddle(targetUrl, 96))}</a>` : '—';
+
+        const levelStats = [
+            { level: 1, label: PROMOTION_REPORT_STRINGS.level1, count: normalized.level1.length, networks: countUniqueNetworks(normalized.level1) },
+            { level: 2, label: PROMOTION_REPORT_STRINGS.level2, count: normalized.level2.length, networks: countUniqueNetworks(normalized.level2) },
+            { level: 3, label: PROMOTION_REPORT_STRINGS.level3, count: normalized.level3.length, networks: countUniqueNetworks(normalized.level3) }
+        ];
+
+        const cards = levelStats
+            .filter(stat => stat.count > 0)
+            .map(stat => `
+                <div class="promotion-report-panel promotion-report-overview-card">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <h6 class="fw-semibold mb-0">${escapeHtml(stat.label)}</h6>
+                        <span class="badge bg-secondary-subtle text-light-emphasis">L${stat.level}</span>
+                    </div>
+                    <div class="promotion-report-overview-metric">${stat.count}</div>
+                    <div class="small text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.overviewNetworksLabel)}: ${stat.networks}</div>
+                </div>
+            `);
+
+        if (normalized.crowd.length) {
+            cards.push(`
+                <div class="promotion-report-panel promotion-report-overview-card">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.crowd)}</h6>
+                        <span class="badge bg-secondary-subtle text-light-emphasis">${normalized.crowd.length}</span>
+                    </div>
+                    <div class="promotion-report-overview-metric">${normalized.crowd.length}</div>
+                    <div class="small text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.overviewCrowdHint)}</div>
+                </div>
+            `);
+        }
+
+        return `
+            <div class="promotion-report-panel promotion-report-overview-meta mb-4">
+                <h6 class="fw-semibold mb-2">${escapeHtml(PROMOTION_REPORT_STRINGS.overviewTitle)}</h6>
+                <p class="small text-muted mb-3">${escapeHtml(PROMOTION_REPORT_STRINGS.overviewLead)}</p>
+                <dl class="row promotion-report-overview-dl mb-0">
+                    <dt class="col-sm-4">${escapeHtml(PROMOTION_REPORT_STRINGS.targetLabel)}</dt>
+                    <dd class="col-sm-8">${targetLink}</dd>
+                    <dt class="col-sm-4">${escapeHtml(PROMOTION_REPORT_STRINGS.statusLabel)}</dt>
+                    <dd class="col-sm-8"><span class="badge bg-info-subtle text-light-emphasis">${statusText}</span></dd>
+                    <dt class="col-sm-4">${escapeHtml(PROMOTION_REPORT_STRINGS.totalLabel)}</dt>
+                    <dd class="col-sm-8">${totalNodes}</dd>
+                    <dt class="col-sm-4">${escapeHtml(PROMOTION_REPORT_STRINGS.uniqueNetworks)}</dt>
+                    <dd class="col-sm-8">${normalized.uniqueNetworks}</dd>
+                </dl>
+            </div>
+            ${cards.length ? `<div class="promotion-report-grid promotion-report-overview-grid mb-4">${cards.join('')}</div>` : ''}
+            ${buildPromotionRatioSection(normalized)}
+            ${buildPromotionReportTree(normalized)}
+        `;
+    }
+
+    function buildPromotionRatioSection(normalized) {
+        const level1Count = normalized.level1.length;
+        const level2Count = normalized.level2.length;
+        const level3Count = normalized.level3.length;
+        const rows = [];
+
+        if (level1Count > 0) {
+            rows.push({
+                label: PROMOTION_REPORT_STRINGS.ratioLevel2,
+                ratio: level2Count / Math.max(1, level1Count),
+                detail: `${level2Count} / ${level1Count}`
+            });
+        }
+        if (level2Count > 0) {
+            rows.push({
+                label: PROMOTION_REPORT_STRINGS.ratioLevel3,
+                ratio: level3Count / Math.max(1, level2Count),
+                detail: `${level3Count} / ${level2Count}`
+            });
+        }
+
+        if (!rows.length) {
+            if (!level1Count && !level2Count && !level3Count) {
+                return '';
+            }
+            return `
+                <div class="promotion-report-panel promotion-report-ratios mb-4">
+                    <h6 class="fw-semibold mb-2">${escapeHtml(PROMOTION_REPORT_STRINGS.ratioTitle)}</h6>
+                    <p class="small text-muted mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.ratioFallback)}</p>
+                </div>
+            `;
+        }
+
+        const items = rows.map(row => {
+            const ratioText = Number.isFinite(row.ratio) ? row.ratio.toFixed(2) : '0.00';
+            return `
+                <li class="promotion-report-ratio-item d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-1">
+                    <span class="ratio-label">${escapeHtml(row.label)}</span>
+                    <span class="ratio-value">
+                        <span class="ratio-number">${ratioText}</span>
+                        <span class="ratio-detail text-muted">(${escapeHtml(row.detail)})</span>
+                    </span>
+                </li>
+            `;
+        }).join('');
+
+        return `
+            <div class="promotion-report-panel promotion-report-ratios mb-4">
+                <h6 class="fw-semibold mb-3">${escapeHtml(PROMOTION_REPORT_STRINGS.ratioTitle)}</h6>
+                <ul class="promotion-report-ratio-list list-unstyled mb-0">${items}</ul>
+            </div>
+        `;
+    }
+
+    function buildPromotionReportTree(normalized) {
+        const level1Items = normalized.level1 || [];
+        if (!level1Items.length) { return ''; }
+        const uid = promotionReportContext?.uid || 'pr';
+        const accordionId = `promotion-report-tree-${uid}`;
+
+        const items = level1Items.map((node, index) => {
+            const nodeId = node._id || `level1-${index}`;
+            const headingId = `${accordionId}-heading-${index}`;
+            const collapseId = `${accordionId}-collapse-${index}`;
+            const url = node.url || node.target_url || '';
+            const link = url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="text-decoration-none">${escapeHtml(truncateMiddle(url, 96))}</a>` : '<span class="text-muted">—</span>';
+            const anchor = node.anchor ? `<div class="small text-muted">${escapeHtml(truncateMiddle(node.anchor, 96))}</div>` : '';
+            const level2Children = normalized.childrenMap.get(nodeId) || [];
+            const body = buildPromotionReportTreeLevel2(level2Children, normalized);
+
+            return `
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="${headingId}">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="false" aria-controls="${collapseId}">
+                            <span class="badge bg-primary-subtle text-light-emphasis me-2">L1</span>
+                            <span class="text-truncate">${escapeHtml(node.network || PROMOTION_REPORT_STRINGS.level1)}</span>
+                        </button>
+                    </h2>
+                    <div id="${collapseId}" class="accordion-collapse collapse" aria-labelledby="${headingId}" data-bs-parent="#${accordionId}">
+                        <div class="accordion-body">
+                            <div class="promotion-report-tree-meta mb-2">
+                                ${link}
+                                ${anchor}
+                            </div>
+                            ${body}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="promotion-report-panel promotion-report-tree mb-4">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="fw-semibold mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.treeTitle)}</h6>
+                    <span class="badge bg-secondary-subtle text-light-emphasis">${level1Items.length}</span>
+                </div>
+                <p class="small text-muted mb-3">${escapeHtml(PROMOTION_REPORT_STRINGS.treeHelper)}</p>
+                <div class="accordion" id="${accordionId}">
+                    ${items}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionReportTreeLevel2(children, normalized) {
+        if (!children || !children.length) {
+            return `<p class="text-muted small mb-0">${escapeHtml(PROMOTION_REPORT_STRINGS.treeEmpty)}</p>`;
+        }
+        return `
+            <ul class="promotion-report-tree-level list-unstyled mb-0">
+                ${children.map(child => buildPromotionReportTreeLevel2Item(child, normalized)).join('')}
+            </ul>
+        `;
+    }
+
+    function buildPromotionReportTreeLevel2Item(node, normalized) {
+        const nodeId = node._id || getReportNodeId(node) || '';
+        const url = node.url || node.target_url || '';
+        const link = url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="text-decoration-none">${escapeHtml(truncateMiddle(url, 92))}</a>` : '<span class="text-muted">—</span>';
+        const anchor = node.anchor ? `<div class="small text-muted">${escapeHtml(truncateMiddle(node.anchor, 80))}</div>` : '';
+        const level3Children = normalized.level3ByParent.get(nodeId) || [];
+        return `
+            <li class="promotion-report-tree-node">
+                <div class="promotion-report-tree-node-head">
+                    <span class="badge bg-info-subtle text-light-emphasis me-2">L2</span>
+                    <div class="flex-grow-1">
+                        ${link}
+                        ${anchor}
+                    </div>
+                    ${node.network ? `<span class="badge bg-secondary-subtle text-light-emphasis ms-2">${escapeHtml(String(node.network))}</span>` : ''}
+                </div>
+                ${level3Children.length ? buildPromotionReportTreeLevel3(level3Children) : ''}
+            </li>
+        `;
+    }
+
+    function buildPromotionReportTreeLevel3(children) {
+        return `
+            <ul class="promotion-report-tree-level promotion-report-tree-level3 list-unstyled ms-4 mt-2 mb-0">
+                ${children.map(child => {
+                    const url = child.url || child.target_url || '';
+                    const link = url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="text-decoration-none">${escapeHtml(truncateMiddle(url, 84))}</a>` : '<span class="text-muted">—</span>';
+                    const anchor = child.anchor ? `<div class="small text-muted">${escapeHtml(truncateMiddle(child.anchor, 72))}</div>` : '';
+                    return `
+                        <li class="promotion-report-tree-node">
+                            <div class="promotion-report-tree-node-head">
+                                <span class="badge bg-warning-subtle text-light-emphasis me-2">L3</span>
+                                <div class="flex-grow-1">
+                                    ${link}
+                                    ${anchor}
+                                </div>
+                                ${child.network ? `<span class="badge bg-secondary-subtle text-light-emphasis ms-2">${escapeHtml(String(child.network))}</span>` : ''}
+                            </div>
+                        </li>
+                    `;
+                }).join('')}
+            </ul>
+        `;
+    }
+
+    function countUniqueNetworks(items) {
+        const set = new Set();
+        (items || []).forEach(item => {
+            if (item && item.network) {
+                set.add(String(item.network));
+            }
+        });
+        return set.size;
     }
 
     function buildPromotionReportFlow(normalized, meta) {
