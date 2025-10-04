@@ -162,6 +162,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); }
   box-shadow: 0 10px 24px -18px rgba(15,46,91,.75), inset 0 1px 0 rgba(255,255,255,.3);
   backdrop-filter: blur(14px) saturate(140%);
 }
+a.nav-balance-chip { text-decoration: none; }
+a.nav-balance-chip:hover { text-decoration: none; color: rgba(255,255,255,.98); box-shadow: 0 12px 28px -18px rgba(15,46,91,.9), inset 0 1px 0 rgba(255,255,255,.45); }
 .nav-balance-chip i { color: rgba(56,189,248,.9); font-size: .9rem; }
 .nav-balance-chip__label { opacity: .8; text-transform: uppercase; letter-spacing: .08em; font-size: .68rem; }
 .nav-balance-chip__value { font-weight: 600; letter-spacing: .01em; }

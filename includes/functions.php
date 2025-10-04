@@ -15,6 +15,7 @@ require_once __DIR__ . '/runtime.php';         // Node/Chrome and runner helpers
 require_once __DIR__ . '/network_check.php';   // Network diagnostics helpers
 require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base url, small utils)
 require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
+require_once __DIR__ . '/payments.php';        // Payment gateways and transactions
 require_once __DIR__ . '/networks.php';        // Networks registry and utilities
 require_once __DIR__ . '/crowd_links.php';     // Crowd marketing links management
 require_once __DIR__ . '/crowd_deep.php';      // Crowd deep submission verification
@@ -774,6 +775,109 @@ function ensure_schema(): void {
             }
         }
     } catch (Throwable $e) { /* ignore migration errors */ }
+
+    // Payment gateways configuration storage
+    $pgCols = $getCols('payment_gateways');
+    if (empty($pgCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `payment_gateways` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `code` VARCHAR(60) NOT NULL,
+            `title` VARCHAR(191) NOT NULL,
+            `is_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+            `config` LONGTEXT NULL,
+            `instructions` LONGTEXT NULL,
+            `sort_order` INT NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_payment_gateways_code` (`code`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddPg = static function(string $field, string $ddl) use ($pgCols, $conn) {
+            if (!isset($pgCols[$field])) {
+                @$conn->query("ALTER TABLE `payment_gateways` {$ddl}");
+            }
+        };
+        $maybeAddPg('title', "ADD COLUMN `title` VARCHAR(191) NOT NULL DEFAULT '' AFTER `code`");
+        $maybeAddPg('is_enabled', "ADD COLUMN `is_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `title`");
+        $maybeAddPg('config', "ADD COLUMN `config` LONGTEXT NULL AFTER `is_enabled`");
+        $maybeAddPg('instructions', "ADD COLUMN `instructions` LONGTEXT NULL AFTER `config`");
+        $maybeAddPg('sort_order', "ADD COLUMN `sort_order` INT NOT NULL DEFAULT 0 AFTER `instructions`");
+        $maybeAddPg('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `sort_order`");
+        $maybeAddPg('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        $pgCols = $getCols('payment_gateways');
+        if (pp_mysql_index_exists($conn, 'payment_gateways', 'uniq_payment_gateways_code') === false && isset($pgCols['code'])) {
+            @$conn->query("CREATE UNIQUE INDEX `uniq_payment_gateways_code` ON `payment_gateways`(`code`)");
+        }
+    }
+
+    // Payment transactions storage
+    $ptCols = $getCols('payment_transactions');
+    if (empty($ptCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `payment_transactions` (
+            `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `gateway_code` VARCHAR(60) NOT NULL,
+            `amount` DECIMAL(16,2) NOT NULL,
+            `currency` VARCHAR(10) NOT NULL,
+            `status` VARCHAR(30) NOT NULL DEFAULT 'pending',
+            `provider_reference` VARCHAR(191) NULL,
+            `provider_payload` LONGTEXT NULL,
+            `customer_payload` LONGTEXT NULL,
+            `error_message` TEXT NULL,
+            `confirmed_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_payment_tx_user` (`user_id`),
+            INDEX `idx_payment_tx_status` (`status`),
+            INDEX `idx_payment_tx_gateway` (`gateway_code`),
+            INDEX `idx_payment_tx_reference` (`provider_reference`),
+            CONSTRAINT `fk_payment_tx_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $maybeAddPt = static function(string $field, string $ddl) use ($ptCols, $conn) {
+            if (!isset($ptCols[$field])) {
+                @$conn->query("ALTER TABLE `payment_transactions` {$ddl}");
+            }
+        };
+        $maybeAddPt('currency', "ADD COLUMN `currency` VARCHAR(10) NOT NULL DEFAULT 'UAH' AFTER `amount`");
+        $maybeAddPt('provider_reference', "ADD COLUMN `provider_reference` VARCHAR(191) NULL AFTER `status`");
+        $maybeAddPt('provider_payload', "ADD COLUMN `provider_payload` LONGTEXT NULL AFTER `provider_reference`");
+        $maybeAddPt('customer_payload', "ADD COLUMN `customer_payload` LONGTEXT NULL AFTER `provider_payload`");
+        $maybeAddPt('error_message', "ADD COLUMN `error_message` TEXT NULL AFTER `customer_payload`");
+        $maybeAddPt('confirmed_at', "ADD COLUMN `confirmed_at` TIMESTAMP NULL DEFAULT NULL AFTER `error_message`");
+        $maybeAddPt('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `confirmed_at`");
+        $maybeAddPt('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        if (!isset($ptCols['user_id'])) {
+            @$conn->query("ALTER TABLE `payment_transactions` ADD COLUMN `user_id` INT NOT NULL AFTER `id`");
+        }
+        $ptCols = $getCols('payment_transactions');
+        if (pp_mysql_index_exists($conn, 'payment_transactions', 'idx_payment_tx_user') === false && isset($ptCols['user_id'])) {
+            @$conn->query("CREATE INDEX `idx_payment_tx_user` ON `payment_transactions`(`user_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'payment_transactions', 'idx_payment_tx_status') === false && isset($ptCols['status'])) {
+            @$conn->query("CREATE INDEX `idx_payment_tx_status` ON `payment_transactions`(`status`)");
+        }
+        if (pp_mysql_index_exists($conn, 'payment_transactions', 'idx_payment_tx_gateway') === false && isset($ptCols['gateway_code'])) {
+            @$conn->query("CREATE INDEX `idx_payment_tx_gateway` ON `payment_transactions`(`gateway_code`)");
+        }
+        if (pp_mysql_index_exists($conn, 'payment_transactions', 'idx_payment_tx_reference') === false && isset($ptCols['provider_reference'])) {
+            @$conn->query("CREATE INDEX `idx_payment_tx_reference` ON `payment_transactions`(`provider_reference`)");
+        }
+    }
+
+    // Seed default payment gateways
+    try {
+        $defaults = [
+            ['code' => 'monobank', 'title' => 'Monobank', 'sort_order' => 10],
+            ['code' => 'binance', 'title' => 'Binance Pay (USDT TRC20)', 'sort_order' => 20],
+        ];
+        foreach ($defaults as $def) {
+            $codeEsc = $conn->real_escape_string($def['code']);
+            $titleEsc = $conn->real_escape_string($def['title']);
+            $sort = (int)$def['sort_order'];
+            @$conn->query("INSERT IGNORE INTO `payment_gateways` (`code`,`title`,`is_enabled`,`config`,`instructions`,`sort_order`,`created_at`,`updated_at`) VALUES ('{$codeEsc}','{$titleEsc}',0,'{}','',{$sort},CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)");
+        }
+    } catch (Throwable $e) { /* ignore seeding errors */ }
 
     // Promotion cascade tables
     $promoRunsCols = $getCols('promotion_runs');

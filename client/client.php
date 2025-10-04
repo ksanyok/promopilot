@@ -121,7 +121,8 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                 </div>
                 <p class="text-muted mb-0 small"><?php echo __('Следите за балансом, активными кампаниями и переходите к нужному проекту в один клик.'); ?></p>
             </div>
-            <div class="dashboard-hero-card__balance text-start text-md-end">
+            <div class="dashboard-hero-card__balance text-start text-md-end position-relative">
+                <a href="<?php echo pp_url('client/balance.php'); ?>" class="stretched-link" aria-label="<?php echo __('Открыть финансовый дашборд'); ?>"></a>
                 <div class="dashboard-balance-label text-uppercase small fw-semibold text-muted"><?php echo __('Ваш баланс'); ?></div>
                 <div class="dashboard-balance-value"><?php echo htmlspecialchars(format_currency($balance)); ?></div>
                 <div class="text-muted small"><i class="bi bi-lightning-charge me-1"></i><?php echo __('Баланс используется для запуска и масштабирования публикационных каскадов.'); ?></div>
