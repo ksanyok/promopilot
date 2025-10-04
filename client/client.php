@@ -32,7 +32,7 @@ $sql = "SELECT
             p.topic,
             p.domain_host,
             (SELECT COUNT(*) FROM project_links pl WHERE pl.project_id = p.id) AS links_count,
-            (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready')) AS active_runs,
+            (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready')) AS active_runs,
             (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status = 'completed') AS completed_runs,
             (SELECT MAX(pr.updated_at) FROM promotion_runs pr WHERE pr.project_id = p.id) AS last_promotion_at,
             (SELECT COUNT(*) FROM publications pub WHERE pub.project_id = p.id AND (pub.status = 'success' OR pub.post_url <> '')) AS published_links,

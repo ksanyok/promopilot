@@ -158,7 +158,7 @@ $promotionSummary = [
     'idle' => 0,
     'issues' => 0,
 ];
-$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'];
+$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
 $promotionIssueStates = ['failed','cancelled'];
 foreach ($links as $item) {
     $linkUrl = (string)($item['url'] ?? '');
@@ -610,7 +610,7 @@ $promotionSummary = [
     'idle' => 0,
     'issues' => 0,
 ];
-$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'];
+$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
 $promotionIssueStates = ['failed','cancelled'];
 foreach ($links as $item) {
     $linkUrl = (string)($item['url'] ?? '');
@@ -1000,7 +1000,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         $promotionProgress = is_array($promotionInfo) ? ($promotionInfo['progress'] ?? ['done' => 0, 'total' => 0]) : ['done' => 0, 'total' => 0];
                                         $promotionRunId = is_array($promotionInfo) ? (int)($promotionInfo['run_id'] ?? 0) : 0;
                                         $promotionReportReady = !empty($promotionInfo['report_ready']);
-                                        $promotionActive = in_array($promotionStatus, ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'], true);
+                                        $promotionActive = in_array($promotionStatus, ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'], true);
                                         $promotionTotal = (int)($promotionProgress['total'] ?? 0);
                                         $promotionTarget = (int)($promotionProgress['target'] ?? 0);
                                         if ($promotionTarget <= 0) { $promotionTarget = $promotionTotal; }
@@ -1008,12 +1008,16 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         $promotionLevels = (is_array($promotionInfo) && isset($promotionInfo['levels']) && is_array($promotionInfo['levels'])) ? $promotionInfo['levels'] : [];
                                         $level1Data = isset($promotionLevels[1]) && is_array($promotionLevels[1]) ? $promotionLevels[1] : [];
                                         $level2Data = isset($promotionLevels[2]) && is_array($promotionLevels[2]) ? $promotionLevels[2] : [];
+                                        $level3Data = isset($promotionLevels[3]) && is_array($promotionLevels[3]) ? $promotionLevels[3] : [];
                                         $level1Total = (int)($level1Data['total'] ?? 0);
                                         $level1Success = (int)($level1Data['success'] ?? 0);
                                         $level1Required = (int)($level1Data['required'] ?? ($promotionTarget ?: 0));
                                         $level2Total = (int)($level2Data['total'] ?? 0);
                                         $level2Success = (int)($level2Data['success'] ?? 0);
                                         $level2Required = (int)($level2Data['required'] ?? 0);
+                                        $level3Total = (int)($level3Data['total'] ?? 0);
+                                        $level3Success = (int)($level3Data['success'] ?? 0);
+                                        $level3Required = (int)($level3Data['required'] ?? 0);
                                         $crowdData = (is_array($promotionInfo) && isset($promotionInfo['crowd']) && is_array($promotionInfo['crowd'])) ? $promotionInfo['crowd'] : [];
                                         $crowdPlanned = (int)($crowdData['planned'] ?? 0);
                                         $promotionDetails = [];
@@ -1022,6 +1026,9 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         }
                                         if ($level2Success > 0 || $level2Required > 0) {
                                             $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 2'), $level2Success, $level2Required > 0 ? ' / ' . $level2Required : '');
+                                        }
+                                        if ($level3Success > 0 || $level3Required > 0) {
+                                            $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 3'), $level3Success, $level3Required > 0 ? ' / ' . $level3Required : '');
                                         }
                                         if ($crowdPlanned > 0) {
                                             $promotionDetails[] = sprintf('%s: %d', __('Крауд'), $crowdPlanned);
@@ -1038,6 +1045,12 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                 break;
                                             case 'level2_active':
                                                 $promotionStatusLabel = __('Уровень 2 выполняется');
+                                                break;
+                                            case 'pending_level3':
+                                                $promotionStatusLabel = __('Ожидание уровня 3');
+                                                break;
+                                            case 'level3_active':
+                                                $promotionStatusLabel = __('Уровень 3 выполняется');
                                                 break;
                                             case 'pending_crowd':
                                                 $promotionStatusLabel = __('Подготовка крауда');
@@ -1073,26 +1086,29 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         if (!empty($pu['fragment'])) { $pathDisp .= '#' . $pu['fragment']; }
                                         if ($pathDisp === '') { $pathDisp = '/'; }
                                     ?>
-                                    <tr data-id="<?php echo (int)$linkId; ?>"
-                                        data-index="<?php echo (int)$index; ?>"
-                                        data-post-url="<?php echo htmlspecialchars($postUrl); ?>"
-                                        data-network="<?php echo htmlspecialchars($networkSlug); ?>"
-                                        data-publication-status="<?php echo htmlspecialchars($status); ?>"
-                                        data-promotion-status="<?php echo htmlspecialchars($promotionStatus); ?>"
-                                        data-promotion-stage="<?php echo htmlspecialchars($promotionStage); ?>"
-                                        data-promotion-run-id="<?php echo $promotionRunId ?: ''; ?>"
-                                        data-promotion-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
-                                        data-promotion-total="<?php echo $promotionTarget; ?>"
-                                        data-promotion-done="<?php echo $promotionDone; ?>"
-                                        data-promotion-target="<?php echo $promotionTarget; ?>"
-                                        data-promotion-attempted="<?php echo $promotionTotal; ?>"
-                                        data-level1-total="<?php echo $level1Total; ?>"
-                                        data-level1-success="<?php echo $level1Success; ?>"
-                                        data-level1-required="<?php echo $level1Required; ?>"
-                                        data-level2-total="<?php echo $level2Total; ?>"
-                                        data-level2-success="<?php echo $level2Success; ?>"
-                                        data-level2-required="<?php echo $level2Required; ?>"
-                                        data-crowd-planned="<?php echo $crowdPlanned; ?>">
+                                        <tr data-id="<?php echo (int)$linkId; ?>"
+                                            data-index="<?php echo (int)$index; ?>"
+                                            data-post-url="<?php echo htmlspecialchars($postUrl); ?>"
+                                            data-network="<?php echo htmlspecialchars($networkSlug); ?>"
+                                            data-publication-status="<?php echo htmlspecialchars($status); ?>"
+                                            data-promotion-status="<?php echo htmlspecialchars($promotionStatus); ?>"
+                                            data-promotion-stage="<?php echo htmlspecialchars($promotionStage); ?>"
+                                            data-promotion-run-id="<?php echo $promotionRunId ?: ''; ?>"
+                                            data-promotion-report-ready="<?php echo $promotionReportReady ? '1' : '0'; ?>"
+                                            data-promotion-total="<?php echo $promotionTarget; ?>"
+                                            data-promotion-done="<?php echo $promotionDone; ?>"
+                                            data-promotion-target="<?php echo $promotionTarget; ?>"
+                                            data-promotion-attempted="<?php echo $promotionTotal; ?>"
+                                            data-level1-total="<?php echo $level1Total; ?>"
+                                            data-level1-success="<?php echo $level1Success; ?>"
+                                            data-level1-required="<?php echo $level1Required; ?>"
+                                            data-level2-total="<?php echo $level2Total; ?>"
+                                            data-level2-success="<?php echo $level2Success; ?>"
+                                            data-level2-required="<?php echo $level2Required; ?>"
+                                            data-level3-total="<?php echo $level3Total; ?>"
+                                            data-level3-success="<?php echo $level3Success; ?>"
+                                            data-level3-required="<?php echo $level3Required; ?>"
+                                            data-crowd-planned="<?php echo $crowdPlanned; ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
@@ -1131,6 +1147,9 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                  data-level2-total="<?php echo $level2Total; ?>"
                                                  data-level2-success="<?php echo $level2Success; ?>"
                                                  data-level2-required="<?php echo $level2Required; ?>"
+                                                 data-level3-total="<?php echo $level3Total; ?>"
+                                                 data-level3-success="<?php echo $level3Success; ?>"
+                                                 data-level3-required="<?php echo $level3Required; ?>"
                                                  data-crowd-planned="<?php echo $crowdPlanned; ?>">
                                                 <div class="promotion-status-top">
                                                     <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
@@ -1154,6 +1173,15 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                         </div>
                                                         <div class="progress progress-thin">
                                                             <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
+                                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                                            <span><?php echo __('Уровень 3'); ?></span>
+                                                            <span class="promotion-progress-value">0 / 0</span>
+                                                        </div>
+                                                        <div class="progress progress-thin">
+                                                            <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1754,13 +1782,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    const PROMOTION_ACTIVE_STATUSES = ['queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready'];
+    const PROMOTION_ACTIVE_STATUSES = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
     const PROMOTION_STATUS_LABELS = {
         'queued': '<?php echo __('Уровень 1 выполняется'); ?>',
         'running': '<?php echo __('Уровень 1 выполняется'); ?>',
         'level1_active': '<?php echo __('Уровень 1 выполняется'); ?>',
         'pending_level2': '<?php echo __('Ожидание уровня 2'); ?>',
         'level2_active': '<?php echo __('Уровень 2 выполняется'); ?>',
+        'pending_level3': '<?php echo __('Ожидание уровня 3'); ?>',
+        'level3_active': '<?php echo __('Уровень 3 выполняется'); ?>',
         'pending_crowd': '<?php echo __('Подготовка крауда'); ?>',
         'crowd_ready': '<?php echo __('Крауд готов'); ?>',
         'report_ready': '<?php echo __('Формируется отчет'); ?>',
@@ -1772,6 +1802,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const PROMOTION_DETAIL_LABELS = {
         level1: <?php echo json_encode(__('Уровень 1')); ?>,
         level2: <?php echo json_encode(__('Уровень 2')); ?>,
+        level3: <?php echo json_encode(__('Уровень 3')); ?>,
         crowd: <?php echo json_encode(__('Крауд')); ?>
     };
 
@@ -1782,9 +1813,11 @@ document.addEventListener('DOMContentLoaded', function() {
         root: <?php echo json_encode(__('Целевая страница')); ?>,
         level1: <?php echo json_encode(__('Уровень 1')); ?>,
         level2: <?php echo json_encode(__('Уровень 2')); ?>,
+    level3: <?php echo json_encode(__('Уровень 3')); ?>,
         crowd: <?php echo json_encode(__('Крауд')); ?>,
         level1Count: <?php echo json_encode(__('Успешных публикаций уровня 1')); ?>,
         level2Count: <?php echo json_encode(__('Успешных публикаций уровня 2')); ?>,
+    level3Count: <?php echo json_encode(__('Успешных публикаций уровня 3')); ?>,
         uniqueNetworks: <?php echo json_encode(__('Уникальные сети')); ?>,
     diagramTitle: <?php echo json_encode(__('Карта публикаций по уровням')); ?>,
     diagramHelper: <?php echo json_encode(__('Выберите публикацию первого уровня, чтобы увидеть связанные материалы.')); ?>,
@@ -1872,22 +1905,28 @@ document.addEventListener('DOMContentLoaded', function() {
         const stage = promotion?.stage || tr.dataset.promotionStage || '';
         const progress = promotion?.progress || {};
         const runId = promotion?.run_id || tr.dataset.promotionRunId || '';
-    const levelDataRaw = promotion?.levels || {};
+        const levelDataRaw = promotion?.levels || {};
         const level1Data = levelDataRaw['1'] || levelDataRaw[1] || {};
         const level2Data = levelDataRaw['2'] || levelDataRaw[2] || {};
-    const progressWrapper = block.querySelector('.promotion-progress-visual');
-    const completeEl = block.querySelector('.promotion-status-complete');
-    const completeTextEl = completeEl?.querySelector('.promotion-status-complete-text');
-    const isActive = isPromotionActiveStatus(status);
-    const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0) || 0;
-    const level1Required = Number(level1Data.required ?? block.dataset.level1Required ?? tr.dataset.level1Required ?? progress?.target ?? progress?.total ?? 0) || 0;
-    const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0) || 0;
-    const level2Required = Number(level2Data.required ?? block.dataset.level2Required ?? tr.dataset.level2Required ?? 0) || 0;
-    const done = Number(progress.done ?? level1Success) || 0;
-    const targetRaw = progress.target ?? level1Required;
-    const target = Number((targetRaw !== undefined && targetRaw !== null) ? targetRaw : 0);
-    const total = target > 0 ? target : (Number(progress.total ?? level1Required ?? 0) || 0);
-        const reportReady = Boolean(promotion?.report_ready || (status === 'completed') || tr.dataset.promotionReportReady === '1');
+        const level3Data = levelDataRaw['3'] || levelDataRaw[3] || {};
+
+        const progressWrapper = block.querySelector('.promotion-progress-visual');
+        const completeEl = block.querySelector('.promotion-status-complete');
+        const completeTextEl = completeEl?.querySelector('.promotion-status-complete-text');
+        const isActive = isPromotionActiveStatus(status);
+
+        const level1Success = Number(level1Data.success ?? block.dataset.level1Success ?? tr.dataset.level1Success ?? 0) || 0;
+        const level1Required = Number(level1Data.required ?? block.dataset.level1Required ?? tr.dataset.level1Required ?? progress?.target ?? progress?.total ?? 0) || 0;
+        const level2Success = Number(level2Data.success ?? block.dataset.level2Success ?? tr.dataset.level2Success ?? 0) || 0;
+        const level2Required = Number(level2Data.required ?? block.dataset.level2Required ?? tr.dataset.level2Required ?? 0) || 0;
+        const level3Success = Number(level3Data.success ?? block.dataset.level3Success ?? tr.dataset.level3Success ?? 0) || 0;
+        const level3Required = Number(level3Data.required ?? block.dataset.level3Required ?? tr.dataset.level3Required ?? 0) || 0;
+
+        const done = Number(progress.done ?? level1Success) || 0;
+        const targetRaw = progress.target ?? level1Required;
+        const target = Number((targetRaw !== undefined && targetRaw !== null) ? targetRaw : 0);
+        const total = target > 0 ? target : (Number(progress.total ?? level1Required ?? 0) || 0);
+        const reportReady = Boolean(promotion?.report_ready || status === 'completed' || tr.dataset.promotionReportReady === '1');
 
         block.dataset.status = status;
         block.dataset.stage = stage;
@@ -1900,9 +1939,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (labelEl) {
             labelEl.textContent = getPromotionStatusLabel(status);
         }
+
         const countEl = block.querySelector('.promotion-progress-count');
         if (countEl) {
-            if (target > 0 && isActive) {
+            if (target > 0 && (isActive || done > 0)) {
                 countEl.textContent = `(${done} / ${target})`;
                 countEl.classList.remove('d-none');
             } else {
@@ -1910,7 +1950,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 countEl.classList.add('d-none');
             }
         }
-        block.classList.remove('text-muted','text-primary','text-success','text-danger');
+
+        block.classList.remove('text-muted', 'text-primary', 'text-success', 'text-danger');
         if (status === 'idle') {
             block.classList.add('text-muted');
         } else if (status === 'completed') {
@@ -1922,7 +1963,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (progressWrapper) {
-            if (isActive) {
+            if (isActive || level1Success > 0 || level2Success > 0 || level3Success > 0) {
                 progressWrapper.classList.remove('d-none');
             } else {
                 progressWrapper.classList.add('d-none');
@@ -1944,53 +1985,48 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const level1Total = level1Success;
         const level2Total = level2Success;
+        const level3Total = level3Success;
         const crowdData = promotion?.crowd || {};
         const crowdPlanned = Number(crowdData.planned ?? block.dataset.crowdPlanned ?? tr.dataset.crowdPlanned ?? 0);
 
         block.dataset.level1Total = String(level1Total);
         block.dataset.level1Success = String(level1Success);
+        block.dataset.level1Required = String(level1Required);
         block.dataset.level2Total = String(level2Total);
         block.dataset.level2Success = String(level2Success);
-        block.dataset.level1Required = String(level1Required);
         block.dataset.level2Required = String(level2Required);
+        block.dataset.level3Total = String(level3Total);
+        block.dataset.level3Success = String(level3Success);
+        block.dataset.level3Required = String(level3Required);
         block.dataset.crowdPlanned = String(crowdPlanned);
 
-    const level1El = block.querySelector('.promotion-progress-level1');
-    const level2El = block.querySelector('.promotion-progress-level2');
+        const level1El = block.querySelector('.promotion-progress-level1');
+        const level2El = block.querySelector('.promotion-progress-level2');
+        const level3El = block.querySelector('.promotion-progress-level3');
 
-        if (level1El) {
-            const valueEl = level1El.querySelector('.promotion-progress-value');
-            const barEl = level1El.querySelector('.promotion-progress-bar');
-            const required = level1Required > 0 ? level1Required : level1Total;
-            if (required > 0 || level1Total > 0) {
-                level1El.classList.remove('d-none');
-                if (valueEl) { valueEl.textContent = required > 0 ? `${level1Success} / ${required}` : String(level1Success); }
+        const updateLevel = (el, success, required) => {
+            if (!el) { return; }
+            const valueEl = el.querySelector('.promotion-progress-value');
+            const barEl = el.querySelector('.promotion-progress-bar');
+            const normalizedRequired = required > 0 ? required : success;
+            if ((normalizedRequired > 0 || success > 0) && !Number.isNaN(success)) {
+                el.classList.remove('d-none');
+                if (valueEl) {
+                    valueEl.textContent = normalizedRequired > 0 ? `${success} / ${normalizedRequired}` : String(success);
+                }
                 if (barEl) {
-                    const pct = required > 0 ? Math.min(100, Math.round((level1Success / required) * 100)) : 100;
+                    const pct = normalizedRequired > 0 ? Math.min(100, Math.round((success / Math.max(1, normalizedRequired)) * 100)) : 100;
                     barEl.style.width = `${pct}%`;
                     barEl.setAttribute('aria-valuenow', String(pct));
                 }
             } else {
-                level1El.classList.add('d-none');
+                el.classList.add('d-none');
             }
-        }
+        };
 
-        if (level2El) {
-            const valueEl = level2El.querySelector('.promotion-progress-value');
-            const barEl = level2El.querySelector('.promotion-progress-bar');
-            if ((level2Required > 0 || level2Success > 0) && !Number.isNaN(level2Success)) {
-                level2El.classList.remove('d-none');
-                const required = level2Required > 0 ? level2Required : level2Success;
-                if (valueEl) { valueEl.textContent = required > 0 ? `${level2Success} / ${required}` : String(level2Success); }
-                if (barEl) {
-                    const pct = required > 0 ? Math.min(100, Math.round((level2Success / required) * 100)) : 100;
-                    barEl.style.width = `${pct}%`;
-                    barEl.setAttribute('aria-valuenow', String(pct));
-                }
-            } else {
-                level2El.classList.add('d-none');
-            }
-        }
+        updateLevel(level1El, level1Success, level1Required);
+        updateLevel(level2El, level2Success, level2Required);
+        updateLevel(level3El, level3Success, level3Required);
 
         const detailsEl = block.querySelector('.promotion-progress-details');
         if (detailsEl) {
@@ -2004,6 +2040,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 if (level2Success > 0 || level2Required > 0) {
                     details.push(`${PROMOTION_DETAIL_LABELS.level2}: ${level2Success}${level2Required > 0 ? ' / ' + level2Required : ''}`);
+                }
+                if (level3Success > 0 || level3Required > 0) {
+                    details.push(`${PROMOTION_DETAIL_LABELS.level3}: ${level3Success}${level3Required > 0 ? ' / ' + level3Required : ''}`);
                 }
                 if (crowdPlanned > 0) {
                     details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
@@ -2026,10 +2065,13 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.promotionTotal = String(total);
         tr.dataset.level1Total = String(level1Total);
         tr.dataset.level1Success = String(level1Success);
+        tr.dataset.level1Required = String(level1Required);
         tr.dataset.level2Total = String(level2Total);
         tr.dataset.level2Success = String(level2Success);
-        tr.dataset.level1Required = String(level1Required);
         tr.dataset.level2Required = String(level2Required);
+        tr.dataset.level3Total = String(level3Total);
+        tr.dataset.level3Success = String(level3Success);
+        tr.dataset.level3Required = String(level3Required);
         tr.dataset.crowdPlanned = String(crowdPlanned);
 
         if (typeof initTooltips === 'function') {
@@ -2446,6 +2488,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const summaryItems = [
             { label: PROMOTION_REPORT_STRINGS.level1Count, value: normalized.level1.length },
             { label: PROMOTION_REPORT_STRINGS.level2Count, value: normalized.level2.length },
+            { label: PROMOTION_REPORT_STRINGS.level3Count, value: normalized.level3.length },
             { label: PROMOTION_REPORT_STRINGS.uniqueNetworks, value: normalized.uniqueNetworks }
         ];
         if (normalized.crowd.length) {
@@ -2462,7 +2505,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const statusText = meta?.status ? escapeHtml(getPromotionStatusLabel(meta.status)) : '—';
         const flowHtml = buildPromotionReportFlow(normalized, meta);
         const tablesHtml = buildPromotionReportTables(normalized, meta);
-        const totalNodes = normalized.level1.length + normalized.level2.length;
+        const totalNodes = normalized.level1.length + normalized.level2.length + normalized.level3.length;
         return `
             <div class="promotion-report-wrapper" data-report-root>
                 <div class="promotion-report-toolbar d-flex flex-column flex-lg-row gap-2 align-items-lg-center justify-content-between mb-3">
@@ -2502,17 +2545,22 @@ document.addEventListener('DOMContentLoaded', function() {
     function normalizePromotionReport(report) {
         const level1Raw = Array.isArray(report?.level1) ? report.level1 : [];
         const level2Raw = Array.isArray(report?.level2) ? report.level2 : [];
+        const level3Raw = Array.isArray(report?.level3) ? report.level3 : [];
         const crowdRaw = Array.isArray(report?.crowd) ? report.crowd : [];
+
         const level1 = level1Raw
             .filter(item => item && (item.url || item.target_url))
             .map(item => ({ ...item }));
-        const parentMap = new Map();
+        const level1Map = new Map();
         level1.forEach(node => {
             const nodeId = getReportNodeId(node);
             node._id = nodeId;
-            parentMap.set(nodeId, node);
+            level1Map.set(nodeId, node);
         });
-        const childrenMap = new Map();
+
+        const level2ByParent = new Map();
+        const level2Map = new Map();
+        const level2ParentMap = new Map();
         const level2 = level2Raw
             .filter(item => item && (item.url || item.target_url))
             .map(item => {
@@ -2521,23 +2569,52 @@ document.addEventListener('DOMContentLoaded', function() {
                 const nodeId = getReportNodeId(clone);
                 clone._id = nodeId;
                 clone.parent_id = parentId;
-                if (!childrenMap.has(parentId)) { childrenMap.set(parentId, []); }
-                childrenMap.get(parentId).push(clone);
+                clone._parent_level1 = parentId;
+                level2Map.set(nodeId, clone);
+                level2ParentMap.set(nodeId, parentId);
+                if (!level2ByParent.has(parentId)) { level2ByParent.set(parentId, []); }
+                level2ByParent.get(parentId).push(clone);
                 return clone;
             });
+
+        const level3ByParent = new Map();
+        const level3 = level3Raw
+            .filter(item => item && (item.url || item.target_url))
+            .map(item => {
+                const clone = { ...item };
+                const parentId = getReportParentId(clone);
+                const nodeId = getReportNodeId(clone);
+                clone._id = nodeId;
+                clone.parent_id = parentId;
+                const parentLevel1 = level2ParentMap.get(parentId) || '';
+                clone._parent_level2 = parentId;
+                clone._parent_level1 = parentLevel1;
+                if (!level3ByParent.has(parentId)) { level3ByParent.set(parentId, []); }
+                level3ByParent.get(parentId).push(clone);
+                return clone;
+            });
+
         const crowd = crowdRaw
             .filter(item => item && item.target_url)
             .map(item => ({ ...item }));
+
         const uniqueNetworks = new Set();
-        level1.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
-        level2.forEach(node => { if (node.network) uniqueNetworks.add(node.network); });
+        const collectNetwork = node => { if (node && node.network) { uniqueNetworks.add(node.network); } };
+        level1.forEach(collectNetwork);
+        level2.forEach(collectNetwork);
+        level3.forEach(collectNetwork);
+
         return {
-            hasData: level1.length > 0 || level2.length > 0 || crowd.length > 0,
+            hasData: level1.length > 0 || level2.length > 0 || level3.length > 0 || crowd.length > 0,
             level1,
             level2,
+            level3,
             crowd,
-            childrenMap,
-            parentMap,
+            childrenMap: level2ByParent,
+            parentMap: level1Map,
+            level2Map,
+            level2ParentMap,
+            level3ByParent,
             uniqueNetworks: uniqueNetworks.size,
         };
     }
@@ -2547,6 +2624,9 @@ document.addEventListener('DOMContentLoaded', function() {
         columns.push(buildPromotionFlowRoot(meta));
         columns.push(buildPromotionFlowLevelColumn(normalized.level1, 1));
         columns.push(buildPromotionFlowLevel2Column(normalized));
+        if ((normalized.level3 || []).length) {
+            columns.push(buildPromotionFlowLevel3Column(normalized));
+        }
         if (normalized.crowd.length) {
             columns.push(buildPromotionFlowCrowdColumn(normalized.crowd));
         }
@@ -2580,9 +2660,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function buildPromotionFlowLevelColumn(items, level) {
-        const label = level === 1 ? PROMOTION_REPORT_STRINGS.level1 : PROMOTION_REPORT_STRINGS.level2;
+        const levelLabels = {
+            1: PROMOTION_REPORT_STRINGS.level1,
+            2: PROMOTION_REPORT_STRINGS.level2,
+            3: PROMOTION_REPORT_STRINGS.level3
+        };
+        const label = levelLabels[level] || `L${level}`;
         const clickable = level === 1;
-        let cards = items.map(node => buildPromotionFlowCard(node, level, { clickable })).join('');
+        let cards = items.map(node => buildPromotionFlowCard(node, level, { clickable, dataset: level === 1 ? null : { rootParent: node?._parent_level1 || '' } })).join('');
         if (!cards) {
             cards = `<div class="promotion-flow-empty text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
         }
@@ -2602,32 +2687,43 @@ document.addEventListener('DOMContentLoaded', function() {
     function buildPromotionFlowLevel2Column(normalized) {
         const groups = [];
         const processed = new Set();
-        const renderGroup = (parentId, title, children) => {
-            const groupCards = children.map(child => buildPromotionFlowCard(child, 2, { clickable: false })).join('');
+        const level2ByParent = normalized.childrenMap || new Map();
+        const renderGroup = (parentId, title, children, rootParentId) => {
+            const groupCards = children.map(child => buildPromotionFlowCard(child, 2, {
+                clickable: false,
+                dataset: {
+                    rootParent: child?._parent_level1 || rootParentId || '',
+                }
+            })).join('');
             return `
-                <div class="promotion-flow-subgroup" data-parent-id="${escapeAttribute(parentId || '')}">
+                <div class="promotion-flow-subgroup" data-flow-level="2" data-parent-id="${escapeAttribute(parentId || '')}" data-root-parent="${escapeAttribute(rootParentId || '')}">
                     <div class="subgroup-title small text-muted">${escapeHtml(title)}</div>
                     ${groupCards}
                 </div>
             `;
         };
+
         normalized.level1.forEach(parent => {
             const parentId = getReportNodeId(parent);
-            const children = normalized.childrenMap.get(parentId) || [];
+            const children = level2ByParent.get(parentId) || [];
             if (!children.length) { return; }
             processed.add(parentId);
-            groups.push(renderGroup(parentId, parent.network || PROMOTION_REPORT_STRINGS.level1, children));
+            const title = parent.network || PROMOTION_REPORT_STRINGS.level1;
+            groups.push(renderGroup(parentId, title, children, parentId));
         });
-        normalized.childrenMap.forEach((children, parentId) => {
+
+        level2ByParent.forEach((children, parentId) => {
             if (processed.has(parentId)) { return; }
             if (!children || !children.length) { return; }
             const parentNode = normalized.parentMap.get(parentId);
             let title = parentNode ? (parentNode.network || PROMOTION_REPORT_STRINGS.level1) : PROMOTION_REPORT_STRINGS.root;
+            const rootParentId = parentNode ? getReportNodeId(parentNode) : '';
             if (!parentNode && parentId && parentId !== '0') {
                 title = `${PROMOTION_REPORT_STRINGS.level1} #${parentId}`;
             }
-            groups.push(renderGroup(parentId, title, children));
+            groups.push(renderGroup(parentId, title, children, rootParentId || parentId));
         });
+
         const body = groups.length ? groups.join('') : `<div class="promotion-flow-empty text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`;
         return `
             <div class="promotion-flow-column" data-flow-column="level2">
@@ -2637,6 +2733,52 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
                 <div class="promotion-flow-body">
                     ${body}
+                </div>
+            </div>
+        `;
+    }
+
+    function buildPromotionFlowLevel3Column(normalized) {
+        const level3ByParent = normalized.level3ByParent || new Map();
+        const level2Map = normalized.level2Map || new Map();
+        const groups = [];
+
+        const renderGroup = (parentId, title, children, rootParentId) => {
+            const groupCards = children.map(child => buildPromotionFlowCard(child, 3, {
+                clickable: false,
+                dataset: {
+                    rootParent: child?._parent_level1 || rootParentId || '',
+                    parentLevel2: child?._parent_level2 || parentId || ''
+                }
+            })).join('');
+            return `
+                <div class="promotion-flow-subgroup" data-flow-level="3" data-parent-level2="${escapeAttribute(parentId || '')}" data-root-parent="${escapeAttribute(rootParentId || '')}">
+                    <div class="subgroup-title small text-muted">${escapeHtml(title)}</div>
+                    ${groupCards || `<div class="promotion-flow-empty text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.noData)}</div>`}
+                </div>
+            `;
+        };
+
+        level3ByParent.forEach((children, parentId) => {
+            if (!children || !children.length) { return; }
+            const parentNode = level2Map.get(parentId);
+            const rootParentId = parentNode ? (parentNode._parent_level1 || '') : (normalized.level2ParentMap?.get(parentId) || '');
+            let title = parentNode ? (parentNode.network || PROMOTION_REPORT_STRINGS.level2) : `${PROMOTION_REPORT_STRINGS.level2} #${parentId}`;
+            groups.push(renderGroup(parentId, title, children, rootParentId));
+        });
+
+        if (!groups.length) {
+            return '';
+        }
+
+        return `
+            <div class="promotion-flow-column" data-flow-column="level3">
+                <div class="promotion-flow-header d-flex align-items-center justify-content-between">
+                    <div class="title">${escapeHtml(PROMOTION_REPORT_STRINGS.level3)}</div>
+                    <span class="badge bg-secondary-subtle text-light-emphasis">${normalized.level3.length}</span>
+                </div>
+                <div class="promotion-flow-body">
+                    ${groups.join('')}
                 </div>
             </div>
         `;
@@ -2699,10 +2841,25 @@ document.addEventListener('DOMContentLoaded', function() {
         if (node.network) {
             attrs.push(`data-network="${escapeAttribute(String(node.network))}"`);
         }
+        if (options.dataset && typeof options.dataset === 'object') {
+            Object.entries(options.dataset).forEach(([key, value]) => {
+                if (value === undefined || value === null) { return; }
+                const strValue = String(value);
+                if (strValue === '' && value !== 0) { return; }
+                const dataKey = key.replace(/[A-Z]/g, match => '-' + match.toLowerCase());
+                attrs.push(`data-${escapeAttribute(dataKey)}="${escapeAttribute(strValue)}"`);
+            });
+        }
+        const levelLabels = {
+            1: PROMOTION_REPORT_STRINGS.level1,
+            2: PROMOTION_REPORT_STRINGS.level2,
+            3: PROMOTION_REPORT_STRINGS.level3
+        };
+        const badgeLabel = levelLabels[level] || `L${level}`;
         return `
             <div ${attrs.join(' ')}>
                 <div class="card-title d-flex align-items-center justify-content-between gap-2">
-                    <span class="text-truncate">${escapeHtml(node.network || (level === 1 ? PROMOTION_REPORT_STRINGS.level1 : PROMOTION_REPORT_STRINGS.level2))}</span>
+                    <span class="text-truncate">${escapeHtml(node.network || badgeLabel)}</span>
                     <span class="badge bg-primary-subtle text-light-emphasis">L${level}</span>
                 </div>
                 ${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener" class="card-link text-truncate" title="${escapeAttribute(url)}">${escapeHtml(label)}</a>` : `<span class="card-link text-muted">—</span>`}
@@ -2756,6 +2913,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (normalized.level2.length) {
             sections.push(buildPromotionReportLevelSection(normalized.level2, PROMOTION_REPORT_STRINGS.level2, normalized.parentMap));
+        }
+        if (normalized.level3 && normalized.level3.length) {
+            sections.push(buildPromotionReportLevelSection(normalized.level3, PROMOTION_REPORT_STRINGS.level3, normalized.level2Map));
         }
         if (normalized.crowd.length) {
             sections.push(buildPromotionReportCrowdSection(normalized.crowd));
@@ -2859,6 +3019,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 status: context.meta?.status || '',
                 level1_count: context.normalized.level1.length,
                 level2_count: context.normalized.level2.length,
+                level3_count: context.normalized.level3.length,
                 crowd_count: context.normalized.crowd.length,
             },
             report: context.report || {}
@@ -2900,6 +3061,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 parentUrl
             ]);
         });
+        context.normalized.level3.forEach(node => {
+            const parentId = getReportParentId(node);
+            const parentNode = context.normalized.level2Map.get(parentId);
+            const parentUrl = parentNode ? (parentNode.url || parentNode.target_url || '') : '';
+            rows.push([
+                'level3',
+                node.network || '',
+                node.url || node.target_url || '',
+                node.anchor || '',
+                parentUrl
+            ]);
+        });
         const csv = rows.map(row => row.map(csvEscape).join(';')).join('\n');
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         downloadPromotionReportFile(blob, buildReportFilename('csv'));
@@ -2910,8 +3083,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const flow = container.querySelector('[data-report-flow]');
         const level1Cards = flow ? Array.from(flow.querySelectorAll('.promotion-flow-card.level-1')) : [];
         const rootCard = flow ? flow.querySelector('.promotion-flow-card[data-flow-reset="1"]') : null;
-        const level2Groups = flow ? Array.from(flow.querySelectorAll('.promotion-flow-subgroup')) : [];
+    const level2Groups = flow ? Array.from(flow.querySelectorAll('.promotion-flow-subgroup[data-flow-level="2"]')) : [];
         const level2Cards = flow ? Array.from(flow.querySelectorAll('.promotion-flow-card.level-2')) : [];
+        const level3Groups = flow ? Array.from(flow.querySelectorAll('.promotion-flow-subgroup[data-flow-level="3"]')) : [];
+        const level3Cards = flow ? Array.from(flow.querySelectorAll('.promotion-flow-card.level-3')) : [];
 
         const setActiveParent = parentId => {
             const active = parentId || '';
@@ -2920,13 +3095,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 const matches = active && card.dataset.nodeId === active;
                 card.classList.toggle('is-active', matches);
             });
+            const matchesRoot = element => !active || (element?.dataset?.rootParent || '') === active;
             level2Groups.forEach(group => {
-                const matches = !active || group.dataset.parentId === active;
-                group.classList.toggle('is-hidden', !matches);
+                group.classList.toggle('is-hidden', !matchesRoot(group));
             });
             level2Cards.forEach(card => {
-                const matches = !active || card.dataset.parentId === active;
-                card.classList.toggle('is-dimmed', !matches);
+                card.classList.toggle('is-dimmed', !matchesRoot(card));
+            });
+            level3Groups.forEach(group => {
+                group.classList.toggle('is-hidden', !matchesRoot(group));
+            });
+            level3Cards.forEach(card => {
+                card.classList.toggle('is-dimmed', !matchesRoot(card));
             });
             if (flow) {
                 flow.classList.toggle('has-filter', Boolean(active));
@@ -3095,6 +3275,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 tr.dataset.level2Total = '0';
                 tr.dataset.level2Success = '0';
                 tr.dataset.level2Required = '0';
+                tr.dataset.level3Total = '0';
+                tr.dataset.level3Success = '0';
+                tr.dataset.level3Required = '0';
                 tr.dataset.crowdPlanned = '0';
                 const pathDisp = pathFromUrl(url);
                 const hostDisp = hostFromUrl(url);
@@ -3133,7 +3316,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         data-level1-required="0"
                              data-level2-total="0"
                              data-level2-success="0"
-                        data-level2-required="0"
+                    data-level2-required="0"
+                        data-level3-total="0"
+                        data-level3-success="0"
+                        data-level3-required="0"
                              data-crowd-planned="0">
                             <div class="promotion-status-top">
                                 <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
@@ -3157,6 +3343,15 @@ document.addEventListener('DOMContentLoaded', function() {
                                     </div>
                                     <div class="progress progress-thin">
                                         <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                    </div>
+                                </div>
+                                <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
+                                    <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                        <span><?php echo __('Уровень 3'); ?></span>
+                                        <span class="promotion-progress-value">0 / 0</span>
+                                    </div>
+                                    <div class="progress progress-thin">
+                                        <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                     </div>
                                 </div>
                             </div>

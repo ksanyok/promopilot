@@ -36,10 +36,13 @@ if (!function_exists('pp_promotion_settings')) {
             'crowd_enabled' => true,
             'level1_count' => 5,
             'level2_per_level1' => 10,
+            'level3_per_level2' => 5,
             'level1_min_len' => 2800,
             'level1_max_len' => 3400,
             'level2_min_len' => 1400,
             'level2_max_len' => 2100,
+            'level3_min_len' => 900,
+            'level3_max_len' => 1400,
             'crowd_per_article' => 100,
             'network_repeat_limit' => 2,
             'price_per_link' => max(0, (float)str_replace(',', '.', (string)get_setting('promotion_price_per_link', '0'))),
@@ -63,6 +66,10 @@ if (!function_exists('pp_promotion_settings')) {
         if ($level2PerSetting > 0) {
             $defaults['level2_per_level1'] = max(1, min(500, $level2PerSetting));
         }
+        $level3PerSetting = (int)get_setting('promotion_level3_per_level2', (string)$defaults['level3_per_level2']);
+        if ($level3PerSetting > 0) {
+            $defaults['level3_per_level2'] = max(1, min(500, $level3PerSetting));
+        }
         $crowdPerSetting = (int)get_setting('promotion_crowd_per_article', (string)$defaults['crowd_per_article']);
         if ($crowdPerSetting >= 0) {
             $defaults['crowd_per_article'] = max(0, min(10000, $crowdPerSetting));
@@ -77,8 +84,8 @@ if (!function_exists('pp_promotion_is_level_enabled')) {
     function pp_promotion_is_level_enabled(int $level): bool {
         $settings = pp_promotion_settings();
         if ($level === 1) { return !empty($settings['level1_enabled']); }
-        if ($level === 2) { return !empty($settings['level2_enabled']); }
-        if ($level === 3) { return !empty($settings['level3_enabled']); }
+        if ($level === 2) { return !empty($settings['level1_enabled']) && !empty($settings['level2_enabled']); }
+        if ($level === 3) { return !empty($settings['level1_enabled']) && !empty($settings['level2_enabled']) && !empty($settings['level3_enabled']); }
         return false;
     }
 }
@@ -104,7 +111,7 @@ if (!function_exists('pp_promotion_fetch_link_row')) {
 
 if (!function_exists('pp_promotion_get_active_run')) {
     function pp_promotion_get_active_run(mysqli $conn, int $projectId, string $url): ?array {
-        $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? AND status IN (\'queued\',\'running\',\'level1_active\',\'level2_active\',\'pending_level2\',\'pending_crowd\',\'crowd_ready\') ORDER BY id DESC LIMIT 1');
+    $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? AND status IN (\'queued\',\'running\',\'pending_level1\',\'level1_active\',\'pending_level2\',\'level2_active\',\'pending_level3\',\'level3_active\',\'pending_crowd\',\'crowd_ready\') ORDER BY id DESC LIMIT 1');
         if (!$stmt) { return null; }
         $stmt->bind_param('is', $projectId, $url);
         if (!$stmt->execute()) { $stmt->close(); return null; }
@@ -340,6 +347,7 @@ if (!function_exists('pp_promotion_get_level_requirements')) {
         return [
             1 => ['count' => max(1, (int)$settings['level1_count']), 'min_len' => (int)$settings['level1_min_len'], 'max_len' => (int)$settings['level1_max_len']],
             2 => ['per_parent' => max(1, (int)$settings['level2_per_level1']), 'min_len' => (int)$settings['level2_min_len'], 'max_len' => (int)$settings['level2_max_len']],
+            3 => ['per_parent' => max(1, (int)$settings['level3_per_level2']), 'min_len' => (int)$settings['level3_min_len'], 'max_len' => (int)$settings['level3_max_len']],
         ];
     }
 }
@@ -688,7 +696,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     $stmt->close();
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='level1_active', status='running', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='level1_active', status='level1_active', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . $runId . " LIMIT 1");
             $res = @$conn->query('SELECT * FROM promotion_nodes WHERE run_id = ' . $runId . ' AND level = 1 AND status = \'pending\'');
             if ($res) {
                 while ($node = $res->fetch_assoc()) {
@@ -796,10 +804,10 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
             if (!pp_promotion_is_level_enabled(2)) {
-                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
-            @$conn->query("UPDATE promotion_runs SET stage='pending_level2' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='pending_level2', status='pending_level2' WHERE id=" . $runId . " LIMIT 1");
             return;
         }
         if ($stage === 'pending_level2') {
@@ -850,7 +858,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='level2_active' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='level2_active', status='level2_active' WHERE id=" . $runId . " LIMIT 1");
             $res2 = @$conn->query('SELECT n.*, p.result_url AS parent_url FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2 AND n.status=\'pending\'');
             if ($res2) {
                 while ($node = $res2->fetch_assoc()) {
@@ -880,26 +888,118 @@ if (!function_exists('pp_promotion_process_run')) {
                 @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
-            @$conn->query("UPDATE promotion_runs SET stage='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
+            if (pp_promotion_is_level_enabled(3)) {
+                @$conn->query("UPDATE promotion_runs SET stage='pending_level3', status='pending_level3' WHERE id=" . $runId . " LIMIT 1");
+            } else {
+                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
+            }
+            return;
+        }
+        if ($stage === 'pending_level3') {
+            $perParent = (int)($requirements[3]['per_parent'] ?? 0);
+            $level2Nodes = [];
+            $res = @$conn->query('SELECT id, result_url FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 AND status IN (\'success\',\'completed\')');
+            if ($res) {
+                while ($row = $res->fetch_assoc()) {
+                    $url = trim((string)$row['result_url']);
+                    if ($url !== '') { $level2Nodes[] = $row; }
+                }
+                $res->free();
+            }
+            if (empty($level2Nodes)) {
+                @$conn->query("UPDATE promotion_runs SET stage='failed', status='failed', error='LEVEL2_NO_URL', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                return;
+            }
+            $usage = [];
+            foreach ($level2Nodes as $parentNode) {
+                $nets = pp_promotion_pick_networks(3, $perParent, $project, $usage);
+                if (empty($nets)) { continue; }
+                $selectedSlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $nets);
+                $usageSnapshot = [];
+                foreach ($selectedSlugs as $slug) {
+                    if ($slug === '') { continue; }
+                    $usageSnapshot[$slug] = (int)($usage[$slug] ?? 0);
+                }
+                pp_promotion_log('promotion.level3.networks_selected', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'parent_node_id' => (int)$parentNode['id'],
+                    'target_url' => $parentNode['result_url'],
+                    'requested' => $perParent,
+                    'selected' => $selectedSlugs,
+                    'usage' => $usageSnapshot,
+                ]);
+                foreach ($nets as $net) {
+                    $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, parent_id, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 3, ?, ?, ?, ?, \'pending\', ?)');
+                    if ($stmt) {
+                        $anchor = pp_promotion_generate_anchor((string)$linkRow['anchor']);
+                        $initiated = (int)$run['initiated_by'];
+                        $stmt->bind_param('iisssi', $runId, $parentNode['id'], $parentNode['result_url'], $net['slug'], $anchor, $initiated);
+                        $stmt->execute();
+                        $stmt->close();
+                    }
+                }
+            }
+            @$conn->query("UPDATE promotion_runs SET stage='level3_active', status='level3_active' WHERE id=" . $runId . " LIMIT 1");
+            $res3 = @$conn->query('SELECT n.*, p.result_url AS parent_url FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=3 AND n.status=\'pending\'');
+            if ($res3) {
+                while ($node = $res3->fetch_assoc()) {
+                    $node['initiated_by'] = $run['initiated_by'];
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[3]['min_len'], 'max_len' => $requirements[3]['max_len'], 'level' => 3, 'parent_url' => $node['parent_url']]);
+                }
+                $res3->free();
+            }
+            pp_promotion_update_progress($conn, $runId);
+            return;
+        }
+        if ($stage === 'level3_active') {
+            $res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=3 GROUP BY status');
+            $pending = 0; $success = 0; $failed = 0;
+            if ($res) {
+                while ($row = $res->fetch_assoc()) {
+                    $statusNode = (string)$row['status'];
+                    $cnt = (int)$row['c'];
+                    if (in_array($statusNode, ['pending','queued','running'], true)) { $pending += $cnt; }
+                    elseif (in_array($statusNode, ['success','completed'], true)) { $success += $cnt; }
+                    elseif (in_array($statusNode, ['failed','cancelled'], true)) { $failed += $cnt; }
+                }
+                $res->free();
+            }
+            if ($pending > 0) { return; }
+            if ($success === 0) {
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL3_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                return;
+            }
+            @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
             return;
         }
         if ($stage === 'pending_crowd') {
             if (!pp_promotion_is_crowd_enabled()) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $crowdPerArticle = (int)pp_promotion_settings()['crowd_per_article'];
             if ($crowdPerArticle <= 0) { $crowdPerArticle = 100; }
-            $level2 = [];
-            if ($res = @$conn->query('SELECT id, result_url FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 AND status IN (\'success\',\'completed\')')) {
-                while ($row = $res->fetch_assoc()) {
-                    $url = trim((string)$row['result_url']);
-                    if ($url !== '') { $level2[] = $row; }
+            $finalNodes = [];
+            $finalLevel = 1;
+            foreach ([3, 2, 1] as $candidateLevel) {
+                $resLevel = @$conn->query('SELECT id, result_url FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=' . $candidateLevel . " AND status IN ('success','completed')");
+                if ($resLevel) {
+                    $candidateNodes = [];
+                    while ($row = $resLevel->fetch_assoc()) {
+                        $url = trim((string)$row['result_url']);
+                        if ($url !== '') { $candidateNodes[] = $row; }
+                    }
+                    $resLevel->free();
+                    if (!empty($candidateNodes)) {
+                        $finalNodes = $candidateNodes;
+                        $finalLevel = $candidateLevel;
+                        break;
+                    }
                 }
-                $res->free();
             }
-            if (empty($level2)) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready' WHERE id=" . $runId . " LIMIT 1");
+            if (empty($finalNodes)) {
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             try {
@@ -907,7 +1007,7 @@ if (!function_exists('pp_promotion_process_run')) {
             } catch (Throwable $e) { $connCrowd = null; }
             $crowdIds = [];
             if ($connCrowd) {
-                $sql = "SELECT id, url FROM crowd_links WHERE deep_status='success' ORDER BY RAND() LIMIT " . max(1000, $crowdPerArticle * count($level2));
+                $sql = "SELECT id, url FROM crowd_links WHERE deep_status='success' ORDER BY RAND() LIMIT " . max(1000, $crowdPerArticle * max(1, count($finalNodes)));
                 if ($res = @$connCrowd->query($sql)) {
                     while ($row = $res->fetch_assoc()) {
                         $crowdIds[] = $row;
@@ -917,7 +1017,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 $connCrowd->close();
             }
             $index = 0; $totalLinks = count($crowdIds);
-            foreach ($level2 as $node) {
+            foreach ($finalNodes as $node) {
                 for ($i = 0; $i < $crowdPerArticle; $i++) {
                     if ($totalLinks === 0) { break; }
                     $chosen = $crowdIds[$index % $totalLinks];
@@ -930,11 +1030,11 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
             return;
         }
         if ($stage === 'crowd_ready') {
-            @$conn->query("UPDATE promotion_runs SET stage='report_ready' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
             return;
         }
         if ($stage === 'report_ready') {
@@ -974,7 +1074,7 @@ if (!function_exists('pp_promotion_worker')) {
                 }
                 $specificRunId = null;
             } else {
-                $sql = "SELECT * FROM promotion_runs WHERE status IN ('queued','running','level1_active','level2_active','pending_level2','pending_crowd','crowd_ready','report_ready') ORDER BY id ASC LIMIT 1";
+                $sql = "SELECT * FROM promotion_runs WHERE status IN ('queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready') ORDER BY id ASC LIMIT 1";
                 if ($res = @$conn->query($sql)) {
                     $run = $res->fetch_assoc();
                     $res->free();
@@ -1049,10 +1149,14 @@ if (!function_exists('pp_promotion_get_status')) {
         if ($level1Required <= 0) { $level1Required = (int)($requirements[1]['count'] ?? 5); }
         $level2PerParent = isset($settingsSnapshot['level2_per_level1']) ? (int)$settingsSnapshot['level2_per_level1'] : (int)($requirements[2]['per_parent'] ?? 0);
         if ($level2PerParent < 0) { $level2PerParent = 0; }
+        $level3PerParent = isset($settingsSnapshot['level3_per_level2']) ? (int)$settingsSnapshot['level3_per_level2'] : (int)($requirements[3]['per_parent'] ?? 0);
+        if ($level3PerParent < 0) { $level3PerParent = 0; }
+        $level3EnabledSnapshot = isset($settingsSnapshot['level3_enabled']) ? (bool)$settingsSnapshot['level3_enabled'] : pp_promotion_is_level_enabled(3);
 
         $levels = [
             1 => ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => $level1Required],
             2 => ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => 0],
+            3 => ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => 0],
         ];
         if ($res = @$conn->query('SELECT level, status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' GROUP BY level, status')) {
             while ($row = $res->fetch_assoc()) {
@@ -1082,6 +1186,16 @@ if (!function_exists('pp_promotion_get_status')) {
         }
         $levels[2]['total'] = (int)($levels[2]['success'] ?? 0);
         $levels[2]['required'] = $expectedLevel2;
+        $level2Success = (int)($levels[2]['success'] ?? 0);
+        $expectedLevel3 = 0;
+        if ($level3EnabledSnapshot && $level3PerParent > 0 && $level2Success > 0) {
+            $expectedLevel3 = $level3PerParent * $level2Success;
+        }
+        if (!isset($levels[3])) {
+            $levels[3] = ['total' => 0, 'success' => 0, 'failed' => 0, 'attempted' => 0, 'required' => $expectedLevel3];
+        }
+        $levels[3]['total'] = (int)($levels[3]['success'] ?? 0);
+        $levels[3]['required'] = $expectedLevel3;
         foreach ($levels as $lvl => &$info) {
             if (!isset($info['attempted'])) { $info['attempted'] = $info['success'] + $info['failed']; }
             if (!isset($info['required']) || $info['required'] < 0) { $info['required'] = 0; }
@@ -1118,7 +1232,7 @@ if (!function_exists('pp_promotion_get_status')) {
 
 if (!function_exists('pp_promotion_build_report')) {
     function pp_promotion_build_report(mysqli $conn, int $runId): array {
-        $report = ['level1' => [], 'level2' => [], 'crowd' => []];
+        $report = ['level1' => [], 'level2' => [], 'level3' => [], 'crowd' => []];
         if ($res = @$conn->query('SELECT id, parent_id, level, network_slug, result_url, status, anchor_text, target_url FROM promotion_nodes WHERE run_id=' . $runId . ' ORDER BY level ASC, id ASC')) {
             while ($row = $res->fetch_assoc()) {
                 $status = (string)($row['status'] ?? '');
@@ -1136,6 +1250,7 @@ if (!function_exists('pp_promotion_build_report')) {
                 ];
                 if ((int)$row['level'] === 1) { $report['level1'][] = $entry; }
                 elseif ((int)$row['level'] === 2) { $report['level2'][] = $entry; }
+                elseif ((int)$row['level'] === 3) { $report['level3'][] = $entry; }
             }
             $res->free();
         }

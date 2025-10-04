@@ -33,6 +33,7 @@ $settingsKeys = array_merge($settingsKeys, [
     'promotion_price_per_link',
     'promotion_level1_count',
     'promotion_level2_per_level1',
+    'promotion_level3_per_level2',
     'promotion_crowd_per_article',
     'promotion_level1_enabled',
     'promotion_level2_enabled',
@@ -64,6 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $promotionPrice = max(0, round((float)$priceRaw, 2));
             $level1Count = max(1, min(500, (int)($_POST['promotion_level1_count'] ?? 5)));
             $level2PerLevel1 = max(1, min(500, (int)($_POST['promotion_level2_per_level1'] ?? 10)));
+            $level3PerLevel2 = max(1, min(500, (int)($_POST['promotion_level3_per_level2'] ?? 5)));
             $crowdPerArticle = max(0, min(5000, (int)($_POST['promotion_crowd_per_article'] ?? 100)));
             $pairs = [
                 ['currency', $currency],
@@ -84,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['promotion_price_per_link', number_format($promotionPrice, 2, '.', '')],
                 ['promotion_level1_count', (string)$level1Count],
                 ['promotion_level2_per_level1', (string)$level2PerLevel1],
+                ['promotion_level3_per_level2', (string)$level3PerLevel2],
                 ['promotion_crowd_per_article', (string)$crowdPerArticle],
                 ['promotion_level1_enabled', isset($_POST['promotion_level1_enabled']) ? '1' : '0'],
                 ['promotion_level2_enabled', isset($_POST['promotion_level2_enabled']) ? '1' : '0'],
@@ -272,6 +275,7 @@ $settings = [
     'promotion_price_per_link' => '0.00',
     'promotion_level1_count' => '5',
     'promotion_level2_per_level1' => '10',
+    'promotion_level3_per_level2' => '5',
     'promotion_crowd_per_article' => '100',
     'promotion_level1_enabled' => '1',
     'promotion_level2_enabled' => '1',
@@ -307,6 +311,7 @@ $settings['promotion_level3_enabled'] = $settings['promotion_level3_enabled'] ??
 $settings['promotion_crowd_enabled'] = $settings['promotion_crowd_enabled'] ?? ($promoDefaults['crowd_enabled'] ? '1' : '0');
 $settings['promotion_level1_count'] = (string)max(1, (int)($settings['promotion_level1_count'] ?? ($promoDefaults['level1_count'] ?? 5)));
 $settings['promotion_level2_per_level1'] = (string)max(1, (int)($settings['promotion_level2_per_level1'] ?? ($promoDefaults['level2_per_level1'] ?? 10)));
+$settings['promotion_level3_per_level2'] = (string)max(1, (int)($settings['promotion_level3_per_level2'] ?? ($promoDefaults['level3_per_level2'] ?? 5)));
 $settings['promotion_crowd_per_article'] = (string)max(0, (int)($settings['promotion_crowd_per_article'] ?? ($promoDefaults['crowd_per_article'] ?? 0)));
 
 
