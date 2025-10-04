@@ -1394,12 +1394,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
     const addedHidden = document.getElementById('added-hidden');
-    const newLinkInput = form.querySelector('input[name="new_link"]');
-    const newAnchorInput = form.querySelector('input[name="new_anchor"]');
-    const newLangSelect = form.querySelector('select[name="new_language"]');
-    const newWish = form.querySelector('#new_wish');
-    const globalWish = document.querySelector('#global_wishes');
-    const useGlobal = form.querySelector('#use_global_wish');
+    const newLinkInput = document.getElementById('new_link_input');
+    const newAnchorInput = document.getElementById('new_anchor_input');
+    const newLangSelect = document.getElementById('new_language_select');
+    const newWish = document.getElementById('new_wish');
+    const globalWish = document.getElementById('global_wishes');
+    const useGlobal = document.getElementById('use_global_wish');
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
 
@@ -2175,7 +2175,7 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('csrf_token', getCsrfToken());
             fd.append('update_project', '1');
             fd.append('ajax', '1');
-            fd.append('wishes', globalWish.value || '');
+            fd.append('wishes', globalWish ? (globalWish.value || '') : '');
             fd.append(`edited_links[${id}][url]`, url);
             fd.append(`edited_links[${id}][anchor]`, anchor);
             fd.append(`edited_links[${id}][language]`, lang);
@@ -2304,10 +2304,10 @@ document.addEventListener('DOMContentLoaded', function() {
             // При submit модалки значение hidden синхронизируется после перезагрузки страницы сервером
         });
     }
-    if (useGlobal) {
+    if (useGlobal && newWish) {
         useGlobal.addEventListener('change', () => {
             if (useGlobal.checked) {
-                newWish.value = globalWish.value;
+                newWish.value = globalWish ? globalWish.value : '';
                 newWish.setAttribute('readonly','readonly');
                 newWish.classList.add('bg-light');
             } else {
@@ -2316,7 +2316,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    if (globalWish && useGlobal) {
+    if (globalWish && useGlobal && newWish) {
         globalWish.addEventListener('input', () => { if (useGlobal.checked) { newWish.value = globalWish.value; } });
     }
 
@@ -3023,11 +3023,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Add link button handler
-    addLinkBtn.addEventListener('click', async function() {
-        const url = newLinkInput.value.trim();
-        const anchor = newAnchorInput.value.trim();
-        const lang = (newLangSelect ? newLangSelect.value.trim() : 'auto');
-        const wish = newWish.value.trim();
+    if (addLinkBtn) {
+        addLinkBtn.addEventListener('click', async function() {
+            if (!newLinkInput || !newAnchorInput || !newWish) {
+                alert('<?php echo __('Не удалось найти поля формы. Пожалуйста, обновите страницу.'); ?>');
+                return;
+            }
+            const url = newLinkInput.value.trim();
+            const anchor = newAnchorInput.value.trim();
+            const lang = (newLangSelect ? newLangSelect.value.trim() : 'auto');
+            const wish = newWish.value.trim();
         if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
         // Domain restriction (client-side)
         try {
@@ -3212,7 +3217,8 @@ document.addEventListener('DOMContentLoaded', function() {
         } finally {
             setButtonLoading(addLinkBtn, false);
         }
-    });
+        });
+    }
 
     function openPromotionConfirm(btn, url) {
         const modalInstance = getPromotionConfirmModalInstance();
