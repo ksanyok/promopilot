@@ -58,7 +58,6 @@ if (is_logged_in()) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
-                            <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/payment_systems.php'); ?>"><i class="bi bi-credit-card me-1"></i><?php echo __('Платежи'); ?></a></li>
                         <?php endif; ?>
                         <?php if ($pp_nav_balance !== null): ?>
                             <li class="nav-item">

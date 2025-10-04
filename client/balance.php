@@ -168,6 +168,32 @@ function pp_client_tx_status_badge(string $status): string {
                                 <?php if (!empty($payload['prepay_id'])): ?>
                                     <p class="mb-0 small text-muted"><?php echo __('Идентификатор платежа'); ?>: <strong><?php echo htmlspecialchars($payload['prepay_id']); ?></strong></p>
                                 <?php endif; ?>
+                                <?php if (!empty($payload['wallet_address'])): ?>
+                                    <hr class="my-3">
+                                    <p class="mb-2"><?php echo __('Для завершения перевода отправьте USDT на кошелёк:'); ?></p>
+                                    <?php
+                                        $walletAddress = (string)$payload['wallet_address'];
+                                        $walletNetwork = (string)($payload['wallet_network'] ?? '');
+                                        $walletMemo = (string)($payload['wallet_memo'] ?? '');
+                                        $walletAddressJs = json_encode($walletAddress, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                                    ?>
+                                    <div class="input-group input-group-sm mb-2">
+                                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($walletAddress); ?>" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard?.writeText(<?php echo $walletAddressJs; ?>);">
+                                            <?php echo __('Скопировать'); ?>
+                                        </button>
+                                    </div>
+                                    <?php if ($walletNetwork !== ''): ?>
+                                        <p class="small text-muted mb-1"><?php echo __('Сеть'); ?>: <strong><?php echo htmlspecialchars($walletNetwork); ?></strong></p>
+                                    <?php endif; ?>
+                                    <?php if ($walletMemo !== ''): ?>
+                                        <p class="small text-muted mb-1"><?php echo __('Memo/Tag'); ?>: <strong><?php echo htmlspecialchars($walletMemo); ?></strong></p>
+                                    <?php endif; ?>
+                                    <p class="small text-muted mb-0"><?php echo __('Сумма к переводу'); ?>: <strong><?php
+                                        $walletAmountValue = sprintf('%.2f %s', (float)($payload['amount'] ?? $createdPayment['transaction']['amount'] ?? 0), (string)($createdPayment['transaction']['currency'] ?? 'USDT'));
+                                        echo htmlspecialchars($walletAmountValue);
+                                    ?></strong></p>
+                                <?php endif; ?>
                             </div>
                         <?php endif; ?>
                     <?php endif; ?>

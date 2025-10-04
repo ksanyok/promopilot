@@ -11,7 +11,7 @@ if (!function_exists('pp_payment_gateway_definitions')) {
             'monobank' => [
                 'code' => 'monobank',
                 'title' => 'Monobank',
-                'currency' => 'UAH',
+                'currency' => 'USD',
                 'sort_order' => 10,
                 'config_defaults' => [
                     'token' => '',
@@ -20,6 +20,8 @@ if (!function_exists('pp_payment_gateway_definitions')) {
                     'redirect_url' => '',
                     'environment' => 'production',
                     'invoice_lifetime' => 900,
+                    'usd_markup_percent' => 5.0,
+                    'usd_manual_rate' => '',
                 ],
             ],
             'binance' => [
@@ -35,6 +37,10 @@ if (!function_exists('pp_payment_gateway_definitions')) {
                     'environment' => 'production',
                     'webhook_key' => '',
                     'terminal_type' => 'WEB',
+                    'mode' => 'merchant',
+                    'wallet_address' => '',
+                    'wallet_network' => 'TRC20',
+                    'wallet_memo' => '',
                 ],
             ],
         ];
@@ -673,7 +679,20 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
             $msg = function_exists('__') ? __('Не задан API токен Monobank.') : 'Monobank token missing';
             return ['ok' => false, 'error' => $msg, 'status' => 'failed'];
         }
-        $amountMinor = (int)round(((float)$transaction['amount']) * 100);
+        $usdAmount = round((float)$transaction['amount'], 2);
+        if ($usdAmount <= 0) {
+            $msg = function_exists('__') ? __('Сумма должна быть больше нуля.') : 'Amount must be positive';
+            return ['ok' => false, 'error' => $msg, 'status' => 'failed'];
+        }
+        $rateInfo = pp_payment_monobank_get_usd_rate($config);
+        if (empty($rateInfo['ok'])) {
+            $error = $rateInfo['error'] ?? 'rate_unavailable';
+            $msg = function_exists('__') ? __('Не удалось получить курс Monobank.') : 'Failed to fetch Monobank rate';
+            return ['ok' => false, 'error' => $msg . ' (' . $error . ')', 'status' => 'failed'];
+        }
+        $exchangeRate = (float)$rateInfo['rate'];
+        $uahAmount = $usdAmount * $exchangeRate;
+        $amountMinor = (int)round($uahAmount * 100);
         if ($amountMinor <= 0) {
             $msg = function_exists('__') ? __('Сумма должна быть больше нуля.') : 'Amount must be positive';
             return ['ok' => false, 'error' => $msg, 'status' => 'failed'];
@@ -714,11 +733,23 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
         if ($invoiceId === '' || $pageUrl === '') {
             return ['ok' => false, 'error' => 'Invalid Monobank response', 'status' => 'failed'];
         }
+        $data['_pp_exchange'] = [
+            'usd_amount' => $usdAmount,
+            'uah_amount' => round($uahAmount, 2),
+            'rate' => $exchangeRate,
+            'base_rate' => $rateInfo['base_rate'] ?? $exchangeRate,
+            'markup_percent' => $rateInfo['markup_percent'] ?? 0.0,
+            'rate_source' => $rateInfo['source'] ?? 'auto',
+        ];
         $customerPayload = [
             'payment_url' => $pageUrl,
             'invoice_id' => $invoiceId,
             'order_id' => $orderId,
             'message' => function_exists('__') ? __('Перейдите по ссылке для оплаты счёта Monobank.') : 'Follow the link to pay via Monobank.',
+            'amount_usd' => number_format($usdAmount, 2, '.', ''),
+            'amount_uah' => number_format($uahAmount, 2, '.', ''),
+            'exchange_rate' => number_format($exchangeRate, 6, '.', ''),
+            'exchange_source' => $rateInfo['source'] ?? 'auto',
         ];
         if (!empty($data['validity'])) {
             $customerPayload['valid_until'] = (int)$data['validity'];
@@ -775,9 +806,140 @@ if (!function_exists('pp_payment_monobank_request')) {
     }
 }
 
+if (!function_exists('pp_payment_monobank_fetch_public_rate')) {
+    function pp_payment_monobank_fetch_public_rate(): array {
+        static $cache = null;
+        static $cacheTs = 0;
+        if ($cache !== null && (time() - $cacheTs) < 120) {
+            return $cache;
+        }
+        $url = 'https://api.monobank.ua/bank/currency';
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+        $body = curl_exec($ch);
+        $err = $body === false ? curl_error($ch) : null;
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false) {
+            return ['ok' => false, 'error' => $err ?? 'curl_failed'];
+        }
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return ['ok' => false, 'error' => 'invalid_response'];
+        }
+        $rate = null;
+        $raw = null;
+        foreach ($decoded as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $codeA = (int)($entry['currencyCodeA'] ?? 0);
+            $codeB = (int)($entry['currencyCodeB'] ?? 0);
+            if ($codeA === 840 && $codeB === 980) {
+                $candidate = null;
+                if (isset($entry['rateCross'])) {
+                    $candidate = (float)$entry['rateCross'];
+                }
+                if (!$candidate && isset($entry['rateSell'])) {
+                    $candidate = (float)$entry['rateSell'];
+                }
+                if (!$candidate && isset($entry['rateBuy'])) {
+                    $candidate = (float)$entry['rateBuy'];
+                }
+                if ($candidate && $candidate > 0) {
+                    $rate = $candidate;
+                    $raw = $entry;
+                    break;
+                }
+            }
+        }
+        if (!$rate) {
+            return ['ok' => false, 'error' => 'rate_not_found'];
+        }
+        $cache = ['ok' => true, 'rate' => $rate, 'source' => 'api', 'raw' => $raw];
+        $cacheTs = time();
+        return $cache;
+    }
+}
+
+if (!function_exists('pp_payment_monobank_get_usd_rate')) {
+    function pp_payment_monobank_get_usd_rate(array $config): array {
+        $markupPercent = isset($config['usd_markup_percent']) ? (float)$config['usd_markup_percent'] : 0.0;
+        $markupPercent = max(-99.0, min(500.0, $markupPercent));
+        $manualRateRaw = trim((string)($config['usd_manual_rate'] ?? ''));
+        if ($manualRateRaw !== '' && is_numeric($manualRateRaw)) {
+            $baseRate = max(0.0001, (float)$manualRateRaw);
+            $rate = $baseRate * (1 + ($markupPercent / 100));
+            return [
+                'ok' => true,
+                'rate' => round($rate, 6),
+                'base_rate' => round($baseRate, 6),
+                'markup_percent' => $markupPercent,
+                'source' => 'manual',
+            ];
+        }
+        $fetched = pp_payment_monobank_fetch_public_rate();
+        if (empty($fetched['ok'])) {
+            return $fetched;
+        }
+        $baseRate = (float)$fetched['rate'];
+        $rate = $baseRate * (1 + ($markupPercent / 100));
+        return [
+            'ok' => true,
+            'rate' => round($rate, 6),
+            'base_rate' => round($baseRate, 6),
+            'markup_percent' => $markupPercent,
+            'source' => $fetched['source'] ?? 'api',
+        ];
+    }
+}
+
 if (!function_exists('pp_payment_gateway_initiate_binance')) {
     function pp_payment_gateway_initiate_binance(array $gateway, array $transaction, array $options = []): array {
         $config = $gateway['config'] ?? [];
+        $mode = strtolower((string)($config['mode'] ?? 'merchant'));
+        $mode = in_array($mode, ['wallet', 'merchant'], true) ? $mode : 'merchant';
+        if ($mode === 'wallet') {
+            $address = trim((string)($config['wallet_address'] ?? ''));
+            if ($address === '') {
+                $msg = function_exists('__') ? __('Укажите адрес кошелька для приёма USDT.') : 'USDT wallet address required';
+                return ['ok' => false, 'error' => $msg, 'status' => 'failed'];
+            }
+            $network = strtoupper(trim((string)($config['wallet_network'] ?? 'TRC20')));
+            if ($network === '') {
+                $network = 'TRC20';
+            }
+            $memo = trim((string)($config['wallet_memo'] ?? ''));
+            $amountFormatted = number_format((float)$transaction['amount'], 2, '.', '');
+            $customerPayload = [
+                'wallet_address' => $address,
+                'wallet_network' => $network,
+                'wallet_memo' => $memo,
+                'amount' => $amountFormatted,
+                'currency' => 'USDT',
+                'message' => function_exists('__') ? __('Переведите указанную сумму USDT на кошелёк ниже. После поступления средств мы подтвердим транзакцию.') : 'Send the specified USDT amount to the wallet below. The team will confirm once received.',
+                'manual_confirmation_required' => true,
+            ];
+            return [
+                'ok' => true,
+                'status' => 'awaiting_confirmation',
+                'provider_reference' => null,
+                'payment_url' => null,
+                'provider_payload' => [
+                    'mode' => 'wallet',
+                    'wallet_address' => $address,
+                    'wallet_network' => $network,
+                    'wallet_memo' => $memo,
+                ],
+                'customer_payload' => $customerPayload,
+            ];
+        }
         $apiKey = trim((string)($config['api_key'] ?? ''));
         $apiSecret = trim((string)($config['api_secret'] ?? ''));
         if ($apiKey === '' || $apiSecret === '') {

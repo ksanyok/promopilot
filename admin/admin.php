@@ -468,6 +468,21 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     <?php echo __('Крауд маркетинг'); ?>
                 </a>
             </li>
+            <li class="mt-3 px-2 text-uppercase small fw-semibold text-muted">
+                <?php echo __('Платежи'); ?>
+            </li>
+            <li>
+                <a href="<?php echo pp_url('admin/payment_systems.php'); ?>" class="menu-item">
+                    <i class="bi bi-credit-card me-2" aria-hidden="true"></i>
+                    <?php echo __('Платёжные системы'); ?>
+                </a>
+            </li>
+            <li>
+                <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="menu-item">
+                    <i class="bi bi-clock-history me-2" aria-hidden="true"></i>
+                    <?php echo __('Транзакции'); ?>
+                </a>
+            </li>
             <li>
                 <a href="#" class="menu-item" onclick="ppShowSection('diagnostics')">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
