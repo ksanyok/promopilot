@@ -6,18 +6,24 @@ if (!function_exists('pp_url')) { require_once __DIR__ . '/init.php'; }
 $GLOBALS['pp_layout_has_sidebar'] = true;
 
 $balanceText = '';
+$sidebarUser = null;
 if (is_logged_in() && !is_admin()) {
     $uid = (int)($_SESSION['user_id'] ?? 0);
     if ($uid > 0) {
         $conn = connect_db();
         if ($conn) {
-            $stmt = $conn->prepare("SELECT balance FROM users WHERE id = ?");
+            $stmt = $conn->prepare("SELECT balance, username, full_name, email FROM users WHERE id = ?");
             if ($stmt) {
                 $stmt->bind_param('i', $uid);
                 $stmt->execute();
                 $res = $stmt->get_result();
                 if ($row = $res->fetch_assoc()) {
                     $balanceText = htmlspecialchars(format_currency($row['balance']));
+                    $sidebarUser = [
+                        'username' => (string)$row['username'],
+                        'full_name' => (string)$row['full_name'],
+                        'email' => (string)$row['email'],
+                    ];
                 }
                 $stmt->close();
             }
@@ -47,8 +53,24 @@ if (is_logged_in() && !is_admin()) {
 }
 ?>
 
+<?php
+$sidebarDisplayName = '';
+$sidebarUsername = '';
+$sidebarEmail = '';
+if ($sidebarUser) {
+    $sidebarUsername = trim((string)$sidebarUser['username']);
+    $sidebarEmail = trim((string)$sidebarUser['email']);
+    $fullName = trim((string)$sidebarUser['full_name']);
+    $sidebarDisplayName = $fullName !== '' ? $fullName : $sidebarUsername;
+    if ($sidebarDisplayName === '') {
+        $sidebarDisplayName = __('Профиль');
+    }
+}
+?>
+
 <div class="sidebar">
-    <div class="menu-block">
+    <div class="sidebar-main">
+        <div class="menu-block">
         <div class="menu-title"><?php echo __('Меню'); ?></div>
         <ul class="menu-list">
             <li>
@@ -130,5 +152,29 @@ if (is_logged_in() && !is_admin()) {
             </li>
         </ul>
     </div>
+    <?php endif; ?>
+    </div>
+
+    <?php if ($sidebarUser): ?>
+    <footer class="sidebar-footer">
+        <div class="sidebar-footer__meta">
+            <span class="sidebar-footer__badge"><?php echo __('Аккаунт'); ?></span>
+            <a href="<?php echo pp_url('client/settings.php'); ?>" class="sidebar-footer__settings" title="<?php echo __('Настройки'); ?>">
+                <i class="bi bi-gear"></i>
+            </a>
+        </div>
+        <div class="sidebar-footer__name"><?php echo htmlspecialchars($sidebarDisplayName); ?></div>
+        <?php if ($sidebarUsername !== ''): ?>
+            <div class="sidebar-footer__username">@<?php echo htmlspecialchars($sidebarUsername); ?></div>
+        <?php endif; ?>
+        <div class="sidebar-footer__email">
+            <i class="bi bi-envelope"></i>
+            <?php if ($sidebarEmail !== ''): ?>
+                <a href="mailto:<?php echo htmlspecialchars($sidebarEmail); ?>" class="sidebar-footer__email-link"><?php echo htmlspecialchars($sidebarEmail); ?></a>
+            <?php else: ?>
+                <span class="sidebar-footer__email--empty"><?php echo __('Email не указан'); ?></span>
+            <?php endif; ?>
+        </div>
+    </footer>
     <?php endif; ?>
 </div>
