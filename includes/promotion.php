@@ -55,6 +55,18 @@ if (!function_exists('pp_promotion_settings')) {
             $cacheBool = !in_array(strtolower((string)$raw), ['0', 'false', 'no', 'off', ''], true);
             $defaults[$localKey] = $cacheBool;
         }
+        $level1CountSetting = (int)get_setting('promotion_level1_count', (string)$defaults['level1_count']);
+        if ($level1CountSetting > 0) {
+            $defaults['level1_count'] = max(1, min(500, $level1CountSetting));
+        }
+        $level2PerSetting = (int)get_setting('promotion_level2_per_level1', (string)$defaults['level2_per_level1']);
+        if ($level2PerSetting > 0) {
+            $defaults['level2_per_level1'] = max(1, min(500, $level2PerSetting));
+        }
+        $crowdPerSetting = (int)get_setting('promotion_crowd_per_article', (string)$defaults['crowd_per_article']);
+        if ($crowdPerSetting >= 0) {
+            $defaults['crowd_per_article'] = max(0, min(10000, $crowdPerSetting));
+        }
         // cache
         $cache = $defaults;
         return $cache;

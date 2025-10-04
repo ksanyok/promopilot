@@ -31,6 +31,9 @@ $settingsKeys = array_merge($settingsKeys, [
     'captcha_fallback_api_key',
     // Promotion pricing and levels
     'promotion_price_per_link',
+    'promotion_level1_count',
+    'promotion_level2_per_level1',
+    'promotion_crowd_per_article',
     'promotion_level1_enabled',
     'promotion_level2_enabled',
     'promotion_level3_enabled',
@@ -59,6 +62,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $priceRaw = str_replace(',', '.', (string)($_POST['promotion_price_per_link'] ?? '0'));
             $promotionPrice = max(0, round((float)$priceRaw, 2));
+            $level1Count = max(1, min(500, (int)($_POST['promotion_level1_count'] ?? 5)));
+            $level2PerLevel1 = max(1, min(500, (int)($_POST['promotion_level2_per_level1'] ?? 10)));
+            $crowdPerArticle = max(0, min(5000, (int)($_POST['promotion_crowd_per_article'] ?? 100)));
             $pairs = [
                 ['currency', $currency],
                 ['openai_api_key', $openai],
@@ -76,6 +82,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ['captcha_fallback_api_key', trim((string)($_POST['captcha_fallback_api_key'] ?? ''))],
                 // Promotion
                 ['promotion_price_per_link', number_format($promotionPrice, 2, '.', '')],
+                ['promotion_level1_count', (string)$level1Count],
+                ['promotion_level2_per_level1', (string)$level2PerLevel1],
+                ['promotion_crowd_per_article', (string)$crowdPerArticle],
                 ['promotion_level1_enabled', isset($_POST['promotion_level1_enabled']) ? '1' : '0'],
                 ['promotion_level2_enabled', isset($_POST['promotion_level2_enabled']) ? '1' : '0'],
                 ['promotion_level3_enabled', isset($_POST['promotion_level3_enabled']) ? '1' : '0'],
@@ -261,6 +270,9 @@ $settings = [
     'telegram_token' => '',
     'telegram_channel' => '',
     'promotion_price_per_link' => '0.00',
+    'promotion_level1_count' => '5',
+    'promotion_level2_per_level1' => '10',
+    'promotion_crowd_per_article' => '100',
     'promotion_level1_enabled' => '1',
     'promotion_level2_enabled' => '1',
     'promotion_level3_enabled' => '0',
@@ -293,6 +305,9 @@ $settings['promotion_level1_enabled'] = $settings['promotion_level1_enabled'] ??
 $settings['promotion_level2_enabled'] = $settings['promotion_level2_enabled'] ?? ($promoDefaults['level2_enabled'] ? '1' : '0');
 $settings['promotion_level3_enabled'] = $settings['promotion_level3_enabled'] ?? ($promoDefaults['level3_enabled'] ? '1' : '0');
 $settings['promotion_crowd_enabled'] = $settings['promotion_crowd_enabled'] ?? ($promoDefaults['crowd_enabled'] ? '1' : '0');
+$settings['promotion_level1_count'] = (string)max(1, (int)($settings['promotion_level1_count'] ?? ($promoDefaults['level1_count'] ?? 5)));
+$settings['promotion_level2_per_level1'] = (string)max(1, (int)($settings['promotion_level2_per_level1'] ?? ($promoDefaults['level2_per_level1'] ?? 10)));
+$settings['promotion_crowd_per_article'] = (string)max(0, (int)($settings['promotion_crowd_per_article'] ?? ($promoDefaults['crowd_per_article'] ?? 0)));
 
 
 // Получить пользователей
