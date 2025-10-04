@@ -10,6 +10,15 @@
     $currentVersion = htmlspecialchars(get_version(), ENT_QUOTES, 'UTF-8');
     $latestVersion = htmlspecialchars($updateStatus['latest'] ?? get_version(), ENT_QUOTES, 'UTF-8');
     $updateAvailable = !empty($updateStatus['is_new']);
+    $releaseDate = '—';
+    if (!empty($updateStatus['published_at'])) {
+        try {
+            $dt = new DateTimeImmutable($updateStatus['published_at']);
+            $releaseDate = htmlspecialchars($dt->format('d.m.Y'), ENT_QUOTES, 'UTF-8');
+        } catch (Throwable $e) {
+            $releaseDate = htmlspecialchars((string)$updateStatus['published_at'], ENT_QUOTES, 'UTF-8');
+        }
+    }
 
     $productLinks = [
         [
@@ -38,16 +47,6 @@
             'label' => __('Риски использования'),
             'href' => pp_url('public/risk.php'),
         ],
-    ];
-    $legalLinks = [
-        [
-            'label' => __('Условия соглашения'),
-            'href' => pp_url('public/terms.php'),
-        ],
-        [
-            'label' => __('Риски использования'),
-            'href' => pp_url('public/risk.php'),
-        ],
         [
             'label' => __('Связаться с поддержкой'),
             'href' => 'https://buyreadysite.com/contact',
@@ -55,6 +54,7 @@
         ],
     ];
     $isAdmin = is_admin();
+    $showUpdateButton = $isAdmin || isset($_SESSION['admin_user_id']);
 ?>
     <footer class="footer pp-footer" id="app-footer">
         <div class="footer__inner pp-footer__inner">
@@ -63,7 +63,8 @@
                     <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="PromoPilot" class="footer-logo" loading="lazy" width="124" height="32">
                     <span class="pp-footer__version-pill">v<?php echo $currentVersion; ?></span>
                 </div>
-                <?php if ($isAdmin): ?>
+                <p class="pp-footer__meta-line"><?php echo __('Последний релиз'); ?>: <strong><?php echo $releaseDate; ?></strong></p>
+                <?php if ($showUpdateButton): ?>
                     <?php
                         $updateBtnClass = $updateAvailable ? 'btn-warning' : 'btn-outline-light';
                         $updateLabel = $updateAvailable ? __('Обновить до новой версии') : __('Проверить обновления');
@@ -74,14 +75,17 @@
                         <span><?php echo $updateLabel; ?><?php echo $updateSuffix; ?></span>
                     </a>
                 <?php endif; ?>
+            </div>
+
+            <div class="pp-footer__column pp-footer__column--developer">
                 <div class="pp-footer__developer">
                     <span class="pp-footer__spark" aria-hidden="true"></span>
-                    <span class="pp-footer__brand" data-brand-animate="true" data-brand-text="BuyReadySite" tabindex="0">BuyReadySite</span>
+                    <span class="pp-footer__brand" data-brand-scramble="true" data-brand-text="BuyReadySite" data-brand-glyphs="▮░▒▓█BRSDUYAEIOT1234567890" tabindex="0">BuyReadySite</span>
                 </div>
                 <p class="pp-footer__tagline"><?php echo __('Разработано компанией'); ?> <a href="https://buyreadysite.com/" target="_blank" rel="noopener">BuyReadySite.com</a></p>
             </div>
 
-            <div class="pp-footer__column pp-footer__column--brand">
+            <div class="pp-footer__column pp-footer__column--products">
                 <h6 class="pp-footer__links-title mb-1"><?php echo __('Продукты BuyReadySite'); ?></h6>
                 <ul class="pp-footer__products">
                     <?php foreach ($productLinks as $product): ?>
@@ -94,25 +98,17 @@
                     <?php endforeach; ?>
                 </ul>
             </div>
-
-            <div class="pp-footer__column pp-footer__column--links">
-                <div class="pp-footer__links-group">
-                    <h6 class="pp-footer__links-title"><?php echo __('Полезные ссылки'); ?></h6>
-                    <ul>
-                        <?php foreach ($legalLinks as $link): ?>
-                            <li>
-                                <a href="<?php echo htmlspecialchars($link['href'], ENT_QUOTES, 'UTF-8'); ?>"<?php echo !empty($link['external']) ? ' target="_blank" rel="noopener"' : ''; ?>>
-                                    <?php echo htmlspecialchars($link['label'], ENT_QUOTES, 'UTF-8'); ?>
-                                </a>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-            </div>
         </div>
         <div class="pp-footer__bottom">
             <div class="pp-footer__bottom-inner">
-                <span>&copy; <?php echo $currentYear; ?> PromoPilot • <?php echo __('Все права защищены.'); ?></span>
+                <span class="pp-footer__bottom-copy">&copy; <?php echo $currentYear; ?> PromoPilot • <?php echo __('Все права защищены.'); ?></span>
+                <nav class="pp-footer__legal" aria-label="<?php echo htmlspecialchars(__('Полезные ссылки'), ENT_QUOTES, 'UTF-8'); ?>">
+                    <?php foreach ($legalLinks as $index => $link): ?>
+                        <a href="<?php echo htmlspecialchars($link['href'], ENT_QUOTES, 'UTF-8'); ?>"<?php echo !empty($link['external']) ? ' target="_blank" rel="noopener"' : ''; ?>>
+                            <?php echo htmlspecialchars($link['label'], ENT_QUOTES, 'UTF-8'); ?>
+                        </a>
+                    <?php endforeach; ?>
+                </nav>
                 <span class="pp-footer__bottom-brand">BuyReadySite</span>
             </div>
         </div>

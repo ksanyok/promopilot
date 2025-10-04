@@ -43,50 +43,81 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Animated developer brand wordmark
-    const brandEl = document.querySelector('[data-brand-animate="true"]');
+    // Animated developer brand wordmark (scramble reveal)
+    const brandEl = document.querySelector('[data-brand-scramble="true"]');
     if (brandEl) {
-        const original = brandEl.dataset.brandText || brandEl.textContent.trim();
-        const letters = Array.from(original);
-        if (letters.length) {
-            brandEl.textContent = '';
-            const spans = letters.map((char, index) => {
-                const span = document.createElement('span');
-                span.textContent = char === ' ' ? '\u00A0' : char;
-                span.setAttribute('data-index', index);
-                brandEl.appendChild(span);
-                return span;
-            });
+        const targetText = (brandEl.dataset.brandText || brandEl.textContent || '').trim();
+        const glyphSource = brandEl.dataset.brandGlyphs || '▮░▒▓█BRSDUYAEIOT1234567890';
+        const glyphs = glyphSource.length ? Array.from(glyphSource) : ['*'];
+        const frameInterval = parseInt(brandEl.dataset.brandInterval || '', 10) || 110;
+        const pauseDuration = parseInt(brandEl.dataset.brandPause || '', 10) || 5200;
+        if (targetText.length) {
+            let revealIndex = -1;
+            let intervalId = null;
+            let restartTimeout = null;
 
-            if (!prefersReducedMotion) {
-                let current = 0;
-                let timer = null;
-
-                const activateIndex = (idx) => {
-                    spans.forEach((span, i) => {
-                        if (i === idx) {
-                            span.setAttribute('data-active', 'true');
-                        } else {
-                            span.removeAttribute('data-active');
-                        }
-                    });
-                };
-
-                const tick = () => {
-                    activateIndex(current);
-                    current = (current + 1) % spans.length;
-                    timer = window.setTimeout(tick, 160 + Math.random() * 180);
-                };
-
-                tick();
-
-                const pause = () => { if (timer) { clearTimeout(timer); timer = null; } };
-                const resume = () => { if (!timer) { tick(); } };
-                brandEl.addEventListener('mouseenter', pause);
-                brandEl.addEventListener('mouseleave', resume);
-                brandEl.addEventListener('focus', pause);
-                brandEl.addEventListener('blur', resume);
+            function clearTimers() {
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+                if (restartTimeout) {
+                    clearTimeout(restartTimeout);
+                    restartTimeout = null;
+                }
             }
+
+            function showFinalState() {
+                brandEl.textContent = targetText;
+                brandEl.classList.add('is-static');
+            }
+
+            function renderFrame() {
+                revealIndex += 1;
+                if (revealIndex >= targetText.length) {
+                    clearTimers();
+                    showFinalState();
+                    if (!prefersReducedMotion) {
+                        restartTimeout = window.setTimeout(startCycle, pauseDuration);
+                    }
+                    return;
+                }
+
+                let output = '';
+                for (let i = 0; i < targetText.length; i++) {
+                    if (i <= revealIndex) {
+                        output += targetText[i];
+                    } else {
+                        const idx = Math.floor(Math.random() * glyphs.length);
+                        output += glyphs[idx] || targetText[i];
+                    }
+                }
+                brandEl.textContent = output;
+            }
+
+            function startCycle() {
+                if (prefersReducedMotion) {
+                    clearTimers();
+                    showFinalState();
+                    return;
+                }
+                brandEl.classList.remove('is-static');
+                clearTimers();
+                revealIndex = -1;
+                intervalId = window.setInterval(renderFrame, frameInterval);
+            }
+
+            function stopCycle() {
+                clearTimers();
+                showFinalState();
+            }
+
+            brandEl.addEventListener('mouseenter', stopCycle);
+            brandEl.addEventListener('focus', stopCycle);
+            brandEl.addEventListener('mouseleave', () => { if (!prefersReducedMotion) { startCycle(); } });
+            brandEl.addEventListener('blur', () => { if (!prefersReducedMotion) { startCycle(); } });
+
+            startCycle();
         }
     }
 
