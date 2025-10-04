@@ -175,6 +175,7 @@ $lang = [
     'История' => 'History',
     'Сохранить' => 'Save',
     'Открыть проект' => 'Open project',
+    'Перейти на сайт' => 'Visit site',
     'Якорный текст будет использован при публикации' => 'Anchor text will be used in publication',
     // New keys for enhanced scanner UI
     'Редактировать основную информацию' => 'Edit basic info',

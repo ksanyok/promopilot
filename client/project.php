@@ -56,6 +56,24 @@ if ($pl = $conn->prepare('SELECT id, url, anchor, language, wish FROM project_li
 }
 $conn->close();
 
+if (empty($project['primary_url'])) {
+    $project['primary_url'] = $links[0]['url'] ?? null;
+}
+$projectPrimaryUrl = pp_project_primary_url($project, $project['primary_url'] ?? null);
+$projectPreviewUrl = pp_project_preview_url($project, $projectPrimaryUrl);
+$projectPrimaryHost = trim((string)($project['domain_host'] ?? ''));
+if ($projectPrimaryHost === '' && $projectPrimaryUrl) {
+    $parsedHost = parse_url($projectPrimaryUrl, PHP_URL_HOST);
+    if (!empty($parsedHost)) { $projectPrimaryHost = $parsedHost; }
+}
+$projectFaviconUrl = $projectPrimaryHost !== '' ? ('https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode($projectPrimaryHost)) : null;
+if (function_exists('mb_substr')) {
+    $projectInitial = mb_strtoupper(mb_substr($project['name'] ?? '', 0, 1, 'UTF-8'), 'UTF-8');
+} else {
+    $projectInitial = strtoupper(substr((string)($project['name'] ?? ''), 0, 1));
+}
+if ($projectInitial === '') { $projectInitial = '∎'; }
+
 // Helper: normalize host (strip www)
 $pp_normalize_host = function(?string $host): string {
     $h = strtolower(trim((string)$host));
@@ -457,16 +475,23 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
             <!-- Project hero -->
             <div class="card project-hero mb-3">
                 <div class="card-body">
-                    <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
-                        <div>
-                            <div class="title d-flex align-items-center gap-2">
-                                <span><?php echo htmlspecialchars($project['name']); ?></span>
-                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#projectInfoModal" title="<?php echo __('Редактировать основную информацию'); ?>">
-                                    <i class="bi bi-pencil-square"></i>
-                                </button>
-                                <i class="bi bi-info-circle ms-1 text-primary" data-bs-toggle="tooltip" title="<?php echo __('Страница проекта: управляйте ссылками и пожеланиями.'); ?>"></i>
+                    <div class="project-hero__layout">
+                        <div class="project-hero__main">
+                            <div class="project-hero__heading d-flex align-items-start justify-content-between gap-3 flex-wrap">
+                                <div>
+                                    <div class="title d-flex align-items-center gap-2">
+                                        <span><?php echo htmlspecialchars($project['name']); ?></span>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#projectInfoModal" title="<?php echo __('Редактировать основную информацию'); ?>">
+                                            <i class="bi bi-pencil-square"></i>
+                                        </button>
+                                        <i class="bi bi-info-circle ms-1 text-primary" data-bs-toggle="tooltip" title="<?php echo __('Страница проекта: управляйте ссылками и пожеланиями.'); ?>"></i>
+                                    </div>
+                                    <div class="subtitle">@<?php echo htmlspecialchars($project['username']); ?></div>
+                                </div>
+                                <div class="project-hero__id text-end">
+                                    <span class="chip" data-bs-toggle="tooltip" title="<?php echo __('Внутренний идентификатор проекта'); ?>"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
+                                </div>
                             </div>
-                            <div class="subtitle">@<?php echo htmlspecialchars($project['username']); ?></div>
                             <div class="meta-list">
                                 <div class="meta-item"><i class="bi bi-calendar3"></i><span><?php echo __('Дата создания'); ?>: <?php echo htmlspecialchars($project['created_at']); ?></span></div>
                                 <div class="meta-item"><i class="bi bi-translate"></i><span><?php echo __('Язык страницы'); ?>: <?php echo htmlspecialchars($project['language'] ?? 'ru'); ?></span></div>
@@ -476,25 +501,41 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                                 <?php if (!empty($project['topic'])): ?>
                                   <div class="meta-item"><i class="bi bi-tags"></i><span><?php echo __('Тематика'); ?>: <?php echo htmlspecialchars($project['topic']); ?></span></div>
                                 <?php endif; ?>
-                                <?php if (!empty($project['domain_host'])): ?>
-                                <div class="meta-item"><i class="bi bi-globe2"></i><span><?php echo __('Домен'); ?>: <?php echo htmlspecialchars($project['domain_host']); ?></span></div>
+                                <?php if ($projectPrimaryHost !== ''): ?>
+                                <div class="meta-item"><i class="bi bi-globe2"></i><span><?php echo __('Домен'); ?>: <?php echo htmlspecialchars($projectPrimaryHost); ?></span></div>
                                 <?php else: ?>
                                 <div class="meta-item"><i class="bi bi-globe2"></i><span class="text-warning"><?php echo __('Домен будет зафиксирован по первой добавленной ссылке.'); ?></span></div>
                                 <?php endif; ?>
                             </div>
+                            <?php if (!empty($project['description'])): ?>
+                                <div class="mt-3 help">&zwj;<?php echo nl2br(htmlspecialchars($project['description'])); ?></div>
+                            <?php else: ?>
+                                <div class="mt-3 small text-muted"><i class="bi bi-lightbulb me-1"></i><?php echo __('Добавьте описание проекту для контекстуализации семантики.'); ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($project['wishes'])): ?>
+                                <div class="mt-2 small text-muted"><i class="bi bi-stars me-1"></i><span class="text-truncate d-inline-block" style="max-width:100%" title="<?php echo htmlspecialchars($project['wishes']); ?>"><?php echo htmlspecialchars(mb_substr($project['wishes'],0,160)); ?><?php echo mb_strlen($project['wishes'])>160?'…':''; ?></span></div>
+                            <?php endif; ?>
                         </div>
-                        <div class="text-end">
-                            <span class="chip" data-bs-toggle="tooltip" title="<?php echo __('Внутренний идентификатор проекта'); ?>"><i class="bi bi-folder2-open"></i>ID <?php echo (int)$project['id']; ?></span>
+                        <div class="project-hero__preview">
+                            <div class="project-hero__preview-frame">
+                                <?php if (!empty($projectPreviewUrl)): ?>
+                                    <img src="<?php echo htmlspecialchars($projectPreviewUrl); ?>" alt="<?php echo htmlspecialchars($project['name']); ?>" class="project-hero__screenshot" loading="lazy" decoding="async">
+                                <?php else: ?>
+                                    <div class="project-hero__screenshot project-hero__screenshot--placeholder"><span><?php echo htmlspecialchars($projectInitial); ?></span></div>
+                                <?php endif; ?>
+                                <span class="project-hero__preview-glow"></span>
+                            </div>
+                            <?php if (!empty($projectPrimaryUrl)): ?>
+                                <a href="<?php echo htmlspecialchars($projectPrimaryUrl); ?>" class="btn btn-sm btn-gradient project-hero__visit" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Перейти на сайт'); ?></a>
+                            <?php endif; ?>
+                            <?php if ($projectPrimaryHost !== ''): ?>
+                                <div class="project-hero__domain small text-muted">
+                                    <?php if (!empty($projectFaviconUrl)): ?><img src="<?php echo htmlspecialchars($projectFaviconUrl); ?>" alt="favicon" loading="lazy"><?php endif; ?>
+                                    <span><?php echo htmlspecialchars($projectPrimaryHost); ?></span>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
-                    <?php if (!empty($project['description'])): ?>
-                        <div class="mt-3 help">&zwj;<?php echo nl2br(htmlspecialchars($project['description'])); ?></div>
-                    <?php else: ?>
-                        <div class="mt-3 small text-muted"><i class="bi bi-lightbulb me-1"></i><?php echo __('Добавьте описание проекту для контекстуализации семантики.'); ?></div>
-                    <?php endif; ?>
-                    <?php if (!empty($project['wishes'])): ?>
-                        <div class="mt-2 small text-muted"><i class="bi bi-stars me-1"></i><span class="text-truncate d-inline-block" style="max-width:100%" title="<?php echo htmlspecialchars($project['wishes']); ?>"><?php echo htmlspecialchars(mb_substr($project['wishes'],0,160)); ?><?php echo mb_strlen($project['wishes'])>160?'…':''; ?></span></div>
-                    <?php endif; ?>
                 </div>
             </div>
 

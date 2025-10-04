@@ -25,11 +25,13 @@ $sql = "SELECT
             p.language,
             p.region,
             p.topic,
+            p.domain_host,
             (SELECT COUNT(*) FROM project_links pl WHERE pl.project_id = p.id) AS links_count,
             (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_crowd','crowd_ready','report_ready')) AS active_runs,
             (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status = 'completed') AS completed_runs,
             (SELECT MAX(pr.updated_at) FROM promotion_runs pr WHERE pr.project_id = p.id) AS last_promotion_at,
-            (SELECT COUNT(*) FROM publications pub WHERE pub.project_id = p.id AND (pub.status = 'success' OR pub.post_url <> '')) AS published_links
+            (SELECT COUNT(*) FROM publications pub WHERE pub.project_id = p.id AND (pub.status = 'success' OR pub.post_url <> '')) AS published_links,
+            (SELECT url FROM project_links pl WHERE pl.project_id = p.id ORDER BY pl.id ASC LIMIT 1) AS primary_url
         FROM projects p
         WHERE p.user_id = ?
         ORDER BY p.created_at DESC";
@@ -45,6 +47,7 @@ $dashboardSummary = [
     'links' => 0,
     'active_runs' => 0,
     'completed_runs' => 0,
+    'published_links' => 0,
     'last_activity' => null
 ];
 
@@ -53,6 +56,17 @@ while ($row = $projectsResult->fetch_assoc()) {
     $row['active_runs'] = (int)($row['active_runs'] ?? 0);
     $row['completed_runs'] = (int)($row['completed_runs'] ?? 0);
     $row['published_links'] = (int)($row['published_links'] ?? 0);
+    $row['domain_host'] = trim((string)($row['domain_host'] ?? ''));
+    $primaryRaw = trim((string)($row['primary_url'] ?? ''));
+    $row['primary_url'] = $primaryRaw !== '' ? $primaryRaw : null;
+    $resolvedPrimaryUrl = pp_project_primary_url($row, $primaryRaw !== '' ? $primaryRaw : null);
+    $row['primary_url_resolved'] = $resolvedPrimaryUrl;
+    if ($row['domain_host'] === '' && $resolvedPrimaryUrl) {
+        $host = parse_url($resolvedPrimaryUrl, PHP_URL_HOST);
+        if (!empty($host)) { $row['domain_host'] = $host; }
+    }
+    $row['preview_url'] = pp_project_preview_url($row, $primaryRaw !== '' ? $primaryRaw : null);
+    $row['favicon_url'] = $row['domain_host'] !== '' ? ('https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode($row['domain_host'])) : null;
     $createdAt = $row['created_at'] ?? null;
     $lastPromotion = $row['last_promotion_at'] ?? null;
     $row['last_activity_at'] = $lastPromotion && $lastPromotion !== '0000-00-00 00:00:00' ? $lastPromotion : $createdAt;
@@ -63,6 +77,7 @@ while ($row = $projectsResult->fetch_assoc()) {
     $dashboardSummary['links'] += $row['links_count'];
     $dashboardSummary['active_runs'] += $row['active_runs'];
     $dashboardSummary['completed_runs'] += $row['completed_runs'];
+    $dashboardSummary['published_links'] += $row['published_links'];
     if (!empty($row['last_activity_at']) && $row['last_activity_at'] !== '0000-00-00 00:00:00') {
         if ($dashboardSummary['last_activity'] === null || strtotime($row['last_activity_at']) > strtotime($dashboardSummary['last_activity'])) {
             $dashboardSummary['last_activity'] = $row['last_activity_at'];
@@ -128,7 +143,7 @@ $pp_container = false;
             <div class="dashboard-metric-card dashboard-metric-card--links h-100">
                 <div class="dashboard-metric-card__label"><?php echo __('Ссылок в проектах'); ?></div>
                 <div class="dashboard-metric-card__value"><?php echo number_format($dashboardSummary['links'], 0, '.', ' '); ?></div>
-                <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-diagram-3 me-1"></i><?php echo __('Опубликовано ссылок'); ?>: <span><?php echo number_format(array_sum(array_column($projectsData, 'published_links')), 0, '.', ' '); ?></span></div>
+                <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-diagram-3 me-1"></i><?php echo __('Опубликовано ссылок'); ?>: <span><?php echo number_format($dashboardSummary['published_links'], 0, '.', ' '); ?></span></div>
             </div>
         </div>
         <div class="col-sm-6 col-lg-3">
@@ -174,9 +189,42 @@ $pp_container = false;
                     $region = !empty($project['region']) ? htmlspecialchars($project['region']) : null;
                     $topic = !empty($project['topic']) ? htmlspecialchars($project['topic']) : null;
                     $lastActivity = htmlspecialchars($formatActivity($project['last_activity_at']));
+                    $projectPrimaryUrl = !empty($project['primary_url_resolved']) ? htmlspecialchars($project['primary_url_resolved']) : null;
+                    $projectPreviewUrl = !empty($project['preview_url']) ? htmlspecialchars($project['preview_url']) : null;
+                    $projectDomainHost = !empty($project['domain_host']) ? htmlspecialchars($project['domain_host']) : '';
+                    $projectFaviconUrl = !empty($project['favicon_url']) ? htmlspecialchars($project['favicon_url']) : null;
+                    if (function_exists('mb_substr')) {
+                        $initialRaw = mb_substr($project['name'], 0, 1, 'UTF-8');
+                        $projectInitial = mb_strtoupper($initialRaw, 'UTF-8');
+                    } else {
+                        $projectInitial = strtoupper(substr($project['name'], 0, 1));
+                    }
+                    if ($projectInitial === '') { $projectInitial = '∎'; }
                 ?>
                 <div class="col-xl-4 col-md-6">
                     <div class="dashboard-project-card h-100">
+                        <div class="dashboard-project-card__media">
+                            <div class="dashboard-project-card__media-inner">
+                                <?php if ($projectPreviewUrl): ?>
+                                    <img src="<?php echo $projectPreviewUrl; ?>" alt="<?php echo $projectName; ?>" loading="lazy" decoding="async" class="dashboard-project-card__screenshot">
+                                <?php else: ?>
+                                    <div class="dashboard-project-card__screenshot dashboard-project-card__screenshot--placeholder">
+                                        <span><?php echo htmlspecialchars($projectInitial); ?></span>
+                                    </div>
+                                <?php endif; ?>
+                                <span class="dashboard-project-card__media-glow"></span>
+                            </div>
+                            <?php if ($projectDomainHost !== ''): ?>
+                                <div class="dashboard-project-card__domain">
+                                    <?php if ($projectFaviconUrl): ?><img src="<?php echo $projectFaviconUrl; ?>" alt="favicon" class="dashboard-project-card__favicon" loading="lazy"><?php endif; ?>
+                                    <?php if ($projectPrimaryUrl): ?>
+                                        <a href="<?php echo $projectPrimaryUrl; ?>" target="_blank" rel="noopener" class="text-decoration-none dashboard-project-card__domain-link"><?php echo $projectDomainHost; ?></a>
+                                    <?php else: ?>
+                                        <span><?php echo $projectDomainHost; ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
                         <div class="dashboard-project-card__head">
                             <div>
                                 <h4 class="dashboard-project-card__title mb-1"><?php echo $projectName; ?></h4>
@@ -212,6 +260,9 @@ $pp_container = false;
                         <div class="dashboard-project-card__footer d-flex align-items-center justify-content-between gap-2">
                             <span class="dashboard-project-card__activity text-muted small"><i class="bi bi-activity me-1"></i><?php echo $lastActivity; ?></span>
                             <div class="dashboard-project-card__actions d-flex gap-2">
+                                <?php if ($projectPrimaryUrl): ?>
+                                <a href="<?php echo $projectPrimaryUrl; ?>" class="btn btn-sm btn-outline-light" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Перейти на сайт'); ?></a>
+                                <?php endif; ?>
                                 <a href="<?php echo $projectUrl; ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-folder2-open me-1"></i><?php echo __('Открыть проект'); ?></a>
                                 <a href="<?php echo $historyUrl; ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock-history"></i></a>
                             </div>
