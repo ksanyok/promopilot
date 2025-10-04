@@ -167,6 +167,60 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Developer brand ticker in footer
+    const brandTicker = document.querySelector('[data-brand-animate]');
+    if (brandTicker) {
+        const glyphs = (brandTicker.dataset.brandGlyphs || '▮░▒▓█BRSDUYAEIOT1234567890').split('');
+        const brandText = (brandTicker.dataset.brandText || brandTicker.textContent || 'BuyReadySite').trim();
+        let stepIndex = -1;
+        let intervalId = null;
+        let restartTimeout = null;
+
+        const stopTicker = () => {
+            if (intervalId) { clearInterval(intervalId); intervalId = null; }
+            if (restartTimeout) { clearTimeout(restartTimeout); restartTimeout = null; }
+        };
+
+        const renderFrame = () => {
+            stepIndex += 1;
+            if (stepIndex >= brandText.length) {
+                brandTicker.textContent = brandText;
+                stopTicker();
+                restartTimeout = setTimeout(startTicker, 5200);
+                return;
+            }
+            let output = '';
+            for (let i = 0; i < brandText.length; i++) {
+                if (i <= stepIndex) {
+                    output += brandText[i];
+                } else {
+                    output += glyphs[Math.floor(Math.random() * glyphs.length)] || '*';
+                }
+            }
+            brandTicker.textContent = output;
+        };
+
+        const startTicker = () => {
+            stopTicker();
+            if (prefersReducedMotion) {
+                brandTicker.textContent = brandText;
+                return;
+            }
+            stepIndex = -1;
+            intervalId = setInterval(renderFrame, 110);
+        };
+
+        brandTicker.addEventListener('pointerdown', startTicker);
+        brandTicker.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter' || ev.key === ' ') {
+                startTicker();
+            }
+        });
+        window.addEventListener('beforeunload', stopTicker);
+
+        startTicker();
+    }
+
     // Futuristic neutral background (particle network)
     (function initBgfx(){
         if (prefersReducedMotion) return; // skip background animation
