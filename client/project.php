@@ -63,20 +63,16 @@ $projectPrimaryUrl = pp_project_primary_url($project, $project['primary_url'] ??
 $projectPreviewDescriptor = pp_project_preview_descriptor($project);
 $projectPreviewUrl = pp_project_preview_url($project, $projectPrimaryUrl, ['cache_bust' => true]);
 $projectPreviewExists = !empty($projectPreviewDescriptor['exists']);
+$projectPreviewHasUrl = !empty($projectPreviewUrl);
 $projectPreviewUpdatedAt = $projectPreviewExists ? (int)($projectPreviewDescriptor['modified_at'] ?? 0) : 0;
 $projectPreviewUpdatedHuman = $projectPreviewUpdatedAt ? date('d.m.Y H:i', $projectPreviewUpdatedAt) : null;
 $projectPreviewStale = pp_project_preview_is_stale($projectPreviewDescriptor, 259200);
-$projectPreviewShouldAuto = !$projectPreviewExists || $projectPreviewStale;
-$projectPreviewStatusKey = 'pending';
-if (!$projectPreviewExists) {
-    $projectPreviewStatusKey = 'pending';
+$projectPreviewShouldAuto = !$projectPreviewHasUrl;
+$projectPreviewStatusKey = $projectPreviewHasUrl ? 'ok' : 'pending';
+if (!$projectPreviewHasUrl) {
     $projectPreviewStatusText = __('Скрин еще не готов');
-} elseif ($projectPreviewStale) {
-    $projectPreviewStatusKey = 'warning';
-    $projectPreviewStatusText = $projectPreviewUpdatedHuman ? sprintf(__('Скрин обновлен давно: %s'), $projectPreviewUpdatedHuman) : __('Скрин обновлен давно');
 } else {
-    $projectPreviewStatusKey = 'ok';
-    $projectPreviewStatusText = $projectPreviewUpdatedHuman ? sprintf(__('Скрин обновлен %s'), $projectPreviewUpdatedHuman) : __('Скрин обновлен');
+    $projectPreviewStatusText = '';
 }
 $projectPreviewStatusIcon = $projectPreviewStatusKey === 'ok' ? 'bi-check-circle' : ($projectPreviewStatusKey === 'warning' ? 'bi-exclamation-triangle' : 'bi-camera');
 $projectPrimaryHost = trim((string)($project['domain_host'] ?? ''));
@@ -84,7 +80,6 @@ if ($projectPrimaryHost === '' && $projectPrimaryUrl) {
     $parsedHost = parse_url($projectPrimaryUrl, PHP_URL_HOST);
     if (!empty($parsedHost)) { $projectPrimaryHost = $parsedHost; }
 }
-$projectFaviconUrl = $projectPrimaryHost !== '' ? ('https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode($projectPrimaryHost)) : null;
 if (function_exists('mb_substr')) {
     $projectInitial = mb_strtoupper(mb_substr($project['name'] ?? '', 0, 1, 'UTF-8'), 'UTF-8');
 } else {
@@ -540,40 +535,48 @@ $pp_current_project = ['id' => (int)$project['id'], 'name' => (string)$project['
                              data-csrf="<?php echo htmlspecialchars(get_csrf_token()); ?>"
                              data-auto-refresh="<?php echo $projectPreviewShouldAuto ? '1' : '0'; ?>"
                              data-preview-updated-at="<?php echo $projectPreviewUpdatedAt; ?>"
-                        data-preview-updated-human="<?php echo htmlspecialchars($projectPreviewUpdatedHuman ?? ''); ?>"
-                        data-has-preview="<?php echo $projectPreviewExists ? '1' : '0'; ?>"
+                             data-preview-updated-human="<?php echo htmlspecialchars($projectPreviewUpdatedHuman ?? ''); ?>"
+                             data-has-preview="<?php echo $projectPreviewExists ? '1' : '0'; ?>"
+                             data-has-preview-url="<?php echo $projectPreviewHasUrl ? '1' : '0'; ?>"
+                             data-preview-source="<?php echo $projectPreviewExists ? 'local' : 'external'; ?>"
                              data-preview-alt="<?php echo htmlspecialchars($project['name']); ?>"
-                        data-text-success="<?php echo htmlspecialchars(__('Скрин обновлен %s')); ?>"
-                        data-text-warning="<?php echo htmlspecialchars(__('Скрин обновлен давно: %s')); ?>"
-                        data-text-pending="<?php echo htmlspecialchars(__('Скрин еще не готов')); ?>"
-                        data-text-error="<?php echo htmlspecialchars(__('Не удалось обновить скрин')); ?>"
-                        data-text-processing="<?php echo htmlspecialchars(__('Обновляем превью...')); ?>">
+                             data-text-success="<?php echo htmlspecialchars(__('Скрин обновлен %s')); ?>"
+                             data-text-warning="<?php echo htmlspecialchars(__('Скрин обновлен давно: %s')); ?>"
+                             data-text-pending="<?php echo htmlspecialchars(__('Скрин еще не готов')); ?>"
+                             data-text-error="<?php echo htmlspecialchars(__('Не удалось обновить скрин')); ?>"
+                             data-text-processing="<?php echo htmlspecialchars(__('Обновляем превью...')); ?>">
                             <div class="project-hero__preview-frame">
                                 <?php if (!empty($projectPreviewUrl)): ?>
                                     <img src="<?php echo htmlspecialchars($projectPreviewUrl); ?>" alt="<?php echo htmlspecialchars($project['name']); ?>" class="project-hero__screenshot" loading="lazy" decoding="async" data-preview-image>
                                 <?php else: ?>
                                     <div class="project-hero__screenshot project-hero__screenshot--placeholder" data-preview-placeholder><span><?php echo htmlspecialchars($projectInitial); ?></span></div>
                                 <?php endif; ?>
+                                <button type="button" class="project-hero__refresh project-hero__refresh--overlay<?php echo $projectPreviewHasUrl ? '' : ' d-none'; ?>" data-action="refresh-preview" title="<?php echo __('Обновить превью'); ?>" aria-label="<?php echo __('Обновить превью'); ?>">
+                                    <span class="label-default"><i class="bi bi-arrow-repeat"></i></span>
+                                    <span class="label-loading"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span></span>
+                                    <span class="visually-hidden"><?php echo __('Обновить превью'); ?></span>
+                                </button>
                                 <span class="project-hero__preview-glow"></span>
                             </div>
-                            <div class="d-flex flex-wrap align-items-center gap-2">
-                                <button type="button" class="project-hero__refresh btn btn-sm" data-action="refresh-preview">
-                                    <span class="label-default"><i class="bi bi-arrow-repeat"></i><?php echo __('Обновить превью'); ?></span>
-                                    <span class="label-loading">
-                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                                        <?php echo __('Обновление...'); ?>
-                                    </span>
-                                </button>
-                                <div class="project-hero__preview-status small" data-preview-status data-status="<?php echo htmlspecialchars($projectPreviewStatusKey); ?>">
-                                    <i class="bi <?php echo htmlspecialchars($projectPreviewStatusIcon); ?>"></i>
-                                    <span data-preview-status-text><?php echo htmlspecialchars($projectPreviewStatusText); ?></span>
+                            <?php if (!$projectPreviewHasUrl): ?>
+                                <div class="project-hero__preview-actions d-flex flex-wrap align-items-center gap-2">
+                                    <button type="button" class="project-hero__refresh" data-action="refresh-preview">
+                                        <span class="label-default"><i class="bi bi-arrow-repeat me-1"></i><?php echo __('Обновить превью'); ?></span>
+                                        <span class="label-loading">
+                                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                            <?php echo __('Обновление...'); ?>
+                                        </span>
+                                    </button>
                                 </div>
+                            <?php endif; ?>
+                            <div class="project-hero__preview-status small<?php echo $projectPreviewStatusText === '' ? ' d-none' : ''; ?>" data-preview-status data-status="<?php echo htmlspecialchars($projectPreviewStatusKey); ?>">
+                                <i class="bi <?php echo htmlspecialchars($projectPreviewStatusIcon); ?>"></i>
+                                <span data-preview-status-text><?php echo htmlspecialchars($projectPreviewStatusText); ?></span>
                             </div>
                             <?php if ($projectPrimaryHost !== ''): ?>
-                                <div class="project-hero__domain small text-muted">
-                                    <?php if (!empty($projectFaviconUrl)): ?><img src="<?php echo htmlspecialchars($projectFaviconUrl); ?>" alt="favicon" loading="lazy"><?php endif; ?>
+                                <div class="project-hero__domain small text-muted fw-semibold">
                                     <?php if (!empty($projectPrimaryUrl)): ?>
-                                        <a href="<?php echo htmlspecialchars($projectPrimaryUrl); ?>" target="_blank" rel="noopener" class="text-decoration-none text-reset fw-semibold"><?php echo htmlspecialchars($projectPrimaryHost); ?></a>
+                                        <a href="<?php echo htmlspecialchars($projectPrimaryUrl); ?>" target="_blank" rel="noopener" class="text-decoration-none text-reset"><?php echo htmlspecialchars($projectPrimaryHost); ?></a>
                                     <?php else: ?>
                                         <span><?php echo htmlspecialchars($projectPrimaryHost); ?></span>
                                     <?php endif; ?>
@@ -1110,15 +1113,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // Project preview automation
     const previewWrapper = document.querySelector('[data-project-preview]');
     if (previewWrapper) {
-        const previewEndpoint = previewWrapper.dataset.endpoint || '';
-        const previewCsrf = previewWrapper.dataset.csrf || '';
-        const previewAuto = previewWrapper.dataset.autoRefresh === '1';
-        let previewImage = previewWrapper.querySelector('[data-preview-image]');
-        const previewPlaceholder = previewWrapper.querySelector('[data-preview-placeholder]');
-        const previewButton = previewWrapper.querySelector('[data-action="refresh-preview"]');
+    const previewEndpoint = previewWrapper.dataset.endpoint || '';
+    const previewCsrf = previewWrapper.dataset.csrf || '';
+    const previewAuto = previewWrapper.dataset.autoRefresh === '1';
+    let previewImage = previewWrapper.querySelector('[data-preview-image]');
+    const previewPlaceholder = previewWrapper.querySelector('[data-preview-placeholder]');
+    const previewButtons = Array.from(previewWrapper.querySelectorAll('[data-action="refresh-preview"]'));
+    const previewOverlayButton = previewWrapper.querySelector('.project-hero__refresh--overlay');
+    const previewFallbackActions = previewWrapper.querySelector('.project-hero__preview-actions');
         const previewStatus = previewWrapper.querySelector('[data-preview-status]');
         const previewStatusText = previewStatus ? previewStatus.querySelector('[data-preview-status-text]') : null;
         const previewStatusIcon = previewStatus ? previewStatus.querySelector('i') : null;
+    const previewHasUrlInitially = previewWrapper.dataset.hasPreviewUrl === '1';
         let previewBusy = false;
 
         const PREVIEW_LOCALE = document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
@@ -1169,17 +1175,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 previewStatusIcon.className = 'bi ' + iconClass;
             }
             const text = options.text || TEXT_TEMPLATES.pending;
+            const hasText = !!text;
             if (previewStatusText) {
                 previewStatusText.textContent = text;
+            }
+            if (hasText) {
+                previewStatus.classList.remove('d-none');
+            } else {
+                previewStatus.classList.add('d-none');
             }
             previewStatus.dataset.status = key;
         };
 
         const togglePreviewLoading = (state) => {
-            if (!previewButton) return;
-            previewButton.classList.toggle('is-loading', !!state);
-            previewButton.disabled = !!state;
+            if (!previewButtons.length) return;
+            previewButtons.forEach((btn) => {
+                btn.classList.toggle('is-loading', !!state);
+                btn.disabled = !!state;
+            });
         };
+
+        if (previewButtons.length) {
+            previewButtons.forEach((btn) => {
+                btn.classList.remove('is-loading');
+                btn.disabled = false;
+            });
+        }
+        if (previewOverlayButton && !previewHasUrlInitially) {
+            previewOverlayButton.classList.add('d-none');
+        }
 
         const handleSuccess = (data) => {
             if (data.preview_url) {
@@ -1206,6 +1230,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             previewWrapper.dataset.hasPreview = '1';
+            previewWrapper.dataset.hasPreviewUrl = '1';
             if (typeof data.modified_at !== 'undefined') {
                 previewWrapper.dataset.previewUpdatedAt = String(data.modified_at || '');
             }
@@ -1215,8 +1240,18 @@ document.addEventListener('DOMContentLoaded', function() {
             previewWrapper.dataset.autoRefresh = '0';
 
             const human = (data.modified_human || '').toString() || formatHuman(data.modified_at) || previewWrapper.dataset.previewUpdatedHuman || '';
-            const text = human ? applyTemplate(TEXT_TEMPLATES.success, human) : TEXT_TEMPLATES.success || TEXT_TEMPLATES.pending;
+            const overlayActive = previewOverlayButton && !previewOverlayButton.classList.contains('d-none');
+            const hasPreviewUrl = previewWrapper.dataset.hasPreviewUrl === '1';
+            const shouldShowStatus = !(overlayActive || hasPreviewUrl);
+            const text = shouldShowStatus && human ? applyTemplate(TEXT_TEMPLATES.success, human) : '';
             updateStatus('ok', { text });
+
+            if (previewOverlayButton) {
+                previewOverlayButton.classList.remove('d-none');
+            }
+            if (previewFallbackActions) {
+                previewFallbackActions.classList.add('d-none');
+            }
         };
 
         const handleError = (errorMessage) => {
@@ -1226,6 +1261,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 text = applyTemplate(TEXT_TEMPLATES.warning, human);
             }
             updateStatus('error', { text });
+            if (previewFallbackActions) {
+                previewFallbackActions.classList.remove('d-none');
+            }
+            if (previewOverlayButton && previewWrapper.dataset.hasPreviewUrl !== '1') {
+                previewOverlayButton.classList.add('d-none');
+            }
         };
 
         const refreshPreview = async (force) => {
@@ -1264,8 +1305,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
 
-        if (previewButton) {
-            previewButton.addEventListener('click', () => refreshPreview(true));
+        if (previewButtons.length) {
+            previewButtons.forEach((btn) => {
+                btn.addEventListener('click', () => refreshPreview(true));
+            });
         }
         if (previewAuto) {
             window.setTimeout(() => refreshPreview(false), 400);
