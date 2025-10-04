@@ -111,6 +111,7 @@ if (!in_array($binanceMode, ['merchant', 'wallet'], true)) {
     $binanceMode = 'merchant';
 }
 
+$pp_admin_sidebar_active = 'payment_systems';
 $pp_container = false;
 $GLOBALS['pp_layout_has_sidebar'] = true;
 include '../includes/header.php';

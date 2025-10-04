@@ -354,7 +354,18 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
   scrollbar-width: thin;
   scrollbar-color: rgba(96,165,250,.52) transparent;
 }
-.sidebar-panel--menu .sidebar-panel__body--scroll { max-height: min(260px, calc(100vh - 380px)); }
+.sidebar-panel--menu .sidebar-panel__body {
+  height: auto;
+  overflow: visible;
+}
+.sidebar-panel--menu .sidebar-panel__scroller {
+  overflow: visible;
+}
+.sidebar-panel--menu .sidebar-panel__body--scroll {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
 .sidebar-panel--current .sidebar-panel__body--scroll { max-height: min(220px, calc(100vh - 420px)); }
 .sidebar-panel--projects .sidebar-panel__body--scroll { max-height: min(360px, calc(100vh - 420px)); }
 .sidebar-panel__body--scroll::-webkit-scrollbar { width: 8px; }

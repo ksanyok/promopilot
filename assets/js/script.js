@@ -77,6 +77,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 : Object.keys(sections).find(k => sections[k])))));
         }
         show(initial || 'users');
+        const navLinks = document.querySelectorAll('.menu-item[data-admin-section]');
+        if (navLinks.length) {
+            const highlight = (sectionKey) => {
+                navLinks.forEach(link => {
+                    const linkedSection = link.getAttribute('data-admin-section');
+                    link.classList.toggle('active', linkedSection === sectionKey);
+                });
+            };
+            navLinks.forEach(link => {
+                link.addEventListener('click', function (event) {
+                    const targetSection = this.getAttribute('data-admin-section');
+                    if (!targetSection) { return; }
+                    event.preventDefault();
+                    show(targetSection);
+                    highlight(targetSection);
+                });
+            });
+            highlight(initial || 'users');
+        }
     }
 
     // OpenAI key checker (admin settings)

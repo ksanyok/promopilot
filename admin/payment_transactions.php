@@ -102,9 +102,11 @@ if (isset($stmt) && $stmt) {
 
 $totalPages = $total > 0 ? (int)ceil($total / $perPage) : 1;
 
-$pp_container = true;
-$pp_container_class = 'container-fluid';
+$pp_admin_sidebar_active = 'payment_transactions';
+$pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
 include '../includes/header.php';
+include __DIR__ . '/../includes/admin_sidebar.php';
 
 function pp_admin_tx_status_badge(string $status): string {
     $statusKey = strtolower(trim($status));
@@ -126,6 +128,7 @@ function pp_admin_tx_status_badge(string $status): string {
 }
 ?>
 
+<div class="main-content fade-in">
 <div class="card shadow-sm mb-4">
     <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
         <div>
@@ -259,5 +262,6 @@ function pp_admin_tx_status_badge(string $status): string {
     <?php endif; ?>
 </div>
 
-    <?php if ($conn) { $conn->close(); } ?>
+</div>
+
 <?php include '../includes/footer.php'; ?>

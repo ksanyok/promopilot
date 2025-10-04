@@ -305,6 +305,21 @@ $conn->close();
 
 $updateStatus = get_update_status();
 
+$pp_admin_sidebar_tools = [
+    [
+        'label' => __('Сканер локализации'),
+        'href' => pp_url('public/scan.php'),
+        'icon' => 'bi-search',
+    ],
+];
+if ($updateStatus['is_new']) {
+    $pp_admin_sidebar_tools[] = [
+        'label' => sprintf('%s (%s)', __('Обновление'), $updateStatus['latest']),
+        'href' => pp_url('public/update.php'),
+        'icon' => 'bi-arrow-repeat',
+    ];
+}
+
 pp_refresh_networks(false);
 $networks = pp_get_networks(false, true);
 $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
@@ -405,134 +420,15 @@ $crowdDeepCurrentRun = ($crowdDeepStatusData['ok'] ?? false) ? ($crowdDeepStatus
 $crowdDeepStatusError = ($crowdDeepStatusData['ok'] ?? false) ? null : ($crowdDeepStatusData['error'] ?? null);
 $crowdDeepRecentResults = pp_crowd_deep_get_recent_results($crowdDeepCurrentRun['id'] ?? null, 15);
 
+$pp_admin_sidebar_active = 'users';
+$pp_admin_sidebar_section_mode = true;
+$pp_container = false;
 $GLOBALS['pp_layout_has_sidebar'] = true;
+include '../includes/header.php';
+include __DIR__ . '/../includes/admin_sidebar.php';
 ?>
 
-<?php include '../includes/header.php'; ?>
-
-<div class="sidebar">
-    <div class="menu-block">
-        <div class="menu-title"><?php echo __('Обзор'); ?></div>
-        <ul class="menu-list">
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('users')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <circle cx="7" cy="8" r="3"/>
-                        <circle cx="17" cy="8" r="3"/>
-                        <path d="M2 20c0-3 3-5 5-5s5 2 5 5"/>
-                        <path d="M12 20c0-3 3-5 5-5s5 2 5 5"/>
-                    </svg>
-                    <?php echo __('Пользователи'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('projects')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="me-2" aria-hidden="true">
-                        <rect x="3" y="4" width="6" height="16" rx="2"/>
-                        <rect x="10" y="4" width="6" height="12" rx="2"/>
-                        <rect x="17" y="4" width="4" height="8" rx="2"/>
-                    </svg>
-                    <?php echo __('Проекты'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('settings')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.4l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10.5 2.28V2a2 2 0 1 1 4 0v.09c0 .67.39 1.27 1 1.51h.01c.63.25 1.35.11 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.44.47-.58 1.19-.33 1.82v.01c.24.61.84 1 1.51 1H22a2 2 0 1 1 0 4h-.09c-.67 0-1.27.39-1.51 1z"/>
-                    </svg>
-                    <?php echo __('Основные настройки'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('networks')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <circle cx="12" cy="5" r="2"/>
-                        <circle cx="5" cy="19" r="2"/>
-                        <circle cx="19" cy="19" r="2"/>
-                        <path d="M12 7v6"/>
-                        <path d="M5 17l5-4"/>
-                        <path d="M19 17l-5-4"/>
-                    </svg>
-                    <?php echo __('Сети'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('crowd')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <path d="M7 11a3 3 0 1 1 3-3"/>
-                        <path d="M17 11a3 3 0 1 0-3-3"/>
-                        <path d="M2 21c0-3 3-6 6-6s6 3 6 6"/>
-                        <path d="M10 21c0-3 3-6 6-6s6 3 6 6"/>
-                    </svg>
-                    <?php echo __('Крауд маркетинг'); ?>
-                </a>
-            </li>
-            <li class="mt-3 px-2 text-uppercase small fw-semibold text-muted">
-                <?php echo __('Платежи'); ?>
-            </li>
-            <li>
-                <a href="<?php echo pp_url('admin/payment_systems.php'); ?>" class="menu-item">
-                    <i class="bi bi-credit-card me-2" aria-hidden="true"></i>
-                    <?php echo __('Платёжные системы'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="menu-item">
-                    <i class="bi bi-clock-history me-2" aria-hidden="true"></i>
-                    <?php echo __('Транзакции'); ?>
-                </a>
-            </li>
-            <li>
-                <a href="#" class="menu-item" onclick="ppShowSection('diagnostics')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <polyline points="4 14 10 14 12 10 16 18 20 8"/>
-                        <circle cx="4" cy="14" r="1"/>
-                        <circle cx="10" cy="14" r="1"/>
-                        <circle cx="12" cy="10" r="1"/>
-                        <circle cx="16" cy="18" r="1"/>
-                        <circle cx="20" cy="8" r="1"/>
-                    </svg>
-                    <?php echo __('Диагностика'); ?>
-                </a>
-            </li>
-        </ul>
-    </div>
-
-    <hr class="menu-separator">
-
-    <div class="menu-block">
-        <div class="menu-title"><?php echo __('Инструменты'); ?></div>
-        <ul class="menu-list">
-            <li>
-                <a href="<?php echo pp_url('public/scan.php'); ?>" class="menu-item">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <path d="M4 5h16"/>
-                        <path d="M9 3v4"/>
-                        <path d="M7 9c2 6 7 9 7 9"/>
-                        <path d="M12 12h8"/>
-                    </svg>
-                    <?php echo __('Сканер локализации'); ?>
-                </a>
-            </li>
-            <?php if ($updateStatus['is_new']): ?>
-            <li>
-                <a href="<?php echo pp_url('public/update.php'); ?>" class="menu-item">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-2" aria-hidden="true">
-                        <path d="M4 5h16"/>
-                        <path d="M9 3v4"/>
-                        <path d="M7 9c2 6 7 9 7 9"/>
-                        <path d="M12 12h8"/>
-                    </svg>
-                    <?php echo __('Обновление'); ?> (<?php echo htmlspecialchars($updateStatus['latest']); ?>)
-                </a>
-            </li>
-            <?php endif; ?>
-        </ul>
-    </div>
-</div>
-
-<div class="main-content">
+<div class="main-content fade-in">
 <h2><?php echo __('Админка PromoPilot'); ?></h2>
 <?php if ($updateStatus['is_new']): ?>
 <div class="alert alert-warning fade-in">
