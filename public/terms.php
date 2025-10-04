@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../includes/init.php';
 $pp_container = true;
 $pp_container_class = 'container-wide static-page';
 $pageTitle = __('Условия соглашения PromoPilot');

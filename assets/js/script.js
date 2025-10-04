@@ -43,6 +43,53 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Animated developer brand wordmark
+    const brandEl = document.querySelector('[data-brand-animate="true"]');
+    if (brandEl) {
+        const original = brandEl.dataset.brandText || brandEl.textContent.trim();
+        const letters = Array.from(original);
+        if (letters.length) {
+            brandEl.textContent = '';
+            const spans = letters.map((char, index) => {
+                const span = document.createElement('span');
+                span.textContent = char === ' ' ? '\u00A0' : char;
+                span.setAttribute('data-index', index);
+                brandEl.appendChild(span);
+                return span;
+            });
+
+            if (!prefersReducedMotion) {
+                let current = 0;
+                let timer = null;
+
+                const activateIndex = (idx) => {
+                    spans.forEach((span, i) => {
+                        if (i === idx) {
+                            span.setAttribute('data-active', 'true');
+                        } else {
+                            span.removeAttribute('data-active');
+                        }
+                    });
+                };
+
+                const tick = () => {
+                    activateIndex(current);
+                    current = (current + 1) % spans.length;
+                    timer = window.setTimeout(tick, 160 + Math.random() * 180);
+                };
+
+                tick();
+
+                const pause = () => { if (timer) { clearTimeout(timer); timer = null; } };
+                const resume = () => { if (!timer) { tick(); } };
+                brandEl.addEventListener('mouseenter', pause);
+                brandEl.addEventListener('mouseleave', resume);
+                brandEl.addEventListener('focus', pause);
+                brandEl.addEventListener('blur', resume);
+            }
+        }
+    }
+
     // Language switcher auto-submit (if using a select)
     const langSelect = document.querySelector('select[name="lang"]');
     if (langSelect) {
@@ -165,60 +212,6 @@ document.addEventListener('DOMContentLoaded', function() {
             statusEl.className = 'form-text';
             statusEl.textContent = defaultText;
         }
-    }
-
-    // Developer brand ticker in footer
-    const brandTicker = document.querySelector('[data-brand-animate]');
-    if (brandTicker) {
-        const glyphs = (brandTicker.dataset.brandGlyphs || '▮░▒▓█BRSDUYAEIOT1234567890').split('');
-        const brandText = (brandTicker.dataset.brandText || brandTicker.textContent || 'BuyReadySite').trim();
-        let stepIndex = -1;
-        let intervalId = null;
-        let restartTimeout = null;
-
-        const stopTicker = () => {
-            if (intervalId) { clearInterval(intervalId); intervalId = null; }
-            if (restartTimeout) { clearTimeout(restartTimeout); restartTimeout = null; }
-        };
-
-        const renderFrame = () => {
-            stepIndex += 1;
-            if (stepIndex >= brandText.length) {
-                brandTicker.textContent = brandText;
-                stopTicker();
-                restartTimeout = setTimeout(startTicker, 5200);
-                return;
-            }
-            let output = '';
-            for (let i = 0; i < brandText.length; i++) {
-                if (i <= stepIndex) {
-                    output += brandText[i];
-                } else {
-                    output += glyphs[Math.floor(Math.random() * glyphs.length)] || '*';
-                }
-            }
-            brandTicker.textContent = output;
-        };
-
-        const startTicker = () => {
-            stopTicker();
-            if (prefersReducedMotion) {
-                brandTicker.textContent = brandText;
-                return;
-            }
-            stepIndex = -1;
-            intervalId = setInterval(renderFrame, 110);
-        };
-
-        brandTicker.addEventListener('pointerdown', startTicker);
-        brandTicker.addEventListener('keydown', (ev) => {
-            if (ev.key === 'Enter' || ev.key === ' ') {
-                startTicker();
-            }
-        });
-        window.addEventListener('beforeunload', stopTicker);
-
-        startTicker();
     }
 
     // Futuristic neutral background (particle network)

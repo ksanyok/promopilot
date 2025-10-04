@@ -65,6 +65,7 @@ $lang = [
     'Последняя проверка' => 'Last check',
     'Разработано компанией' => 'Developed by',
     'Полезные ссылки' => 'Helpful links',
+    'Продукты BuyReadySite' => 'BuyReadySite products',
     'Условия соглашения' => 'Terms of use',
     'Риски использования' => 'Risk disclosure',
     'Связаться с поддержкой' => 'Contact support',
