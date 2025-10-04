@@ -130,38 +130,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_project'])) {
                     $transactionStarted = @$conn->begin_transaction();
                 }
 
+                $cleanupStatements = [
+                    'DELETE FROM promotion_crowd_tasks WHERE run_id IN (SELECT id FROM promotion_runs WHERE project_id = ?)',
+                    'DELETE FROM promotion_nodes WHERE run_id IN (SELECT id FROM promotion_runs WHERE project_id = ?)',
+                    'DELETE FROM promotion_nodes WHERE publication_id IN (SELECT id FROM publications WHERE project_id = ?)',
+                    'DELETE FROM promotion_runs WHERE project_id = ?',
+                    'DELETE FROM publication_queue WHERE project_id = ?',
+                    'DELETE FROM publications WHERE project_id = ?',
+                    'DELETE FROM project_links WHERE project_id = ?',
+                    'DELETE FROM page_meta WHERE project_id = ?',
+                ];
+                foreach ($cleanupStatements as $sql) {
+                    $stmt = $conn->prepare($sql);
+                    if ($stmt) {
+                        $stmt->bind_param('i', $id);
+                        $ok = $stmt->execute();
+                        $stmt->close();
+                        if ($ok === false) {
+                            throw new RuntimeException('Cleanup failed: ' . $conn->error, (int)$conn->errno);
+                        }
+                    }
+                }
+
                 if (is_admin()) {
                     $stmt = $conn->prepare('DELETE FROM projects WHERE id = ?');
                     if ($stmt) {
                         $stmt->bind_param('i', $id);
-                        @$stmt->execute();
-                        $deleteOk = ($stmt->affected_rows ?? 0) > 0;
+                        $execOk = $stmt->execute();
+                        $deleteOk = $execOk && (($stmt->affected_rows ?? 0) > 0);
                         $stmt->close();
                     }
                 } else {
                     $stmt = $conn->prepare('DELETE FROM projects WHERE id = ? AND user_id = ?');
                     if ($stmt) {
                         $stmt->bind_param('ii', $id, $user_id);
-                        @$stmt->execute();
-                        $deleteOk = ($stmt->affected_rows ?? 0) > 0;
+                        $execOk = $stmt->execute();
+                        $deleteOk = $execOk && (($stmt->affected_rows ?? 0) > 0);
                         $stmt->close();
-                    }
-                }
-
-                if ($deleteOk) {
-                    $cleanupQueries = [
-                        'DELETE FROM project_links WHERE project_id = ?',
-                        'DELETE FROM publications WHERE project_id = ?',
-                        'DELETE FROM promotion_runs WHERE project_id = ?',
-                        'DELETE FROM page_meta WHERE project_id = ?',
-                    ];
-                    foreach ($cleanupQueries as $sql) {
-                        $stmt = $conn->prepare($sql);
-                        if ($stmt) {
-                            $stmt->bind_param('i', $id);
-                            @$stmt->execute();
-                            $stmt->close();
-                        }
                     }
                 }
 
@@ -179,6 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_project'])) {
                 @$conn->rollback();
                 $transactionStarted = false;
             }
+            @error_log('[PromoPilot] Project delete failed for #' . (int)$id . ': ' . $e->getMessage());
             $deleteOk = false;
         } finally {
             if ($conn) {

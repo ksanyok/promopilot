@@ -7,7 +7,6 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
 
 $currentProject = $pp_current_project ?? null;
 $currentScript = basename($_SERVER['SCRIPT_NAME'] ?? '');
-$isBalancePage = ($currentScript === 'balance.php');
 $isDashboardPage = ($currentScript === 'client.php');
 
 $projectsList = [];
@@ -46,12 +45,6 @@ if (is_logged_in() && !is_admin()) {
                             <a href="<?php echo pp_url('client/client.php'); ?>" class="menu-item<?php echo $isDashboardPage ? ' active' : ''; ?>">
                                 <i class="bi bi-grid me-2"></i>
                                 <span class="menu-item__text"><?php echo __('Дашборд'); ?></span>
-                            </a>
-                        </li>
-                        <li>
-                            <a href="<?php echo pp_url('client/balance.php'); ?>" class="menu-item<?php echo $isBalancePage ? ' active' : ''; ?>">
-                                <i class="bi bi-wallet2 me-2"></i>
-                                <span class="menu-item__text"><?php echo __('Баланс'); ?></span>
                             </a>
                         </li>
                         <li>

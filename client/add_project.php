@@ -13,6 +13,14 @@ $availableRegions = $taxonomy['regions'] ?? [];
 $availableTopics  = $taxonomy['topics'] ?? [];
 if (empty($availableRegions)) { $availableRegions = ['Global']; }
 if (empty($availableTopics)) { $availableTopics = ['Paste/Text','Pages/Markdown','Blogging/Pages (micro-articles)']; }
+$creationTips = [
+    __('Создаем проект и готовим рабочее пространство…'),
+    __('Анализируем первую ссылку и домен…'),
+    __('Генерируем визуальный предпросмотр…'),
+    __('Сохраняем пожелания и настройки проекта…'),
+];
+$creationTipsAttr = htmlspecialchars(implode('|', $creationTips), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$creationTipInitial = htmlspecialchars($creationTips[0] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (!verify_csrf()) {
@@ -286,3 +294,31 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
 </div>
 
 <?php include '../includes/footer.php'; ?>
+
+<div id="project-create-overlay"
+     class="project-create-overlay d-none"
+     data-tips="<?php echo $creationTipsAttr; ?>"
+     role="alertdialog"
+     aria-hidden="true"
+     aria-live="polite"
+     aria-label="<?php echo htmlspecialchars(__('Создаем проект'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+     tabindex="-1">
+    <div class="project-create-overlay__panel">
+        <div class="project-create-overlay__spinner" aria-hidden="true">
+            <div class="spinner-border text-info spinner-border-lg"></div>
+        </div>
+        <div class="project-create-overlay__content">
+            <div class="project-create-overlay__headline">
+                <span class="badge bg-info text-dark"><i class="bi bi-stars me-1"></i><?php echo __('Создаем проект'); ?></span>
+                <h4 class="mb-1"><?php echo __('Подготавливаем рабочее пространство'); ?></h4>
+            </div>
+            <p class="project-create-overlay__tip" data-tip-text><?php echo $creationTipInitial; ?></p>
+            <div class="project-create-overlay__progress" role="status">
+                <span class="project-create-overlay__progress-bar" data-progress-bar></span>
+            </div>
+        </div>
+        <div class="project-create-overlay__footer text-muted small">
+            <i class="bi bi-shield-check me-2"></i><?php echo __('Это может занять до минуты — не закрывайте вкладку.'); ?>
+        </div>
+    </div>
+</div>

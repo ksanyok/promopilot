@@ -384,4 +384,92 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+
+    // Project creation preloader overlay
+    const projectCreateForm = document.querySelector('form.add-project-form');
+    const projectCreateOverlay = document.getElementById('project-create-overlay');
+    if (projectCreateForm && projectCreateOverlay) {
+        const tipTarget = projectCreateOverlay.querySelector('[data-tip-text]');
+        const submitButton = projectCreateForm.querySelector('[type="submit"]');
+        const tipsRaw = projectCreateOverlay.dataset.tips || '';
+        const tips = tipsRaw.split('|').map(t => t.trim()).filter(Boolean);
+        let tipIndex = 0;
+        let tipTimer = null;
+        let overlayActive = false;
+
+        const clearTipTimer = () => {
+            if (tipTimer) {
+                clearInterval(tipTimer);
+                tipTimer = null;
+            }
+        };
+
+        const setTip = (index) => {
+            if (!tipTarget || !tips.length) return;
+            const normalizedIndex = ((index % tips.length) + tips.length) % tips.length;
+            tipTarget.textContent = tips[normalizedIndex];
+        };
+
+        const startTipCycle = () => {
+            if (prefersReducedMotion || !tipTarget || tips.length <= 1) return;
+            clearTipTimer();
+            tipTimer = window.setInterval(() => {
+                tipIndex = (tipIndex + 1) % tips.length;
+                setTip(tipIndex);
+            }, 4600);
+        };
+
+        const showOverlay = () => {
+            if (overlayActive) return;
+            overlayActive = true;
+            document.body.classList.add('project-create-loading');
+            projectCreateOverlay.classList.remove('d-none');
+            projectCreateOverlay.classList.add('is-active');
+            projectCreateOverlay.setAttribute('aria-hidden', 'false');
+            if (typeof projectCreateOverlay.focus === 'function') {
+                try { projectCreateOverlay.focus({ preventScroll: true }); }
+                catch (_) { projectCreateOverlay.focus(); }
+            }
+            tipIndex = 0;
+            setTip(tipIndex);
+            startTipCycle();
+        };
+
+        const teardownOverlay = () => {
+            clearTipTimer();
+            overlayActive = false;
+            document.body.classList.remove('project-create-loading');
+            projectCreateOverlay.classList.remove('is-active');
+            projectCreateOverlay.classList.add('d-none');
+            projectCreateOverlay.setAttribute('aria-hidden', 'true');
+            if (submitButton) {
+                submitButton.classList.remove('disabled');
+                submitButton.removeAttribute('aria-disabled');
+                submitButton.removeAttribute('disabled');
+            }
+        };
+
+        projectCreateForm.addEventListener('submit', (event) => {
+            if (overlayActive) return;
+            if (typeof projectCreateForm.checkValidity === 'function' && !projectCreateForm.checkValidity()) {
+                return;
+            }
+            if (submitButton) {
+                submitButton.classList.add('disabled');
+                submitButton.setAttribute('aria-disabled', 'true');
+                submitButton.setAttribute('disabled', 'disabled');
+            }
+            window.setTimeout(showOverlay, 80);
+        });
+
+        window.addEventListener('pagehide', clearTipTimer);
+        window.addEventListener('beforeunload', clearTipTimer);
+
+        // If the page was restored from cache (bfcache), ensure overlay isn't stuck
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted) {
+                teardownOverlay();
+            }
+        });
+    }
 });
