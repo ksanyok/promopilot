@@ -72,6 +72,27 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $message = __('Ошибка добавления проекта.');
             }
             $conn->close();
+
+            if ($first_url && function_exists('pp_capture_project_preview')) {
+                try {
+                    $projectStub = [
+                        'id' => $project_id,
+                        'user_id' => $user_id,
+                        'name' => $name,
+                        'domain_host' => $host,
+                        'primary_url' => $first_url,
+                    ];
+                    $capture = pp_capture_project_preview($projectStub, [
+                        'fallback_url' => $first_url,
+                        'timeout_seconds' => 90,
+                    ]);
+                    if (empty($capture['ok']) && !empty($capture['error'])) {
+                        @error_log('[PromoPilot] Preview auto-generation failed for project #' . $project_id . ': ' . $capture['error']);
+                    }
+                } catch (Throwable $e) {
+                    @error_log('[PromoPilot] Preview auto-generation threw for project #' . $project_id . ': ' . $e->getMessage());
+                }
+            }
         }
     }
 }

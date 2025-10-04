@@ -112,7 +112,92 @@ $pp_is_ajax = (
 
 // Обработка формы
 $message = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_project'])) {
+    if (!verify_csrf()) {
+        $message = __('Ошибка удаления проекта.') . ' (CSRF)';
+    } elseif (!$canDeleteProject) {
+        $message = __('Удаление проекта недоступно: есть активные или выполненные ссылки.');
+    } else {
+        $previewDescriptor = function_exists('pp_project_preview_descriptor') ? pp_project_preview_descriptor($project) : null;
+        $previewPath = (is_array($previewDescriptor) && !empty($previewDescriptor['exists']) && !empty($previewDescriptor['path'])) ? (string)$previewDescriptor['path'] : null;
+        $deleteOk = false;
+        $conn = null;
+        $transactionStarted = false;
+        try {
+            $conn = connect_db();
+            if ($conn) {
+                if (method_exists($conn, 'begin_transaction')) {
+                    $transactionStarted = @$conn->begin_transaction();
+                }
+
+                if (is_admin()) {
+                    $stmt = $conn->prepare('DELETE FROM projects WHERE id = ?');
+                    if ($stmt) {
+                        $stmt->bind_param('i', $id);
+                        @$stmt->execute();
+                        $deleteOk = ($stmt->affected_rows ?? 0) > 0;
+                        $stmt->close();
+                    }
+                } else {
+                    $stmt = $conn->prepare('DELETE FROM projects WHERE id = ? AND user_id = ?');
+                    if ($stmt) {
+                        $stmt->bind_param('ii', $id, $user_id);
+                        @$stmt->execute();
+                        $deleteOk = ($stmt->affected_rows ?? 0) > 0;
+                        $stmt->close();
+                    }
+                }
+
+                if ($deleteOk) {
+                    $cleanupQueries = [
+                        'DELETE FROM project_links WHERE project_id = ?',
+                        'DELETE FROM publications WHERE project_id = ?',
+                        'DELETE FROM promotion_runs WHERE project_id = ?',
+                        'DELETE FROM page_meta WHERE project_id = ?',
+                    ];
+                    foreach ($cleanupQueries as $sql) {
+                        $stmt = $conn->prepare($sql);
+                        if ($stmt) {
+                            $stmt->bind_param('i', $id);
+                            @$stmt->execute();
+                            $stmt->close();
+                        }
+                    }
+                }
+
+                if ($transactionStarted) {
+                    if ($deleteOk) {
+                        @$conn->commit();
+                    } else {
+                        @$conn->rollback();
+                    }
+                    $transactionStarted = false;
+                }
+            }
+        } catch (Throwable $e) {
+            if ($conn && $transactionStarted) {
+                @$conn->rollback();
+                $transactionStarted = false;
+            }
+            $deleteOk = false;
+        } finally {
+            if ($conn) {
+                $conn->close();
+            }
+        }
+
+        if ($deleteOk) {
+            if ($previewPath && @is_file($previewPath)) {
+                @unlink($previewPath);
+            }
+            $_SESSION['pp_client_flash'] = ['type' => 'success', 'text' => __('Проект удален.')];
+            redirect('client/client.php');
+            exit;
+        }
+
+        $message = __('Не удалось удалить проект.');
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info'])) {
     if (!verify_csrf()) {
         $message = __('Ошибка обновления.') . ' (CSRF)';
     } else {
@@ -465,6 +550,8 @@ foreach ($links as $item) {
     }
 }
 
+$canDeleteProject = ($promotionSummary['total'] === 0) || ($promotionSummary['idle'] === $promotionSummary['total']);
+
 // Make this page full-width (no Bootstrap container wrapper from header)
 $pp_container = false;
 $pp_container_class = '';
@@ -507,6 +594,11 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         <button type="button" class="btn btn-primary project-hero__action-add" data-bs-toggle="modal" data-bs-target="#addLinkModal">
                                             <i class="bi bi-plus-lg"></i><span><?php echo __('Добавить ссылку'); ?></span>
                                         </button>
+                                        <?php if ($canDeleteProject): ?>
+                                        <button type="button" class="btn btn-outline-danger project-hero__action-delete" data-bs-toggle="modal" data-bs-target="#deleteProjectModal">
+                                            <i class="bi bi-trash"></i><span><?php echo __('Удалить проект'); ?></span>
+                                        </button>
+                                        <?php endif; ?>
                                         <a href="<?php echo pp_url('client/history.php?id=' . (int)$project['id']); ?>" class="btn btn-outline-light project-hero__action-history" data-bs-toggle="tooltip" title="<?php echo __('История'); ?>">
                                             <i class="bi bi-clock-history"></i>
                                         </a>
@@ -1044,6 +1136,34 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
         </div>
     </div>
 </div>
+
+<?php if ($canDeleteProject): ?>
+<div class="modal fade modal-fixed-center" id="deleteProjectModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="delete_project" value="1" />
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-trash me-2"></i><?php echo __('Удалить проект'); ?></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-3"><?php echo __('Проект и все связанные данные будут удалены без возможности восстановления.'); ?></p>
+                    <div class="note note--warning small d-flex align-items-start gap-2">
+                        <i class="bi bi-exclamation-triangle text-warning"></i>
+                        <span><?php echo __('Удаление доступно, потому что в проекте нет ссылок в продвижении или работе.'); ?></span>
+                    </div>
+                </div>
+                <div class="modal-footer justify-content-between">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Отмена'); ?></button>
+                    <button type="submit" class="btn btn-danger"><i class="bi bi-trash me-1"></i><?php echo __('Удалить'); ?></button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- Analyze Modal -->
 <div class="modal fade modal-fixed-center" id="analyzeModal" tabindex="-1" aria-hidden="true">

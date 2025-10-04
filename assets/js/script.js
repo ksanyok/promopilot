@@ -362,4 +362,26 @@ document.addEventListener('DOMContentLoaded', function() {
             try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
         });
     }
+
+    // Sidebar "Add link" button should open the modal on project page
+    const sidebarAddLinkBtn = document.getElementById('sidebar-add-link-btn');
+    if (sidebarAddLinkBtn) {
+        sidebarAddLinkBtn.addEventListener('click', function(event) {
+            const modalEl = document.getElementById('addLinkModal');
+            if (!modalEl) {
+                return;
+            }
+            if (window.bootstrap && typeof bootstrap.Modal === 'function') {
+                event.preventDefault();
+                const modal = typeof bootstrap.Modal.getOrCreateInstance === 'function'
+                    ? bootstrap.Modal.getOrCreateInstance(modalEl)
+                    : new bootstrap.Modal(modalEl);
+                modal.show();
+                const urlInput = modalEl.querySelector('#new_link_input');
+                if (urlInput) {
+                    setTimeout(() => { urlInput.focus(); }, 250);
+                }
+            }
+        });
+    }
 });

@@ -5,6 +5,11 @@ if (!is_logged_in() || is_admin()) {
     redirect('auth/login.php');
 }
 
+$pp_client_flash = $_SESSION['pp_client_flash'] ?? null;
+if ($pp_client_flash) {
+    unset($_SESSION['pp_client_flash']);
+}
+
 $user_id = $_SESSION['user_id'];
 $conn = connect_db();
 
@@ -112,6 +117,19 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
 <?php include __DIR__ . '/../includes/client_sidebar.php'; ?>
 
 <div class="main-content fade-in">
+    <?php if (!empty($pp_client_flash['text'])): ?>
+        <?php
+            $flashType = strtolower((string)($pp_client_flash['type'] ?? '')); 
+            $flashClass = 'alert-info';
+            if ($flashType === 'success') { $flashClass = 'alert-success'; }
+            elseif ($flashType === 'error' || $flashType === 'danger') { $flashClass = 'alert-danger'; }
+            elseif ($flashType === 'warning') { $flashClass = 'alert-warning'; }
+        ?>
+        <div class="alert <?php echo $flashClass; ?> alert-dismissible fade show" role="alert">
+            <?php echo htmlspecialchars($pp_client_flash['text']); ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="<?php echo __('Закрыть'); ?>"></button>
+        </div>
+    <?php endif; ?>
     <div class="dashboard-hero-card card mb-4">
         <div class="card-body d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-4">
             <div class="dashboard-hero-card__intro">

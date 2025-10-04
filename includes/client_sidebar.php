@@ -78,9 +78,9 @@ if (is_logged_in() && !is_admin()) {
                         $active = ($currentProject && (int)$currentProject['id'] === (int)$p['id']);
                         $projectNameRaw = $p['name'] ?: ('ID ' . (int)$p['id']);
                         if (function_exists('mb_strlen')) {
-                            $limited = mb_strlen($projectNameRaw, 'UTF-8') > 15 ? (mb_substr($projectNameRaw, 0, 15, 'UTF-8') . '…') : $projectNameRaw;
+                            $limited = mb_strlen($projectNameRaw, 'UTF-8') > 20 ? (mb_substr($projectNameRaw, 0, 20, 'UTF-8') . '…') : $projectNameRaw;
                         } else {
-                            $limited = strlen($projectNameRaw) > 15 ? (substr($projectNameRaw, 0, 15) . '…') : $projectNameRaw;
+                            $limited = strlen($projectNameRaw) > 20 ? (substr($projectNameRaw, 0, 20) . '…') : $projectNameRaw;
                         }
                         $projectNameDisplay = htmlspecialchars($limited);
                         $projectTitle = htmlspecialchars($projectNameRaw);
@@ -102,9 +102,9 @@ if (is_logged_in() && !is_admin()) {
     <?php
         $currentProjectRaw = $currentProject['name'] ?? ('ID ' . (int)$currentProject['id']);
         if (function_exists('mb_strlen')) {
-            $currentProjectLimited = mb_strlen($currentProjectRaw, 'UTF-8') > 15 ? (mb_substr($currentProjectRaw, 0, 15, 'UTF-8') . '…') : $currentProjectRaw;
+            $currentProjectLimited = mb_strlen($currentProjectRaw, 'UTF-8') > 20 ? (mb_substr($currentProjectRaw, 0, 20, 'UTF-8') . '…') : $currentProjectRaw;
         } else {
-            $currentProjectLimited = strlen($currentProjectRaw) > 15 ? (substr($currentProjectRaw, 0, 15) . '…') : $currentProjectRaw;
+            $currentProjectLimited = strlen($currentProjectRaw) > 20 ? (substr($currentProjectRaw, 0, 20) . '…') : $currentProjectRaw;
         }
         $currentProjectDisplay = htmlspecialchars($currentProjectLimited);
         $currentProjectTitle = htmlspecialchars($currentProjectRaw);
