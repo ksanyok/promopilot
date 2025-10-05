@@ -8,6 +8,7 @@ const { generateText, cleanLLMOutput } = require('./ai_client');
 const { solveIfCaptcha, detectCaptcha } = require('./captcha');
 const { htmlToPlainText } = require('./lib/contentFormats');
 const { prepareTextSample, createVerificationPayload } = require('./lib/verification');
+const { attachArticleToResult } = require('./lib/articleGenerator');
 
 // Logger
 const LOG_DIR = process.env.PP_LOG_DIR || path.join(process.cwd(), 'logs');
@@ -565,9 +566,24 @@ async function publishToJustPaste(pageUrl, anchorText, language, openaiApiKey, a
     htmlContent: content,
     plainText: plainArticle,
     verificationSample,
+    language,
   };
   const verification = createVerificationPayload({ pageUrl, anchorText, article: verificationArticle, extraTexts: [titleClean] });
-  return { ok: true, network: 'justpaste', publishedUrl, title: titleClean, logFile: LOG_FILE, screenshots, verification };
+  return {
+    ok: true,
+    network: 'justpaste',
+    publishedUrl,
+    title: titleClean,
+    logFile: LOG_FILE,
+    screenshots,
+    verification,
+    article: {
+      title: titleClean,
+      htmlContent: content,
+      plainText: plainArticle,
+      language,
+    }
+  };
 }
 
 module.exports = { publish: publishToJustPaste };
@@ -596,8 +612,9 @@ if (require.main === module) {
         logLine('Run failed (missing openai key)', payload); console.log(JSON.stringify(payload)); process.exit(1);
       }
 
-  const res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
-      logLine('Success result', res); console.log(JSON.stringify(res)); process.exit(0);
+  let res = await publishToJustPaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null);
+    res = attachArticleToResult(res, job);
+    logLine('Success result', res); console.log(JSON.stringify(res)); process.exit(res && res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'justpaste', logFile: LOG_FILE };
       logLine('Run failed', { error: payload.error, stack: e && e.stack });

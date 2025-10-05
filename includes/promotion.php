@@ -187,6 +187,74 @@ if (!function_exists('pp_promotion_extract_keywords')) {
     }
 }
 
+if (!function_exists('pp_promotion_extract_theme_phrases')) {
+    function pp_promotion_extract_theme_phrases(string $text, int $limit = 6): array {
+        $limit = max(1, min(10, $limit));
+        $clean = trim(preg_replace('~[\r\n]+~u', ' ', $text));
+        if ($clean === '') { return []; }
+        $tokensRaw = preg_split('~\s+~u', $clean, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($tokensRaw) || empty($tokensRaw)) { return []; }
+
+        $stopwords = [
+            'ru' => ['ещё','это','оно','она','они','который','где','когда','как','для','или','если','только','также','теперь','по','при','без','над','под','через','к','от','до','из','что','чтобы','про','эти','между','есть','был','будет','так','его','её','могут','может','над','под','того','этом','эту','эта','этих','там','здесь','тем','ним','ней','нам','вам','кто','кого','чем','ним','наш','ваш','их','его','ее'],
+            'en' => ['the','and','that','with','from','this','there','their','which','about','into','after','before','where','when','will','would','should','could','have','been','being','just','than','then','them','they','your','yours','ours','over','such','only','some','most','more','very','also','another','other','others','many','much','each','every','any','lot','lots','make','made','make','made'],
+        ];
+        $genericStop = array_merge($stopwords['ru'], $stopwords['en'], ['http','https','www','com','net','org','html','href']);
+
+        $tokens = [];
+        foreach ($tokensRaw as $raw) {
+            $normalized = trim($raw, " \t\-_:;.,!?".")" . '\"');
+            if ($normalized === '') { continue; }
+            $lower = function_exists('mb_strtolower') ? mb_strtolower($normalized, 'UTF-8') : strtolower($normalized);
+            $lenCheck = function_exists('mb_strlen') ? mb_strlen($lower, 'UTF-8') : strlen($lower);
+            if ($lenCheck < 3) { continue; }
+            if (in_array($lower, $genericStop, true)) { continue; }
+            $tokens[] = ['original' => $normalized, 'lower' => $lower];
+        }
+        if (empty($tokens)) { return []; }
+
+        $candidates = [];
+        $windowSizes = [3, 2];
+        $tokenCount = count($tokens);
+        foreach ($windowSizes as $size) {
+            if ($tokenCount < $size) { continue; }
+            for ($i = 0; $i <= $tokenCount - $size; $i++) {
+                $slice = array_slice($tokens, $i, $size);
+                $phraseLowerParts = array_column($slice, 'lower');
+                if (count(array_unique($phraseLowerParts)) < $size) { continue; }
+                $phraseLower = implode(' ', $phraseLowerParts);
+                if (array_intersect($phraseLowerParts, $genericStop)) { continue; }
+                if (!isset($candidates[$phraseLower])) {
+                    $candidates[$phraseLower] = ['score' => 0, 'samples' => []];
+                }
+                $candidates[$phraseLower]['score']++;
+                $originalPhrase = implode(' ', array_column($slice, 'original'));
+                $candidates[$phraseLower]['samples'][$originalPhrase] = true;
+            }
+        }
+
+        if (empty($candidates)) {
+            $topSingles = array_slice(array_unique(array_column($tokens, 'original')), 0, $limit);
+            return $topSingles;
+        }
+
+        uasort($candidates, static function(array $a, array $b) {
+            if ($a['score'] === $b['score']) { return 0; }
+            return ($a['score'] > $b['score']) ? -1 : 1;
+        });
+
+        $phrases = [];
+        foreach ($candidates as $info) {
+            foreach (array_keys($info['samples']) as $sample) {
+                $phrases[] = $sample;
+                if (count($phrases) >= $limit) { break 2; }
+            }
+        }
+
+        return $phrases;
+    }
+}
+
 if (!function_exists('pp_promotion_compact_context')) {
     function pp_promotion_compact_context($context): ?array {
         if (!is_array($context)) { return null; }
@@ -241,6 +309,147 @@ if (!function_exists('pp_promotion_compact_context')) {
             'keywords' => $keywords,
             'language' => trim((string)($context['language'] ?? '')),
             'excerpt' => $excerpt,
+        ];
+    }
+}
+
+if (!function_exists('pp_promotion_get_article_cache_dir')) {
+    function pp_promotion_get_article_cache_dir(): ?string {
+        if (!defined('PP_ROOT_PATH')) { return null; }
+        $dir = rtrim(PP_ROOT_PATH, '\\/') . '/.cache/promotion_articles';
+        if (!@is_dir($dir)) {
+            if (!@mkdir($dir, 0775, true) && !@is_dir($dir)) {
+                pp_promotion_log('promotion.cache.create_failed', ['dir' => $dir]);
+                return null;
+            }
+        }
+        return $dir;
+    }
+}
+
+if (!function_exists('pp_promotion_cache_path_for_node')) {
+    function pp_promotion_cache_path_for_node(int $nodeId): ?string {
+        if ($nodeId <= 0) { return null; }
+        $dir = pp_promotion_get_article_cache_dir();
+        if ($dir === null) { return null; }
+        return $dir . '/node-' . $nodeId . '.json';
+    }
+}
+
+if (!function_exists('pp_promotion_store_cached_article')) {
+    function pp_promotion_store_cached_article(int $nodeId, array $article, array $meta = []): ?string {
+        if ($nodeId <= 0) { return null; }
+        $path = pp_promotion_cache_path_for_node($nodeId);
+        if ($path === null) { return null; }
+        $payload = [
+            'node_id' => $nodeId,
+            'title' => (string)($article['title'] ?? ''),
+            'htmlContent' => (string)($article['htmlContent'] ?? ''),
+            'language' => (string)($article['language'] ?? ''),
+            'linkStats' => $article['linkStats'] ?? null,
+            'plainText' => (string)($article['plainText'] ?? ''),
+            'stored_at' => gmdate('c'),
+        ];
+        foreach ($meta as $key => $value) {
+            if (is_string($key) && $key !== '') {
+                $payload[$key] = $value;
+            }
+        }
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) { return null; }
+        if (@file_put_contents($path, $json, LOCK_EX) === false) {
+            pp_promotion_log('promotion.cache.write_failed', ['node_id' => $nodeId, 'path' => $path]);
+            return null;
+        }
+        return $path;
+    }
+}
+
+if (!function_exists('pp_promotion_load_cached_article')) {
+    function pp_promotion_load_cached_article(int $nodeId): ?array {
+        if ($nodeId <= 0) { return null; }
+        $path = pp_promotion_cache_path_for_node($nodeId);
+        if ($path === null || !@is_file($path)) { return null; }
+        $json = @file_get_contents($path);
+        if (!is_string($json) || $json === '') { return null; }
+        $data = json_decode($json, true);
+        if (!is_array($data)) { return null; }
+        return $data;
+    }
+}
+
+if (!function_exists('pp_promotion_generate_child_anchor')) {
+    function pp_promotion_generate_child_anchor(?array $article, string $language, string $fallback = ''): string {
+        $lang = strtolower(substr(trim($language), 0, 2));
+        $title = trim((string)($article['title'] ?? ''));
+        if ($title === '') {
+            $title = trim($fallback) !== '' ? trim($fallback) : __('Материал');
+        }
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($title, 'UTF-8') > 55) {
+                $title = rtrim(mb_substr($title, 0, 55, 'UTF-8')) . '…';
+            }
+        } elseif (strlen($title) > 55) {
+            $title = rtrim(substr($title, 0, 55)) . '…';
+        }
+        $templatesRu = ['Обзор: %s', 'Разбор темы %s', 'Подборка по %s', 'Что важно о %s', 'Инсайты по %s'];
+        $templatesEn = ['Deep dive: %s', 'Insights on %s', 'Guide to %s', 'Key takeaways on %s', 'Highlights about %s'];
+        $pool = $lang === 'en' ? $templatesEn : $templatesRu;
+        try {
+            $template = $pool[random_int(0, count($pool) - 1)];
+        } catch (Throwable $e) {
+            $template = $pool[0];
+        }
+        $anchor = sprintf($template, $title);
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($anchor, 'UTF-8') > 64) {
+                $anchor = rtrim(mb_substr($anchor, 0, 64, 'UTF-8')) . '…';
+            }
+        } elseif (strlen($anchor) > 64) {
+            $anchor = rtrim(substr($anchor, 0, 64)) . '…';
+        }
+        return $anchor !== '' ? $anchor : ($fallback !== '' ? $fallback : __('Подробнее'));
+    }
+}
+
+if (!function_exists('pp_promotion_prepare_child_article')) {
+    function pp_promotion_prepare_child_article(array $parentArticle, string $newLinkUrl, string $sourceUrl, string $language, string $anchorText): ?array {
+        $html = (string)($parentArticle['htmlContent'] ?? '');
+        if ($html === '') { return null; }
+        $anchorText = trim($anchorText);
+        if ($anchorText === '') { $anchorText = __('Подробнее'); }
+        $sourceUrl = trim($sourceUrl);
+        $newLinkUrl = trim($newLinkUrl);
+        $anchorSafe = htmlspecialchars($anchorText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $newUrlSafe = htmlspecialchars($newLinkUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $updatedHtml = $html;
+        $replaced = 0;
+        if ($sourceUrl !== '') {
+            $pattern = '~<a\s+[^>]*href=["\']' . preg_quote($sourceUrl, '~') . '["\'][^>]*>(.*?)</a>~iu';
+            $replacement = '<a href="' . $newUrlSafe . '">' . $anchorSafe . '</a>';
+            $updatedHtml = preg_replace($pattern, $replacement, $updatedHtml, 1, $replaced);
+        }
+        if ($replaced === 0 && $newLinkUrl !== '') {
+            $prepend = '<p><a href="' . $newUrlSafe . '">' . $anchorSafe . '</a></p>';
+            $updatedHtml = $prepend . $updatedHtml;
+        }
+        $title = trim((string)($parentArticle['title'] ?? ''));
+        if ($title !== '') {
+            $suffix = (stripos($language, 'en') === 0) ? ' — repost' : ' — обзор';
+            if (function_exists('mb_stripos')) {
+                if (mb_stripos($title, trim($suffix, ' —'), 0, 'UTF-8') === false) {
+                    $title .= $suffix;
+                }
+            } elseif (stripos($title, trim($suffix, ' —')) === false) {
+                $title .= $suffix;
+            }
+        }
+        $plain = trim(strip_tags($updatedHtml));
+        return [
+            'title' => $title !== '' ? $title : $anchorText,
+            'htmlContent' => $updatedHtml,
+            'language' => $language,
+            'plainText' => $plain,
         ];
     }
 }
@@ -761,13 +970,17 @@ if (!function_exists('pp_promotion_pick_networks')) {
         }
 
         $selected = [];
+        $allowRepeats = false;
         for ($i = 0; $i < $count; $i++) {
             $candidates = [];
             foreach ($catalog as $slug => $meta) {
                 $used = (int)($usage[$slug] ?? 0);
-                if ($usageLimit > 0 && $used >= $usageLimit) { continue; }
+                if (!$allowRepeats && $usageLimit > 0 && $used >= $usageLimit) { continue; }
                 $score = $meta['baseScore'];
                 if ($used > 0) { $score -= $used * 250; }
+                if ($allowRepeats && $usageLimit > 0 && $used >= $usageLimit) {
+                    $score -= 1200 + ($used * 150);
+                }
                 try {
                     $score += random_int(0, 250);
                 } catch (Throwable $e) {
@@ -775,7 +988,14 @@ if (!function_exists('pp_promotion_pick_networks')) {
                 }
                 $candidates[] = ['slug' => $slug, 'score' => $score, 'network' => $meta['network']];
             }
-            if (empty($candidates)) { break; }
+            if (empty($candidates)) {
+                if (!$allowRepeats && $usageLimit > 0) {
+                    $allowRepeats = true;
+                    $i--;
+                    continue;
+                }
+                break;
+            }
             usort($candidates, static function(array $a, array $b) {
                 if ($a['score'] === $b['score']) { return strcmp($a['slug'], $b['slug']); }
                 return $a['score'] < $b['score'] ? 1 : -1;
@@ -846,6 +1066,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         $anchor = (string)$node['anchor_text'];
         $language = (string)($linkRow['language'] ?? $project['language'] ?? 'ru');
         $wish = (string)($linkRow['wish'] ?? $project['wishes'] ?? '');
+        $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
         $jobPayload = [
             'article' => [
                 'minLength' => $requirements['min_len'] ?? 2000,
@@ -871,6 +1092,12 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
                 'level' => (int)$node['level'],
             ],
         ];
+        if ($nodeId > 0) {
+            $jobPayload['article']['nodeId'] = $nodeId;
+        }
+        if (empty($jobPayload['article']['language'])) {
+            $jobPayload['article']['language'] = $language;
+        }
         $parentContext = $requirements['parent_context'] ?? null;
         if ($parentContext) {
             $parentContextCompact = pp_promotion_compact_context($parentContext);
@@ -889,6 +1116,35 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             if (!empty($trail)) {
                 $jobPayload['article']['ancestorTrail'] = $trail;
             }
+        }
+        if (!empty($requirements['article_meta']) && is_array($requirements['article_meta'])) {
+            foreach ($requirements['article_meta'] as $metaKey => $metaValue) {
+                if (is_string($metaKey) && $metaKey !== '') {
+                    $jobPayload['article'][$metaKey] = $metaValue;
+                }
+            }
+        }
+        if (!empty($requirements['prepared_language'])) {
+            $preparedLanguage = (string)$requirements['prepared_language'];
+            if ($preparedLanguage !== '') {
+                $jobPayload['target']['language'] = $preparedLanguage;
+                if (empty($jobPayload['article']['language'])) {
+                    $jobPayload['article']['language'] = $preparedLanguage;
+                }
+            }
+        }
+        if (!empty($requirements['prepared_article']) && is_array($requirements['prepared_article'])) {
+            $prepared = $requirements['prepared_article'];
+            $preparedPayload = [
+                'title' => (string)($prepared['title'] ?? ''),
+                'htmlContent' => (string)($prepared['htmlContent'] ?? ''),
+                'language' => (string)($prepared['language'] ?? ($jobPayload['target']['language'] ?? $language)),
+            ];
+            if (!empty($prepared['plainText'])) { $preparedPayload['plainText'] = (string)$prepared['plainText']; }
+            if (!empty($prepared['linkStats']) && is_array($prepared['linkStats'])) { $preparedPayload['linkStats'] = $prepared['linkStats']; }
+            if (!empty($prepared['author'])) { $preparedPayload['author'] = (string)$prepared['author']; }
+            if (!empty($prepared['verificationSample'])) { $preparedPayload['verificationSample'] = (string)$prepared['verificationSample']; }
+            $jobPayload['preparedArticle'] = $preparedPayload;
         }
         $payloadJson = json_encode($jobPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
         if ($payloadJson === false) { $payloadJson = '{}'; }
@@ -947,6 +1203,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             'requirements' => [
                 'min_length' => $requirements['min_len'] ?? null,
                 'max_length' => $requirements['max_len'] ?? null,
+                'prepared_article' => !empty($requirements['prepared_article']),
             ],
         ]);
         if (function_exists('pp_run_queue_worker')) {
@@ -1032,21 +1289,20 @@ if (!function_exists('pp_promotion_generate_contextual_anchor')) {
                     }
                 }
             }
+            $excerpt = trim((string)($context['excerpt'] ?? ''));
+            if ($excerpt !== '') {
+                $phrases = pp_promotion_extract_theme_phrases($excerpt, 6);
+                foreach ($phrases as $phrase) {
+                    $cleanPhrase = trim($phrase);
+                    if ($cleanPhrase === '') { continue; }
+                    $candidates[] = $cleanPhrase;
+                }
+            }
         }
 
         $fallbackAnchor = trim($fallbackAnchor);
         if ($fallbackAnchor !== '') { $candidates[] = $fallbackAnchor; }
 
-        $generic = [
-            __('Полезный разбор'),
-            __('Практический опыт'),
-            __('Связанный материал'),
-            __('Актуальные выводы'),
-            __('Дополнение к теме'),
-            __('Свежий взгляд'),
-            __('Разбор кейса'),
-        ];
-        $candidates = array_merge($candidates, $generic);
         $candidates = array_values(array_unique(array_filter(array_map('trim', $candidates))));
         if (empty($candidates)) {
             return __('Подробнее');
@@ -1476,10 +1732,15 @@ if (!function_exists('pp_promotion_process_run')) {
             }
             $usage = [];
             $level1Contexts = [];
+            $cachedArticlesL1 = [];
             foreach ($nodesL1 as $parentNode) {
                 $ctx = pp_promotion_get_article_context((string)$parentNode['result_url']);
                 if ($ctx) {
                     $level1Contexts[(int)$parentNode['id']] = $ctx;
+                }
+                $cached = pp_promotion_load_cached_article((int)$parentNode['id']);
+                if (is_array($cached) && !empty($cached['htmlContent'])) {
+                    $cachedArticlesL1[(int)$parentNode['id']] = $cached;
                 }
             }
             $created = 0;
@@ -1516,22 +1777,87 @@ if (!function_exists('pp_promotion_process_run')) {
                 }
             }
             @$conn->query("UPDATE promotion_runs SET stage='level2_active', status='level2_active' WHERE id=" . $runId . " LIMIT 1");
-            $res2 = @$conn->query('SELECT n.*, p.result_url AS parent_url FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2 AND n.status=\'pending\'');
+            $res2 = @$conn->query('SELECT n.*, p.result_url AS parent_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2 AND n.status=\'pending\'');
             if ($res2) {
                 while ($node = $res2->fetch_assoc()) {
                     $node['initiated_by'] = $run['initiated_by'];
+                    $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
                     $parentNodeId = (int)($node['parent_id'] ?? 0);
                     $parentCtx = $level1Contexts[$parentNodeId] ?? null;
                     $trail = [];
                     if ($parentCtx) { $trail[] = $parentCtx; }
-                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                    $preparedArticle = null;
+                    $preparedLanguage = null;
+                    $articleMeta = [];
+                    $cachedParent = $cachedArticlesL1[$parentNodeId] ?? null;
+                    if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
+                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? '')));
+                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
+                        $fallbackAnchor = (string)($node['anchor_text'] ?? '');
+                        $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $fallbackAnchor);
+                        if ($childAnchor !== '') {
+                            if ($childAnchor !== $fallbackAnchor && $nodeId > 0) {
+                                $updateAnchor = $conn->prepare('UPDATE promotion_nodes SET anchor_text=? WHERE id=? LIMIT 1');
+                                if ($updateAnchor) {
+                                    $updateAnchor->bind_param('si', $childAnchor, $nodeId);
+                                    $updateAnchor->execute();
+                                    $updateAnchor->close();
+                                }
+                            }
+                            $node['anchor_text'] = $childAnchor;
+                        }
+                        $parentTargetUrl = (string)($node['parent_target_url'] ?? '');
+                        if ($parentTargetUrl === '') { $parentTargetUrl = (string)$run['target_url']; }
+                        $preparedArticle = pp_promotion_prepare_child_article(
+                            $cachedParent,
+                            (string)$node['target_url'],
+                            $parentTargetUrl,
+                            $preparedLanguage,
+                            (string)$node['anchor_text']
+                        );
+                        if (is_array($preparedArticle) && !empty($preparedArticle['htmlContent'])) {
+                            if (empty($preparedArticle['language'])) { $preparedArticle['language'] = $preparedLanguage; }
+                            if (empty($preparedArticle['plainText'])) {
+                                $plain = trim(strip_tags((string)$preparedArticle['htmlContent']));
+                                if ($plain !== '') { $preparedArticle['plainText'] = $plain; }
+                            }
+                            $preparedArticle['sourceUrl'] = $parentTargetUrl;
+                            $preparedArticle['sourceNodeId'] = $parentNodeId;
+                            $articleMeta = [
+                                'source_node_id' => $parentNodeId,
+                                'source_target_url' => $parentTargetUrl,
+                                'source_level' => (int)($node['parent_level'] ?? 1),
+                                'parent_result_url' => (string)($node['parent_url'] ?? ''),
+                                'reuse_mode' => 'cached_parent',
+                            ];
+                            pp_promotion_log('promotion.level2.article_reuse', [
+                                'run_id' => $runId,
+                                'node_id' => $nodeId,
+                                'parent_node_id' => $parentNodeId,
+                                'prepared_language' => $preparedLanguage,
+                                'target_url' => (string)$node['target_url'],
+                                'parent_target_url' => $parentTargetUrl,
+                            ]);
+                        } else {
+                            $preparedArticle = null;
+                        }
+                    }
+                    $requirementsPayload = [
                         'min_len' => $requirements[2]['min_len'],
                         'max_len' => $requirements[2]['max_len'],
                         'level' => 2,
                         'parent_url' => $node['parent_url'],
                         'parent_context' => $parentCtx,
                         'ancestor_trail' => $trail,
-                    ]);
+                    ];
+                    if ($preparedArticle) {
+                        $requirementsPayload['prepared_article'] = $preparedArticle;
+                        $requirementsPayload['prepared_language'] = $preparedLanguage;
+                        if (!empty($articleMeta)) {
+                            $requirementsPayload['article_meta'] = $articleMeta;
+                        }
+                    }
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, $requirementsPayload);
                 }
                 $res2->free();
             }
@@ -1580,6 +1906,7 @@ if (!function_exists('pp_promotion_process_run')) {
             }
             $usage = [];
             $level2Contexts = [];
+            $cachedArticlesL2 = [];
             $level1IdsNeeded = [];
             $level2ParentMap = [];
             foreach ($level2Nodes as $parentNode) {
@@ -1589,6 +1916,10 @@ if (!function_exists('pp_promotion_process_run')) {
                 if ($pid > 0) {
                     $level1IdsNeeded[$pid] = $pid;
                     $level2ParentMap[(int)$parentNode['id']] = $pid;
+                }
+                $cached = pp_promotion_load_cached_article((int)$parentNode['id']);
+                if (is_array($cached) && !empty($cached['htmlContent'])) {
+                    $cachedArticlesL2[(int)$parentNode['id']] = $cached;
                 }
             }
             $level1Contexts = [];
@@ -1638,10 +1969,11 @@ if (!function_exists('pp_promotion_process_run')) {
                 }
             }
             @$conn->query("UPDATE promotion_runs SET stage='level3_active', status='level3_active' WHERE id=" . $runId . " LIMIT 1");
-            $res3 = @$conn->query('SELECT n.*, p.result_url AS parent_url FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=3 AND n.status=\'pending\'');
+            $res3 = @$conn->query('SELECT n.*, p.result_url AS parent_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=3 AND n.status=\'pending\'');
             if ($res3) {
                 while ($node = $res3->fetch_assoc()) {
                     $node['initiated_by'] = $run['initiated_by'];
+                    $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
                     $parentId = (int)($node['parent_id'] ?? 0);
                     $parentCtx = $level2Contexts[$parentId] ?? null;
                     $trail = [];
@@ -1650,14 +1982,80 @@ if (!function_exists('pp_promotion_process_run')) {
                         $trail[] = $level1Contexts[$level1ParentId];
                     }
                     if ($parentCtx) { $trail[] = $parentCtx; }
-                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                    $preparedArticle = null;
+                    $preparedLanguage = null;
+                    $articleMeta = [];
+                    $cachedParent = $cachedArticlesL2[$parentId] ?? null;
+                    if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
+                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? '')));
+                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
+                        $fallbackAnchor = (string)($node['anchor_text'] ?? '');
+                        $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $fallbackAnchor);
+                        if ($childAnchor !== '') {
+                            if ($childAnchor !== $fallbackAnchor && $nodeId > 0) {
+                                $updateAnchor = $conn->prepare('UPDATE promotion_nodes SET anchor_text=? WHERE id=? LIMIT 1');
+                                if ($updateAnchor) {
+                                    $updateAnchor->bind_param('si', $childAnchor, $nodeId);
+                                    $updateAnchor->execute();
+                                    $updateAnchor->close();
+                                }
+                            }
+                            $node['anchor_text'] = $childAnchor;
+                        }
+                        $parentTargetUrl = (string)($node['parent_target_url'] ?? '');
+                        if ($parentTargetUrl === '') { $parentTargetUrl = (string)$node['parent_url']; }
+                        $preparedArticle = pp_promotion_prepare_child_article(
+                            $cachedParent,
+                            (string)$node['target_url'],
+                            $parentTargetUrl,
+                            $preparedLanguage,
+                            (string)$node['anchor_text']
+                        );
+                        if (is_array($preparedArticle) && !empty($preparedArticle['htmlContent'])) {
+                            if (empty($preparedArticle['language'])) { $preparedArticle['language'] = $preparedLanguage; }
+                            if (empty($preparedArticle['plainText'])) {
+                                $plain = trim(strip_tags((string)$preparedArticle['htmlContent']));
+                                if ($plain !== '') { $preparedArticle['plainText'] = $plain; }
+                            }
+                            $preparedArticle['sourceUrl'] = $parentTargetUrl;
+                            $preparedArticle['sourceNodeId'] = $parentId;
+                            $articleMeta = [
+                                'source_node_id' => $parentId,
+                                'source_target_url' => $parentTargetUrl,
+                                'source_level' => (int)($node['parent_level'] ?? 2),
+                                'parent_result_url' => (string)($node['parent_url'] ?? ''),
+                                'ancestor_source_node_id' => $level1ParentId,
+                                'reuse_mode' => 'cached_parent',
+                            ];
+                            pp_promotion_log('promotion.level3.article_reuse', [
+                                'run_id' => $runId,
+                                'node_id' => $nodeId,
+                                'parent_node_id' => $parentId,
+                                'prepared_language' => $preparedLanguage,
+                                'target_url' => (string)$node['target_url'],
+                                'parent_target_url' => $parentTargetUrl,
+                                'level1_parent_id' => $level1ParentId,
+                            ]);
+                        } else {
+                            $preparedArticle = null;
+                        }
+                    }
+                    $requirementsPayload = [
                         'min_len' => $requirements[3]['min_len'],
                         'max_len' => $requirements[3]['max_len'],
                         'level' => 3,
                         'parent_url' => $node['parent_url'],
                         'parent_context' => $parentCtx,
                         'ancestor_trail' => $trail,
-                    ]);
+                    ];
+                    if ($preparedArticle) {
+                        $requirementsPayload['prepared_article'] = $preparedArticle;
+                        $requirementsPayload['prepared_language'] = $preparedLanguage;
+                        if (!empty($articleMeta)) {
+                            $requirementsPayload['article_meta'] = $articleMeta;
+                        }
+                    }
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, $requirementsPayload);
                 }
                 $res3->free();
             }
@@ -1859,18 +2257,21 @@ if (!function_exists('pp_promotion_worker')) {
 }
 
 if (!function_exists('pp_promotion_handle_publication_update')) {
-    function pp_promotion_handle_publication_update(int $publicationId, string $status, ?string $postUrl, ?string $error): void {
+    function pp_promotion_handle_publication_update(int $publicationId, string $status, ?string $postUrl, ?string $error, ?array $jobResult = null): void {
         try { $conn = @connect_db(); } catch (Throwable $e) { return; }
         if (!$conn) { return; }
-        $stmt = $conn->prepare('SELECT run_id, id FROM promotion_nodes WHERE publication_id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT run_id, id, level, target_url, parent_id, network_slug FROM promotion_nodes WHERE publication_id = ? LIMIT 1');
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $publicationId);
         if (!$stmt->execute()) { $stmt->close(); $conn->close(); return; }
         $node = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         if (!$node) { $conn->close(); return; }
-        $nodeId = (int)$node['id'];
-        $runId = (int)$node['run_id'];
+    $nodeId = (int)$node['id'];
+    $runId = (int)$node['run_id'];
+    $nodeLevel = isset($node['level']) ? (int)$node['level'] : null;
+    $nodeTargetUrl = isset($node['target_url']) ? (string)$node['target_url'] : '';
+    $parentNodeId = isset($node['parent_id']) ? (int)$node['parent_id'] : 0;
         $now = date('Y-m-d H:i:s');
         $statusUpdate = in_array($status, ['success','partial'], true) ? 'success' : ($status === 'failed' ? 'failed' : $status);
         $stmt2 = $conn->prepare('UPDATE promotion_nodes SET status=?, result_url=?, error=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1');
@@ -1891,6 +2292,42 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
             'post_url' => $postUrl,
             'error' => $error,
         ]);
+        if (in_array($statusUpdate, ['success','completed','partial'], true) && is_array($jobResult)) {
+            $article = $jobResult['article'] ?? null;
+            if (is_array($article) && !empty($article['htmlContent'])) {
+                $meta = [
+                    'level' => $nodeLevel,
+                    'target_url' => $nodeTargetUrl,
+                    'result_url' => $postUrl,
+                    'status' => $statusUpdate,
+                    'network' => (string)($node['network_slug'] ?? ''),
+                    'stored_from' => 'publication_update',
+                ];
+                if ($parentNodeId > 0) { $meta['parent_node_id'] = $parentNodeId; }
+                if (!empty($jobResult['articleMeta']) && is_array($jobResult['articleMeta'])) {
+                    foreach ($jobResult['articleMeta'] as $metaKey => $metaValue) {
+                        if (is_string($metaKey) && $metaKey !== '') {
+                            $meta[$metaKey] = $metaValue;
+                        }
+                    }
+                }
+                $storedPath = pp_promotion_store_cached_article($nodeId, $article, $meta);
+                if ($storedPath) {
+                    pp_promotion_log('promotion.article_cached', [
+                        'run_id' => $runId,
+                        'node_id' => $nodeId,
+                        'level' => $nodeLevel,
+                        'path' => $storedPath,
+                    ]);
+                } else {
+                    pp_promotion_log('promotion.article_cache_failed', [
+                        'run_id' => $runId,
+                        'node_id' => $nodeId,
+                        'level' => $nodeLevel,
+                    ]);
+                }
+            }
+        }
         $conn->close();
     }
 }
@@ -1974,9 +2411,80 @@ if (!function_exists('pp_promotion_get_status')) {
             $info['attempted'] = (int)$info['attempted'];
         }
         unset($info);
-        $crowdCount = 0;
-        if ($res = @$conn->query('SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId)) {
-            if ($row = $res->fetch_assoc()) { $crowdCount = (int)$row['c']; }
+        $crowdStats = [
+            'total' => 0,
+            'planned' => 0,
+            'queued' => 0,
+            'running' => 0,
+            'completed' => 0,
+            'failed' => 0,
+            'remaining' => 0,
+            'percent' => 0.0,
+            'completed_links' => 0,
+            'items' => [],
+        ];
+        if ($res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY status')) {
+            while ($row = $res->fetch_assoc()) {
+                $status = strtolower((string)($row['status'] ?? ''));
+                $count = (int)($row['c'] ?? 0);
+                $crowdStats['total'] += $count;
+                if (isset($crowdStats[$status])) {
+                    $crowdStats[$status] += $count;
+                } elseif ($status === 'posted' || $status === 'success' || $status === 'done') {
+                    $crowdStats['completed'] += $count;
+                } elseif ($status === 'error') {
+                    $crowdStats['failed'] += $count;
+                }
+            }
+            $res->free();
+        }
+        if ($crowdStats['completed'] === 0 && $crowdStats['total'] > 0) {
+            $crowdStats['completed'] = $crowdStats['queued'] === 0 && $crowdStats['running'] === 0 ? $crowdStats['total'] - ($crowdStats['failed'] ?? 0) - $crowdStats['planned'] : $crowdStats['completed'];
+            if ($crowdStats['completed'] < 0) { $crowdStats['completed'] = 0; }
+        }
+        $crowdStats['remaining'] = max(0, $crowdStats['total'] - $crowdStats['completed'] - $crowdStats['failed']);
+        if ($crowdStats['total'] > 0) {
+            $crowdStats['percent'] = (float)round(($crowdStats['completed'] / $crowdStats['total']) * 100, 1);
+        }
+        $crowdLinkCache = [];
+        $taskSql = 'SELECT id, status, crowd_link_id, result_url, payload_json, target_url, updated_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY updated_at DESC, id DESC LIMIT 80';
+        if ($res = @$conn->query($taskSql)) {
+            while ($row = $res->fetch_assoc()) {
+                $statusRaw = (string)($row['status'] ?? '');
+                $status = strtolower($statusRaw);
+                $payloadLink = null;
+                if (!empty($row['payload_json'])) {
+                    $payload = json_decode((string)$row['payload_json'], true);
+                    if (is_array($payload) && !empty($payload['crowd_link_url'])) {
+                        $payloadLink = (string)$payload['crowd_link_url'];
+                    }
+                }
+                $crowdLinkId = isset($row['crowd_link_id']) ? (int)$row['crowd_link_id'] : 0;
+                if (!$payloadLink && $crowdLinkId > 0) {
+                    if (array_key_exists($crowdLinkId, $crowdLinkCache)) {
+                        $payloadLink = $crowdLinkCache[$crowdLinkId];
+                    } else {
+                        if ($resLink = @$conn->query('SELECT url FROM crowd_links WHERE id=' . $crowdLinkId . ' LIMIT 1')) {
+                            if ($rowLink = $resLink->fetch_assoc()) {
+                                $payloadLink = (string)($rowLink['url'] ?? '');
+                            }
+                            $resLink->free();
+                        }
+                        $crowdLinkCache[$crowdLinkId] = $payloadLink;
+                    }
+                }
+                $resultUrl = trim((string)($row['result_url'] ?? ''));
+                if ($resultUrl !== '') { $crowdStats['completed_links']++; }
+                $crowdStats['items'][] = [
+                    'id' => (int)$row['id'],
+                    'status' => $statusRaw,
+                    'status_normalized' => $status,
+                    'result_url' => $resultUrl !== '' ? $resultUrl : null,
+                    'link_url' => $payloadLink ? (string)$payloadLink : null,
+                    'target_url' => (string)($row['target_url'] ?? ''),
+                    'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
+                ];
+            }
             $res->free();
         }
         $conn->close();
@@ -1986,7 +2494,7 @@ if (!function_exists('pp_promotion_get_status')) {
             'stage' => (string)$run['stage'],
             'progress' => ['done' => (int)$run['progress_done'], 'total' => (int)$run['progress_total'], 'target' => $level1Required],
             'levels' => $levels,
-            'crowd' => ['planned' => $crowdCount],
+            'crowd' => $crowdStats,
             'run_id' => $runId,
             'report_ready' => !empty($run['report_json']) || $run['status'] === 'completed',
             'charge' => [
@@ -2023,9 +2531,41 @@ if (!function_exists('pp_promotion_build_report')) {
             }
             $res->free();
         }
-        if ($res = @$conn->query('SELECT crowd_link_id, target_url FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY id ASC')) {
+        $crowdLinkCache = [];
+        if ($res = @$conn->query('SELECT id, status, crowd_link_id, target_url, result_url, payload_json, updated_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY id ASC')) {
             while ($row = $res->fetch_assoc()) {
-                $report['crowd'][] = ['crowd_link_id' => (int)$row['crowd_link_id'], 'target_url' => (string)$row['target_url']];
+                $linkUrl = null;
+                if (!empty($row['payload_json'])) {
+                    $payload = json_decode((string)$row['payload_json'], true);
+                    if (is_array($payload) && !empty($payload['crowd_link_url'])) {
+                        $linkUrl = (string)$payload['crowd_link_url'];
+                    }
+                }
+                if ($linkUrl === null && isset($row['crowd_link_id'])) {
+                    $cid = (int)$row['crowd_link_id'];
+                    if ($cid > 0) {
+                        if (isset($crowdLinkCache[$cid])) {
+                            $linkUrl = $crowdLinkCache[$cid];
+                        } else {
+                            if ($resLink = @$conn->query('SELECT url FROM crowd_links WHERE id=' . $cid . ' LIMIT 1')) {
+                                if ($rowLink = $resLink->fetch_assoc()) {
+                                    $linkUrl = (string)($rowLink['url'] ?? '');
+                                }
+                                $resLink->free();
+                            }
+                            $crowdLinkCache[$cid] = $linkUrl;
+                        }
+                    }
+                }
+                $report['crowd'][] = [
+                    'task_id' => isset($row['id']) ? (int)$row['id'] : null,
+                    'crowd_link_id' => (int)$row['crowd_link_id'],
+                    'link_url' => $linkUrl ? (string)$linkUrl : null,
+                    'target_url' => (string)$row['target_url'],
+                    'status' => (string)($row['status'] ?? ''),
+                    'result_url' => isset($row['result_url']) && $row['result_url'] !== null ? (string)$row['result_url'] : null,
+                    'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
+                ];
             }
             $res->free();
         }

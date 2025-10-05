@@ -103,7 +103,7 @@ if (!function_exists('pp_process_publication_job')) {
             @$conn->query("UPDATE publication_queue SET status=IF((SELECT cancel_requested FROM publications WHERE id=".(int)$pubId.")=1,'cancelled','failed') WHERE publication_id = " . (int)$pubId);
             @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId);
             if (function_exists('pp_promotion_handle_publication_update')) {
-                pp_promotion_handle_publication_update($pubId, 'failed', null, $msg);
+                pp_promotion_handle_publication_update($pubId, 'failed', null, $msg, null);
             }
             $conn->close(); return;
         }
@@ -124,7 +124,7 @@ if (!function_exists('pp_process_publication_job')) {
         if ($finalStatus === 'failed') { @$conn->query("UPDATE publication_queue SET status='failed' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         else { $queueStatus = ($finalStatus === 'partial') ? 'partial' : 'success'; @$conn->query("UPDATE publication_queue SET status='" . $queueStatus . "' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         if (function_exists('pp_promotion_handle_publication_update')) {
-            pp_promotion_handle_publication_update($pubId, $finalStatus, $publishedUrl, $errorMsg);
+            pp_promotion_handle_publication_update($pubId, $finalStatus, $publishedUrl, $errorMsg, $result);
         }
         $conn->close();
     }

@@ -2,7 +2,7 @@
 
 const puppeteer = require('puppeteer');
 const { createLogger } = require('./lib/logger');
-const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
+const { generateArticle, analyzeLinks, attachArticleToResult } = require('./lib/articleGenerator');
 const { htmlToMarkdown, htmlToPlainText } = require('./lib/contentFormats');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { createVerificationPayload } = require('./lib/verification');
@@ -332,7 +332,8 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
       publishedUrl,
       format: 'markdown',
       logFile: LOG_FILE,
-      verification
+      verification,
+      article
     };
   } catch (error) {
     try {
@@ -382,10 +383,11 @@ if (require.main === module) {
         process.exit(1);
       }
 
-  const res = await publishToDpaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
-      logLine('Success result', res);
-      console.log(JSON.stringify(res));
-      process.exit(res.ok ? 0 : 1);
+  let res = await publishToDpaste(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
+  res = attachArticleToResult(res, job);
+  logLine('Success result', res);
+  console.log(JSON.stringify(res));
+  process.exit(res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'dpaste', logFile: LOG_FILE };
       logLine('Run failed', payload);

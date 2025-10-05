@@ -4,6 +4,8 @@ const { generateText, cleanLLMOutput } = require('../ai_client');
 const { htmlToPlainText } = require('./contentFormats');
 const { prepareTextSample } = require('./verification');
 
+let lastGeneratedArticle = null;
+
 function normalizeContextArray(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -33,7 +35,7 @@ function normalizeContextArray(value) {
 
 function buildCascadeGuidance(cascade, language) {
   if (!cascade || typeof cascade !== 'object') {
-    return { intro: '', bullets: [], reminder: '', titleReminder: '', detailSnippets: [] };
+    return { intro: '', bullets: [], reminder: '', titleReminder: '', detailSnippets: [], focusKeywords: [] };
   }
   const isRu = String(language || '').toLowerCase().startsWith('ru');
   const intro = isRu ? 'Контекст предыдущих уровней:' : 'Context from previous levels:';
@@ -51,12 +53,45 @@ function buildCascadeGuidance(cascade, language) {
   const trail = normalizeContextArray(cascade.ancestorTrail);
   const parentContext = cascade.parentContext ? normalizeContextArray([cascade.parentContext]) : [];
   const contexts = trail.length ? trail : parentContext;
+  const focusKeywordsMap = new Map();
+  const addKeyword = (value) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return;
+    const lower = trimmed.toLowerCase();
+    if (!focusKeywordsMap.has(lower)) {
+      focusKeywordsMap.set(lower, trimmed);
+    }
+  };
   const bullets = contexts.slice(0, 5).map((ctx) => {
     const parts = [];
     if (ctx.title) parts.push(`${titleLabel}: ${ctx.title}`);
     if (ctx.summary) parts.push(`${summaryLabel}: ${ctx.summary}`);
     if (!ctx.summary && ctx.description) parts.push(`${summaryLabel}: ${ctx.description}`);
     if (ctx.keywords && ctx.keywords.length) parts.push(`${keywordsLabel}: ${ctx.keywords.slice(0, 6).join(', ')}`);
+    if (Array.isArray(ctx.keywords)) {
+      ctx.keywords.forEach(addKeyword);
+    }
+    if (ctx.summary) {
+      ctx.summary.split(/[,.]/).forEach((piece) => {
+        piece.split(/\s+/).forEach((word) => {
+          if (!word) return;
+          const normalized = word.replace(/[^\p{L}\p{N}\-]+/gu, '');
+          if (!normalized) return;
+          if (normalized.length < 4) return;
+          addKeyword(normalized);
+        });
+      });
+    }
+    if (ctx.headings && ctx.headings.length) {
+      ctx.headings.forEach((heading) => {
+        heading.split(/\s+/).forEach((word) => {
+          const normalized = word.replace(/[^\p{L}\p{N}\-]+/gu, '');
+          if (!normalized) return;
+          if (normalized.length < 4) return;
+          addKeyword(normalized);
+        });
+      });
+    }
     if (ctx.excerpt && !ctx.summary) {
       const trimmed = ctx.excerpt.length > 220 ? `${ctx.excerpt.slice(0, 220)}…` : ctx.excerpt;
       parts.push(`${summaryLabel}: ${trimmed}`);
@@ -76,12 +111,15 @@ function buildCascadeGuidance(cascade, language) {
     })
     .slice(0, 3);
 
+  const focusKeywords = Array.from(focusKeywordsMap.values()).slice(0, 8);
+
   return {
     intro: bullets.length ? intro : '',
     bullets,
     reminder: bullets.length ? reminder : '',
     titleReminder: bullets.length ? titleReminder : '',
     detailSnippets,
+    focusKeywords,
   };
 }
 
@@ -197,6 +235,14 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const insightBlock = Array.isArray(cascadeInfo.detailSnippets) && cascadeInfo.detailSnippets.length
     ? `${insightLabel}:\n${cascadeInfo.detailSnippets.map((line) => `${insightBullet} ${line}`).join('\n')}\n`
     : '';
+  const keywordReminder = Array.isArray(cascadeInfo.focusKeywords) && cascadeInfo.focusKeywords.length
+    ? (isRu
+        ? `Сфокусируйся на темах: ${cascadeInfo.focusKeywords.join(', ')}. Упомяни каждую из них конкретно.`
+        : `Center the article around: ${cascadeInfo.focusKeywords.join(', ')}. Mention each of these topics explicitly.`)
+    : '';
+  const avoidGeneric = isRu
+    ? 'Не используй шаблонные фразы вроде «разбор кейса», «быстрый обзор», «пошаговый гайд» без конкретики. Излагай факты и контекст из исходной темы.'
+    : 'Avoid generic phrases like “case study breakdown”, “quick overview”, or “step-by-step guide” without concrete detail. Ground every section in the original topic context.';
 
   if (isTest) {
     const preset = buildDiagnosticArticle(pageUrl, anchorText);
@@ -204,13 +250,15 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     if (typeof logLine === 'function') {
       logLine('Diagnostic article prepared', { links: stats, length: preset.html.length, author: preset.author });
     }
-    return {
+    const article = {
       title: preset.title,
       htmlContent: preset.html,
       language: pageLang,
       linkStats: stats,
       author: preset.author,
     };
+    lastGeneratedArticle = { ...article };
+    return article;
   }
 
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
@@ -218,19 +266,22 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     provider,
     openaiApiKey: openaiApiKey || process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || undefined,
-    temperature: 0.2
+    temperature: 0.2,
   };
 
   const prompts = {
     title:
       `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
       `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.` +
+      (keywordReminder ? `\n${keywordReminder}` : '') +
       (cascadeInfo.titleReminder ? `\n${cascadeInfo.titleReminder}` : ''),
     content:
       `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
       (cascadeInfo.intro ? `${cascadeInfo.intro}\n${cascadeInfo.bullets.join('\n')}\n` : '') +
       insightBlock +
       (cascadeInfo.reminder ? `${cascadeInfo.reminder}\n` : '') +
+      (keywordReminder ? `${keywordReminder}\n` : '') +
+      `${avoidGeneric}\n` +
       `Требования:\n` +
       `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
       `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
@@ -283,7 +334,7 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const plainText = htmlToPlainText(htmlContent);
   const verificationSample = prepareTextSample([plainText]);
 
-  return {
+  const article = {
     title: titleClean || topicTitle || anchorText,
     htmlContent,
     language: pageLang,
@@ -292,6 +343,42 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     plainText,
     verificationSample,
   };
+  lastGeneratedArticle = { ...article };
+  return article;
 }
 
-module.exports = { generateArticle, analyzeLinks };
+function getLastGeneratedArticle() {
+  if (!lastGeneratedArticle || typeof lastGeneratedArticle !== 'object') {
+    return null;
+  }
+  return { ...lastGeneratedArticle };
+}
+
+function attachArticleToResult(result, job = {}) {
+  if (!result || typeof result !== 'object') {
+    return result;
+  }
+  const hasArticle = result.article && typeof result.article === 'object' && result.article.htmlContent;
+  let article = hasArticle ? result.article : null;
+  if (!article || !article.htmlContent) {
+    const prepared = job && job.preparedArticle && job.preparedArticle.htmlContent ? job.preparedArticle : null;
+    const fallback = getLastGeneratedArticle();
+    article = prepared || fallback;
+  }
+  if (article && article.htmlContent && (!result.article || result.article !== article)) {
+    const enriched = { ...article };
+    if (!enriched.language) {
+      const jobLang = job && (job.language || (job.article && job.article.language) || (job.page_meta && job.page_meta.lang));
+      if (jobLang) {
+        enriched.language = jobLang;
+      }
+    }
+    result.article = enriched;
+  }
+  if (job && job.article && typeof job.article === 'object' && !result.articleMeta) {
+    result.articleMeta = { ...job.article };
+  }
+  return result;
+}
+
+module.exports = { generateArticle, analyzeLinks, getLastGeneratedArticle, attachArticleToResult };

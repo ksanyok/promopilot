@@ -3,7 +3,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const { generateArticle, analyzeLinks } = require('./lib/articleGenerator');
+const { generateArticle, analyzeLinks, attachArticleToResult } = require('./lib/articleGenerator');
 const { waitForTimeoutSafe } = require('./lib/puppeteerUtils');
 const { createVerificationPayload } = require('./lib/verification');
 
@@ -127,7 +127,7 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await browser.close();
   logLine('Browser closed');
   const verification = createVerificationPayload({ pageUrl, anchorText, article, extraTexts: [title, author] });
-  return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE, verification };
+  return { ok: true, network: 'telegraph', publishedUrl, title, author, logFile: LOG_FILE, verification, article };
 }
 
 module.exports = { publish: publishToTelegraph };
@@ -162,10 +162,11 @@ if (require.main === module) {
         process.exit(1);
       }
 
-      const res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
-      logLine('Success result', res);
-      console.log(JSON.stringify(res));
-      process.exit(0);
+  let res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
+  res = attachArticleToResult(res, job);
+  logLine('Success result', res);
+  console.log(JSON.stringify(res));
+  process.exit(res && res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
       logLine('Run failed', { error: payload.error, stack: e && e.stack });

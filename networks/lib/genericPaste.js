@@ -2,7 +2,7 @@
 
 const puppeteer = require('puppeteer');
 const { createLogger } = require('./logger');
-const { generateArticle } = require('./articleGenerator');
+const { generateArticle, attachArticleToResult } = require('./articleGenerator');
 const { htmlToMarkdown, htmlToPlainText } = require('./contentFormats');
 const { fillTitleField, fillContentField, clickSubmit, waitForResult, sleep } = require('./puppeteerUtils');
 const { createVerificationPayload } = require('./verification');
@@ -283,7 +283,7 @@ function runCli(moduleObj, publishFn, slug) {
         process.exit(1);
       }
 
-      const res = await publishFn(
+      let res = await publishFn(
         pageUrl,
         anchor,
         language,
@@ -293,6 +293,7 @@ function runCli(moduleObj, publishFn, slug) {
         job.page_meta || job.meta || null,
         job
       );
+      res = attachArticleToResult(res, job);
       logLine('Success result', res);
       console.log(JSON.stringify(res));
       process.exit(res.ok ? 0 : 1);

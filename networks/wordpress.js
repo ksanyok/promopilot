@@ -4,7 +4,7 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const { createLogger } = require('./lib/logger');
-const { generateArticle } = require('./lib/articleGenerator');
+const { generateArticle, attachArticleToResult } = require('./lib/articleGenerator');
 const { waitForTimeoutSafe, findVisibleHandle } = require('./lib/puppeteerUtils');
 const { solveIfCaptcha, detectCaptcha } = require('./captcha');
 
@@ -191,7 +191,16 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
 
   await browser.close();
   logLine('Done', { siteUrl, email, username });
-  return { ok: !!siteUrl, network: 'wordpress', siteUrl, email, username, logFile: LOG_FILE, screenshots };
+  return {
+    ok: !!siteUrl,
+    network: 'wordpress',
+    siteUrl,
+    email,
+    username,
+    logFile: LOG_FILE,
+    screenshots,
+    article
+  };
 }
 
 // CLI entry for PromoPilot runner
@@ -223,10 +232,11 @@ if (require.main === module) {
         console.log(JSON.stringify(payload));
         process.exit(1);
       }
-      const res = await publish(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
-      logLine('Success result', res);
-      console.log(JSON.stringify(res));
-      process.exit(res.ok ? 0 : 1);
+  let res = await publish(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
+  res = attachArticleToResult(res, job);
+  logLine('Success result', res);
+  console.log(JSON.stringify(res));
+  process.exit(res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'wordpress' };
       console.log(JSON.stringify(payload));

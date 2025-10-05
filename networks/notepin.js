@@ -20,7 +20,7 @@ try {
   process.exit(1);
 }
 const { createLogger } = require('./lib/logger');
-const { generateArticle } = require('./lib/articleGenerator');
+const { generateArticle, attachArticleToResult } = require('./lib/articleGenerator');
 
 function safeUrl(p) { try { return p.url(); } catch { return ''; } }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
@@ -257,7 +257,8 @@ async function loginNotepin(username, password, job = {}) {
       candidates,
       title,
       logFile: LOG_FILE,
-      logDir: LOG_DIR
+      logDir: LOG_DIR,
+      article
     };
   } catch (error) {
     try { await snap(page, 'Lx-error'); } catch {}
@@ -281,8 +282,9 @@ if (require.main === module) {
   const username = job.username || job.loginUsername || process.env.PP_NOTEPIN_USERNAME || 'pphr9sc56f4j4s';
   const password = job.password || job.loginPassword || process.env.PP_NOTEPIN_PASSWORD || 'swxqsk27nmA!9';
 
-  const res = await loginNotepin(username, password, job);
-      logLine('result', res); console.log(JSON.stringify(res)); process.exit(res.ok ? 0 : 1);
+  let res = await loginNotepin(username, password, job);
+    res = attachArticleToResult(res, job);
+    logLine('result', res); console.log(JSON.stringify(res)); process.exit(res && res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String((e && e.message) || e), network: 'notepin' };
       logLine('fail-exception', payload); console.log(JSON.stringify(payload)); process.exit(1);
