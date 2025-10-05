@@ -107,6 +107,12 @@ if (!function_exists('pp_mail_send')) {
         if ($toEmail === '' || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
             return false;
         }
+        if (!function_exists('mail')) {
+            if (function_exists('error_log')) {
+                @error_log('PromoPilot mail(): native mail() function is unavailable; message skipped for ' . $toEmail);
+            }
+            return false;
+        }
         if (!function_exists('mb_encode_mimeheader')) {
             if (function_exists('mb_internal_encoding')) {
                 @mb_internal_encoding('UTF-8');
