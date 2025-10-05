@@ -1,7 +1,8 @@
 <?php
 // Users section partial
 ?>
-<div id="users-section">
+<?php $focusUserAttr = isset($focusUserId) && $focusUserId > 0 ? (string)(int)$focusUserId : ''; ?>
+<div id="users-section" data-focus-user="<?php echo htmlspecialchars($focusUserAttr, ENT_QUOTES, 'UTF-8'); ?>">
 <h3><?php echo __('Пользователи'); ?></h3>
 <div class="table-responsive">
 <table class="table table-striped align-middle">
@@ -19,7 +20,7 @@
     </thead>
     <tbody>
         <?php while ($user = $users->fetch_assoc()): ?>
-            <tr>
+            <tr data-user-id="<?php echo (int)$user['id']; ?>">
                 <td class="text-muted">#<?php echo (int)$user['id']; ?></td>
                 <td>
                     <div class="fw-semibold"><?php echo htmlspecialchars($user['username']); ?></div>
@@ -50,3 +51,17 @@
 </table>
 </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+    const usersSection = document.getElementById('users-section');
+    if (!usersSection) { return; }
+    const focusUser = usersSection.getAttribute('data-focus-user');
+    if (!focusUser) { return; }
+    const targetRow = usersSection.querySelector('[data-user-id="' + focusUser + '"]');
+    if (!targetRow) { return; }
+    targetRow.classList.add('table-warning');
+    targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(function(){ targetRow.classList.remove('table-warning'); }, 4000);
+});
+</script>

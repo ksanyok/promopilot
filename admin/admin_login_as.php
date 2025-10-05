@@ -7,6 +7,25 @@ if (!is_logged_in() || !is_admin()) {
 
 $user_id = (int)($_GET['user_id'] ?? 0);
 $token = $_GET['t'] ?? '';
+$redirectRaw = (string)($_GET['r'] ?? '');
+$redirectSafe = '';
+
+if ($redirectRaw !== '') {
+    $parsed = @parse_url($redirectRaw);
+    if (is_array($parsed) && !isset($parsed['scheme']) && !isset($parsed['host'])) {
+        $path = ltrim((string)($parsed['path'] ?? ''), '/');
+        $hasTraversal = strpos($path, '..') !== false || strpos($path, '\\') !== false;
+        if ($path !== '' && !$hasTraversal) {
+            $redirectSafe = $path;
+            if (!empty($parsed['query'])) {
+                $redirectSafe .= '?' . $parsed['query'];
+            }
+            if (!empty($parsed['fragment'])) {
+                $redirectSafe .= '#' . $parsed['fragment'];
+            }
+        }
+    }
+}
 
 if (!$user_id || !verify_action_token($token, 'login_as', (string)$user_id)) {
     redirect('admin/admin.php');
@@ -28,7 +47,24 @@ if ($stmt) {
         $_SESSION['user_id'] = $user_id;
         $_SESSION['role'] = $role;
         session_write_close();
-        redirect($role === 'admin' ? 'admin/admin.php' : 'client/client.php');
+        $target = $role === 'admin' ? 'admin/admin.php' : 'client/client.php';
+        if ($redirectSafe !== '') {
+            $redirectLower = strtolower($redirectSafe);
+            $canRedirect = false;
+            if ($role === 'admin') {
+                $canRedirect = (
+                    strpos($redirectLower, 'admin/') === 0 ||
+                    strpos($redirectLower, 'client/') === 0 ||
+                    strpos($redirectLower, 'public/') === 0
+                );
+            } else {
+                $canRedirect = strpos($redirectLower, 'client/') === 0;
+            }
+            if ($canRedirect) {
+                $target = $redirectSafe;
+            }
+        }
+        redirect($target);
     }
     $stmt->close();
 }

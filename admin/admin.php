@@ -318,8 +318,143 @@ $settings['promotion_crowd_per_article'] = (string)max(0, (int)($settings['promo
 // Получить пользователей
 $users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.promotion_discount, u.created_at, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");
 
-// Получить проекты
-$projects = $conn->query("SELECT p.id, p.name, p.description, p.links, p.created_at, u.username, COUNT(pb.id) AS published_count FROM projects p JOIN users u ON p.user_id = u.id LEFT JOIN publications pb ON pb.project_id = p.id GROUP BY p.id ORDER BY p.id");
+$focusUserId = isset($_GET['focus_user']) ? max(0, (int)$_GET['focus_user']) : 0;
+
+$projectsData = [];
+$projectsSummary = [
+    'total' => 0,
+    'links_total' => 0,
+    'published_total' => 0,
+    'active_runs' => 0,
+    'completed_runs' => 0,
+    'active_projects' => 0,
+    'last_activity_ts' => null,
+    'last_activity_raw' => null,
+];
+
+$projectSql = "SELECT 
+        p.id,
+        p.user_id,
+        p.name,
+        p.description,
+        p.language,
+        p.region,
+        p.topic,
+        p.domain_host,
+        p.homepage_url,
+        p.created_at,
+        u.username,
+        u.email,
+        u.role,
+        (SELECT COUNT(*) FROM project_links pl WHERE pl.project_id = p.id) AS links_count,
+        (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready')) AS active_runs,
+        (SELECT COUNT(*) FROM promotion_runs pr WHERE pr.project_id = p.id AND pr.status = 'completed') AS completed_runs,
+        (SELECT MAX(pr.updated_at) FROM promotion_runs pr WHERE pr.project_id = p.id) AS last_promotion_at,
+        (SELECT COUNT(*) FROM publications pub WHERE pub.project_id = p.id AND (pub.status = 'success' OR pub.post_url <> '')) AS published_links,
+        (SELECT url FROM project_links pl WHERE pl.project_id = p.id ORDER BY pl.id ASC LIMIT 1) AS primary_url
+    FROM projects p
+    JOIN users u ON u.id = p.user_id
+    ORDER BY p.created_at DESC";
+
+if ($projectRes = @$conn->query($projectSql)) {
+    while ($row = $projectRes->fetch_assoc()) {
+        $projectId = (int)($row['id'] ?? 0);
+        $ownerId = (int)($row['user_id'] ?? 0);
+        $linksCount = (int)($row['links_count'] ?? 0);
+        $publishedLinksRaw = (int)($row['published_links'] ?? 0);
+        $publishedLinks = $linksCount > 0 ? min($publishedLinksRaw, $linksCount) : $publishedLinksRaw;
+        $activeRuns = (int)($row['active_runs'] ?? 0);
+        $completedRuns = (int)($row['completed_runs'] ?? 0);
+        $createdAtRaw = (string)($row['created_at'] ?? '');
+        $createdDisplay = '—';
+        if ($createdAtRaw !== '' && $createdAtRaw !== '0000-00-00 00:00:00') {
+            $createdTs = strtotime($createdAtRaw);
+            if ($createdTs) {
+                $createdDisplay = date('Y-m-d H:i', $createdTs);
+            }
+        }
+        $lastPromotionRaw = (string)($row['last_promotion_at'] ?? '');
+        $lastActivityRaw = ($lastPromotionRaw !== '' && $lastPromotionRaw !== '0000-00-00 00:00:00') ? $lastPromotionRaw : $createdAtRaw;
+        $lastActivityDisplay = '—';
+        $lastActivityTs = null;
+        if ($lastActivityRaw !== '' && $lastActivityRaw !== '0000-00-00 00:00:00') {
+            $ts = strtotime($lastActivityRaw);
+            if ($ts) {
+                $lastActivityDisplay = date('Y-m-d H:i', $ts);
+                $lastActivityTs = $ts;
+            }
+        }
+
+        $projectForUrl = [
+            'domain_host' => (string)($row['domain_host'] ?? ''),
+            'primary_url' => (string)($row['primary_url'] ?? ''),
+            'homepage_url' => (string)($row['homepage_url'] ?? ''),
+            'domain' => (string)($row['domain_host'] ?? ''),
+        ];
+        $primaryUrl = pp_project_primary_url($projectForUrl, (string)($row['primary_url'] ?? ''));
+        $primaryHost = '';
+        if ($primaryUrl) {
+            $primaryHost = (string)(parse_url($primaryUrl, PHP_URL_HOST) ?: '');
+        }
+        if ($primaryHost === '' && !empty($row['domain_host'])) {
+            $primaryHost = (string)$row['domain_host'];
+        }
+
+        $progressPct = 0;
+        if ($linksCount > 0 && $publishedLinks > 0) {
+            $progressPct = (int)round(min(100, max(0, ($publishedLinks / $linksCount) * 100)));
+        }
+
+        $projectsData[] = [
+            'id' => $projectId,
+            'user_id' => $ownerId,
+            'name' => (string)($row['name'] ?? ''),
+            'description' => (string)($row['description'] ?? ''),
+            'language' => (string)($row['language'] ?? ''),
+            'region' => (string)($row['region'] ?? ''),
+            'topic' => (string)($row['topic'] ?? ''),
+            'domain_host' => (string)($row['domain_host'] ?? ''),
+            'primary_url' => $primaryUrl,
+            'primary_host' => $primaryHost,
+            'links_count' => $linksCount,
+            'published_links' => max(0, $publishedLinks),
+            'active_runs' => $activeRuns,
+            'completed_runs' => $completedRuns,
+            'progress_pct' => $progressPct,
+            'created_at' => $createdAtRaw,
+            'created_display' => $createdDisplay,
+            'last_activity_at' => $lastActivityRaw,
+            'last_activity_display' => $lastActivityDisplay,
+            'owner_username' => (string)($row['username'] ?? ''),
+            'owner_email' => (string)($row['email'] ?? ''),
+            'owner_role' => (string)($row['role'] ?? ''),
+        ];
+
+        $projectsSummary['total']++;
+        $projectsSummary['links_total'] += $linksCount;
+        $projectsSummary['published_total'] += max(0, $publishedLinks);
+        $projectsSummary['active_runs'] += $activeRuns;
+        $projectsSummary['completed_runs'] += $completedRuns;
+        if ($activeRuns > 0) {
+            $projectsSummary['active_projects']++;
+        }
+        if ($lastActivityTs !== null && ($projectsSummary['last_activity_ts'] === null || $lastActivityTs > $projectsSummary['last_activity_ts'])) {
+            $projectsSummary['last_activity_ts'] = $lastActivityTs;
+            $projectsSummary['last_activity_raw'] = $lastActivityRaw;
+        }
+    }
+    $projectRes->free();
+}
+
+$projectsSummary['avg_links'] = $projectsSummary['total'] > 0 ? ($projectsSummary['links_total'] / $projectsSummary['total']) : 0;
+$projectsSummary['published_pct'] = $projectsSummary['links_total'] > 0 ? round(($projectsSummary['published_total'] / $projectsSummary['links_total']) * 100) : 0;
+$projectsSummary['last_activity_display'] = '—';
+if ($projectsSummary['last_activity_raw'] && $projectsSummary['last_activity_raw'] !== '0000-00-00 00:00:00') {
+    $summaryTs = $projectsSummary['last_activity_ts'];
+    if ($summaryTs) {
+        $projectsSummary['last_activity_display'] = date('Y-m-d H:i', $summaryTs);
+    }
+}
 
 $overviewMetrics = [
     'total_users' => 0,
