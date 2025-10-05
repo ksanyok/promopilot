@@ -218,6 +218,20 @@ if (!function_exists('pp_promotion_compact_context')) {
                 if (count($keywords) >= 8) { break; }
             }
         }
+        $excerpt = '';
+        if (!empty($context['excerpt'])) {
+            $excerpt = trim((string)$context['excerpt']);
+            if ($excerpt !== '') {
+                if (function_exists('mb_substr')) {
+                    if (mb_strlen($excerpt, 'UTF-8') > 900) {
+                        $excerpt = rtrim(mb_substr($excerpt, 0, 900, 'UTF-8')) . '…';
+                    }
+                } elseif (strlen($excerpt) > 900) {
+                    $excerpt = rtrim(substr($excerpt, 0, 900)) . '…';
+                }
+            }
+        }
+
         return [
             'url' => (string)($context['url'] ?? ''),
             'title' => trim((string)($context['title'] ?? '')),
@@ -226,6 +240,7 @@ if (!function_exists('pp_promotion_compact_context')) {
             'headings' => $headings,
             'keywords' => $keywords,
             'language' => trim((string)($context['language'] ?? '')),
+            'excerpt' => $excerpt,
         ];
     }
 }
@@ -326,6 +341,9 @@ if (!function_exists('pp_promotion_get_article_context')) {
             $summary = trim($paragraphs[0]);
         }
 
+        $excerptPieces = array_slice($paragraphs, 0, 5);
+        $excerpt = trim(implode("\n", $excerptPieces));
+
         $headingNodes = $xpath->query('//h1 | //h2 | //h3');
         $headings = [];
         foreach ($headingNodes as $hNode) {
@@ -344,6 +362,7 @@ if (!function_exists('pp_promotion_get_article_context')) {
         $fullContext['keywords'] = $keywords;
         $fullContext['headings'] = $headings;
         $fullContext['language'] = $lang;
+        $fullContext['excerpt'] = $excerpt !== '' ? $excerpt : $summary;
 
         $compact = pp_promotion_compact_context($fullContext);
         $cache[$normalizedUrl] = $compact;
@@ -959,14 +978,103 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
     }
 }
 
+if (!function_exists('pp_promotion_generate_contextual_anchor')) {
+    function pp_promotion_generate_contextual_anchor(?array $context, string $fallbackAnchor): string {
+        $candidates = [];
+        if (is_array($context)) {
+            $headings = $context['headings'] ?? [];
+            if (is_array($headings)) {
+                foreach ($headings as $heading) {
+                    $title = trim((string)$heading);
+                    if ($title === '') { continue; }
+                    if (function_exists('mb_substr') && mb_strlen($title, 'UTF-8') > 55) {
+                        $title = rtrim(mb_substr($title, 0, 55, 'UTF-8')) . '…';
+                    } elseif (strlen($title) > 55) {
+                        $title = rtrim(substr($title, 0, 55)) . '…';
+                    }
+                    if ($title !== '') { $candidates[] = $title; }
+                }
+            }
+            $keywords = $context['keywords'] ?? [];
+            if (is_array($keywords)) {
+                foreach (array_slice($keywords, 0, 6) as $keyword) {
+                    $kw = trim((string)$keyword);
+                    if ($kw === '') { continue; }
+                    if (function_exists('mb_strlen')) {
+                        if (mb_strlen($kw, 'UTF-8') <= 18) {
+                            if (function_exists('mb_convert_case')) {
+                                $candidates[] = mb_convert_case($kw, MB_CASE_TITLE, 'UTF-8');
+                            } else {
+                                $candidates[] = strtoupper(substr($kw, 0, 1)) . substr($kw, 1);
+                            }
+                            $candidates[] = __('Разбор') . ' ' . $kw;
+                        } else {
+                            $candidates[] = __('Тема') . ': ' . $kw;
+                        }
+                    } else {
+                        $candidates[] = strtoupper(substr($kw, 0, 1)) . substr($kw, 1);
+                    }
+                }
+            }
+            $summary = trim((string)($context['summary'] ?? ''));
+            if ($summary !== '') {
+                $sentences = preg_split('~(?<=[.!?])\s+~u', $summary, -1, PREG_SPLIT_NO_EMPTY);
+                if (is_array($sentences)) {
+                    foreach ($sentences as $sentence) {
+                        $sent = trim($sentence);
+                        if ($sent === '') { continue; }
+                        if (function_exists('mb_substr') && mb_strlen($sent, 'UTF-8') > 60) {
+                            $sent = rtrim(mb_substr($sent, 0, 60, 'UTF-8')) . '…';
+                        } elseif (strlen($sent) > 60) {
+                            $sent = rtrim(substr($sent, 0, 60)) . '…';
+                        }
+                        if ($sent !== '') { $candidates[] = $sent; }
+                    }
+                }
+            }
+        }
+
+        $fallbackAnchor = trim($fallbackAnchor);
+        if ($fallbackAnchor !== '') { $candidates[] = $fallbackAnchor; }
+
+        $generic = [
+            __('Полезный разбор'),
+            __('Практический опыт'),
+            __('Связанный материал'),
+            __('Актуальные выводы'),
+            __('Дополнение к теме'),
+            __('Свежий взгляд'),
+            __('Разбор кейса'),
+        ];
+        $candidates = array_merge($candidates, $generic);
+        $candidates = array_values(array_unique(array_filter(array_map('trim', $candidates))));
+        if (empty($candidates)) {
+            return __('Подробнее');
+        }
+        $choice = pp_promotion_random_choice($candidates, __('Подробнее'));
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($choice, 'UTF-8') > 60) {
+                $choice = rtrim(mb_substr($choice, 0, 60, 'UTF-8')) . '…';
+            }
+        } elseif (strlen($choice) > 60) {
+            $choice = rtrim(substr($choice, 0, 60)) . '…';
+        }
+        return $choice !== '' ? $choice : __('Подробнее');
+    }
+}
+
 if (!function_exists('pp_promotion_generate_anchor')) {
     function pp_promotion_generate_anchor(string $baseAnchor): string {
         $base = trim($baseAnchor);
         if ($base === '') { return __('Подробнее'); }
         $suffixes = ['обзор', 'подробнее', 'инструкция', 'руководство', 'разбор'];
         try { $suffix = $suffixes[random_int(0, count($suffixes)-1)]; } catch (Throwable $e) { $suffix = $suffixes[0]; }
-        if (mb_strlen($base, 'UTF-8') > 40) {
-            $base = trim(mb_substr($base, 0, 35, 'UTF-8'));
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($base, 'UTF-8') > 40) {
+                $base = trim(mb_substr($base, 0, 35, 'UTF-8'));
+            }
+        } elseif (strlen($base) > 40) {
+            $base = trim(substr($base, 0, 35));
         }
         return $base . ' — ' . $suffix;
     }
@@ -1007,36 +1115,78 @@ if (!function_exists('pp_promotion_make_email_slug')) {
 }
 
 if (!function_exists('pp_promotion_generate_crowd_payloads')) {
-    function pp_promotion_generate_crowd_payloads(string $targetUrl, array $project, array $linkRow, int $uniqueCount): array {
+    function pp_promotion_generate_crowd_payloads(string $targetUrl, array $project, array $linkRow, int $uniqueCount, ?array $articleContext = null): array {
         $uniqueCount = max(1, $uniqueCount);
-        $baseAnchor = trim((string)($linkRow['anchor'] ?? ''));
-        if ($baseAnchor === '') {
-            $baseAnchor = trim((string)($project['name'] ?? __('Материал')));
+        $articleTitle = trim((string)($articleContext['title'] ?? $linkRow['anchor'] ?? $project['name'] ?? __('Материал')));
+        if ($articleTitle === '') { $articleTitle = __('Материал'); }
+        $summary = trim((string)($articleContext['summary'] ?? $articleContext['excerpt'] ?? ''));
+        $keywords = [];
+        if (!empty($articleContext['keywords']) && is_array($articleContext['keywords'])) {
+            foreach ($articleContext['keywords'] as $kw) {
+                $kwClean = trim((string)$kw);
+                if ($kwClean !== '') { $keywords[] = $kwClean; }
+            }
         }
-        if ($baseAnchor === '') {
-            $baseAnchor = __('Полезный материал');
+        $headings = [];
+        if (!empty($articleContext['headings']) && is_array($articleContext['headings'])) {
+            foreach ($articleContext['headings'] as $heading) {
+                $headingClean = trim((string)$heading);
+                if ($headingClean !== '') { $headings[] = $headingClean; }
+            }
         }
-        $bodyTemplates = [
-            __('Коллеги, нашёл свежий материал «{{anchor}}»: {{link}}. Делюсь, может пригодиться в работе.'),
-            __('Если кто-то пропустил, вот отличный разбор {{anchor}} — {{link}}. Очень в тему.'),
-            __('Собрали подборку и добавили туда {{anchor}} ({{link}}). Дайте знать, если есть комментарии.'),
-            __('Проверили на практике: {{anchor}} — {{link}}. Работает, рекомендую почитать.'),
-            __('Для обсуждения на планёрке: {{anchor}} → {{link}}. Как думаете, подходит под нашу задачу?'),
-            __('Добавляю в закладки: {{anchor}} ({{link}}). Предлагаю включить в подборку.'),
+
+        $points = [];
+        if ($summary !== '') {
+            $sentences = preg_split('~(?<=[.!?])\s+~u', $summary, -1, PREG_SPLIT_NO_EMPTY);
+            if (is_array($sentences)) {
+                foreach ($sentences as $sentence) {
+                    $sentence = trim($sentence);
+                    if ($sentence === '') { continue; }
+                    if (function_exists('mb_strlen') && mb_strlen($sentence, 'UTF-8') > 160) {
+                        $sentence = rtrim(mb_substr($sentence, 0, 160, 'UTF-8')) . '…';
+                    } elseif (strlen($sentence) > 160) {
+                        $sentence = rtrim(substr($sentence, 0, 160)) . '…';
+                    }
+                    $points[] = $sentence;
+                    if (count($points) >= 3) { break; }
+                }
+            }
+        }
+        if (empty($points) && !empty($headings)) {
+            foreach ($headings as $heading) {
+                $points[] = $heading;
+                if (count($points) >= 3) { break; }
+            }
+        }
+        if (empty($points) && !empty($keywords)) {
+            $points[] = __('Ключевые темы') . ': ' . implode(', ', array_slice($keywords, 0, 5));
+        }
+        if (empty($points)) {
+            $points[] = __('Стоит посмотреть статью, там подробности по теме.');
+        }
+
+        $describePoints = function(array $pointsList): string {
+            if (empty($pointsList)) { return ''; }
+            if (count($pointsList) === 1) { return $pointsList[0]; }
+            $last = array_pop($pointsList);
+            return implode('; ', $pointsList) . ' — ' . $last;
+        };
+
+        $commentTemplates = [
+            __('Коллеги, прочитайте статью «{{title}}»: {{link}}. Автор разбирает {{points}}.'),
+            __('Нашёл полезный материал «{{title}}». Коротко: {{points}}. Делюсь ссылкой без анкоров — {{link}}.'),
+            __('Для обсуждения: в «{{title}}» ({{link}}) описаны {{points}}. Как вам подход?'),
+            __('В статье «{{title}}» собраны {{points}}. Если есть время, загляните: {{link}}.'),
+            __('Скидываю ссылку {{link}} — материал «{{title}}» с акцентом на {{points}}. Нужна обратная связь.'),
         ];
+
         $subjectTemplates = [
-            __('Идея по теме: {{anchor}}'),
-            __('Статья к обсуждению — {{anchor}}'),
-            __('Полезный кейс: {{anchor}}'),
-            __('Нашёл материал: {{anchor}}'),
-            __('Добавка в подборку — {{anchor}}'),
+            __('Комментарий к статье «{{title}}»'),
+            __('Что думаете про «{{title}}»?'),
+            __('Стоит обсудить: «{{title}}»'),
+            __('К обсуждению статья «{{title}}»'),
         ];
-        $closingTemplates = [
-            __('Спасибо, {{name}}'),
-            __('На связи, {{name}}'),
-            __('С уважением, {{name}}'),
-            __('Хорошего дня, {{name}}'),
-        ];
+
         $firstNames = ['Алексей','Мария','Иван','Дарья','Егор','Светлана','Максим','Анна','Дмитрий','Виктория','Павел','Ольга','Роман','Екатерина','Кирилл','Юлия'];
         $lastNames = ['Смирнов','Иванова','Кузнецов','Павлова','Андреев','Федорова','Максимов','Алексеева','Морозов','Васильева','Соколов','Никитина','Громов','Орлова','Яковлев','Сергеева'];
         $domains = ['gmail.com','yandex.ru','mail.ru','outlook.com'];
@@ -1052,17 +1202,24 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
         $maxAttempts = $uniqueCount * 7;
         while (count($payloads) < $uniqueCount && $attempts < $maxAttempts) {
             $attempts++;
-            $anchorVariant = pp_promotion_generate_anchor($baseAnchor);
-            $subjectTpl = (string)pp_promotion_random_choice($subjectTemplates, __('Полезный материал'));
-            $subject = strtr($subjectTpl, ['{{anchor}}' => $anchorVariant, '{{link}}' => $targetUrl]);
-            $bodyTpl = (string)pp_promotion_random_choice($bodyTemplates, __('Посмотрите {{anchor}}: {{link}}'));
-            $body = strtr($bodyTpl, ['{{anchor}}' => $anchorVariant, '{{link}}' => $targetUrl]);
+            $pointsSample = [];
+            if (!empty($points)) {
+                $shuffled = $points;
+                if (count($shuffled) > 1) { shuffle($shuffled); }
+                $pointsSample = array_slice($shuffled, 0, min(3, count($shuffled)));
+            }
+            $pointsText = $describePoints($pointsSample);
+            $commentTemplate = (string)pp_promotion_random_choice($commentTemplates, __('Коллеги, обратите внимание на {{title}}: {{link}}.'));
+            $body = strtr($commentTemplate, [
+                '{{title}}' => $articleTitle,
+                '{{points}}' => $pointsText,
+                '{{link}}' => $targetUrl,
+            ]);
+            $subjectTemplate = (string)pp_promotion_random_choice($subjectTemplates, __('К обсуждению статья «{{title}}»'));
+            $subject = strtr($subjectTemplate, ['{{title}}' => $articleTitle]);
             $first = (string)pp_promotion_random_choice($firstNames, 'Иван');
             $last = (string)pp_promotion_random_choice($lastNames, 'Иванов');
             $fullName = trim($first . ' ' . $last);
-            $closingTpl = (string)pp_promotion_random_choice($closingTemplates, __('Спасибо, {{name}}'));
-            $closing = strtr($closingTpl, ['{{name}}' => $fullName]);
-            $signature = $closing;
             try {
                 $token = substr(bin2hex(random_bytes(6)), 0, 10);
             } catch (Throwable $e) {
@@ -1072,19 +1229,18 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
             $domain = (string)pp_promotion_random_choice($domains, 'example.com');
             $email = $emailSlug;
             if ($domain !== '') {
-                $email .= '+' . strtolower($token);
-                $email .= '@' . $domain;
+                $email .= '+' . strtolower($token) . '@' . $domain;
             } else {
                 $email .= '+' . strtolower($token) . '@example.com';
             }
-            $bodyFull = trim($body . "\n\n" . $signature);
+            $bodyFull = trim($body);
             $hash = md5($subject . '|' . $bodyFull . '|' . $email);
             if (isset($usedHashes[$hash])) {
                 continue;
             }
             $usedHashes[$hash] = true;
             $payloads[] = [
-                'anchor' => $anchorVariant,
+                'anchor' => '',
                 'subject' => $subject,
                 'body' => $bodyFull,
                 'author_name' => $fullName,
@@ -1095,17 +1251,17 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
         }
 
         if (count($payloads) < $uniqueCount) {
-            $fallbackSubject = __('Полезный материал') . ': ' . $baseAnchor;
             while (count($payloads) < $uniqueCount) {
                 try {
                     $token = substr(bin2hex(random_bytes(5)), 0, 8);
                 } catch (Throwable $e) {
                     $token = (string)mt_rand(100000, 999999);
                 }
+                $fallbackBody = __('Поделюсь ссылкой без анкоров') . ': ' . $targetUrl;
                 $payloads[] = [
-                    'anchor' => pp_promotion_generate_anchor($baseAnchor),
-                    'subject' => $fallbackSubject,
-                    'body' => $baseAnchor . ' — ' . $targetUrl,
+                    'anchor' => '',
+                    'subject' => __('Комментарий к статье'),
+                    'body' => $fallbackBody,
                     'author_name' => 'PromoPilot Bot',
                     'author_email' => 'promopilot+' . strtolower($token) . '@example.com',
                     'token' => $token,
@@ -1347,10 +1503,11 @@ if (!function_exists('pp_promotion_process_run')) {
                     'region' => $project['region'] ?? null,
                     'topic' => $project['topic'] ?? null,
                 ]);
+                $parentContext = $level1Contexts[(int)$parentNode['id']] ?? null;
                 foreach ($nets as $net) {
                     $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, parent_id, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 2, ?, ?, ?, ?, \'pending\', ?)');
                     if ($stmt) {
-                        $anchor = pp_promotion_generate_anchor((string)$linkRow['anchor']);
+                        $anchor = pp_promotion_generate_contextual_anchor($parentContext, (string)$linkRow['anchor']);
                         $initiated = (int)$run['initiated_by'];
                         $stmt->bind_param('iisssi', $runId, $parentNode['id'], $parentNode['result_url'], $net['slug'], $anchor, $initiated);
                         if ($stmt->execute()) { $created++; }
@@ -1363,7 +1520,8 @@ if (!function_exists('pp_promotion_process_run')) {
             if ($res2) {
                 while ($node = $res2->fetch_assoc()) {
                     $node['initiated_by'] = $run['initiated_by'];
-                    $parentCtx = $level1Contexts[(int)($node['parent_id'] ?? 0)] ?? null;
+                    $parentNodeId = (int)($node['parent_id'] ?? 0);
+                    $parentCtx = $level1Contexts[$parentNodeId] ?? null;
                     $trail = [];
                     if ($parentCtx) { $trail[] = $parentCtx; }
                     pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
@@ -1467,10 +1625,11 @@ if (!function_exists('pp_promotion_process_run')) {
                     'selected' => $selectedSlugs,
                     'usage' => $usageSnapshot,
                 ]);
+                $parentCtx = $level2Contexts[(int)$parentNode['id']] ?? null;
                 foreach ($nets as $net) {
                     $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, parent_id, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 3, ?, ?, ?, ?, \'pending\', ?)');
                     if ($stmt) {
-                        $anchor = pp_promotion_generate_anchor((string)$linkRow['anchor']);
+                        $anchor = pp_promotion_generate_contextual_anchor($parentCtx, (string)$linkRow['anchor']);
                         $initiated = (int)$run['initiated_by'];
                         $stmt->bind_param('iisssi', $runId, $parentNode['id'], $parentNode['result_url'], $net['slug'], $anchor, $initiated);
                         $stmt->execute();
@@ -1577,12 +1736,17 @@ if (!function_exists('pp_promotion_process_run')) {
             $totalLinks = count($crowdIds);
             if ($totalLinks > 1) { shuffle($crowdIds); }
             $hasCrowdPayloadColumn = pp_promotion_ensure_crowd_payload_column($conn);
+            $crowdContextCache = [];
             foreach ($finalNodes as $node) {
                 $targetUrl = (string)($node['result_url'] ?? '');
                 $nodeId = (int)($node['id'] ?? 0);
                 if ($targetUrl === '' || $nodeId <= 0) { continue; }
                 $uniqueMessages = max(1, (int)ceil($crowdPerArticle * 0.1));
-                $payloadVariants = pp_promotion_generate_crowd_payloads($targetUrl, $project, $linkRow, $uniqueMessages);
+                if (!array_key_exists($targetUrl, $crowdContextCache)) {
+                    $crowdContextCache[$targetUrl] = pp_promotion_get_article_context($targetUrl);
+                }
+                $payloadArticleContext = $crowdContextCache[$targetUrl] ?? null;
+                $payloadVariants = pp_promotion_generate_crowd_payloads($targetUrl, $project, $linkRow, $uniqueMessages, $payloadArticleContext);
                 $variantsCount = max(1, count($payloadVariants));
                 for ($i = 0; $i < $crowdPerArticle; $i++) {
                     if ($totalLinks === 0) { break 2; }

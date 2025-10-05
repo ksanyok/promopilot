@@ -13,6 +13,7 @@ function normalizeContextArray(value) {
       const summary = String(item.summary || '').trim();
       const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean).map((kw) => String(kw).trim()).filter(Boolean).slice(0, 8) : [];
       const description = String(item.description || '').trim();
+      const excerpt = String(item.excerpt || '').trim();
       if (!title && !summary && keywords.length === 0 && !description) {
         return null;
       }
@@ -24,6 +25,7 @@ function normalizeContextArray(value) {
         keywords,
         language: String(item.language || '').trim(),
         headings: Array.isArray(item.headings) ? item.headings.filter(Boolean).map((h) => String(h).trim()).filter(Boolean).slice(0, 6) : [],
+        excerpt,
       };
     })
     .filter(Boolean);
@@ -31,7 +33,7 @@ function normalizeContextArray(value) {
 
 function buildCascadeGuidance(cascade, language) {
   if (!cascade || typeof cascade !== 'object') {
-    return { intro: '', bullets: [], reminder: '', titleReminder: '' };
+    return { intro: '', bullets: [], reminder: '', titleReminder: '', detailSnippets: [] };
   }
   const isRu = String(language || '').toLowerCase().startsWith('ru');
   const intro = isRu ? 'Контекст предыдущих уровней:' : 'Context from previous levels:';
@@ -49,20 +51,37 @@ function buildCascadeGuidance(cascade, language) {
   const trail = normalizeContextArray(cascade.ancestorTrail);
   const parentContext = cascade.parentContext ? normalizeContextArray([cascade.parentContext]) : [];
   const contexts = trail.length ? trail : parentContext;
-  const bullets = contexts.slice(0, 5).map((ctx, index) => {
+  const bullets = contexts.slice(0, 5).map((ctx) => {
     const parts = [];
     if (ctx.title) parts.push(`${titleLabel}: ${ctx.title}`);
     if (ctx.summary) parts.push(`${summaryLabel}: ${ctx.summary}`);
     if (!ctx.summary && ctx.description) parts.push(`${summaryLabel}: ${ctx.description}`);
     if (ctx.keywords && ctx.keywords.length) parts.push(`${keywordsLabel}: ${ctx.keywords.slice(0, 6).join(', ')}`);
+    if (ctx.excerpt && !ctx.summary) {
+      const trimmed = ctx.excerpt.length > 220 ? `${ctx.excerpt.slice(0, 220)}…` : ctx.excerpt;
+      parts.push(`${summaryLabel}: ${trimmed}`);
+    }
     return `${bullet} ${parts.join('; ')}`;
   });
+
+  const detailSnippets = contexts
+    .map((ctx) => ctx.excerpt || ctx.summary || ctx.description)
+    .filter(Boolean)
+    .map((text) => {
+      const flattened = String(text).replace(/\s+/g, ' ').trim();
+      if (flattened.length > 320) {
+        return `${flattened.slice(0, 320)}…`;
+      }
+      return flattened;
+    })
+    .slice(0, 3);
 
   return {
     intro: bullets.length ? intro : '',
     bullets,
     reminder: bullets.length ? reminder : '',
     titleReminder: bullets.length ? titleReminder : '',
+    detailSnippets,
   };
 }
 
@@ -172,6 +191,12 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
   const isTest = !!testMode;
   const cascadeInfo = buildCascadeGuidance(cascade, pageLang);
+  const isRu = String(pageLang || '').toLowerCase().startsWith('ru');
+  const insightLabel = isRu ? 'Ключевые идеи родительской статьи' : 'Key ideas from the parent article';
+  const insightBullet = isRu ? '•' : '-';
+  const insightBlock = Array.isArray(cascadeInfo.detailSnippets) && cascadeInfo.detailSnippets.length
+    ? `${insightLabel}:\n${cascadeInfo.detailSnippets.map((line) => `${insightBullet} ${line}`).join('\n')}\n`
+    : '';
 
   if (isTest) {
     const preset = buildDiagnosticArticle(pageUrl, anchorText);
@@ -204,6 +229,7 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     content:
       `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
       (cascadeInfo.intro ? `${cascadeInfo.intro}\n${cascadeInfo.bullets.join('\n')}\n` : '') +
+      insightBlock +
       (cascadeInfo.reminder ? `${cascadeInfo.reminder}\n` : '') +
       `Требования:\n` +
       `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
