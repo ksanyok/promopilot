@@ -1536,6 +1536,121 @@ document.addEventListener('DOMContentLoaded', function() {
     let linksTable = document.querySelector('.table-links');
     let linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
 
+    const TABLE_TEXT = {
+        number: '#',
+        link: <?php echo json_encode(__('Ссылка')); ?>,
+        anchor: <?php echo json_encode(__('Анкор')); ?>,
+        language: <?php echo json_encode(__('Язык')); ?>,
+        wish: <?php echo json_encode(__('Пожелание')); ?>,
+        status: <?php echo json_encode(__('Статус')); ?>,
+        actions: <?php echo json_encode(__('Действия')); ?>,
+        empty: <?php echo json_encode(__('Ссылок нет.')); ?>,
+        emptyHint: <?php echo json_encode(__('Добавьте первую целевую ссылку выше.')); ?>
+    };
+
+    function ensureLinksTable() {
+        if (linksTable && linksTbody) {
+            return linksTbody;
+        }
+
+        if (!linksTable) {
+            linksTable = document.querySelector('.table-links');
+            linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
+            if (linksTable && linksTbody) {
+                return linksTbody;
+            }
+        }
+
+        const cardBody = document.querySelector('#links-card .card-body');
+        if (!cardBody) {
+            return null;
+        }
+
+        const emptyState = cardBody.querySelector('.empty-state');
+        if (emptyState) {
+            emptyState.remove();
+        }
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-responsive';
+
+        const table = document.createElement('table');
+        table.className = 'table table-striped table-hover table-sm align-middle table-links';
+
+        const thead = document.createElement('thead');
+        thead.innerHTML = `
+            <tr>
+                <th style="width:44px;">${TABLE_TEXT.number}</th>
+                <th>${TABLE_TEXT.link}</th>
+                <th>${TABLE_TEXT.anchor}</th>
+                <th>${TABLE_TEXT.language}</th>
+                <th>${TABLE_TEXT.wish}</th>
+                <th>${TABLE_TEXT.status}</th>
+                <th class="text-end" style="width:200px;">&nbsp;</th>
+            </tr>`;
+
+        const tbody = document.createElement('tbody');
+
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        cardBody.appendChild(wrapper);
+
+        linksTable = table;
+        linksTbody = tbody;
+
+        if (typeof initTooltips === 'function') {
+            initTooltips(wrapper);
+        }
+
+        return linksTbody;
+    }
+
+    function refreshRowNumbers() {
+        if (!linksTable || !linksTbody) {
+            linksTable = document.querySelector('.table-links');
+            linksTbody = linksTable ? linksTable.querySelector('tbody') : null;
+        }
+
+        const tbody = linksTbody;
+        if (!tbody) {
+            return;
+        }
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        if (rows.length === 0) {
+            const wrapper = linksTable ? linksTable.closest('.table-responsive') : null;
+            if (wrapper) {
+                wrapper.remove();
+            }
+            linksTable = null;
+            linksTbody = null;
+
+            const cardBody = document.querySelector('#links-card .card-body');
+            if (cardBody && !cardBody.querySelector('.empty-state')) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.innerHTML = `${escapeHtml(TABLE_TEXT.empty)} <span class="d-inline-block ms-1" data-bs-toggle="tooltip" title="${escapeAttribute(TABLE_TEXT.emptyHint)}"><i class="bi bi-info-circle"></i></span>`;
+                cardBody.appendChild(empty);
+                if (typeof initTooltips === 'function') {
+                    initTooltips(empty);
+                }
+            }
+
+            return;
+        }
+
+        rows.forEach((tr, index) => {
+            tr.dataset.index = String(index);
+            const numberCell = tr.querySelector('td[data-label="#"]') || tr.querySelector('td');
+            if (numberCell) {
+                numberCell.textContent = String(index + 1);
+                numberCell.setAttribute('data-label', TABLE_TEXT.number);
+            }
+        });
+    }
+
     // Project preview automation
     const previewWrapper = document.querySelector('[data-project-preview]');
     if (previewWrapper) {
