@@ -2310,17 +2310,6 @@ document.addEventListener('DOMContentLoaded', function() {
             labelEl.textContent = getPromotionStatusLabel(status);
         }
 
-        const countEl = block.querySelector('.promotion-progress-count');
-        if (countEl) {
-            if (target > 0 && (isActive || done > 0)) {
-                countEl.textContent = `(${done} / ${target})`;
-                countEl.classList.remove('d-none');
-            } else {
-                countEl.textContent = '';
-                countEl.classList.add('d-none');
-            }
-        }
-
         block.classList.remove('text-muted', 'text-primary', 'text-success', 'text-danger');
         if (status === 'idle') {
             block.classList.add('text-muted');
@@ -2367,6 +2356,63 @@ document.addEventListener('DOMContentLoaded', function() {
         let crowdTarget = crowdTotal > 0 ? crowdTotal : 0;
         if (!crowdTarget && crowdPlanned > 0) { crowdTarget = crowdPlanned; }
         if (!crowdTarget && crowdCompleted > 0) { crowdTarget = crowdCompleted; }
+
+        const stageSequence = [];
+        const ensureStage = (key, condition) => {
+            if (condition && !stageSequence.includes(key)) { stageSequence.push(key); }
+        };
+        const level1StatusSet = ['queued', 'running', 'level1_active'];
+        const level2StatusSet = ['pending_level2', 'level2_active'];
+        const level3StatusSet = ['pending_level3', 'level3_active'];
+        const crowdStatusSet = ['pending_crowd', 'crowd_ready', 'report_ready', 'completed'];
+
+        ensureStage('level1', level1Required > 0 || level1Success > 0 || level1StatusSet.includes(status));
+        ensureStage('level2', level2Required > 0 || level2Success > 0 || level2StatusSet.includes(status));
+        ensureStage('level3', level3Required > 0 || level3Success > 0 || level3StatusSet.includes(status));
+        ensureStage('crowd', crowdTarget > 0 || crowdCompleted > 0 || crowdStatusSet.includes(status));
+
+        let stageProgressIndex = 0;
+        if (stageSequence.length > 0) {
+            if (status === 'report_ready' || status === 'completed') {
+                stageProgressIndex = stageSequence.length;
+            } else {
+                const stageStatusMap = {
+                    queued: 'level1',
+                    running: 'level1',
+                    level1_active: 'level1',
+                    pending_level2: 'level2',
+                    level2_active: 'level2',
+                    pending_level3: 'level3',
+                    level3_active: 'level3',
+                    pending_crowd: 'crowd',
+                    crowd_ready: 'crowd',
+                    failed: stageSequence[stageSequence.length - 1] ?? null,
+                    cancelled: stageSequence[stageSequence.length - 1] ?? null,
+                };
+                const stageKey = stageStatusMap[status];
+                if (stageKey) {
+                    const idx = stageSequence.indexOf(stageKey);
+                    if (idx >= 0) { stageProgressIndex = idx + 1; }
+                }
+            }
+            if (!stageProgressIndex && isActive) {
+                stageProgressIndex = Math.min(stageSequence.length, 1);
+            }
+        }
+
+        const countEl = block.querySelector('.promotion-progress-count');
+        if (countEl) {
+            if (stageSequence.length > 1 && stageProgressIndex > 0) {
+                countEl.textContent = `(${stageProgressIndex} / ${stageSequence.length})`;
+                countEl.classList.remove('d-none');
+            } else if (target > 0 && (isActive || done > 0)) {
+                countEl.textContent = `(${done} / ${target})`;
+                countEl.classList.remove('d-none');
+            } else {
+                countEl.textContent = '';
+                countEl.classList.add('d-none');
+            }
+        }
 
         block.dataset.level1Total = String(level1Total);
         block.dataset.level1Success = String(level1Success);

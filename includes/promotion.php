@@ -929,9 +929,20 @@ if (!function_exists('pp_promotion_launch_worker')) {
 }
 
 if (!function_exists('pp_promotion_launch_crowd_worker')) {
-    function pp_promotion_launch_crowd_worker(?int $taskId = null): bool {
+    function pp_promotion_launch_crowd_worker(?int $taskId = null, bool $allowFallback = true): bool {
         $script = PP_ROOT_PATH . '/scripts/promotion_crowd_worker.php';
-        if (!is_file($script)) { return false; }
+        if (!is_file($script)) {
+            pp_promotion_log('promotion.crowd.worker_missing', ['script' => $script]);
+            if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
+                try {
+                    pp_promotion_crowd_worker($taskId, 5);
+                    return true;
+                } catch (Throwable $e) {
+                    pp_promotion_log('promotion.crowd.worker_fallback_error', ['error' => $e->getMessage()]);
+                }
+            }
+            return false;
+        }
         $phpBinary = PHP_BINARY ?: 'php';
         $args = $taskId ? ' ' . (int)$taskId : '';
         $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
@@ -943,23 +954,51 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
                 @pclose($handle);
                 $success = true;
             }
-            return $success;
-        }
-        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args . ' > /dev/null 2>&1 &';
-        if (function_exists('popen')) {
-            $handle = @popen($cmd, 'r');
-            if (is_resource($handle)) {
-                @pclose($handle);
-                $success = true;
+        } else {
+            $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args . ' > /dev/null 2>&1 &';
+            if (function_exists('popen')) {
+                $handle = @popen($cmd, 'r');
+                if (is_resource($handle)) {
+                    @pclose($handle);
+                    $success = true;
+                }
+            }
+            if (!$success) {
+                $output = [];
+                $status = 1;
+                @exec($cmd, $output, $status);
+                if ($status === 0) {
+                    $success = true;
+                }
             }
         }
-        if (!$success) {
-            $execResult = @exec($cmd, $output, $status);
-            if ($status === 0) {
-                $success = true;
+
+        if ($success) {
+            pp_promotion_log('promotion.crowd.worker_launched', [
+                'task_id' => $taskId,
+                'script' => $script,
+                'mode' => $isWindows ? 'windows_popen' : 'posix_background',
+            ]);
+            return true;
+        }
+
+        pp_promotion_log('promotion.crowd.worker_launch_failed', [
+            'task_id' => $taskId,
+            'script' => $script,
+            'mode' => $isWindows ? 'windows_popen' : 'posix_background',
+        ]);
+
+        if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
+            try {
+                pp_promotion_crowd_worker($taskId, 5);
+                pp_promotion_log('promotion.crowd.worker_fallback_used', ['task_id' => $taskId]);
+                return true;
+            } catch (Throwable $e) {
+                pp_promotion_log('promotion.crowd.worker_fallback_error', ['error' => $e->getMessage()]);
             }
         }
-        return $success;
+
+        return false;
     }
 }
 
