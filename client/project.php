@@ -1020,6 +1020,15 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         $level3Required = (int)($level3Data['required'] ?? 0);
                                         $crowdData = (is_array($promotionInfo) && isset($promotionInfo['crowd']) && is_array($promotionInfo['crowd'])) ? $promotionInfo['crowd'] : [];
                                         $crowdPlanned = (int)($crowdData['planned'] ?? 0);
+                                        $crowdTotal = (int)($crowdData['total'] ?? 0);
+                                        $crowdCompleted = (int)($crowdData['completed'] ?? 0);
+                                        $crowdRunning = (int)($crowdData['running'] ?? 0);
+                                        $crowdQueued = (int)($crowdData['queued'] ?? 0);
+                                        $crowdFailed = (int)($crowdData['failed'] ?? 0);
+                                        $crowdTarget = max($crowdTotal, $crowdPlanned);
+                                        if ($crowdTarget === 0 && $crowdCompleted > 0) {
+                                            $crowdTarget = $crowdCompleted;
+                                        }
                                         $promotionDetails = [];
                                         if ($level1Success > 0 || $level1Required > 0) {
                                             $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 1'), $level1Success, $level1Required > 0 ? ' / ' . $level1Required : '');
@@ -1030,8 +1039,22 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         if ($level3Success > 0 || $level3Required > 0) {
                                             $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 3'), $level3Success, $level3Required > 0 ? ' / ' . $level3Required : '');
                                         }
-                                        if ($crowdPlanned > 0) {
-                                            $promotionDetails[] = sprintf('%s: %d', __('Крауд'), $crowdPlanned);
+                                        if ($crowdTarget > 0 || $crowdCompleted > 0) {
+                                            $crowdDetail = sprintf(__('Крауд: %1$d / %2$d'), $crowdCompleted, $crowdTarget);
+                                            $crowdExtras = [];
+                                            $crowdInProgress = $crowdRunning + $crowdQueued;
+                                            if ($crowdInProgress > 0) {
+                                                $crowdExtras[] = sprintf(__('В работе: %d'), $crowdInProgress);
+                                            }
+                                            if ($crowdFailed > 0) {
+                                                $crowdExtras[] = sprintf(__('Ошибок: %d'), $crowdFailed);
+                                            }
+                                            if (!empty($crowdExtras)) {
+                                                $crowdDetail .= ' (' . implode(', ', $crowdExtras) . ')';
+                                            }
+                                            $promotionDetails[] = $crowdDetail;
+                                        } elseif ($crowdPlanned > 0) {
+                                            $promotionDetails[] = sprintf(__('Крауд задач запланировано: %d'), $crowdPlanned);
                                         }
                                         $promotionStatusLabel = '';
                                         switch ($promotionStatus) {
@@ -1108,7 +1131,12 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                             data-level3-total="<?php echo $level3Total; ?>"
                                             data-level3-success="<?php echo $level3Success; ?>"
                                             data-level3-required="<?php echo $level3Required; ?>"
-                                            data-crowd-planned="<?php echo $crowdPlanned; ?>">
+                                            data-crowd-planned="<?php echo $crowdPlanned; ?>"
+                                            data-crowd-total="<?php echo $crowdTotal; ?>"
+                                            data-crowd-completed="<?php echo $crowdCompleted; ?>"
+                                            data-crowd-running="<?php echo $crowdRunning; ?>"
+                                            data-crowd-queued="<?php echo $crowdQueued; ?>"
+                                            data-crowd-failed="<?php echo $crowdFailed; ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
@@ -1150,7 +1178,12 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                  data-level3-total="<?php echo $level3Total; ?>"
                                                  data-level3-success="<?php echo $level3Success; ?>"
                                                  data-level3-required="<?php echo $level3Required; ?>"
-                                                 data-crowd-planned="<?php echo $crowdPlanned; ?>">
+                                                 data-crowd-planned="<?php echo $crowdPlanned; ?>"
+                                                 data-crowd-total="<?php echo $crowdTotal; ?>"
+                                                 data-crowd-completed="<?php echo $crowdCompleted; ?>"
+                                                 data-crowd-running="<?php echo $crowdRunning; ?>"
+                                                 data-crowd-queued="<?php echo $crowdQueued; ?>"
+                                                 data-crowd-failed="<?php echo $crowdFailed; ?>">
                                                 <div class="promotion-status-top">
                                                     <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                                                     <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
@@ -1182,6 +1215,15 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                         </div>
                                                         <div class="progress progress-thin">
                                                             <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
+                                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                                            <span><?php echo __('Крауд'); ?></span>
+                                                            <span class="promotion-progress-value">0 / 0</span>
+                                                        </div>
+                                                        <div class="progress progress-thin">
+                                                            <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2102,7 +2144,10 @@ document.addEventListener('DOMContentLoaded', function() {
         level1: <?php echo json_encode(__('Уровень 1')); ?>,
         level2: <?php echo json_encode(__('Уровень 2')); ?>,
         level3: <?php echo json_encode(__('Уровень 3')); ?>,
-        crowd: <?php echo json_encode(__('Крауд')); ?>
+        crowd: <?php echo json_encode(__('Крауд')); ?>,
+        crowdRunning: <?php echo json_encode(__('В работе')); ?>,
+        crowdFailed: <?php echo json_encode(__('Ошибок')); ?>,
+        crowdPlanned: <?php echo json_encode(__('Крауд задач запланировано')); ?>
     };
 
     const PROMOTION_COMPLETE_TEXT = <?php echo json_encode(__('Продвижение завершено')); ?>;
@@ -2276,7 +2321,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (progressWrapper) {
-            if (isActive || level1Success > 0 || level2Success > 0 || level3Success > 0) {
+            if (isActive || level1Success > 0 || level2Success > 0 || level3Success > 0 || crowdTarget > 0 || crowdCompleted > 0 || crowdInProgress > 0) {
                 progressWrapper.classList.remove('d-none');
             } else {
                 progressWrapper.classList.add('d-none');
@@ -2300,7 +2345,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const level2Total = level2Success;
         const level3Total = level3Success;
         const crowdData = promotion?.crowd || {};
-        const crowdPlanned = Number(crowdData.planned ?? block.dataset.crowdPlanned ?? tr.dataset.crowdPlanned ?? 0);
+        const crowdPlanned = Number(crowdData.planned ?? block.dataset.crowdPlanned ?? tr.dataset.crowdPlanned ?? 0) || 0;
+        const crowdTotal = Number(crowdData.total ?? block.dataset.crowdTotal ?? tr.dataset.crowdTotal ?? 0) || 0;
+        const crowdCompleted = Number(crowdData.completed ?? block.dataset.crowdCompleted ?? tr.dataset.crowdCompleted ?? 0) || 0;
+        const crowdRunning = Number(crowdData.running ?? block.dataset.crowdRunning ?? tr.dataset.crowdRunning ?? 0) || 0;
+        const crowdQueued = Number(crowdData.queued ?? block.dataset.crowdQueued ?? tr.dataset.crowdQueued ?? 0) || 0;
+        const crowdFailed = Number(crowdData.failed ?? block.dataset.crowdFailed ?? tr.dataset.crowdFailed ?? 0) || 0;
+        const crowdInProgress = crowdRunning + crowdQueued;
+        let crowdTarget = crowdTotal > 0 ? crowdTotal : 0;
+        if (!crowdTarget && crowdPlanned > 0) { crowdTarget = crowdPlanned; }
+        if (!crowdTarget && crowdCompleted > 0) { crowdTarget = crowdCompleted; }
 
         block.dataset.level1Total = String(level1Total);
         block.dataset.level1Success = String(level1Success);
@@ -2312,10 +2366,16 @@ document.addEventListener('DOMContentLoaded', function() {
         block.dataset.level3Success = String(level3Success);
         block.dataset.level3Required = String(level3Required);
         block.dataset.crowdPlanned = String(crowdPlanned);
+        block.dataset.crowdTotal = String(crowdTotal);
+        block.dataset.crowdCompleted = String(crowdCompleted);
+        block.dataset.crowdRunning = String(crowdRunning);
+        block.dataset.crowdQueued = String(crowdQueued);
+        block.dataset.crowdFailed = String(crowdFailed);
 
         const level1El = block.querySelector('.promotion-progress-level1');
         const level2El = block.querySelector('.promotion-progress-level2');
         const level3El = block.querySelector('.promotion-progress-level3');
+        const crowdEl = block.querySelector('.promotion-progress-crowd');
 
         const updateLevel = (el, success, required) => {
             if (!el) { return; }
@@ -2340,6 +2400,7 @@ document.addEventListener('DOMContentLoaded', function() {
         updateLevel(level1El, level1Success, level1Required);
         updateLevel(level2El, level2Success, level2Required);
         updateLevel(level3El, level3Success, level3Required);
+        updateLevel(crowdEl, crowdCompleted, crowdTarget);
 
         const detailsEl = block.querySelector('.promotion-progress-details');
         if (detailsEl) {
@@ -2357,8 +2418,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (level3Success > 0 || level3Required > 0) {
                     details.push(`${PROMOTION_DETAIL_LABELS.level3}: ${level3Success}${level3Required > 0 ? ' / ' + level3Required : ''}`);
                 }
-                if (crowdPlanned > 0) {
-                    details.push(`${PROMOTION_DETAIL_LABELS.crowd}: ${crowdPlanned}`);
+                if (crowdTarget > 0 || crowdCompleted > 0) {
+                    let crowdLine = `${PROMOTION_DETAIL_LABELS.crowd}: ${crowdCompleted}${crowdTarget > 0 ? ' / ' + crowdTarget : ''}`;
+                    const crowdPieces = [];
+                    const crowdActive = crowdInProgress;
+                    if (crowdActive > 0) {
+                        crowdPieces.push(`${PROMOTION_DETAIL_LABELS.crowdRunning}: ${crowdActive}`);
+                    }
+                    if (crowdFailed > 0) {
+                        crowdPieces.push(`${PROMOTION_DETAIL_LABELS.crowdFailed}: ${crowdFailed}`);
+                    }
+                    if (crowdPieces.length) {
+                        crowdLine += ` (${crowdPieces.join(', ')})`;
+                    }
+                    details.push(crowdLine);
+                } else if (crowdPlanned > 0) {
+                    details.push(`${PROMOTION_DETAIL_LABELS.crowdPlanned}: ${crowdPlanned}`);
                 }
                 if (details.length) {
                     detailsEl.innerHTML = details.map(text => `<div>${escapeHtml(text)}</div>`).join('');
@@ -2386,6 +2461,11 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.level3Success = String(level3Success);
         tr.dataset.level3Required = String(level3Required);
         tr.dataset.crowdPlanned = String(crowdPlanned);
+        tr.dataset.crowdTotal = String(crowdTotal);
+        tr.dataset.crowdCompleted = String(crowdCompleted);
+        tr.dataset.crowdRunning = String(crowdRunning);
+        tr.dataset.crowdQueued = String(crowdQueued);
+        tr.dataset.crowdFailed = String(crowdFailed);
 
         if (typeof initTooltips === 'function') {
             initTooltips(block);
@@ -3794,6 +3874,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 tr.dataset.level3Success = '0';
                 tr.dataset.level3Required = '0';
                 tr.dataset.crowdPlanned = '0';
+                tr.dataset.crowdTotal = '0';
+                tr.dataset.crowdCompleted = '0';
+                tr.dataset.crowdRunning = '0';
+                tr.dataset.crowdQueued = '0';
+                tr.dataset.crowdFailed = '0';
                 const pathDisp = pathFromUrl(url);
                 const hostDisp = hostFromUrl(url);
                 tr.innerHTML = `
@@ -3823,19 +3908,24 @@ document.addEventListener('DOMContentLoaded', function() {
                              data-run-id=""
                              data-status="idle"
                              data-stage=""
-                        data-total="0"
+                             data-total="0"
                              data-done="0"
                              data-report-ready="0"
                              data-level1-total="0"
                              data-level1-success="0"
-                        data-level1-required="0"
+                             data-level1-required="0"
                              data-level2-total="0"
                              data-level2-success="0"
-                    data-level2-required="0"
-                        data-level3-total="0"
-                        data-level3-success="0"
-                        data-level3-required="0"
-                             data-crowd-planned="0">
+                             data-level2-required="0"
+                             data-level3-total="0"
+                             data-level3-success="0"
+                             data-level3-required="0"
+                             data-crowd-planned="0"
+                             data-crowd-total="0"
+                             data-crowd-completed="0"
+                             data-crowd-running="0"
+                             data-crowd-queued="0"
+                             data-crowd-failed="0">
                             <div class="promotion-status-top">
                                 <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                                 <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
@@ -3867,6 +3957,15 @@ document.addEventListener('DOMContentLoaded', function() {
                                     </div>
                                     <div class="progress progress-thin">
                                         <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                                    </div>
+                                </div>
+                                <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
+                                    <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                        <span><?php echo __('Крауд'); ?></span>
+                                        <span class="promotion-progress-value">0 / 0</span>
+                                    </div>
+                                    <div class="progress progress-thin">
+                                        <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                     </div>
                                 </div>
                             </div>
