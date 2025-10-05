@@ -390,6 +390,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 `target_url` TEXT NOT NULL,
                 `status` VARCHAR(20) NOT NULL DEFAULT 'planned',
                 `result_url` TEXT NULL,
+                `payload_json` LONGTEXT NULL,
                 `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX `idx_promotion_crowd_run` (`run_id`),
@@ -404,6 +405,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (!$columnExists('promotion_crowd_tasks','target_url'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `target_url` TEXT NOT NULL AFTER `crowd_link_id`"); }
             if (!$columnExists('promotion_crowd_tasks','status'))         { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'planned' AFTER `target_url`"); }
             if (!$columnExists('promotion_crowd_tasks','result_url'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `result_url` TEXT NULL AFTER `status`"); }
+            if (!$columnExists('promotion_crowd_tasks','payload_json'))   { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `payload_json` LONGTEXT NULL AFTER `result_url`"); }
             if (!$columnExists('promotion_crowd_tasks','updated_at'))     { $apply("ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`"); }
             if (!$indexExists('promotion_crowd_tasks','idx_promotion_crowd_run'))  { $apply("CREATE INDEX `idx_promotion_crowd_run` ON `promotion_crowd_tasks`(`run_id`)"); }
             if (!$indexExists('promotion_crowd_tasks','idx_promotion_crowd_node')) { $apply("CREATE INDEX `idx_promotion_crowd_node` ON `promotion_crowd_tasks`(`node_id`)"); }

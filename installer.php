@@ -326,6 +326,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         target_url TEXT NOT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'planned',
         result_url TEXT NULL,
+        payload_json LONGTEXT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_promotion_crowd_run (run_id),

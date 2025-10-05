@@ -910,6 +910,152 @@ if (!function_exists('pp_promotion_generate_anchor')) {
     }
 }
 
+if (!function_exists('pp_promotion_random_choice')) {
+    function pp_promotion_random_choice(array $items, $default = null) {
+        if (empty($items)) {
+            return $default;
+        }
+        $maxIndex = count($items) - 1;
+        if ($maxIndex <= 0) {
+            return reset($items);
+        }
+        try {
+            $idx = random_int(0, $maxIndex);
+        } catch (Throwable $e) {
+            $idx = array_rand($items);
+        }
+        return $items[$idx] ?? $default;
+    }
+}
+
+if (!function_exists('pp_promotion_make_email_slug')) {
+    function pp_promotion_make_email_slug(string $name): string {
+        $slug = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name);
+        if ($slug === false) {
+            $slug = $name;
+        }
+        $slug = strtolower($slug);
+        $slug = preg_replace('~[^a-z0-9]+~', '.', $slug ?? '');
+        $slug = trim((string)$slug, '.');
+        if ($slug === '') {
+            $slug = 'promo';
+        }
+        return preg_replace('~\.+~', '.', $slug);
+    }
+}
+
+if (!function_exists('pp_promotion_generate_crowd_payloads')) {
+    function pp_promotion_generate_crowd_payloads(string $targetUrl, array $project, array $linkRow, int $uniqueCount): array {
+        $uniqueCount = max(1, $uniqueCount);
+        $baseAnchor = trim((string)($linkRow['anchor'] ?? ''));
+        if ($baseAnchor === '') {
+            $baseAnchor = trim((string)($project['name'] ?? __('Материал')));
+        }
+        if ($baseAnchor === '') {
+            $baseAnchor = __('Полезный материал');
+        }
+        $bodyTemplates = [
+            __('Коллеги, нашёл свежий материал «{{anchor}}»: {{link}}. Делюсь, может пригодиться в работе.'),
+            __('Если кто-то пропустил, вот отличный разбор {{anchor}} — {{link}}. Очень в тему.'),
+            __('Собрали подборку и добавили туда {{anchor}} ({{link}}). Дайте знать, если есть комментарии.'),
+            __('Проверили на практике: {{anchor}} — {{link}}. Работает, рекомендую почитать.'),
+            __('Для обсуждения на планёрке: {{anchor}} → {{link}}. Как думаете, подходит под нашу задачу?'),
+            __('Добавляю в закладки: {{anchor}} ({{link}}). Предлагаю включить в подборку.'),
+        ];
+        $subjectTemplates = [
+            __('Идея по теме: {{anchor}}'),
+            __('Статья к обсуждению — {{anchor}}'),
+            __('Полезный кейс: {{anchor}}'),
+            __('Нашёл материал: {{anchor}}'),
+            __('Добавка в подборку — {{anchor}}'),
+        ];
+        $closingTemplates = [
+            __('Спасибо, {{name}}'),
+            __('На связи, {{name}}'),
+            __('С уважением, {{name}}'),
+            __('Хорошего дня, {{name}}'),
+        ];
+        $firstNames = ['Алексей','Мария','Иван','Дарья','Егор','Светлана','Максим','Анна','Дмитрий','Виктория','Павел','Ольга','Роман','Екатерина','Кирилл','Юлия'];
+        $lastNames = ['Смирнов','Иванова','Кузнецов','Павлова','Андреев','Федорова','Максимов','Алексеева','Морозов','Васильева','Соколов','Никитина','Громов','Орлова','Яковлев','Сергеева'];
+        $domains = ['gmail.com','yandex.ru','mail.ru','outlook.com'];
+        $projectDomain = trim((string)($project['domain_host'] ?? ''));
+        if ($projectDomain !== '') {
+            $domains[] = preg_replace('~[^a-z0-9.-]+~i', '', strtolower($projectDomain));
+        }
+        $domains = array_values(array_unique(array_filter($domains)));
+
+        $payloads = [];
+        $usedHashes = [];
+        $attempts = 0;
+        $maxAttempts = $uniqueCount * 7;
+        while (count($payloads) < $uniqueCount && $attempts < $maxAttempts) {
+            $attempts++;
+            $anchorVariant = pp_promotion_generate_anchor($baseAnchor);
+            $subjectTpl = (string)pp_promotion_random_choice($subjectTemplates, __('Полезный материал'));
+            $subject = strtr($subjectTpl, ['{{anchor}}' => $anchorVariant, '{{link}}' => $targetUrl]);
+            $bodyTpl = (string)pp_promotion_random_choice($bodyTemplates, __('Посмотрите {{anchor}}: {{link}}'));
+            $body = strtr($bodyTpl, ['{{anchor}}' => $anchorVariant, '{{link}}' => $targetUrl]);
+            $first = (string)pp_promotion_random_choice($firstNames, 'Иван');
+            $last = (string)pp_promotion_random_choice($lastNames, 'Иванов');
+            $fullName = trim($first . ' ' . $last);
+            $closingTpl = (string)pp_promotion_random_choice($closingTemplates, __('Спасибо, {{name}}'));
+            $closing = strtr($closingTpl, ['{{name}}' => $fullName]);
+            $signature = $closing;
+            try {
+                $token = substr(bin2hex(random_bytes(6)), 0, 10);
+            } catch (Throwable $e) {
+                $token = substr(sha1($fullName . microtime(true)), 0, 10);
+            }
+            $emailSlug = pp_promotion_make_email_slug($fullName);
+            $domain = (string)pp_promotion_random_choice($domains, 'example.com');
+            $email = $emailSlug;
+            if ($domain !== '') {
+                $email .= '+' . strtolower($token);
+                $email .= '@' . $domain;
+            } else {
+                $email .= '+' . strtolower($token) . '@example.com';
+            }
+            $bodyFull = trim($body . "\n\n" . $signature);
+            $hash = md5($subject . '|' . $bodyFull . '|' . $email);
+            if (isset($usedHashes[$hash])) {
+                continue;
+            }
+            $usedHashes[$hash] = true;
+            $payloads[] = [
+                'anchor' => $anchorVariant,
+                'subject' => $subject,
+                'body' => $bodyFull,
+                'author_name' => $fullName,
+                'author_email' => $email,
+                'token' => $token,
+                'target_url' => $targetUrl,
+            ];
+        }
+
+        if (count($payloads) < $uniqueCount) {
+            $fallbackSubject = __('Полезный материал') . ': ' . $baseAnchor;
+            while (count($payloads) < $uniqueCount) {
+                try {
+                    $token = substr(bin2hex(random_bytes(5)), 0, 8);
+                } catch (Throwable $e) {
+                    $token = (string)mt_rand(100000, 999999);
+                }
+                $payloads[] = [
+                    'anchor' => pp_promotion_generate_anchor($baseAnchor),
+                    'subject' => $fallbackSubject,
+                    'body' => $baseAnchor . ' — ' . $targetUrl,
+                    'author_name' => 'PromoPilot Bot',
+                    'author_email' => 'promopilot+' . strtolower($token) . '@example.com',
+                    'token' => $token,
+                    'target_url' => $targetUrl,
+                ];
+            }
+        }
+
+        return $payloads;
+    }
+}
+
 if (!function_exists('pp_promotion_process_run')) {
     function pp_promotion_process_run(mysqli $conn, array $run): void {
         $runId = (int)$run['id'];
@@ -1352,24 +1498,43 @@ if (!function_exists('pp_promotion_process_run')) {
             } catch (Throwable $e) { $connCrowd = null; }
             $crowdIds = [];
             if ($connCrowd) {
-                $sql = "SELECT id, url FROM crowd_links WHERE deep_status='success' ORDER BY RAND() LIMIT " . max(1000, $crowdPerArticle * max(1, count($finalNodes)));
+                $limit = max(1000, $crowdPerArticle * max(1, count($finalNodes)));
+                $sql = "SELECT id, url FROM crowd_links WHERE deep_status='success' AND COALESCE(NULLIF(deep_message_excerpt,''), '') <> '' ORDER BY RAND() LIMIT " . $limit;
                 if ($res = @$connCrowd->query($sql)) {
                     while ($row = $res->fetch_assoc()) {
-                        $crowdIds[] = $row;
+                        $crowdIds[] = [
+                            'id' => (int)($row['id'] ?? 0),
+                            'url' => (string)($row['url'] ?? ''),
+                        ];
                     }
                     $res->free();
                 }
                 $connCrowd->close();
             }
-            $index = 0; $totalLinks = count($crowdIds);
+            $index = 0;
+            $totalLinks = count($crowdIds);
+            if ($totalLinks > 1) { shuffle($crowdIds); }
             foreach ($finalNodes as $node) {
+                $targetUrl = (string)($node['result_url'] ?? '');
+                $nodeId = (int)($node['id'] ?? 0);
+                if ($targetUrl === '' || $nodeId <= 0) { continue; }
+                $uniqueMessages = max(1, (int)ceil($crowdPerArticle * 0.1));
+                $payloadVariants = pp_promotion_generate_crowd_payloads($targetUrl, $project, $linkRow, $uniqueMessages);
+                $variantsCount = max(1, count($payloadVariants));
                 for ($i = 0; $i < $crowdPerArticle; $i++) {
-                    if ($totalLinks === 0) { break; }
+                    if ($totalLinks === 0) { break 2; }
                     $chosen = $crowdIds[$index % $totalLinks];
                     $index++;
-                    $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status) VALUES (?, ?, ?, ?, \'planned\')');
+                    $variant = $payloadVariants[$i % $variantsCount];
+                    $variant['crowd_link_id'] = $chosen['id'];
+                    $variant['crowd_link_url'] = $chosen['url'];
+                    $variant['target_url'] = $targetUrl;
+                    $payloadJson = json_encode($variant, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+                    if ($payloadJson === false) { $payloadJson = '{}'; }
+                    $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status, payload_json) VALUES (?, ?, ?, ?, \'planned\', ?)');
                     if ($stmt) {
-                        $stmt->bind_param('iiis', $runId, $node['id'], $chosen['id'], $node['result_url']);
+                        $cid = (int)$chosen['id'];
+                        $stmt->bind_param('iiiss', $runId, $nodeId, $cid, $targetUrl, $payloadJson);
                         $stmt->execute();
                         $stmt->close();
                     }
