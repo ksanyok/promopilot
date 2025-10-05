@@ -1878,6 +1878,176 @@ if (!function_exists('pp_promotion_process_run')) {
                 $res->free();
             }
             if ($pending > 0) { return; }
+
+            $perParentRequired = max(1, (int)($requirements[2]['per_parent'] ?? 1));
+            $usageLevel2 = [];
+            if ($usageRes = @$conn->query('SELECT network_slug, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 GROUP BY network_slug')) {
+                while ($u = $usageRes->fetch_assoc()) {
+                    $slugUsage = (string)($u['network_slug'] ?? '');
+                    if ($slugUsage === '') { continue; }
+                    $usageLevel2[$slugUsage] = (int)($u['c'] ?? 0);
+                }
+                $usageRes->free();
+            }
+
+            $parentStats = [];
+            $parentInfo = [];
+            if ($detailRes = @$conn->query('SELECT n.id, n.parent_id, n.status, n.network_slug, n.target_url, p.result_url AS parent_result_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2')) {
+                while ($row = $detailRes->fetch_assoc()) {
+                    $parentId = isset($row['parent_id']) ? (int)$row['parent_id'] : 0;
+                    if ($parentId <= 0) { continue; }
+                    if (!isset($parentStats[$parentId])) {
+                        $parentStats[$parentId] = ['success' => 0];
+                    }
+                    $statusNode = (string)($row['status'] ?? '');
+                    if (in_array($statusNode, ['success','completed'], true)) {
+                        $parentStats[$parentId]['success']++;
+                    }
+                    $slugUsage = (string)($row['network_slug'] ?? '');
+                    if ($slugUsage !== '' && !isset($usageLevel2[$slugUsage])) {
+                        $usageLevel2[$slugUsage] = 1;
+                    }
+                    $parentInfo[$parentId] = [
+                        'result_url' => (string)($row['parent_result_url'] ?? ''),
+                        'target_url' => (string)($row['parent_target_url'] ?? ''),
+                        'level' => isset($row['parent_level']) ? (int)$row['parent_level'] : 1,
+                    ];
+                }
+                $detailRes->free();
+            }
+
+            $parentsNeeding = [];
+            foreach ($parentStats as $parentId => $stats) {
+                $completed = (int)($stats['success'] ?? 0);
+                if ($completed < $perParentRequired) {
+                    $parentsNeeding[$parentId] = $perParentRequired - $completed;
+                }
+            }
+
+            if (!empty($parentsNeeding)) {
+                $parentContexts = [];
+                $parentCachedArticles = [];
+                $createdAny = false;
+                foreach ($parentsNeeding as $parentId => $deficit) {
+                    $parentResultUrl = (string)($parentInfo[$parentId]['result_url'] ?? '');
+                    if ($parentResultUrl === '') { continue; }
+                    if (!array_key_exists($parentId, $parentContexts)) {
+                        $parentContexts[$parentId] = pp_promotion_get_article_context($parentResultUrl);
+                    }
+                    if (!array_key_exists($parentId, $parentCachedArticles)) {
+                        $parentCachedArticles[$parentId] = pp_promotion_load_cached_article($parentId);
+                    }
+                    $parentContext = $parentContexts[$parentId] ?? null;
+                    $cachedParent = $parentCachedArticles[$parentId] ?? null;
+                    $anchorBase = pp_promotion_generate_contextual_anchor($parentContext, (string)$linkRow['anchor']);
+                    $parentTargetUrl = (string)($parentInfo[$parentId]['target_url'] ?? '');
+                    if ($parentTargetUrl === '') { $parentTargetUrl = (string)$run['target_url']; }
+                    $preparedLanguage = null;
+                    $preparedArticle = null;
+                    $articleMeta = [];
+                    $anchorFinal = $anchorBase;
+                    if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
+                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? 'ru')));
+                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
+                        $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $anchorBase);
+                        if ($childAnchor !== '') { $anchorFinal = $childAnchor; }
+                        $preparedArticleCandidate = pp_promotion_prepare_child_article(
+                            $cachedParent,
+                            $parentResultUrl,
+                            $parentTargetUrl,
+                            $preparedLanguage,
+                            $anchorFinal
+                        );
+                        if (is_array($preparedArticleCandidate) && !empty($preparedArticleCandidate['htmlContent'])) {
+                            if (empty($preparedArticleCandidate['language'])) { $preparedArticleCandidate['language'] = $preparedLanguage; }
+                            if (empty($preparedArticleCandidate['plainText'])) {
+                                $plainCandidate = trim(strip_tags((string)$preparedArticleCandidate['htmlContent']));
+                                if ($plainCandidate !== '') { $preparedArticleCandidate['plainText'] = $plainCandidate; }
+                            }
+                            $preparedArticleCandidate['sourceUrl'] = $parentTargetUrl;
+                            $preparedArticleCandidate['sourceNodeId'] = $parentId;
+                            $preparedArticle = $preparedArticleCandidate;
+                            $articleMeta = [
+                                'source_node_id' => $parentId,
+                                'source_target_url' => $parentTargetUrl,
+                                'source_level' => (int)($parentInfo[$parentId]['level'] ?? 1),
+                                'parent_result_url' => $parentResultUrl,
+                                'reuse_mode' => 'cached_parent',
+                            ];
+                        }
+                    }
+
+                    $netsRetry = pp_promotion_pick_networks(2, $deficit, $project, $usageLevel2);
+                    if (empty($netsRetry)) { continue; }
+                    $retrySlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $netsRetry);
+                    pp_promotion_log('promotion.level2.retry_scheduled', [
+                        'run_id' => $runId,
+                        'project_id' => $projectId,
+                        'parent_node_id' => $parentId,
+                        'needed' => $deficit,
+                        'selected' => $retrySlugs,
+                    ]);
+                    foreach ($netsRetry as $netRetry) {
+                        $stmt = $conn->prepare('INSERT INTO promotion_nodes (run_id, level, parent_id, target_url, network_slug, anchor_text, status, initiated_by) VALUES (?, 2, ?, ?, ?, ?, \'pending\', ?)');
+                        if (!$stmt) { continue; }
+                        $initiated = (int)$run['initiated_by'];
+                        $stmt->bind_param('iisssi', $runId, $parentId, $parentResultUrl, $netRetry['slug'], $anchorFinal, $initiated);
+                        if ($stmt->execute()) {
+                            $createdAny = true;
+                            $newNodeId = (int)$conn->insert_id;
+                            $stmt->close();
+                            $nodeRow = [
+                                'id' => $newNodeId,
+                                'run_id' => $runId,
+                                'parent_id' => $parentId,
+                                'level' => 2,
+                                'target_url' => $parentResultUrl,
+                                'network_slug' => (string)$netRetry['slug'],
+                                'anchor_text' => $anchorFinal,
+                                'parent_url' => $parentResultUrl,
+                                'parent_target_url' => $parentTargetUrl,
+                                'parent_level' => (int)($parentInfo[$parentId]['level'] ?? 1),
+                                'initiated_by' => $run['initiated_by'],
+                            ];
+                            $trail = [];
+                            if ($parentContext) { $trail[] = $parentContext; }
+                            $requirementsPayload = [
+                                'min_len' => $requirements[2]['min_len'],
+                                'max_len' => $requirements[2]['max_len'],
+                                'level' => 2,
+                                'parent_url' => $parentResultUrl,
+                                'parent_context' => $parentContext,
+                                'ancestor_trail' => $trail,
+                            ];
+                            if ($preparedArticle) {
+                                $requirementsPayload['prepared_article'] = $preparedArticle;
+                                $requirementsPayload['prepared_language'] = $preparedLanguage;
+                                if (!empty($articleMeta)) {
+                                    $requirementsPayload['article_meta'] = $articleMeta;
+                                }
+                            }
+                            pp_promotion_enqueue_publication($conn, $nodeRow, $project, $linkRow, $requirementsPayload);
+                        } else {
+                            $stmt->close();
+                        }
+                    }
+                }
+
+                if ($createdAny) {
+                    pp_promotion_update_progress($conn, $runId);
+                    return;
+                }
+
+                if (!empty($parentsNeeding)) {
+                    pp_promotion_log('promotion.level2.retry_exhausted', [
+                        'run_id' => $runId,
+                        'project_id' => $projectId,
+                        'deficit' => $parentsNeeding,
+                    ]);
+                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                    return;
+                }
+            }
             if ($success === 0) {
                 @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
@@ -2453,10 +2623,41 @@ if (!function_exists('pp_promotion_get_status')) {
                 $statusRaw = (string)($row['status'] ?? '');
                 $status = strtolower($statusRaw);
                 $payloadLink = null;
+                $messageBody = null;
+                $messagePreview = null;
+                $messageSubject = null;
+                $messageAuthor = null;
+                $messageEmail = null;
                 if (!empty($row['payload_json'])) {
                     $payload = json_decode((string)$row['payload_json'], true);
                     if (is_array($payload) && !empty($payload['crowd_link_url'])) {
                         $payloadLink = (string)$payload['crowd_link_url'];
+                    }
+                    if (is_array($payload)) {
+                        if (!empty($payload['body'])) {
+                            $messageBody = trim((string)$payload['body']);
+                            if ($messageBody !== '') {
+                                $messagePreview = $messageBody;
+                                if (function_exists('mb_strlen')) {
+                                    if (mb_strlen($messagePreview, 'UTF-8') > 220) {
+                                        $messagePreview = rtrim(mb_substr($messagePreview, 0, 200, 'UTF-8')) . '…';
+                                    }
+                                } elseif (strlen($messagePreview) > 220) {
+                                    $messagePreview = rtrim(substr($messagePreview, 0, 200)) . '…';
+                                }
+                            } else {
+                                $messageBody = null;
+                            }
+                        }
+                        if (!empty($payload['subject'])) {
+                            $messageSubject = trim((string)$payload['subject']);
+                        }
+                        if (!empty($payload['author_name'])) {
+                            $messageAuthor = trim((string)$payload['author_name']);
+                        }
+                        if (!empty($payload['author_email'])) {
+                            $messageEmail = trim((string)$payload['author_email']);
+                        }
                     }
                 }
                 $crowdLinkId = isset($row['crowd_link_id']) ? (int)$row['crowd_link_id'] : 0;
@@ -2475,13 +2676,21 @@ if (!function_exists('pp_promotion_get_status')) {
                 }
                 $resultUrl = trim((string)($row['result_url'] ?? ''));
                 if ($resultUrl !== '') { $crowdStats['completed_links']++; }
+                $articleUrl = (string)($row['target_url'] ?? '');
                 $crowdStats['items'][] = [
                     'id' => (int)$row['id'],
                     'status' => $statusRaw,
                     'status_normalized' => $status,
                     'result_url' => $resultUrl !== '' ? $resultUrl : null,
                     'link_url' => $payloadLink ? (string)$payloadLink : null,
-                    'target_url' => (string)($row['target_url'] ?? ''),
+                    'crowd_url' => $payloadLink ? (string)$payloadLink : null,
+                    'target_url' => $articleUrl,
+                    'article_url' => $articleUrl,
+                    'message' => $messageBody,
+                    'message_preview' => $messagePreview,
+                    'subject' => $messageSubject,
+                    'author_name' => $messageAuthor,
+                    'author_email' => $messageEmail,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
                 ];
             }
@@ -2535,10 +2744,29 @@ if (!function_exists('pp_promotion_build_report')) {
         if ($res = @$conn->query('SELECT id, status, crowd_link_id, target_url, result_url, payload_json, updated_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY id ASC')) {
             while ($row = $res->fetch_assoc()) {
                 $linkUrl = null;
+                $messageBody = null;
+                $messageSubject = null;
+                $messageAuthor = null;
+                $messageEmail = null;
                 if (!empty($row['payload_json'])) {
                     $payload = json_decode((string)$row['payload_json'], true);
-                    if (is_array($payload) && !empty($payload['crowd_link_url'])) {
-                        $linkUrl = (string)$payload['crowd_link_url'];
+                    if (is_array($payload)) {
+                        if (!empty($payload['crowd_link_url'])) {
+                            $linkUrl = (string)$payload['crowd_link_url'];
+                        }
+                        if (!empty($payload['body'])) {
+                            $body = trim((string)$payload['body']);
+                            if ($body !== '') { $messageBody = $body; }
+                        }
+                        if (!empty($payload['subject'])) {
+                            $messageSubject = trim((string)$payload['subject']);
+                        }
+                        if (!empty($payload['author_name'])) {
+                            $messageAuthor = trim((string)$payload['author_name']);
+                        }
+                        if (!empty($payload['author_email'])) {
+                            $messageEmail = trim((string)$payload['author_email']);
+                        }
                     }
                 }
                 if ($linkUrl === null && isset($row['crowd_link_id'])) {
@@ -2561,7 +2789,13 @@ if (!function_exists('pp_promotion_build_report')) {
                     'task_id' => isset($row['id']) ? (int)$row['id'] : null,
                     'crowd_link_id' => (int)$row['crowd_link_id'],
                     'link_url' => $linkUrl ? (string)$linkUrl : null,
+                    'crowd_url' => $linkUrl ? (string)$linkUrl : null,
                     'target_url' => (string)$row['target_url'],
+                    'article_url' => (string)$row['target_url'],
+                    'message' => $messageBody,
+                    'subject' => $messageSubject,
+                    'author_name' => $messageAuthor,
+                    'author_email' => $messageEmail,
                     'status' => (string)($row['status'] ?? ''),
                     'result_url' => isset($row['result_url']) && $row['result_url'] !== null ? (string)$row['result_url'] : null,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
