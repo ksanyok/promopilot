@@ -957,7 +957,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                         <div class="toolbar status-toolbar d-flex flex-wrap align-items-center gap-3">
                             <div class="status-legend small text-muted" data-bs-toggle="tooltip" title="<?php echo __('Статусы продвижения'); ?>">
                                 <span><span class="legend-dot legend-dot-idle"></span><?php echo __('Продвижение не запускалось'); ?></span>
-                                <span><span class="legend-dot legend-dot-running"></span><?php echo __('Продвижение выполняется'); ?></span>
+                                <span><span class="legend-dot legend-dot-running"></span><?php echo __('Выполняется'); ?></span>
                                 <span><span class="legend-dot legend-dot-done"></span><?php echo __('Продвижение завершено'); ?></span>
                                 <span><span class="legend-dot legend-dot-cancelled"></span><?php echo __('Продвижение отменено'); ?></span>
                             </div>
@@ -1205,7 +1205,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                     <div class="link-actions-progress d-flex flex-column align-items-stretch gap-2">
                                                         <button type="button" class="btn btn-sm btn-publish btn-progress-running w-100" disabled data-loading="1">
                                                             <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                                                            <span class="label d-none d-md-inline"><?php echo __('В процессе'); ?></span>
+                                                            <span class="label d-none d-md-inline"><?php echo __('Выполняется'); ?></span>
                                                         </button>
                                                         <?php if ($promotionRunId > 0): ?>
                                                             <button type="button" class="btn btn-outline-info btn-sm action-promotion-progress link-actions-progress-btn w-100" data-run-id="<?php echo $promotionRunId; ?>" data-url="<?php echo htmlspecialchars($url); ?>" title="<?php echo __('Промежуточный отчет'); ?>">
@@ -1383,7 +1383,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     </div>
                 </div>
                 <div class="small text-muted mb-0">
-                    <i class="bi bi-wallet2 me-1"></i><?php echo __('Текущий баланс'); ?>: <span><?php echo htmlspecialchars($currentUserBalanceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span><br>
+                    <i class="bi bi-wallet2 me-1"></i><?php echo __('Текущий баланс'); ?>: <span data-current-balance-display data-balance-raw="<?php echo htmlspecialchars(number_format($currentUserBalance, 2, '.', ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo htmlspecialchars($currentUserBalanceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span><br>
                     <i class="bi bi-check-circle me-1"></i><?php echo __('Сумма будет списана немедленно, возврат средств невозможен.'); ?>
                 </div>
             </div>
@@ -1459,25 +1459,88 @@ document.addEventListener('DOMContentLoaded', function() {
     const navBalanceCurrency = navBalanceValueEl?.dataset.balanceCurrency || 'RUB';
     let CURRENT_USER_BALANCE_RAW = (typeof window.PP_BALANCE === 'number' && !Number.isNaN(window.PP_BALANCE))
         ? window.PP_BALANCE
-        : (navBalanceValueEl ? parseFloat(navBalanceValueEl.dataset.balanceRaw || 'NaN') : NaN);
+        : (() => {
+            const rawAttr = navBalanceValueEl?.dataset.balanceRaw;
+            if (typeof rawAttr === 'string' && rawAttr !== '') {
+                const parsed = Number(rawAttr);
+                return Number.isNaN(parsed) ? NaN : parsed;
+            }
+            return NaN;
+        })();
 
-    function updateClientBalance(rawAmount, formattedText) {
-        if (!navBalanceValueEl) { return; }
-        if (typeof rawAmount === 'number' && !Number.isNaN(rawAmount)) {
-            CURRENT_USER_BALANCE_RAW = rawAmount;
-            window.PP_BALANCE = rawAmount;
-            navBalanceValueEl.dataset.balanceRaw = rawAmount.toFixed(2);
+    function coerceNumber(value) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
         }
-        if ((typeof formattedText !== 'string' || formattedText.length === 0) && typeof rawAmount === 'number' && !Number.isNaN(rawAmount)) {
-            try {
-                formattedText = new Intl.NumberFormat(navBalanceLocale, { style: 'currency', currency: navBalanceCurrency }).format(rawAmount);
-            } catch (e) {
-                formattedText = rawAmount.toFixed(2);
+        if (typeof value === 'string') {
+            const normalized = value.replace(/\s+/g, '').replace(',', '.');
+            if (normalized === '') { return NaN; }
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? parsed : NaN;
+        }
+        if (typeof value === 'object' && value !== null) {
+            if (Object.prototype.hasOwnProperty.call(value, 'amount')) {
+                return coerceNumber(value.amount);
             }
         }
-        if (typeof formattedText === 'string' && formattedText.length > 0) {
-            navBalanceValueEl.textContent = formattedText;
+        return NaN;
+    }
+
+    function formatBalanceLocale(amount) {
+        if (!Number.isFinite(amount)) { return ''; }
+        try {
+            const locale = navBalanceLocale || document.documentElement.getAttribute('lang') || 'ru-RU';
+            const currency = navBalanceCurrency || 'RUB';
+            return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount);
+        } catch (e) {
+            return amount.toFixed(2);
         }
+    }
+
+    function updateClientBalance(rawAmount, formattedText) {
+        const numericAmount = coerceNumber(rawAmount);
+        let finalAmount = numericAmount;
+        if (!Number.isFinite(finalAmount) && Number.isFinite(CURRENT_USER_BALANCE_RAW)) {
+            finalAmount = CURRENT_USER_BALANCE_RAW;
+        }
+        if (Number.isFinite(finalAmount)) {
+            CURRENT_USER_BALANCE_RAW = finalAmount;
+            window.PP_BALANCE = finalAmount;
+        }
+
+        let finalFormatted = typeof formattedText === 'string' ? formattedText.trim() : '';
+        if (!finalFormatted || finalFormatted.length === 0) {
+            finalFormatted = formatBalanceLocale(finalAmount);
+        }
+
+        if (navBalanceValueEl) {
+            if (Number.isFinite(finalAmount)) {
+                navBalanceValueEl.dataset.balanceRaw = finalAmount.toFixed(2);
+            }
+            if (finalFormatted) {
+                navBalanceValueEl.textContent = finalFormatted;
+            }
+        }
+
+        document.querySelectorAll('[data-current-balance-display]').forEach(el => {
+            if (Number.isFinite(finalAmount)) {
+                el.dataset.balanceRaw = finalAmount.toFixed(2);
+            }
+            if (finalFormatted) {
+                el.textContent = finalFormatted;
+            }
+        });
+
+        try {
+            document.dispatchEvent(new CustomEvent('pp:balance-updated', {
+                detail: {
+                    amount: Number.isFinite(finalAmount) ? finalAmount : NaN,
+                    formatted: finalFormatted
+                }
+            }));
+        } catch (_) {}
+
+        return { amount: finalAmount, formatted: finalFormatted };
     }
 
     function setButtonLoading(btn, loading) {
@@ -1890,7 +1953,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 html += '<div class="link-actions-progress d-flex flex-column align-items-stretch gap-2">'
                     + '<button type="button" class="btn btn-sm btn-publish btn-progress-running w-100" disabled data-loading="1">'
                     + '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>'
-                    + '<span class="label d-none d-md-inline"><?php echo __('В процессе'); ?></span>'
+                    + '<span class="label d-none d-md-inline"><?php echo __('Выполняется'); ?></span>'
                     + '</button>';
                 if (promotionRunId) {
                     html += '<button type="button" class="btn btn-outline-info btn-sm action-promotion-progress link-actions-progress-btn w-100" data-run-id="' + escapeAttribute(promotionRunId) + '" data-url="' + escapeAttribute(url) + '" title="<?php echo __('Промежуточный отчет'); ?>"><i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span></button>';
@@ -2323,7 +2386,7 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (promotionActive) {
             html += '<button type="button" class="btn btn-sm btn-publish me-1" disabled data-loading="1">'
                 + '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>'
-                + '<span class="label d-none d-md-inline"><?php echo __('Продвижение выполняется'); ?></span>'
+                + '<span class="label d-none d-md-inline"><?php echo __('Выполняется'); ?></span>'
                 + '</button>';
         } else {
             html += '<button type="button" class="btn btn-sm btn-publish me-1 action-promote"'
@@ -2551,7 +2614,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const csrf = getCsrfToken();
         if (!csrf) { alert('CSRF missing'); return; }
         if (!url) { alert('<?php echo __('Сначала сохраните ссылку перед запуском продвижения.'); ?>'); return; }
-        const tr = btn.closest('tr');
+        const tr = btn?.closest ? btn.closest('tr') : null;
+        if (btn) {
+            btn.dataset.loadingLabel = '<?php echo __('Выполняется'); ?>';
+        }
         setButtonLoading(btn, true);
         try {
             const fd = new FormData();
@@ -2577,26 +2643,40 @@ document.addEventListener('DOMContentLoaded', function() {
                 updatePromotionBlock(tr, data.promotion || data);
                 refreshActionsCell(tr);
             }
-            const chargedAmount = Number(
-                data.charged ?? data.charge ?? data.promotion?.charge?.amount ?? 0
-            ) || 0;
-            if (typeof data.balance_after === 'number' || typeof data.balance_after_formatted === 'string') {
-                updateClientBalance(
-                    typeof data.balance_after === 'number' ? data.balance_after : NaN,
-                    typeof data.balance_after_formatted === 'string' ? data.balance_after_formatted : ''
-                );
-            } else if (data.balance && typeof data.balance === 'object') {
-                updateClientBalance(
-                    typeof data.balance.amount === 'number' ? data.balance.amount : parseFloat(data.balance.amount || NaN),
-                    data.balance.formatted || ''
-                );
-            } else if (typeof data.balance === 'number') {
-                updateClientBalance(data.balance, '');
-            } else if (!Number.isNaN(chargedAmount) && chargedAmount > 0 && typeof CURRENT_USER_BALANCE_RAW === 'number' && !Number.isNaN(CURRENT_USER_BALANCE_RAW)) {
-                updateClientBalance(Math.max(0, CURRENT_USER_BALANCE_RAW - chargedAmount), '');
+            const priorBalance = Number.isFinite(CURRENT_USER_BALANCE_RAW) ? CURRENT_USER_BALANCE_RAW : NaN;
+            const chargedAmount = coerceNumber(
+                data?.charged ?? data?.charge ?? data?.promotion?.charge?.amount ?? 0
+            );
+            const balanceAfter = coerceNumber(data?.balance_after);
+            const balanceAfterFormatted = typeof data?.balance_after_formatted === 'string' ? data.balance_after_formatted : '';
+            if (Number.isFinite(balanceAfter) || balanceAfterFormatted) {
+                updateClientBalance(balanceAfter, balanceAfterFormatted);
+            } else if (data?.balance && typeof data.balance === 'object') {
+                const balanceAmount = coerceNumber(data.balance.amount);
+                const balanceFormatted = typeof data.balance.formatted === 'string' ? data.balance.formatted : '';
+                if (Number.isFinite(balanceAmount) || balanceFormatted) {
+                    updateClientBalance(balanceAmount, balanceFormatted);
+                }
+            } else if (Number.isFinite(chargedAmount) && chargedAmount > 0 && Number.isFinite(priorBalance)) {
+                updateClientBalance(Math.max(0, priorBalance - chargedAmount), '');
             }
             await pollPromotionStatusesOnce();
         } catch (e) {
+            console.error('Promotion start failed', e);
+            if (PP_PAGE_UNLOADING || (e && e.name === 'AbortError')) {
+                return;
+            }
+            let statusAfterPoll = '';
+            try {
+                await pollPromotionStatusesOnce();
+                if (tr) {
+                    refreshActionsCell(tr);
+                    statusAfterPoll = tr.dataset.promotionStatus || '';
+                }
+            } catch (_) {}
+            if (tr && (statusAfterPoll === 'queued' || isPromotionActiveStatus(statusAfterPoll))) {
+                return;
+            }
             alert('<?php echo __('Сетевая ошибка'); ?>');
         } finally {
             setButtonLoading(btn, false);
@@ -3855,6 +3935,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 promotionConfirmSavingsBlock.classList.add('d-none');
             }
         }
+        const currentBalanceFormatted = formatBalanceLocale(CURRENT_USER_BALANCE_RAW);
+        document.querySelectorAll('[data-current-balance-display]').forEach(el => {
+            if (Number.isFinite(CURRENT_USER_BALANCE_RAW)) {
+                el.dataset.balanceRaw = CURRENT_USER_BALANCE_RAW.toFixed(2);
+            }
+            if (currentBalanceFormatted) {
+                el.textContent = currentBalanceFormatted;
+            }
+        });
         promotionConfirmAcceptBtn?.classList.remove('disabled');
         if (promotionConfirmAcceptBtn) {
             promotionConfirmAcceptBtn.disabled = false;
