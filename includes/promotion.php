@@ -23,6 +23,68 @@ if (!function_exists('pp_promotion_log')) {
     }
 }
 
+if (!function_exists('pp_promotion_ensure_crowd_payload_column')) {
+    function pp_promotion_ensure_crowd_payload_column(\mysqli $conn): bool {
+        static $available = null;
+        if ($available !== null) {
+            return $available;
+        }
+
+        $available = false;
+
+        try {
+            if ($res = @$conn->query("SHOW COLUMNS FROM `promotion_crowd_tasks` LIKE 'payload_json'")) {
+                $available = ($res->num_rows > 0);
+                $res->free();
+                if ($available) {
+                    return true;
+                }
+            }
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.schema_check_failed', [
+                'table' => 'promotion_crowd_tasks',
+                'column' => 'payload_json',
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $alterSql = "ALTER TABLE `promotion_crowd_tasks` ADD COLUMN `payload_json` LONGTEXT NULL AFTER `result_url`";
+            $alterOk = @$conn->query($alterSql);
+            if ($alterOk) {
+                $available = true;
+            } else {
+                $errno = $conn->errno;
+                if ($errno === 1060) { // duplicate column
+                    $available = true;
+                } else {
+                    pp_promotion_log('promotion.schema_alter_failed', [
+                        'table' => 'promotion_crowd_tasks',
+                        'column' => 'payload_json',
+                        'errno' => $errno,
+                        'error' => $conn->error,
+                    ]);
+                }
+            }
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.schema_alter_exception', [
+                'table' => 'promotion_crowd_tasks',
+                'column' => 'payload_json',
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if (!$available) {
+            pp_promotion_log('promotion.schema_column_unavailable', [
+                'table' => 'promotion_crowd_tasks',
+                'column' => 'payload_json',
+            ]);
+        }
+
+        return $available;
+    }
+}
+
 if (!function_exists('pp_promotion_fetch_article_html')) {
     function pp_promotion_fetch_article_html(string $url, int $timeoutSeconds = 12, int $maxBytes = 262144): ?string {
         $url = trim($url);
@@ -1514,6 +1576,7 @@ if (!function_exists('pp_promotion_process_run')) {
             $index = 0;
             $totalLinks = count($crowdIds);
             if ($totalLinks > 1) { shuffle($crowdIds); }
+            $hasCrowdPayloadColumn = pp_promotion_ensure_crowd_payload_column($conn);
             foreach ($finalNodes as $node) {
                 $targetUrl = (string)($node['result_url'] ?? '');
                 $nodeId = (int)($node['id'] ?? 0);
@@ -1529,14 +1592,42 @@ if (!function_exists('pp_promotion_process_run')) {
                     $variant['crowd_link_id'] = $chosen['id'];
                     $variant['crowd_link_url'] = $chosen['url'];
                     $variant['target_url'] = $targetUrl;
-                    $payloadJson = json_encode($variant, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-                    if ($payloadJson === false) { $payloadJson = '{}'; }
-                    $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status, payload_json) VALUES (?, ?, ?, ?, \'planned\', ?)');
-                    if ($stmt) {
-                        $cid = (int)$chosen['id'];
-                        $stmt->bind_param('iiiss', $runId, $nodeId, $cid, $targetUrl, $payloadJson);
-                        $stmt->execute();
-                        $stmt->close();
+                    if ($hasCrowdPayloadColumn) {
+                        $payloadJson = json_encode($variant, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+                        if ($payloadJson === false) { $payloadJson = '{}'; }
+                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status, payload_json) VALUES (?, ?, ?, ?, \'planned\', ?)');
+                        if ($stmt) {
+                            $cid = (int)$chosen['id'];
+                            $stmt->bind_param('iiiss', $runId, $nodeId, $cid, $targetUrl, $payloadJson);
+                            $stmt->execute();
+                            $stmt->close();
+                        } else {
+                            pp_promotion_log('promotion.crowd_task_insert_failed', [
+                                'run_id' => $runId,
+                                'node_id' => $nodeId,
+                                'crowd_link_id' => (int)$chosen['id'],
+                                'with_payload' => true,
+                                'error' => $conn->error,
+                                'errno' => $conn->errno,
+                            ]);
+                        }
+                    } else {
+                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status) VALUES (?, ?, ?, ?, \'planned\')');
+                        if ($stmt) {
+                            $cid = (int)$chosen['id'];
+                            $stmt->bind_param('iiis', $runId, $nodeId, $cid, $targetUrl);
+                            $stmt->execute();
+                            $stmt->close();
+                        } else {
+                            pp_promotion_log('promotion.crowd_task_insert_failed', [
+                                'run_id' => $runId,
+                                'node_id' => $nodeId,
+                                'crowd_link_id' => (int)$chosen['id'],
+                                'with_payload' => false,
+                                'error' => $conn->error,
+                                'errno' => $conn->errno,
+                            ]);
+                        }
                     }
                 }
             }
@@ -1566,7 +1657,11 @@ if (!function_exists('pp_promotion_worker')) {
             'max_iterations' => $maxIterations,
         ]);
         try { $conn = @connect_db(); } catch (Throwable $e) {
-            pp_promotion_log('promotion.worker.db_error', ['error' => $e->getMessage()]);
+            $message = $e->getMessage();
+            pp_promotion_log('promotion.worker.db_error', ['error' => $message]);
+            if (PHP_SAPI === 'cli') {
+                fwrite(STDERR, "Promotion worker: unable to connect to database ({$message})." . PHP_EOL);
+            }
             return;
         }
         if (!$conn) {

@@ -3,15 +3,44 @@
 
 if (!function_exists('connect_db')) {
     function connect_db() {
-        $configPath = PP_ROOT_PATH . '/config/config.php';
-        if (!file_exists($configPath)) {
+        $candidatePaths = [];
+        $envConfig = trim((string)getenv('PP_CONFIG_PATH'));
+        if ($envConfig !== '') {
+            if ($envConfig[0] !== DIRECTORY_SEPARATOR) {
+                $envConfig = PP_ROOT_PATH . '/' . ltrim($envConfig, '/');
+            }
+            $candidatePaths[] = $envConfig;
+        }
+        $candidatePaths[] = PP_ROOT_PATH . '/config/config.php';
+        $candidatePaths[] = PP_ROOT_PATH . '/config/config.local.php';
+        $candidatePaths[] = PP_ROOT_PATH . '/config/config.dist.php';
+
+        $configLoaded = false;
+        foreach ($candidatePaths as $path) {
+            if ($path && file_exists($path)) {
+                include $path;
+                $configLoaded = true;
+                break;
+            }
+        }
+
+        if (!$configLoaded) {
+            $db_host = getenv('PP_DB_HOST') ?: null;
+            $db_user = getenv('PP_DB_USER') ?: null;
+            $db_pass = getenv('PP_DB_PASS') ?: null;
+            $db_name = getenv('PP_DB_NAME') ?: null;
+        }
+
+        if (!isset($db_host, $db_user, $db_pass, $db_name) || $db_host === null || $db_user === null || $db_name === null) {
+            if (PHP_SAPI === 'cli') {
+                throw new RuntimeException('Database configuration is missing. Provide config/config.php or PP_DB_* environment variables.');
+            }
             $installer = (defined('PP_BASE_URL') ? pp_url('installer.php') : '/installer.php');
             if (!headers_sent()) { header('Location: ' . $installer, true, 302); }
-            exit('Config file not found. Please run the installer: <a href="' . htmlspecialchars($installer) . '">installer</a>');
+            exit('Config file not found. Please run the installer: <a href="' . htmlspecialchars($installer) . '">installer</a> or configure PP_DB_* environment variables.');
         }
+
         if (!class_exists('mysqli')) { exit('PHP mysqli extension is not available. Please enable it to continue.'); }
-        include $configPath;
-        if (!isset($db_host, $db_user, $db_pass, $db_name)) { exit('Database configuration variables are not set. Please check config/config.php'); }
         $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
         if ($conn->connect_error) { exit('Ошибка подключения к БД: ' . $conn->connect_error); }
         if (method_exists($conn, 'set_charset')) { @$conn->set_charset('utf8mb4'); }
