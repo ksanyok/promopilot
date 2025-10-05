@@ -654,6 +654,9 @@ $crowdDeepDefaults = pp_crowd_deep_default_options();
 $crowdDeepStatusData = pp_crowd_deep_get_status();
 $crowdDeepCurrentRun = ($crowdDeepStatusData['ok'] ?? false) ? ($crowdDeepStatusData['run'] ?? null) : null;
 $crowdDeepStatusError = ($crowdDeepStatusData['ok'] ?? false) ? null : ($crowdDeepStatusData['error'] ?? null);
+$crowdDeepLinkStats = ($crowdDeepStatusData['ok'] ?? false) && isset($crowdDeepStatusData['link_stats']) && is_array($crowdDeepStatusData['link_stats'])
+    ? $crowdDeepStatusData['link_stats']
+    : pp_crowd_deep_get_link_stats();
 $crowdDeepRecentResults = pp_crowd_deep_get_recent_results($crowdDeepCurrentRun['id'] ?? null, 15);
 
 $pp_admin_sidebar_active = 'overview';

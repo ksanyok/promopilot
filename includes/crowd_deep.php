@@ -40,6 +40,87 @@ if (!function_exists('pp_crowd_deep_is_error_status')) {
     }
 }
 
+if (!function_exists('pp_crowd_deep_get_link_stats')) {
+    function pp_crowd_deep_get_link_stats(?mysqli $existingConn = null): array {
+        $stats = [
+            'total' => 0,
+            'pending' => 0,
+            'queued' => 0,
+            'running' => 0,
+            'success' => 0,
+            'partial' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'processed' => 0,
+            'errors' => 0,
+            'in_progress' => 0,
+        ];
+
+        $conn = $existingConn;
+        $ownsConnection = false;
+        if (!$conn) {
+            try {
+                $conn = @connect_db();
+            } catch (Throwable $e) {
+                return $stats;
+            }
+            if (!$conn) {
+                return $stats;
+            }
+            $ownsConnection = true;
+        }
+
+        $sql = "SELECT deep_status, COUNT(*) AS cnt FROM crowd_links GROUP BY deep_status";
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $status = (string)($row['deep_status'] ?? '');
+                $count = (int)($row['cnt'] ?? 0);
+                if ($count <= 0) {
+                    continue;
+                }
+                $stats['total'] += $count;
+                switch ($status) {
+                    case 'success':
+                        $stats['success'] += $count;
+                        break;
+                    case 'partial':
+                        $stats['partial'] += $count;
+                        break;
+                    case 'failed':
+                    case 'blocked':
+                        $stats['failed'] += $count;
+                        break;
+                    case 'skipped':
+                    case 'no_form':
+                        $stats['skipped'] += $count;
+                        break;
+                    case 'queued':
+                        $stats['queued'] += $count;
+                        break;
+                    case 'running':
+                        $stats['running'] += $count;
+                        break;
+                    case 'pending':
+                    default:
+                        $stats['pending'] += $count;
+                        break;
+                }
+            }
+            $res->free();
+        }
+
+        $stats['processed'] = $stats['success'] + $stats['partial'] + $stats['failed'] + $stats['skipped'];
+        $stats['errors'] = $stats['failed'];
+        $stats['in_progress'] = $stats['queued'] + $stats['running'];
+
+        if ($ownsConnection && $conn) {
+            $conn->close();
+        }
+
+        return $stats;
+    }
+}
+
 if (!function_exists('pp_crowd_deep_default_options')) {
     function pp_crowd_deep_default_options(): array {
         return [
@@ -384,6 +465,7 @@ if (!function_exists('pp_crowd_deep_get_status')) {
         if (!$conn) {
             return ['ok' => false, 'error' => 'DB_CONNECTION'];
         }
+        $linkStats = pp_crowd_deep_get_link_stats($conn);
         if ($runId === null || $runId <= 0) {
             if ($res = @$conn->query('SELECT id FROM crowd_deep_runs ORDER BY id DESC LIMIT 1')) {
                 if ($row = $res->fetch_assoc()) {
@@ -394,12 +476,12 @@ if (!function_exists('pp_crowd_deep_get_status')) {
         }
         if (!$runId) {
             $conn->close();
-            return ['ok' => true, 'run' => null];
+            return ['ok' => true, 'run' => null, 'link_stats' => $linkStats];
         }
         $stmt = $conn->prepare('SELECT * FROM crowd_deep_runs WHERE id = ? LIMIT 1');
         if (!$stmt) {
             $conn->close();
-            return ['ok' => false, 'error' => 'DB_READ'];
+            return ['ok' => false, 'error' => 'DB_READ', 'link_stats' => $linkStats];
         }
         $stmt->bind_param('i', $runId);
         $stmt->execute();
@@ -407,7 +489,7 @@ if (!function_exists('pp_crowd_deep_get_status')) {
         $stmt->close();
         $conn->close();
         if (!$row) {
-            return ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
+            return ['ok' => false, 'error' => 'RUN_NOT_FOUND', 'link_stats' => $linkStats];
         }
         $run = [
             'id' => (int)$row['id'],
@@ -439,7 +521,7 @@ if (!function_exists('pp_crowd_deep_get_status')) {
         $run['progress_percent'] = min(100, (int)round($run['processed_count'] * 100 / $total));
         $run['in_progress'] = in_array($run['status'], ['queued', 'running'], true);
         $run['stalled'] = pp_crowd_links_is_stalled_run($row, 180);
-        return ['ok' => true, 'run' => $run];
+        return ['ok' => true, 'run' => $run, 'link_stats' => $linkStats];
     }
 }
 

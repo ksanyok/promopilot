@@ -131,6 +131,13 @@ foreach ($crowdDeepScopeOptions as $scopeKey => $scopeLabel) {
     $crowdDeepScopeLabels[$scopeKey] = $scopeLabel;
 }
 
+$deepLinkStats = is_array($crowdDeepLinkStats ?? null) ? $crowdDeepLinkStats : pp_crowd_deep_get_link_stats();
+$deepStatsSuccess = (int)($deepLinkStats['success'] ?? 0);
+$deepStatsPartial = (int)($deepLinkStats['partial'] ?? 0);
+$deepStatsFailed = (int)($deepLinkStats['failed'] ?? 0);
+$deepStatsSkipped = (int)($deepLinkStats['skipped'] ?? 0);
+$deepStatsProcessed = (int)($deepLinkStats['processed'] ?? ($deepStatsSuccess + $deepStatsPartial + $deepStatsFailed + $deepStatsSkipped));
+
 $deepApiUrl = pp_url('admin/crowd_links.php');
 $deepHasRun = is_array($crowdDeepCurrentRun);
 $deepRunInProgress = $deepHasRun && !empty($crowdDeepCurrentRun['in_progress']);
@@ -304,7 +311,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             <div class="card crowd-stat-card crowd-stat-card--deep-success h-100">
                 <div class="card-body d-flex flex-column justify-content-between">
                     <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — успешно'); ?></div>
-                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunSuccess, 0, '.', ' ') : '—'; ?></div>
+                    <div class="crowd-stat-card__value"><span data-deep-stats-success><?php echo number_format($deepStatsSuccess, 0, '.', ' '); ?></span></div>
                 </div>
             </div>
         </div>
@@ -312,7 +319,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             <div class="card crowd-stat-card crowd-stat-card--deep-partial h-100">
                 <div class="card-body d-flex flex-column justify-content-between">
                     <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — вручную'); ?></div>
-                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunPartial, 0, '.', ' ') : '—'; ?></div>
+                    <div class="crowd-stat-card__value"><span data-deep-stats-partial><?php echo number_format($deepStatsPartial, 0, '.', ' '); ?></span></div>
                 </div>
             </div>
         </div>
@@ -320,7 +327,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             <div class="card crowd-stat-card crowd-stat-card--deep-failed h-100">
                 <div class="card-body d-flex flex-column justify-content-between">
                     <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — ошибки'); ?></div>
-                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunFailed, 0, '.', ' ') : '—'; ?></div>
+                    <div class="crowd-stat-card__value"><span data-deep-stats-failed><?php echo number_format($deepStatsFailed, 0, '.', ' '); ?></span></div>
                 </div>
             </div>
         </div>
@@ -328,7 +335,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
             <div class="card crowd-stat-card crowd-stat-card--deep-skipped h-100">
                 <div class="card-body d-flex flex-column justify-content-between">
                     <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — пропущено'); ?></div>
-                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunSkipped, 0, '.', ' ') : '—'; ?></div>
+                    <div class="crowd-stat-card__value"><span data-deep-stats-skipped><?php echo number_format($deepStatsSkipped, 0, '.', ' '); ?></span></div>
                 </div>
             </div>
         </div>
@@ -994,6 +1001,10 @@ $pp_truncate = static function (string $text, int $length = 30): string {
     const deepResultsTable = section.querySelector('#crowdDeepResultsTable');
     const deepResultsBody = deepResultsTable ? deepResultsTable.querySelector('tbody') : null;
     const deepResultsMeta = section.querySelector('[data-deep-results-meta]');
+    const deepStatsSuccessEl = section.querySelector('[data-deep-stats-success]');
+    const deepStatsPartialEl = section.querySelector('[data-deep-stats-partial]');
+    const deepStatsFailedEl = section.querySelector('[data-deep-stats-failed]');
+    const deepStatsSkippedEl = section.querySelector('[data-deep-stats-skipped]');
 
     const labels = {
         selectSomething: <?php echo json_encode(__('Выберите хотя бы одну ссылку.'), JSON_UNESCAPED_UNICODE); ?>,
@@ -1028,6 +1039,26 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         scopeMap: <?php echo json_encode($crowdDeepScopeLabels, JSON_UNESCAPED_UNICODE); ?>,
         noResults: <?php echo json_encode(__('Результатов пока нет.'), JSON_UNESCAPED_UNICODE); ?>
     };
+
+    const formatNumber = (value) => {
+        const num = Number(value || 0);
+        if (!Number.isFinite(num)) {
+            return '0';
+        }
+        try {
+            return num.toLocaleString('ru-RU');
+        } catch (err) {
+            return String(num);
+        }
+    };
+
+    function updateDeepStatsCards(stats) {
+        if (!stats) { return; }
+        if (deepStatsSuccessEl) deepStatsSuccessEl.textContent = formatNumber(stats.success || 0);
+        if (deepStatsPartialEl) deepStatsPartialEl.textContent = formatNumber(stats.partial || 0);
+        if (deepStatsFailedEl) deepStatsFailedEl.textContent = formatNumber(stats.failed || 0);
+        if (deepStatsSkippedEl) deepStatsSkippedEl.textContent = formatNumber(stats.skipped || 0);
+    }
 
     let pollTimer = null;
     let currentRunId = card ? parseInt(card.getAttribute('data-run-id') || '0', 10) : 0;
@@ -1384,7 +1415,8 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         }
     }
 
-    function updateDeepRunCard(data) {
+    function updateDeepRunCard(data, linkStats) {
+        updateDeepStatsCards(linkStats);
         if (!deepCard) { return; }
         if (!data) {
             currentDeepRunId = 0;
@@ -1506,7 +1538,7 @@ $pp_truncate = static function (string $text, int $length = 30): string {
                 updateDeepMessage(data && data.error ? data.error : 'Error', 'warning');
                 return;
             }
-            updateDeepRunCard(data.run || null);
+            updateDeepRunCard(data.run || null, data.link_stats || null);
             if (data.run && data.run.in_progress) {
                 deepPollTimer = setTimeout(() => fetchDeepStatus(runId), 5000);
             }
