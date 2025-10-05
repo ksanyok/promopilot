@@ -36,6 +36,17 @@ if (!function_exists('pp_project_brief_log_event')) {
     }
 }
 
+if (!function_exists('pp_project_brief_truncate')) {
+    function pp_project_brief_truncate(string $value, int $limit): string {
+        $value = trim($value);
+        if ($value === '' || $limit <= 0) { return ''; }
+        if (function_exists('mb_substr')) {
+            return trim(mb_substr($value, 0, $limit, 'UTF-8'));
+        }
+        return trim(substr($value, 0, $limit));
+    }
+}
+
 if (!function_exists('pp_project_brief_extract_json_object')) {
     function pp_project_brief_extract_json_object(string $text): ?array {
         $text = trim($text);
@@ -159,17 +170,37 @@ if (!function_exists('pp_project_brief_normalize_text')) {
     }
 }
 
-if (!function_exists('pp_project_brief_is_valid_generated_text')) {
-    function pp_project_brief_is_valid_generated_text(string $value, bool $isName = false): bool {
-        $value = trim($value);
-        if ($value === '') { return false; }
-        if (preg_match('~^[\p{P}\p{S}\s]+$~u', $value)) { return false; }
-        $alphanumeric = preg_replace('~[^a-z0-9а-яёїієґ]+~iu', '', $value);
-        if ($alphanumeric === '' || (function_exists('mb_strlen') ? mb_strlen($alphanumeric, 'UTF-8') : strlen($alphanumeric)) < ($isName ? 3 : 8)) {
-            return false;
+if (!function_exists('pp_project_brief_is_generic_name')) {
+    function pp_project_brief_is_generic_name(string $value, array $keywords = []): bool {
+        $normalized = pp_project_brief_normalize_text($value);
+        if ($normalized === '') { return true; }
+        $words = preg_split('~\s+~u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($words)) { return true; }
+        $generic = [
+            'online','онлайн','сайт','сайты','проект','проекты','project','projects','платформа','платформы','platform','service','services','сервис','сервисы','магазин','shop','store','каталог','catalog','портал','portal','решение','решения','solution','solutions','digital','media'
+        ];
+        $hasSpecificWord = false;
+        foreach ($words as $word) {
+            if (!in_array($word, $generic, true)) {
+                $hasSpecificWord = true;
+                break;
+            }
         }
-        if (preg_match('~\b(название|описание|пример|sample|lorem)\b~iu', $value)) { return false; }
-        if (strpos($value, '...') !== false || strpos($value, '…') !== false) { return false; }
+        if ($hasSpecificWord) { return false; }
+
+        if (!empty($keywords)) {
+            $lookup = [];
+            foreach ($keywords as $keyword) {
+                $kw = pp_project_brief_normalize_text((string)$keyword);
+                if ($kw !== '') { $lookup[$kw] = true; }
+            }
+            if (!empty($lookup)) {
+                foreach ($words as $word) {
+                    if (isset($lookup[$word])) { return false; }
+                }
+            }
+        }
+
         return true;
     }
 }
@@ -202,75 +233,79 @@ if (!function_exists('pp_project_brief_is_similar_to_source')) {
     }
 }
 
+if (!function_exists('pp_project_brief_collect_validation_issues')) {
+    function pp_project_brief_collect_validation_issues(string $name, string $description, string $metaTitle = '', string $metaDescription = '', array $keywords = []): array {
+        $issues = [];
+
+        $nameNormalized = pp_project_brief_normalize_text($name);
+        $nameLength = $nameNormalized === '' ? 0 : (function_exists('mb_strlen') ? mb_strlen($nameNormalized, 'UTF-8') : strlen($nameNormalized));
+        if ($nameLength < 3) {
+            $issues[] = 'name_empty';
+        }
+        if ($nameNormalized !== '' && preg_match('~\b(название|sample|пример|demo|test)\b~iu', $nameNormalized)) {
+            $issues[] = 'name_placeholder';
+        }
+        if ($name !== '' && pp_project_brief_is_generic_name($name, $keywords)) {
+            $issues[] = 'name_generic';
+        }
+        if ($name !== '' && $metaTitle !== '' && pp_project_brief_is_similar_to_source($name, $metaTitle, 0.97)) {
+            $issues[] = 'name_similar';
+        }
+
+        $descriptionNormalized = pp_project_brief_normalize_text($description);
+        $descriptionLength = $descriptionNormalized === '' ? 0 : (function_exists('mb_strlen') ? mb_strlen($descriptionNormalized, 'UTF-8') : strlen($descriptionNormalized));
+        if ($descriptionLength < 20) {
+            $issues[] = 'description_short';
+        }
+        if ($descriptionNormalized !== '' && preg_match('~\b(описание|sample|пример|lorem)\b~iu', $descriptionNormalized)) {
+            $issues[] = 'description_placeholder';
+        }
+        if ($description !== '' && $metaDescription !== '' && pp_project_brief_is_similar_to_source($description, $metaDescription, 0.98)) {
+            $issues[] = 'description_similar';
+        }
+
+        return array_values(array_unique($issues));
+    }
+}
+
 if (!function_exists('pp_project_brief_refine_name')) {
     function pp_project_brief_refine_name(string $candidate, string $metaTitle = '', string $url = ''): string {
-        $original = $candidate;
-        $words = preg_split('~\s+~u', $candidate, -1, PREG_SPLIT_NO_EMPTY);
-        if (empty($words)) { return $candidate; }
-        $stopWords = [];
-        if ($metaTitle !== '') {
-            $stopWords = array_filter(explode(' ', pp_project_brief_normalize_text($metaTitle)));
+        $candidate = trim(preg_replace('~\s+~u', ' ', $candidate));
+        if ($candidate === '') { return ''; }
+        $candidate = preg_replace('~["«»“”„‟]+~u', '', $candidate);
+        $normalized = pp_project_brief_normalize_text($candidate);
+
+        if ($normalized !== '' && $metaTitle !== '') {
+            $metaNormalized = pp_project_brief_normalize_text($metaTitle);
+            if ($metaNormalized !== '' && ($metaNormalized === $normalized || pp_project_brief_is_similar_to_source($candidate, $metaTitle, 0.98))) {
+                $candidate = '';
+            }
         }
-        if ($url !== '') {
-            $host = parse_url($url, PHP_URL_HOST) ?: '';
+
+        if ($candidate === '' && $url !== '') {
+            $host = pp_project_brief_extract_domain($url);
             if ($host !== '') {
-                $host = preg_replace('~^www\.~i', '', strtolower($host));
-                $parts = array_filter(preg_split('~[\.-]+~', $host));
-                $stopWords = array_merge($stopWords, $parts);
+                $candidate = pp_project_brief_mb_ucfirst($host);
             }
         }
-        $stopMap = array_flip(array_filter($stopWords));
-        $filtered = [];
-        $removed = [];
-        foreach ($words as $word) {
-            $normalized = pp_project_brief_normalize_text($word);
-            if ($normalized === '') { continue; }
-            if (isset($stopMap[$normalized])) {
-                $removed[] = $word;
-                continue;
-            }
-            $filtered[] = $word;
-        }
-        if (!empty($filtered)) {
-            $candidate = implode(' ', $filtered);
-            $firstWord = $filtered[0];
-            $normalizedFirst = pp_project_brief_normalize_text($firstWord);
-            $prepositions = ['и','а','но','да','или','ли','к','во','со','в','на','по','за','для','при','из','от','об','со','что'];
-            if (!empty($removed) && in_array($normalizedFirst, $prepositions, true)) {
-                $candidate = $original;
-            }
-        }
-        if ($candidate === '') { return $original; }
-        if (function_exists('mb_substr') && mb_strlen($candidate, 'UTF-8') > 20) {
-            $candidate = trim(mb_substr($candidate, 0, 20, 'UTF-8'));
-        } elseif (strlen($candidate) > 20) {
-            $candidate = trim(substr($candidate, 0, 20));
-        }
-        return $candidate !== '' ? $candidate : $original;
+
+        return pp_project_brief_truncate($candidate, 20);
     }
 }
 
 if (!function_exists('pp_project_brief_refine_description')) {
     function pp_project_brief_refine_description(string $candidate, string $metaDescription = ''): string {
-        $original = $candidate;
-        if ($candidate === '' || $metaDescription === '') { return $candidate; }
-        $normalizedMeta = pp_project_brief_normalize_text($metaDescription);
-        if ($normalizedMeta === '') { return $candidate; }
-        $candidateNorm = pp_project_brief_normalize_text($candidate);
-        if ($candidateNorm === '') { return $candidate; }
-        if (strpos($candidateNorm, $normalizedMeta) !== false) {
-            $candidate = trim(str_ireplace($metaDescription, '', $candidate));
-        }
-        $sentences = preg_split('~[.!?]+\s*~u', $metaDescription, -1, PREG_SPLIT_NO_EMPTY);
-        foreach ($sentences as $sentence) {
-            $sentNorm = pp_project_brief_normalize_text($sentence);
-            if ($sentNorm === '') { continue; }
-            if (strpos(pp_project_brief_normalize_text($candidate), $sentNorm) !== false) {
-                $candidate = trim(str_ireplace($sentence, '', $candidate));
+        $candidate = trim(preg_replace('~\s+~u', ' ', $candidate));
+        if ($candidate === '') { return ''; }
+        if ($metaDescription !== '') {
+            $metaNormalized = pp_project_brief_normalize_text($metaDescription);
+            $candidateNormalized = pp_project_brief_normalize_text($candidate);
+            if ($metaNormalized !== '' && $candidateNormalized !== '' && ($candidateNormalized === $metaNormalized || pp_project_brief_is_similar_to_source($candidate, $metaDescription, 0.98))) {
+                $candidate = '';
             }
         }
-        $candidate = preg_replace('~\s+~u', ' ', trim($candidate));
-        return $candidate !== '' ? $candidate : $original;
+
+        return pp_project_brief_truncate($candidate, 240);
     }
 }
 
@@ -434,21 +469,23 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
 
         $basePrompt = (string)($job['prompt'] ?? '');
         $systemPrompt = (string)($job['system'] ?? '');
-        $promptSuffix = '';
         $temperature = 0.45;
+        $promptSuffix = '';
         $maxAttempts = 2;
 
-        $truncate = static function (string $value, int $limit): string {
-            if ($value === '') { return ''; }
-            if (function_exists('mb_substr')) {
-                return trim(mb_substr($value, 0, $limit, 'UTF-8'));
-            }
-            return trim(substr($value, 0, $limit));
-        };
+        $issueHints = [
+            'name_empty' => 'Название должно содержать осмысленные слова, отражающие тематику проекта.',
+            'name_placeholder' => 'Не используй шаблонные слова вроде «название», «sample» или «пример».',
+            'name_generic' => 'Добавь конкретики: кто клиент или какой продукт, избегай общих слов вроде «онлайн» или «сайт».',
+            'name_similar' => 'Переформулируй название, чтобы оно отличалось от исходного метатега страницы.',
+            'description_short' => 'Описание должно быть одним развернутым предложением с выгодой или назначением проекта (не менее ~20 символов).',
+            'description_placeholder' => 'Не используй заглушки вида «описание» или «lorem ipsum».',
+            'description_similar' => 'Перепиши описание, чтобы оно отличалось от мета-описания страницы.',
+        ];
 
         $attemptsInfo = [];
-        $lastCandidate = null;
         $lastRaw = '';
+        $lastIssues = [];
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             $requestPrompt = $basePrompt . $promptSuffix;
@@ -516,8 +553,7 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
                 return $response;
             }
 
-            $text = $textRaw;
-            if ($text === '') {
+            if ($textRaw === '') {
                 $emptyLog = [
                     'attempt' => $attempt,
                     'provider' => $provider,
@@ -535,22 +571,23 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
                 return $response;
             }
 
-            $lastRaw = $text;
-            $json = json_decode($text, true);
-            if (json_last_error() !== JSON_ERROR_NONE || !is_array($json)) {
-                $json = pp_project_brief_extract_json_object($text);
+            $lastRaw = $textRaw;
+            $decoded = json_decode($textRaw, true);
+            if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+                $decoded = pp_project_brief_extract_json_object($textRaw);
             }
-            if (!is_array($json)) {
+
+            if (!is_array($decoded)) {
                 $jsonLog = [
                     'attempt' => $attempt,
                     'provider' => $provider,
-                    'text' => pp_project_brief_log_truncate($text),
+                    'text' => pp_project_brief_log_truncate($textRaw),
                     'json_error' => json_last_error_msg(),
                 ];
                 if ($model !== '') { $jsonLog['model'] = $model; }
                 pp_project_brief_log_event('ai_json_error', $jsonLog);
                 if ($attempt < $maxAttempts) {
-                    $promptSuffix .= "\n\nПредыдущий ответ содержал пояснения. Верни только JSON формата {\"name\":\"...\",\"description\":\"...\"} без Markdown и комментариев.";
+                    $promptSuffix = "\n\nПредыдущий ответ содержал пояснения. Верни только JSON формата {\"name\":\"...\",\"description\":\"...\"} без Markdown.";
                     $temperature = min(0.75, $temperature + 0.1);
                     continue;
                 }
@@ -560,78 +597,32 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
                     'used_ai' => false,
                     'error' => 'invalid_json',
                     'provider' => $provider,
-                    'raw' => $text,
+                    'raw' => $textRaw,
                 ];
                 if ($model !== '') { $response['model'] = $model; }
                 return $response;
             }
 
-            $name = trim((string)($json['name'] ?? ''));
-            $description = trim((string)($json['description'] ?? ''));
+            $name = pp_project_brief_truncate(pp_project_brief_refine_name((string)($decoded['name'] ?? ''), $metaTitle, $finalUrl), 20);
+            $description = pp_project_brief_truncate(pp_project_brief_refine_description((string)($decoded['description'] ?? ''), $metaDescription), 240);
 
-            if ($name !== '') {
-                $name = pp_project_brief_refine_name($name, $metaTitle, $finalUrl);
-            }
-            if ($description !== '') {
-                $description = pp_project_brief_refine_description($description, $metaDescription);
-            }
-
-            $name = $truncate($name, 20);
-            $description = $truncate($description, 240);
-
-            $validName = $name !== '' && pp_project_brief_is_valid_generated_text($name, true);
-            $validDescription = $description !== '' && pp_project_brief_is_valid_generated_text($description, false);
-
-            if (!$validName || !$validDescription) {
-                $invalidLog = [
-                    'attempt' => $attempt,
-                    'provider' => $provider,
-                    'invalid_name' => !$validName,
-                    'invalid_description' => !$validDescription,
-                ];
-                if ($model !== '') { $invalidLog['model'] = $model; }
-                pp_project_brief_log_event('ai_invalid_payload', $invalidLog);
-
-                if ($attempt < $maxAttempts) {
-                    $promptSuffix .= "\n\nПредыдущий ответ содержал некорректное название или описание. Дай содержательные формулировки без многоточий и заглушек, обязательно опиши тематику сайта.";
-                    $temperature = min(0.8, $temperature + 0.15);
-                    continue;
-                }
-                if (!$validName) { $name = ''; }
-                if (!$validDescription) { $description = ''; }
-            }
-
-            if ($name === '') {
-                $name = pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle);
-            }
-            if ($description === '') {
-                $description = pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription);
-            }
-
-            $nameSimilar = $metaTitle !== '' && pp_project_brief_is_similar_to_source($name, $metaTitle, 0.96);
-            $descriptionSimilar = $metaDescription !== '' && pp_project_brief_is_similar_to_source($description, $metaDescription, 0.98);
+            $issues = pp_project_brief_collect_validation_issues($name, $description, $metaTitle, $metaDescription, $keywords);
+            $lastIssues = $issues;
 
             $attemptsInfo[] = [
+                'attempt' => $attempt,
                 'name' => $name,
                 'description' => $description,
+                'issues' => $issues,
                 'temperature' => $temperature,
-                'name_similar' => $nameSimilar,
-                'description_similar' => $descriptionSimilar,
             ];
 
-            $lastCandidate = [
-                'name' => $name,
-                'description' => $description,
-                'name_similar' => $nameSimilar,
-                'description_similar' => $descriptionSimilar,
-            ];
-
-            if (!$nameSimilar && !$descriptionSimilar) {
+            if (empty($issues)) {
                 $successLog = [
                     'attempt' => $attempt,
                     'provider' => $provider,
-                    'name' => $name,
-                    'description' => $description,
+                    'name' => pp_project_brief_log_truncate($name),
+                    'description' => pp_project_brief_log_truncate($description, 160),
                 ];
                 if ($model !== '') { $successLog['model'] = $model; }
                 pp_project_brief_log_event('ai_success', $successLog);
@@ -645,53 +636,38 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
                 ] + ($model !== '' ? ['model' => $model] : []);
             }
 
+            $invalidLog = [
+                'attempt' => $attempt,
+                'provider' => $provider,
+                'issues' => $issues,
+            ];
+            if ($model !== '') { $invalidLog['model'] = $model; }
+            pp_project_brief_log_event('ai_invalid_payload', $invalidLog);
+
             if ($attempt < $maxAttempts) {
-                $promptSuffix .= "\n\nПредыдущий ответ оказался слишком похож на исходные метатеги. Полностью переформулируй название и описание, избегай повторения бренда, добавь больше выгод и конкретики.";
-                $temperature = min(0.9, $temperature + 0.25);
+                $promptHints = [];
+                foreach ($issues as $issue) {
+                    if (isset($issueHints[$issue])) {
+                        $promptHints[] = $issueHints[$issue];
+                    }
+                }
+                $promptHints = array_values(array_unique($promptHints));
+                $promptSuffix = !empty($promptHints)
+                    ? "\n\n" . implode(' ', $promptHints)
+                    : "\n\nПерезапиши ответ, оставив только корректный JSON с ключами name и description.";
+                $temperature = min(0.85, $temperature + 0.15);
+                continue;
             }
         }
 
-        if ($lastCandidate !== null) {
-            $name = $lastCandidate['name'];
-            $description = $lastCandidate['description'];
-
-            if ($lastCandidate['name_similar']) {
-                $name = $truncate(pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle), 20);
-            }
-            if ($lastCandidate['description_similar']) {
-                $description = $truncate(pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription), 240);
-            }
-
-            $similarityLog = [
-                'provider' => $provider,
-                'name_similar' => $lastCandidate['name_similar'],
-                'description_similar' => $lastCandidate['description_similar'],
-                'name' => $name,
-                'description' => $description,
-            ];
-            if ($model !== '') { $similarityLog['model'] = $model; }
-            pp_project_brief_log_event('ai_similarity_fallback', $similarityLog);
-
-            $response = [
-                'name' => $name,
-                'description' => $description,
-                'used_ai' => !$lastCandidate['name_similar'] && !$lastCandidate['description_similar'],
-                'provider' => $provider,
-                'raw' => $lastRaw,
-                'attempts' => $attemptsInfo,
-                'fallback' => 'keywords',
-            ];
-            if ($model !== '') { $response['model'] = $model; }
-            return $response;
-        }
-
-        $fallbackName = pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle);
+        $fallbackName = pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle, $finalUrl);
         $fallbackDescription = pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription);
 
         $keywordLog = [
             'provider' => $provider,
             'name' => pp_project_brief_log_truncate($fallbackName),
-            'description' => pp_project_brief_log_truncate($fallbackDescription),
+            'description' => pp_project_brief_log_truncate($fallbackDescription, 160),
+            'issues' => $lastIssues,
         ];
         if ($model !== '') { $keywordLog['model'] = $model; }
         pp_project_brief_log_event('ai_keywords_fallback', $keywordLog);
@@ -701,8 +677,10 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
             'description' => $fallbackDescription,
             'used_ai' => false,
             'provider' => $provider,
-            'error' => 'ai_unreachable',
+            'error' => 'ai_fallback',
             'fallback' => 'keywords',
+            'raw' => $lastRaw,
+            'attempts' => $attemptsInfo,
         ];
         if ($model !== '') { $fallbackResponse['model'] = $model; }
         return $fallbackResponse;
@@ -802,26 +780,18 @@ if (!function_exists('pp_project_brief_prepare_initial')) {
             ];
         }
 
-        $truncate = static function (string $value, int $limit) {
-            if ($value === '') { return ''; }
-            if (function_exists('mb_substr')) {
-                return trim(mb_substr($value, 0, $limit, 'UTF-8'));
-            }
-            return trim(substr($value, 0, $limit));
-        };
-
         $name = $ai['name'] ?? '';
         $description = $ai['description'] ?? '';
 
         if ($name === '') { $name = $fallbackTitle; }
         if ($description === '') { $description = $fallbackDescription; }
 
-        $name = $truncate($name, 20);
-        $description = $truncate($description, 240);
+        $name = pp_project_brief_truncate($name, 20);
+        $description = pp_project_brief_truncate($description, 240);
 
         if ($name === '' && $url !== '') {
             $host = pp_project_brief_extract_domain($url);
-            if ($host !== '') { $name = $truncate($host, 20); }
+            if ($host !== '') { $name = pp_project_brief_truncate($host, 20); }
         }
 
         if (empty($ai['used_ai'] ?? false)) {
