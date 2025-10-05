@@ -21,6 +21,7 @@ $generalMenu = [
         'label' => __('Обзор'),
         'icon' => 'bi-speedometer2',
         'href' => $adminBaseUrl,
+        'section' => 'overview',
     ],
     [
         'key' => 'users',

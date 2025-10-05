@@ -299,6 +299,41 @@ $pp_truncate = static function (string $text, int $length = 30): string {
         </div>
     </div>
 
+    <div class="row g-3 mb-4 crowd-deep-stats-row">
+        <div class="col-md-3">
+            <div class="card crowd-stat-card crowd-stat-card--deep-success h-100">
+                <div class="card-body d-flex flex-column justify-content-between">
+                    <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — успешно'); ?></div>
+                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunSuccess, 0, '.', ' ') : '—'; ?></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card crowd-stat-card crowd-stat-card--deep-partial h-100">
+                <div class="card-body d-flex flex-column justify-content-between">
+                    <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — вручную'); ?></div>
+                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunPartial, 0, '.', ' ') : '—'; ?></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card crowd-stat-card crowd-stat-card--deep-failed h-100">
+                <div class="card-body d-flex flex-column justify-content-between">
+                    <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — ошибки'); ?></div>
+                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunFailed, 0, '.', ' ') : '—'; ?></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card crowd-stat-card crowd-stat-card--deep-skipped h-100">
+                <div class="card-body d-flex flex-column justify-content-between">
+                    <div class="crowd-stat-card__label"><?php echo __('Глубокая проверка — пропущено'); ?></div>
+                    <div class="crowd-stat-card__value"><?php echo $deepHasRun ? number_format((int)$deepRunSkipped, 0, '.', ' ') : '—'; ?></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Import (full width row) -->
     <div class="mb-4">
         <div class="card crowd-panel crowd-panel--upload h-100">

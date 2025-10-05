@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Admin sections toggle (users, projects, settings, networks, diagnostics)
-    const sectionKeys = ['users','projects','settings','crowd','networks','diagnostics'];
+    const sectionKeys = ['overview','users','projects','settings','crowd','networks','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);
@@ -147,14 +147,16 @@ document.addEventListener('DOMContentLoaded', function() {
         window.ppShowSection = show;
         let initial = storageAvailable ? localStorage.getItem('pp-admin-section') : null;
         if (!initial || !sections[initial]) {
-            initial = sections.users ? 'users'
+            initial = sections.overview ? 'overview'
+                : (sections.users ? 'users'
                 : (sections.projects ? 'projects'
                 : (sections.settings ? 'settings'
                 : (sections.crowd ? 'crowd'
                 : (sections.networks ? 'networks'
-                : Object.keys(sections).find(k => sections[k])))));
+                : Object.keys(sections).find(k => sections[k]))))));
         }
-        show(initial || 'users');
+        const fallbackSection = sections.overview ? 'overview' : 'users';
+        show(initial || fallbackSection);
         const navLinks = document.querySelectorAll('.menu-item[data-admin-section]');
         if (navLinks.length) {
             const highlight = (sectionKey) => {
@@ -172,7 +174,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     highlight(targetSection);
                 });
             });
-            highlight(initial || 'users');
+            highlight(initial || fallbackSection);
         }
     }
 

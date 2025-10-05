@@ -321,6 +321,222 @@ $users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.pr
 // Получить проекты
 $projects = $conn->query("SELECT p.id, p.name, p.description, p.links, p.created_at, u.username, COUNT(pb.id) AS published_count FROM projects p JOIN users u ON p.user_id = u.id LEFT JOIN publications pb ON pb.project_id = p.id GROUP BY p.id ORDER BY p.id");
 
+$overviewMetrics = [
+    'total_users' => 0,
+    'new_users_30d' => 0,
+    'total_projects' => 0,
+    'new_projects_30d' => 0,
+    'active_runs' => 0,
+    'completed_runs' => 0,
+    'promotion_runs_total' => 0,
+    'promotion_runs_30d' => 0,
+    'spend_total' => 0.0,
+    'spend_30d' => 0.0,
+    'topups_total' => 0.0,
+    'topups_30d' => 0.0,
+    'topups_total_count' => 0,
+    'topups_count_30d' => 0,
+];
+$overviewTopUsers = [
+    'spenders' => [],
+    'depositors' => [],
+];
+$overviewTopProjects = [];
+$overviewRecentTransactions = [];
+$overviewChartData = [
+    'activity' => ['labels' => [], 'projects' => [], 'promotions' => []],
+    'finance' => ['labels' => [], 'topups' => [], 'spend' => []],
+];
+
+$chartWindowDays = 30;
+$chartDays = [];
+for ($i = $chartWindowDays - 1; $i >= 0; $i--) {
+    $ts = strtotime('-' . $i . ' days');
+    $key = date('Y-m-d', $ts);
+    $chartDays[$key] = [
+        'label' => date('d.m', $ts),
+        'projects' => 0,
+        'promotions' => 0,
+        'topups' => 0.0,
+        'spend' => 0.0,
+    ];
+}
+
+if ($conn) {
+    if ($res = @$conn->query('SELECT COUNT(*) AS cnt FROM users')) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['total_users'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT COUNT(*) AS cnt FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['new_users_30d'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query('SELECT COUNT(*) AS cnt FROM projects')) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['total_projects'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT COUNT(*) AS cnt FROM projects WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['new_projects_30d'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT COUNT(*) AS cnt FROM promotion_runs WHERE status NOT IN ('completed','failed','cancelled','canceled')")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['active_runs'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT COUNT(*) AS cnt FROM promotion_runs WHERE status = 'completed'")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['completed_runs'] = (int)($row['cnt'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT
+            COUNT(*) AS runs_total,
+            SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS runs_30d,
+            COALESCE(SUM(charged_amount), 0) AS spend_total,
+            COALESCE(SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN charged_amount ELSE 0 END), 0) AS spend_30d
+        FROM promotion_runs")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['promotion_runs_total'] = (int)($row['runs_total'] ?? 0);
+        $overviewMetrics['promotion_runs_30d'] = (int)($row['runs_30d'] ?? 0);
+        $overviewMetrics['spend_total'] = (float)($row['spend_total'] ?? 0);
+        $overviewMetrics['spend_30d'] = (float)($row['spend_30d'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT
+            COUNT(*) AS txn_total,
+            SUM(CASE WHEN COALESCE(confirmed_at, created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS txn_30d,
+            COALESCE(SUM(amount), 0) AS amount_total,
+            COALESCE(SUM(CASE WHEN COALESCE(confirmed_at, created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN amount ELSE 0 END), 0) AS amount_30d
+        FROM payment_transactions
+        WHERE status = 'confirmed'")) {
+        $row = $res->fetch_assoc();
+        $overviewMetrics['topups_total'] = (float)($row['amount_total'] ?? 0);
+        $overviewMetrics['topups_30d'] = (float)($row['amount_30d'] ?? 0);
+        $overviewMetrics['topups_total_count'] = (int)($row['txn_total'] ?? 0);
+        $overviewMetrics['topups_count_30d'] = (int)($row['txn_30d'] ?? 0);
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT DATE(created_at) AS day, COUNT(*) AS cnt FROM projects WHERE created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY) GROUP BY day ORDER BY day")) {
+        while ($row = $res->fetch_assoc()) {
+            $day = (string)($row['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['projects'] = (int)($row['cnt'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT DATE(created_at) AS day, COUNT(*) AS cnt, SUM(charged_amount) AS sum_amount FROM promotion_runs WHERE created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY) GROUP BY day ORDER BY day")) {
+        while ($row = $res->fetch_assoc()) {
+            $day = (string)($row['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['promotions'] = (int)($row['cnt'] ?? 0);
+                $chartDays[$day]['spend'] = (float)($row['sum_amount'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT DATE(COALESCE(confirmed_at, created_at)) AS day, COUNT(*) AS cnt, SUM(amount) AS sum_amount FROM payment_transactions WHERE status = 'confirmed' AND COALESCE(confirmed_at, created_at) >= DATE_SUB(NOW(), INTERVAL 29 DAY) GROUP BY day ORDER BY day")) {
+        while ($row = $res->fetch_assoc()) {
+            $day = (string)($row['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['topups'] = (float)($row['sum_amount'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT u.id, u.username, SUM(pr.charged_amount) AS total_spent, COUNT(pr.id) AS runs_count, MAX(pr.created_at) AS last_run
+        FROM promotion_runs pr
+        INNER JOIN projects p ON p.id = pr.project_id
+        INNER JOIN users u ON u.id = p.user_id
+        GROUP BY u.id, u.username
+        HAVING total_spent > 0
+        ORDER BY total_spent DESC
+        LIMIT 5")) {
+        while ($row = $res->fetch_assoc()) {
+            $overviewTopUsers['spenders'][] = [
+                'id' => (int)($row['id'] ?? 0),
+                'username' => (string)($row['username'] ?? ''),
+                'total' => (float)($row['total_spent'] ?? 0),
+                'runs' => (int)($row['runs_count'] ?? 0),
+                'last' => $row['last_run'] ?? null,
+            ];
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT u.id, u.username, SUM(pt.amount) AS total_amount, COUNT(pt.id) AS txn_count, MAX(COALESCE(pt.confirmed_at, pt.created_at)) AS last_time
+        FROM payment_transactions pt
+        INNER JOIN users u ON u.id = pt.user_id
+        WHERE pt.status = 'confirmed'
+        GROUP BY u.id, u.username
+        HAVING total_amount > 0
+        ORDER BY total_amount DESC
+        LIMIT 5")) {
+        while ($row = $res->fetch_assoc()) {
+            $overviewTopUsers['depositors'][] = [
+                'id' => (int)($row['id'] ?? 0),
+                'username' => (string)($row['username'] ?? ''),
+                'total' => (float)($row['total_amount'] ?? 0),
+                'txns' => (int)($row['txn_count'] ?? 0),
+                'last' => $row['last_time'] ?? null,
+            ];
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT p.id, p.name, u.username, SUM(pr.charged_amount) AS total_spent, COUNT(pr.id) AS runs_count, MAX(pr.created_at) AS last_run
+        FROM promotion_runs pr
+        INNER JOIN projects p ON p.id = pr.project_id
+        INNER JOIN users u ON u.id = p.user_id
+        GROUP BY p.id, p.name, u.username
+        HAVING total_spent > 0
+        ORDER BY total_spent DESC
+        LIMIT 5")) {
+        while ($row = $res->fetch_assoc()) {
+            $overviewTopProjects[] = [
+                'id' => (int)($row['id'] ?? 0),
+                'name' => (string)($row['name'] ?? ''),
+                'owner' => (string)($row['username'] ?? ''),
+                'total' => (float)($row['total_spent'] ?? 0),
+                'runs' => (int)($row['runs_count'] ?? 0),
+                'last' => $row['last_run'] ?? null,
+            ];
+        }
+        $res->free();
+    }
+    if ($res = @$conn->query("SELECT pt.id, pt.user_id, u.username, pt.amount, pt.currency, pt.status, pt.gateway_code, pt.confirmed_at, pt.created_at
+        FROM payment_transactions pt
+        LEFT JOIN users u ON u.id = pt.user_id
+        ORDER BY pt.id DESC
+        LIMIT 6")) {
+        while ($row = $res->fetch_assoc()) {
+            $overviewRecentTransactions[] = [
+                'id' => (int)($row['id'] ?? 0),
+                'user_id' => (int)($row['user_id'] ?? 0),
+                'username' => (string)($row['username'] ?? ''),
+                'amount' => (float)($row['amount'] ?? 0),
+                'currency' => (string)($row['currency'] ?? ''),
+                'status' => (string)($row['status'] ?? ''),
+                'gateway' => (string)($row['gateway_code'] ?? ''),
+                'confirmed_at' => $row['confirmed_at'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }
+        $res->free();
+    }
+}
+
+foreach ($chartDays as $info) {
+    $overviewChartData['activity']['labels'][] = $info['label'];
+    $overviewChartData['activity']['projects'][] = (int)$info['projects'];
+    $overviewChartData['activity']['promotions'][] = (int)$info['promotions'];
+    $overviewChartData['finance']['labels'][] = $info['label'];
+    $overviewChartData['finance']['topups'][] = round((float)$info['topups'], 2);
+    $overviewChartData['finance']['spend'][] = round((float)$info['spend'], 2);
+}
+
 $conn->close();
 
 $updateStatus = get_update_status();
@@ -440,7 +656,7 @@ $crowdDeepCurrentRun = ($crowdDeepStatusData['ok'] ?? false) ? ($crowdDeepStatus
 $crowdDeepStatusError = ($crowdDeepStatusData['ok'] ?? false) ? null : ($crowdDeepStatusData['error'] ?? null);
 $crowdDeepRecentResults = pp_crowd_deep_get_recent_results($crowdDeepCurrentRun['id'] ?? null, 15);
 
-$pp_admin_sidebar_active = 'users';
+$pp_admin_sidebar_active = 'overview';
 $pp_admin_sidebar_section_mode = true;
 $pp_container = false;
 $GLOBALS['pp_layout_has_sidebar'] = true;
@@ -456,6 +672,8 @@ include __DIR__ . '/../includes/admin_sidebar.php';
     <a href="<?php echo pp_url('public/update.php'); ?>" class="alert-link"><?php echo __('Перейти к обновлению'); ?></a>.
 </div>
 <?php endif; ?>
+
+<?php include __DIR__ . '/partials/overview_section.php'; ?>
 
 <?php include __DIR__ . '/partials/users_section.php'; ?>
 
