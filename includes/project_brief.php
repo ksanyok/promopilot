@@ -1,6 +1,81 @@
 <?php
 // Project brief helpers: metadata analysis + AI-assisted name/description generation
 
+if (!function_exists('pp_project_brief_log_truncate')) {
+    function pp_project_brief_log_truncate(string $value, int $limit = 1200): string {
+        if ($limit <= 0 || $value === '') { return $value; }
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($value, 'UTF-8') <= $limit) { return $value; }
+            return mb_substr($value, 0, $limit, 'UTF-8') . '…';
+        }
+        if (strlen($value) <= $limit) { return $value; }
+        return substr($value, 0, $limit) . '…';
+    }
+}
+
+if (!function_exists('pp_project_brief_log_event')) {
+    function pp_project_brief_log_event(string $stage, array $data = []): void {
+        if (!defined('PP_ROOT_PATH')) { return; }
+        $logDir = PP_ROOT_PATH . '/logs';
+        if (!is_dir($logDir)) { @mkdir($logDir, 0775, true); }
+        if (!is_writable($logDir)) { @chmod($logDir, 0775); }
+        $entry = [
+            'time' => date('c'),
+            'stage' => $stage,
+            'data' => $data,
+        ];
+        $line = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($line === false) {
+            $line = sprintf(
+                '{"time":"%s","stage":"%s","error":"json_encode_failed"}',
+                date('c'),
+                addslashes($stage)
+            );
+        }
+        @file_put_contents($logDir . '/project_brief.log', $line . PHP_EOL, FILE_APPEND);
+    }
+}
+
+if (!function_exists('pp_project_brief_extract_json_object')) {
+    function pp_project_brief_extract_json_object(string $text): ?array {
+        $text = trim($text);
+        if ($text === '') { return null; }
+        $length = strlen($text);
+        $offset = strpos($text, '{');
+        while ($offset !== false) {
+            $depth = 0;
+            $inString = false;
+            $prev = '';
+            for ($i = $offset; $i < $length; $i++) {
+                $char = $text[$i];
+                if ($char === '"' && $prev !== '\\') {
+                    $inString = !$inString;
+                }
+                if ($inString) {
+                    $prev = $char;
+                    continue;
+                }
+                if ($char === '{') {
+                    $depth++;
+                } elseif ($char === '}') {
+                    $depth--;
+                    if ($depth === 0) {
+                        $candidate = substr($text, $offset, $i - $offset + 1);
+                        $decoded = json_decode($candidate, true);
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                            return $decoded;
+                        }
+                        break;
+                    }
+                }
+                $prev = $char;
+            }
+            $offset = strpos($text, '{', $offset + 1);
+        }
+        return null;
+    }
+}
+
 if (!function_exists('pp_normalize_locale_code')) {
     function pp_normalize_locale_code(?string $code): string {
         $code = strtolower(trim((string)$code));
@@ -56,9 +131,9 @@ if (!function_exists('pp_project_brief_prepare_ai_payload')) {
         $prompt = implode("\n", $promptPieces);
 
         $systemPrompt = 'You are PromoPilot assistant. You craft ultra-short project names and concise briefs for marketing managers.';
-        $userPrompt = "Проанализируй сайт и подготовь предложение на языке {$langLabel}. Сформируй новое, ёмкое название проекта (до 20 символов, без кавычек, эмодзи и технических приставок) и одно краткое описание (до 200 символов). Не пересказывай метатеги дословно — придумай свежую формулировку, отражающую пользу проекта.";
+    $userPrompt = "Проанализируй сайт и подготовь предложение на языке {$langLabel}. Сформируй новое, ёмкое название проекта (до 20 символов, без кавычек, эмодзи и технических приставок), которое чётко отражает тематику сайта и его основное предложение. Добавь одно краткое описание (до 200 символов), поясняющее, что именно пользователь найдёт на странице и для кого это полезно. Избегай рекламных лозунгов, формулировок про скидки и общих фраз, не пересказывай метатеги дословно.";
         if ($prompt !== '') { $userPrompt .= "\n\nДанные страницы:\n" . $prompt; }
-        $userPrompt .= "\n\nВерни ответ строго в JSON без форматирования и комментариев с ключами: name, description. Ответ должен быть на языке {$langLabel}.";
+    $userPrompt .= "\n\nВерни ответ строго в JSON без форматирования и комментариев с ключами: name, description. Ответ должен быть на языке {$langLabel}.";
 
         return [
             'language' => $lang,
@@ -81,6 +156,21 @@ if (!function_exists('pp_project_brief_normalize_text')) {
         $value = preg_replace('~[^a-z0-9а-яёїієґçäöüßáàâãéèêíìîñóòôõúùûçæœ\s]+~iu', ' ', $value);
         $value = preg_replace('~\s+~u', ' ', $value);
         return trim((string)$value);
+    }
+}
+
+if (!function_exists('pp_project_brief_is_valid_generated_text')) {
+    function pp_project_brief_is_valid_generated_text(string $value, bool $isName = false): bool {
+        $value = trim($value);
+        if ($value === '') { return false; }
+        if (preg_match('~^[\p{P}\p{S}\s]+$~u', $value)) { return false; }
+        $alphanumeric = preg_replace('~[^a-z0-9а-яёїієґ]+~iu', '', $value);
+        if ($alphanumeric === '' || (function_exists('mb_strlen') ? mb_strlen($alphanumeric, 'UTF-8') : strlen($alphanumeric)) < ($isName ? 3 : 8)) {
+            return false;
+        }
+        if (preg_match('~\b(название|описание|пример|sample|lorem)\b~iu', $value)) { return false; }
+        if (strpos($value, '...') !== false || strpos($value, '…') !== false) { return false; }
+        return true;
     }
 }
 
@@ -131,13 +221,24 @@ if (!function_exists('pp_project_brief_refine_name')) {
         }
         $stopMap = array_flip(array_filter($stopWords));
         $filtered = [];
+        $removed = [];
         foreach ($words as $word) {
             $normalized = pp_project_brief_normalize_text($word);
-            if ($normalized === '' || isset($stopMap[$normalized])) { continue; }
+            if ($normalized === '') { continue; }
+            if (isset($stopMap[$normalized])) {
+                $removed[] = $word;
+                continue;
+            }
             $filtered[] = $word;
         }
         if (!empty($filtered)) {
             $candidate = implode(' ', $filtered);
+            $firstWord = $filtered[0];
+            $normalizedFirst = pp_project_brief_normalize_text($firstWord);
+            $prepositions = ['и','а','но','да','или','ли','к','во','со','в','на','по','за','для','при','из','от','об','со','что'];
+            if (!empty($removed) && in_array($normalizedFirst, $prepositions, true)) {
+                $candidate = $original;
+            }
         }
         if ($candidate === '') { return $original; }
         if (function_exists('mb_substr') && mb_strlen($candidate, 'UTF-8') > 20) {
@@ -173,12 +274,112 @@ if (!function_exists('pp_project_brief_refine_description')) {
     }
 }
 
+if (!function_exists('pp_project_brief_mb_ucfirst')) {
+    function pp_project_brief_mb_ucfirst(string $text): string {
+        if ($text === '') { return ''; }
+        if (function_exists('mb_substr') && function_exists('mb_strtoupper') && function_exists('mb_strlen')) {
+            $first = mb_substr($text, 0, 1, 'UTF-8');
+            $rest = mb_substr($text, 1, null, 'UTF-8');
+            return mb_strtoupper($first, 'UTF-8') . $rest;
+        }
+        return ucfirst($text);
+    }
+}
+
+if (!function_exists('pp_project_brief_extract_keywords')) {
+    function pp_project_brief_extract_keywords(string $text, int $limit = 6, array $extraStopWords = []): array {
+        if ($text === '') { return []; }
+        $words = preg_split('~[^\p{L}\p{N}]+~u', $text, -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($words)) { return []; }
+        $defaultStops = [
+            'and','the','for','with','your','our','company','official','service','services','solution','solutions','team','business','online','project','promo','best','site','sites','buy','ready','website','platform','digital','marketing','подробнее','компания','сайт','сайта','ваш','ваша','наша','это','этот','эта','для','уже','готовый','готовые','готовая','лучшие','решение','решения','бизнес','команда','маркетинг','проект','сервисы','портал','сервис','онлайн'
+        ];
+        $stops = array_merge($defaultStops, $extraStopWords);
+        $stopMap = [];
+        foreach ($stops as $word) {
+            $w = (string)$word;
+            $w = function_exists('mb_strtolower') ? mb_strtolower($w, 'UTF-8') : strtolower($w);
+            $w = trim($w);
+            if ($w !== '') { $stopMap[$w] = true; }
+        }
+        $keywords = [];
+        foreach ($words as $word) {
+            $lower = function_exists('mb_strtolower') ? mb_strtolower($word, 'UTF-8') : strtolower($word);
+            $lower = trim($lower);
+            if ($lower === '' || isset($stopMap[$lower])) { continue; }
+            if ((function_exists('mb_strlen') ? mb_strlen($lower, 'UTF-8') : strlen($lower)) < 3) { continue; }
+            if (!isset($keywords[$lower])) {
+                $keywords[$lower] = $word;
+                if (count($keywords) >= $limit) { break; }
+            }
+        }
+        return array_values($keywords);
+    }
+}
+
+if (!function_exists('pp_project_brief_build_name_from_keywords')) {
+    function pp_project_brief_build_name_from_keywords(array $keywords, string $language, string $fallback = ''): string {
+        $lang = strtolower(substr($language, 0, 2));
+        $candidate = '';
+        if (count($keywords) >= 2) {
+            $candidate = pp_project_brief_mb_ucfirst(trim($keywords[0])) . ' ' . pp_project_brief_mb_ucfirst(trim($keywords[1]));
+        } elseif (count($keywords) === 1) {
+            $candidate = pp_project_brief_mb_ucfirst(trim($keywords[0]));
+        }
+        if ($candidate === '' && $fallback !== '') {
+            $candidate = $fallback;
+        }
+        if ($candidate === '') {
+            $candidate = ($lang === 'ru') ? 'Новый проект' : 'New project';
+        }
+        return trim($candidate);
+    }
+}
+
+if (!function_exists('pp_project_brief_build_description_from_keywords')) {
+    function pp_project_brief_build_description_from_keywords(array $keywords, string $language, string $metaDescription = ''): string {
+        $lang = strtolower(substr($language, 0, 2));
+        $primary = array_values($keywords);
+        $sentence = '';
+        if ($lang === 'ru') {
+            if (count($primary) >= 3) {
+                $sentence = "Решение для {$primary[0]}: {$primary[1]} и {$primary[2]} без лишних усилий.";
+            } elseif (count($primary) === 2) {
+                $sentence = "Помогаем {$primary[0]} достигать {$primary[1]} быстрее.";
+            } elseif (count($primary) === 1) {
+                $sentence = "Предлагаем современный подход к {$primary[0]}";
+            }
+        } else {
+            if (count($primary) >= 3) {
+                $sentence = "Solution for {$primary[0]}: {$primary[1]} and {$primary[2]} made simple.";
+            } elseif (count($primary) === 2) {
+                $sentence = "Helping {$primary[0]} achieve {$primary[1]} faster.";
+            } elseif (count($primary) === 1) {
+                $sentence = "Modern approach to {$primary[0]}";
+            }
+        }
+        if ($sentence === '' && $metaDescription !== '') {
+            $sentence = $metaDescription;
+        }
+        if ($sentence === '') {
+            $sentence = ($lang === 'ru') ? 'Краткое описание проекта для быстрого старта.' : 'Concise project summary for a fast launch.';
+        }
+        return pp_project_brief_mb_ucfirst(trim($sentence));
+    }
+}
+
 if (!function_exists('pp_project_brief_generate_from_ai')) {
     function pp_project_brief_generate_from_ai(array $options): array {
         $job = pp_project_brief_prepare_ai_payload($options);
-        $provider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
-        $key = trim((string)get_setting('openai_api_key', ''));
-        if ($provider === 'openai' && $key === '') {
+
+        $providerSetting = strtolower((string)get_setting('ai_provider', 'openai'));
+        $provider = $providerSetting === 'byoa' ? 'byoa' : 'openai';
+        $apiKey = trim((string)get_setting('openai_api_key', ''));
+
+        if ($provider === 'openai' && $apiKey === '') {
+            pp_project_brief_log_event('ai_skip_missing_key', [
+                'provider' => $provider,
+            ]);
             return [
                 'name' => '',
                 'description' => '',
@@ -187,180 +388,324 @@ if (!function_exists('pp_project_brief_generate_from_ai')) {
                 'provider' => $provider,
             ];
         }
-        if (!function_exists('pp_run_ai_completion')) {
-            if (!defined('PP_ROOT_PATH')) {
-                return [
-                    'name' => '',
-                    'description' => '',
-                    'used_ai' => false,
-                    'error' => 'client_unavailable',
-                    'provider' => $provider,
-                ];
-            }
-            $clientPath = PP_ROOT_PATH . '/networks/ai_client.js';
-            if (!is_file($clientPath)) {
-                return [
-                    'name' => '',
-                    'description' => '',
-                    'used_ai' => false,
-                    'error' => 'client_missing',
-                    'provider' => $provider,
-                ];
-            }
-        }
 
-        $meta = is_array($options['meta'] ?? null) ? $options['meta'] : [];
-    $metaTitle = trim((string)($meta['title'] ?? ''));
-    $metaDescription = trim((string)($meta['description'] ?? ''));
-    $finalUrl = trim((string)($meta['final_url'] ?? ($options['url'] ?? '')));
-
-        $basePrompt = $job['prompt'];
-        $prompt = $basePrompt;
-        $temperature = 0.25;
-        $maxAttempts = 2;
-        $attemptsInfo = [];
-        $lastRaw = null;
-
-        try {
-            for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-                $result = pp_run_ai_completion([
-                    'provider' => $provider,
-                    'prompt' => $prompt,
-                    'systemPrompt' => $job['system'],
-                    'temperature' => $temperature,
-                    'model' => trim((string)get_setting('openai_model', '')),
-                ]);
-                if (!is_array($result) || empty($result['ok'])) {
-                    return [
-                        'name' => '',
-                        'description' => '',
-                        'used_ai' => false,
-                        'error' => $result['error'] ?? 'ai_call_failed',
-                        'provider' => $provider,
-                        'attempts' => $attemptsInfo,
-                    ];
-                }
-
-                $text = trim((string)($result['text'] ?? ''));
-                if ($text === '') {
-                    return [
-                        'name' => '',
-                        'description' => '',
-                        'used_ai' => false,
-                        'error' => 'empty_response',
-                        'provider' => $provider,
-                        'attempts' => $attemptsInfo,
-                    ];
-                }
-                $lastRaw = $text;
-
-                $json = json_decode($text, true);
-                if (json_last_error() !== JSON_ERROR_NONE || !is_array($json)) {
-                    $matches = [];
-                    if (preg_match('~\{.*\}~s', $text, $matches)) {
-                        $json = json_decode($matches[0], true);
-                        if (json_last_error() !== JSON_ERROR_NONE || !is_array($json)) {
-                            return [
-                                'name' => '',
-                                'description' => '',
-                                'used_ai' => false,
-                                'error' => 'invalid_json',
-                                'raw' => $text,
-                                'provider' => $provider,
-                                'attempts' => $attemptsInfo,
-                            ];
-                        }
-                    } else {
-                        return [
-                            'name' => '',
-                            'description' => '',
-                            'used_ai' => false,
-                            'error' => 'json_not_found',
-                            'raw' => $text,
-                            'provider' => $provider,
-                            'attempts' => $attemptsInfo,
-                        ];
-                    }
-                }
-
-                $name = trim((string)($json['name'] ?? ''));
-                $description = trim((string)($json['description'] ?? ''));
-
-                $truncate = static function (string $value, int $limit): string {
-                    if ($value === '') { return ''; }
-                    if (function_exists('mb_substr')) {
-                        return trim(mb_substr($value, 0, $limit, 'UTF-8'));
-                    }
-                    return trim(substr($value, 0, $limit));
-                };
-
-                $originalName = $name;
-                $originalDescription = $description;
-
-                if ($name !== '') {
-                    $name = pp_project_brief_refine_name($name, $metaTitle, $finalUrl);
-                }
-                if ($description !== '') {
-                    $description = pp_project_brief_refine_description($description, $metaDescription);
-                }
-
-                $name = $truncate($name, 20);
-                $description = $truncate($description, 240);
-
-                $wasRefined = ($name !== $originalName) || ($description !== $originalDescription);
-
-                $nameSimilar = pp_project_brief_is_similar_to_source($name, $metaTitle, 0.9);
-                $descriptionSimilar = pp_project_brief_is_similar_to_source($description, $metaDescription, 0.95);
-
-                $attemptsInfo[] = [
-                    'name' => $name,
-                    'description' => $description,
-                    'name_similar' => $nameSimilar,
-                    'description_similar' => $descriptionSimilar,
-                    'temperature' => $temperature,
-                    'refined' => $wasRefined,
-                ];
-
-                if (($name !== '' || $description !== '') && !$nameSimilar && !$descriptionSimilar) {
-                    return [
-                        'name' => $name,
-                        'description' => $description,
-                        'used_ai' => true,
-                        'provider' => $provider,
-                        'model' => trim((string)get_setting('openai_model', '')),
-                        'raw' => $text,
-                        'attempts' => $attemptsInfo,
-                    ];
-                }
-
-                if ($attempt < $maxAttempts) {
-                    $prompt = $basePrompt . "\n\nПредыдущая версия получилась слишком похожей на исходные метатеги. Полностью переформулируй название и описание, сохрани требования по длине, не повторяй бренд из title и добавь больше конкретики о выгоде.";
-                    $temperature = min(0.85, $temperature + 0.25);
-                }
-            }
-        } catch (Throwable $e) {
+        if (!function_exists('pp_run_ai_completion') || !defined('PP_ROOT_PATH')) {
+            pp_project_brief_log_event('ai_client_unavailable', [
+                'provider' => $provider,
+            ]);
             return [
                 'name' => '',
                 'description' => '',
                 'used_ai' => false,
-                'error' => 'exception',
-                'message' => $e->getMessage(),
+                'error' => 'client_unavailable',
                 'provider' => $provider,
-                'attempts' => $attemptsInfo,
             ];
         }
 
-        $lastAttempt = end($attemptsInfo) ?: ['name' => '', 'description' => ''];
-        return [
-            'name' => $lastAttempt['name'] ?? '',
-            'description' => $lastAttempt['description'] ?? '',
-            'used_ai' => false,
-            'error' => 'too_similar',
+        $meta = is_array($options['meta'] ?? null) ? $options['meta'] : [];
+        $metaTitle = trim((string)($meta['title'] ?? ''));
+        $metaDescription = trim((string)($meta['description'] ?? ''));
+        $finalUrl = trim((string)($meta['final_url'] ?? ($options['url'] ?? '')));
+        $language = $job['language'] ?? 'ru';
+
+        $domainStops = [];
+        if ($finalUrl !== '') {
+            $host = parse_url($finalUrl, PHP_URL_HOST) ?: '';
+            if ($host !== '') {
+                $host = strtolower($host);
+                if (strpos($host, 'www.') === 0) { $host = substr($host, 4); }
+                $domainStops = array_filter(preg_split('~[\.-]+~', $host));
+            }
+        }
+
+        $keywords = pp_project_brief_extract_keywords(trim($metaTitle . ' ' . $metaDescription), 8, $domainStops);
+        $model = $provider === 'openai' ? trim((string)get_setting('openai_model', '')) : '';
+
+        $contextLog = [
             'provider' => $provider,
-            'model' => trim((string)get_setting('openai_model', '')),
-            'attempts' => $attemptsInfo,
-            'raw' => $lastRaw,
+            'language' => $language,
+            'url' => $finalUrl,
+            'meta_title' => pp_project_brief_log_truncate($metaTitle, 240),
+            'meta_description' => pp_project_brief_log_truncate($metaDescription, 360),
+            'keywords' => $keywords,
         ];
+        if ($model !== '') { $contextLog['model'] = $model; }
+        pp_project_brief_log_event('ai_context_prepared', $contextLog);
+
+        $basePrompt = (string)($job['prompt'] ?? '');
+        $systemPrompt = (string)($job['system'] ?? '');
+        $promptSuffix = '';
+        $temperature = 0.45;
+        $maxAttempts = 2;
+
+        $truncate = static function (string $value, int $limit): string {
+            if ($value === '') { return ''; }
+            if (function_exists('mb_substr')) {
+                return trim(mb_substr($value, 0, $limit, 'UTF-8'));
+            }
+            return trim(substr($value, 0, $limit));
+        };
+
+        $attemptsInfo = [];
+        $lastCandidate = null;
+        $lastRaw = '';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $requestPrompt = $basePrompt . $promptSuffix;
+            $requestLog = [
+                'attempt' => $attempt,
+                'provider' => $provider,
+                'temperature' => $temperature,
+                'prompt' => pp_project_brief_log_truncate($requestPrompt),
+            ];
+            if ($model !== '') { $requestLog['model'] = $model; }
+            pp_project_brief_log_event('ai_request', $requestLog);
+
+            $aiPayload = [
+                'provider' => $provider,
+                'prompt' => $requestPrompt,
+                'systemPrompt' => $systemPrompt,
+                'temperature' => $temperature,
+            ];
+            if ($model !== '') { $aiPayload['model'] = $model; }
+            $result = pp_run_ai_completion($aiPayload);
+
+            if (!is_array($result)) {
+                pp_project_brief_log_event('ai_response', [
+                    'attempt' => $attempt,
+                    'ok' => false,
+                    'error' => 'invalid_response_type',
+                    'raw_type' => gettype($result),
+                ]);
+                $response = [
+                    'name' => '',
+                    'description' => '',
+                    'used_ai' => false,
+                    'error' => 'ai_call_failed',
+                    'provider' => $provider,
+                ];
+                if ($model !== '') { $response['model'] = $model; }
+                return $response;
+            }
+
+            $textRaw = trim((string)($result['text'] ?? ''));
+            pp_project_brief_log_event('ai_response', [
+                'attempt' => $attempt,
+                'ok' => !empty($result['ok']),
+                'error' => $result['error'] ?? null,
+                'text' => pp_project_brief_log_truncate($textRaw),
+            ]);
+
+            if (empty($result['ok'])) {
+                $errorCode = !empty($result['error']) ? (string)$result['error'] : 'ai_call_failed';
+                $errorLog = [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                    'error' => $errorCode,
+                ];
+                if ($model !== '') { $errorLog['model'] = $model; }
+                pp_project_brief_log_event('ai_error', $errorLog);
+                $response = [
+                    'name' => '',
+                    'description' => '',
+                    'used_ai' => false,
+                    'error' => $errorCode,
+                    'provider' => $provider,
+                ];
+                if ($model !== '') { $response['model'] = $model; }
+                return $response;
+            }
+
+            $text = $textRaw;
+            if ($text === '') {
+                $emptyLog = [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                ];
+                if ($model !== '') { $emptyLog['model'] = $model; }
+                pp_project_brief_log_event('ai_empty_text', $emptyLog);
+                $response = [
+                    'name' => '',
+                    'description' => '',
+                    'used_ai' => false,
+                    'error' => 'empty_response',
+                    'provider' => $provider,
+                ];
+                if ($model !== '') { $response['model'] = $model; }
+                return $response;
+            }
+
+            $lastRaw = $text;
+            $json = json_decode($text, true);
+            if (json_last_error() !== JSON_ERROR_NONE || !is_array($json)) {
+                $json = pp_project_brief_extract_json_object($text);
+            }
+            if (!is_array($json)) {
+                $jsonLog = [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                    'text' => pp_project_brief_log_truncate($text),
+                    'json_error' => json_last_error_msg(),
+                ];
+                if ($model !== '') { $jsonLog['model'] = $model; }
+                pp_project_brief_log_event('ai_json_error', $jsonLog);
+                if ($attempt < $maxAttempts) {
+                    $promptSuffix .= "\n\nПредыдущий ответ содержал пояснения. Верни только JSON формата {\"name\":\"...\",\"description\":\"...\"} без Markdown и комментариев.";
+                    $temperature = min(0.75, $temperature + 0.1);
+                    continue;
+                }
+                $response = [
+                    'name' => '',
+                    'description' => '',
+                    'used_ai' => false,
+                    'error' => 'invalid_json',
+                    'provider' => $provider,
+                    'raw' => $text,
+                ];
+                if ($model !== '') { $response['model'] = $model; }
+                return $response;
+            }
+
+            $name = trim((string)($json['name'] ?? ''));
+            $description = trim((string)($json['description'] ?? ''));
+
+            if ($name !== '') {
+                $name = pp_project_brief_refine_name($name, $metaTitle, $finalUrl);
+            }
+            if ($description !== '') {
+                $description = pp_project_brief_refine_description($description, $metaDescription);
+            }
+
+            $name = $truncate($name, 20);
+            $description = $truncate($description, 240);
+
+            $validName = $name !== '' && pp_project_brief_is_valid_generated_text($name, true);
+            $validDescription = $description !== '' && pp_project_brief_is_valid_generated_text($description, false);
+
+            if (!$validName || !$validDescription) {
+                $invalidLog = [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                    'invalid_name' => !$validName,
+                    'invalid_description' => !$validDescription,
+                ];
+                if ($model !== '') { $invalidLog['model'] = $model; }
+                pp_project_brief_log_event('ai_invalid_payload', $invalidLog);
+
+                if ($attempt < $maxAttempts) {
+                    $promptSuffix .= "\n\nПредыдущий ответ содержал некорректное название или описание. Дай содержательные формулировки без многоточий и заглушек, обязательно опиши тематику сайта.";
+                    $temperature = min(0.8, $temperature + 0.15);
+                    continue;
+                }
+                if (!$validName) { $name = ''; }
+                if (!$validDescription) { $description = ''; }
+            }
+
+            if ($name === '') {
+                $name = pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle);
+            }
+            if ($description === '') {
+                $description = pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription);
+            }
+
+            $nameSimilar = $metaTitle !== '' && pp_project_brief_is_similar_to_source($name, $metaTitle, 0.96);
+            $descriptionSimilar = $metaDescription !== '' && pp_project_brief_is_similar_to_source($description, $metaDescription, 0.98);
+
+            $attemptsInfo[] = [
+                'name' => $name,
+                'description' => $description,
+                'temperature' => $temperature,
+                'name_similar' => $nameSimilar,
+                'description_similar' => $descriptionSimilar,
+            ];
+
+            $lastCandidate = [
+                'name' => $name,
+                'description' => $description,
+                'name_similar' => $nameSimilar,
+                'description_similar' => $descriptionSimilar,
+            ];
+
+            if (!$nameSimilar && !$descriptionSimilar) {
+                $successLog = [
+                    'attempt' => $attempt,
+                    'provider' => $provider,
+                    'name' => $name,
+                    'description' => $description,
+                ];
+                if ($model !== '') { $successLog['model'] = $model; }
+                pp_project_brief_log_event('ai_success', $successLog);
+                return [
+                    'name' => $name,
+                    'description' => $description,
+                    'used_ai' => true,
+                    'provider' => $provider,
+                    'raw' => $lastRaw,
+                    'attempts' => $attemptsInfo,
+                ] + ($model !== '' ? ['model' => $model] : []);
+            }
+
+            if ($attempt < $maxAttempts) {
+                $promptSuffix .= "\n\nПредыдущий ответ оказался слишком похож на исходные метатеги. Полностью переформулируй название и описание, избегай повторения бренда, добавь больше выгод и конкретики.";
+                $temperature = min(0.9, $temperature + 0.25);
+            }
+        }
+
+        if ($lastCandidate !== null) {
+            $name = $lastCandidate['name'];
+            $description = $lastCandidate['description'];
+
+            if ($lastCandidate['name_similar']) {
+                $name = $truncate(pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle), 20);
+            }
+            if ($lastCandidate['description_similar']) {
+                $description = $truncate(pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription), 240);
+            }
+
+            $similarityLog = [
+                'provider' => $provider,
+                'name_similar' => $lastCandidate['name_similar'],
+                'description_similar' => $lastCandidate['description_similar'],
+                'name' => $name,
+                'description' => $description,
+            ];
+            if ($model !== '') { $similarityLog['model'] = $model; }
+            pp_project_brief_log_event('ai_similarity_fallback', $similarityLog);
+
+            $response = [
+                'name' => $name,
+                'description' => $description,
+                'used_ai' => !$lastCandidate['name_similar'] && !$lastCandidate['description_similar'],
+                'provider' => $provider,
+                'raw' => $lastRaw,
+                'attempts' => $attemptsInfo,
+                'fallback' => 'keywords',
+            ];
+            if ($model !== '') { $response['model'] = $model; }
+            return $response;
+        }
+
+        $fallbackName = pp_project_brief_build_name_from_keywords($keywords, $language, $metaTitle);
+        $fallbackDescription = pp_project_brief_build_description_from_keywords($keywords, $language, $metaDescription);
+
+        $keywordLog = [
+            'provider' => $provider,
+            'name' => pp_project_brief_log_truncate($fallbackName),
+            'description' => pp_project_brief_log_truncate($fallbackDescription),
+        ];
+        if ($model !== '') { $keywordLog['model'] = $model; }
+        pp_project_brief_log_event('ai_keywords_fallback', $keywordLog);
+
+        $fallbackResponse = [
+            'name' => $fallbackName,
+            'description' => $fallbackDescription,
+            'used_ai' => false,
+            'provider' => $provider,
+            'error' => 'ai_unreachable',
+            'fallback' => 'keywords',
+        ];
+        if ($model !== '') { $fallbackResponse['model'] = $model; }
+        return $fallbackResponse;
     }
 }
 

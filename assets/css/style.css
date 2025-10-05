@@ -526,7 +526,41 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .add-project-card .form-control:focus,
 .add-project-card .form-select:focus { border-color: rgba(96,165,250,.7); box-shadow: 0 16px 32px -24px rgba(96,165,250,.75); background: rgba(8,20,40,.92); }
 
-.add-project-card .form-floating > label { color: rgba(226,232,240,.75); }
+.add-project-card .form-floating > label {
+  color: rgba(226,232,240,.82);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-size: .7rem;
+  font-weight: 600;
+  transition: color .2s ease, opacity .2s ease;
+}
+.add-project-card .form-floating > label::after {
+  content: '';
+  position: absolute;
+  left: -6px;
+  right: -6px;
+  top: 50%;
+  height: 1.6em;
+  transform: translateY(-50%);
+  background: rgba(8,20,40,.92);
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity .2s ease;
+  z-index: -1;
+}
+.add-project-card .form-floating > .form-control:focus ~ label,
+.add-project-card .form-floating > .form-control:not(:placeholder-shown) ~ label,
+.add-project-card .form-floating > textarea:focus ~ label,
+.add-project-card .form-floating > textarea:not(:placeholder-shown) ~ label {
+  color: rgba(144,205,244,.95);
+  opacity: 1;
+}
+.add-project-card .form-floating > .form-control:focus ~ label::after,
+.add-project-card .form-floating > .form-control:not(:placeholder-shown) ~ label::after,
+.add-project-card .form-floating > textarea:focus ~ label::after,
+.add-project-card .form-floating > textarea:not(:placeholder-shown) ~ label::after {
+  opacity: 1;
+}
 .add-project-card .form-floating > .form-control::placeholder { color: transparent; }
 .add-project-card .form-floating > .form-control:-webkit-autofill,
 .add-project-card .form-floating > .form-control:-webkit-autofill:focus { -webkit-text-fill-color: var(--white); box-shadow: 0 0 0 30px rgba(8,20,40,.82) inset; }
