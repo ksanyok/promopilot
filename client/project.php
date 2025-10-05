@@ -2402,8 +2402,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const countEl = block.querySelector('.promotion-progress-count');
         if (countEl) {
-            if (stageSequence.length > 1 && stageProgressIndex > 0) {
-                countEl.textContent = `(${stageProgressIndex} / ${stageSequence.length})`;
+            const stageTotal = stageSequence.length;
+            const stageCompleted = stageTotal > 0
+                ? Math.min(stageTotal, Math.max(stageProgressIndex, isActive ? 1 : (status === 'completed' || status === 'report_ready' ? stageTotal : 0)))
+                : 0;
+            if (stageTotal > 0) {
+                countEl.textContent = `(${stageCompleted} / ${stageTotal})`;
                 countEl.classList.remove('d-none');
             } else if (target > 0 && (isActive || done > 0)) {
                 countEl.textContent = `(${done} / ${target})`;

@@ -931,6 +931,7 @@ if (!function_exists('pp_promotion_launch_worker')) {
 if (!function_exists('pp_promotion_launch_crowd_worker')) {
     function pp_promotion_launch_crowd_worker(?int $taskId = null, bool $allowFallback = true): bool {
         $script = PP_ROOT_PATH . '/scripts/promotion_crowd_worker.php';
+        $inlineIterations = 0;
         if (!is_file($script)) {
             pp_promotion_log('promotion.crowd.worker_missing', ['script' => $script]);
             if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
@@ -979,6 +980,21 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
                 'script' => $script,
                 'mode' => $isWindows ? 'windows_popen' : 'posix_background',
             ]);
+            if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
+                try {
+                    pp_promotion_crowd_worker($taskId, $taskId ? 1 : 5);
+                    $inlineIterations = $taskId ? 1 : 5;
+                    pp_promotion_log('promotion.crowd.worker_inline_assist', [
+                        'task_id' => $taskId,
+                        'iterations' => $inlineIterations,
+                    ]);
+                } catch (Throwable $e) {
+                    pp_promotion_log('promotion.crowd.worker_inline_error', [
+                        'task_id' => $taskId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
             return true;
         }
 
