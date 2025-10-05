@@ -60,7 +60,8 @@ if (!function_exists('pp_http_fetch')) {
 
 if (!function_exists('pp_html_dom')) {
     function pp_html_dom(string $html): ?DOMDocument {
-        if ($html === '') return null; $doc = new DOMDocument(); libxml_use_internal_errors(true);
+        if ($html === '') return null; if (!class_exists('DOMDocument')) { return null; }
+        $doc = new DOMDocument(); libxml_use_internal_errors(true);
         if (stripos($html, '<meta') === false) { $html = '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">' . $html; }
         $loaded = @$doc->loadHTML($html, LIBXML_NOWARNING | LIBXML_NOERROR); libxml_clear_errors(); if (!$loaded) return null; return $doc;
     }
@@ -155,6 +156,7 @@ if (!function_exists('pp_verify_published_content')) {
 
 if (!function_exists('pp_analyze_url_data')) {
     function pp_analyze_url_data(string $url): ?array {
+        if (!class_exists('DOMDocument') || !class_exists('DOMXPath')) { return null; }
         $fetch = pp_http_fetch($url, 12); if (($fetch['status'] ?? 0) >= 400 || ($fetch['body'] ?? '') === '') { return null; }
         $finalUrl = $fetch['final_url'] ?: $url; $headers = $fetch['headers'] ?? []; $body = (string)$fetch['body']; $doc = pp_html_dom($body); if (!$doc) { return null; }
         $xp = pp_xpath($doc);
