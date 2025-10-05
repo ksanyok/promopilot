@@ -2198,6 +2198,13 @@ document.addEventListener('DOMContentLoaded', function() {
         targetLabel: <?php echo json_encode(__('Целевой URL')); ?>,
         statusLabel: <?php echo json_encode(__('Статус')); ?>,
         crowdLinks: <?php echo json_encode(__('Крауд ссылки')); ?>,
+        crowdPublication: <?php echo json_encode(__('Где опубликовано')); ?>,
+        crowdSubmission: <?php echo json_encode(__('Площадка (заявка)')); ?>,
+        crowdTargetInfo: <?php echo json_encode(__('Цель перехода')); ?>,
+        crowdMessage: <?php echo json_encode(__('Текст сообщения')); ?>,
+        crowdNoMessage: <?php echo json_encode(__('Текст не зафиксирован')); ?>,
+        crowdManualFallback: <?php echo json_encode(__('Ручная доработка')); ?>,
+        crowdFallbackNote: <?php echo json_encode(__('Комментарий')); ?>,
         filenamePrefix: <?php echo json_encode('promotion-report'); ?>
     };
 
@@ -2912,6 +2919,14 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
     }
 
+    function buildCrowdMessagePreview(message, limit = 220) {
+        const text = typeof message === 'string' ? message.trim() : '';
+        if (!text) { return ''; }
+        if (text.length <= limit) { return text; }
+        const clipped = text.slice(0, limit - 1).trimEnd();
+        return `${clipped}…`;
+    }
+
     function normalizePromotionReport(report) {
         const level1Raw = Array.isArray(report?.level1) ? report.level1 : [];
         const level2Raw = Array.isArray(report?.level2) ? report.level2 : [];
@@ -2965,8 +2980,16 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
         const crowd = crowdRaw
-            .filter(item => item && item.target_url)
-            .map(item => ({ ...item }));
+            .filter(item => item && (item.result_url || item.link_url || item.target_url))
+            .map(item => {
+                const clone = { ...item };
+                const message = typeof clone.message === 'string' ? clone.message.trim() : '';
+                clone.message = message;
+                clone.message_preview = message ? buildCrowdMessagePreview(message) : '';
+                const fallbackNote = typeof clone.fallback_reason === 'string' ? clone.fallback_reason.trim() : '';
+                clone.fallback_reason = fallbackNote;
+                return clone;
+            });
 
         const uniqueNetworks = new Set();
         const collectNetwork = node => { if (node && node.network) { uniqueNetworks.add(node.network); } };
@@ -3568,11 +3591,86 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
     }
 
+    function getCrowdStatusBadgeClass(status) {
+        const value = (status || '').toString().toLowerCase();
+        if (!value) { return 'bg-secondary-subtle text-light-emphasis'; }
+        if (['success', 'posted', 'done', 'ok', 'published', 'complete'].includes(value)) {
+            return 'bg-success-subtle text-light-emphasis';
+        }
+        if (['running', 'processing', 'queued', 'pending', 'in_progress'].includes(value)) {
+            return 'bg-info-subtle text-light-emphasis';
+        }
+        if (['error', 'failed', 'cancelled', 'timeout'].includes(value)) {
+            return 'bg-danger-subtle text-light-emphasis';
+        }
+        return 'bg-secondary-subtle text-light-emphasis';
+    }
+
     function buildPromotionReportCrowdSection(items) {
         const rows = items.map(item => {
-            const target = item.target_url || '';
-            return `<li>${escapeHtml(String(item.crowd_link_id || ''))} → ${target ? `<a href="${escapeAttribute(target)}" target="_blank" rel="noopener">${escapeHtml(target)}</a>` : '—'}</li>`;
+            const taskId = item.task_id || item.crowd_link_id || '';
+            const statusRaw = (item.status || '').toString();
+            const statusLabel = statusRaw.replace(/_/g, ' ').trim();
+            const manualFallback = Boolean(item.manual_fallback);
+            const resultUrl = (item.result_url || item.link_url || '').trim();
+            const submissionUrl = (item.link_url || '').trim();
+            const targetUrl = (item.target_url || '').trim();
+            const messagePreview = (item.message_preview || item.message || '').trim();
+            const fallbackNote = (item.fallback_reason || '').trim();
+            const hostingLabel = getHostname(resultUrl) || getHostname(submissionUrl) || '';
+            const messageTitleAttr = item.message ? escapeAttribute(String(item.message)).replace(/\n/g, '&#10;') : '';
+
+            const idBadge = taskId ? `<span class="badge bg-primary-subtle text-light-emphasis promotion-report-crowd-badge">#${escapeHtml(String(taskId))}</span>` : '';
+            const statusBadge = statusLabel ? `<span class="badge ${getCrowdStatusBadgeClass(statusRaw)} promotion-report-crowd-badge">${escapeHtml(statusLabel)}</span>` : '';
+            const manualBadge = manualFallback ? `<span class="badge bg-warning-subtle text-dark promotion-report-crowd-badge">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdManualFallback)}</span>` : '';
+
+            const resultLink = resultUrl ? `<a href="${escapeAttribute(resultUrl)}" target="_blank" rel="noopener">${escapeHtml(truncateMiddle(resultUrl, 96))}</a>` : '—';
+            const submissionLink = submissionUrl && submissionUrl !== resultUrl ? `<a href="${escapeAttribute(submissionUrl)}" target="_blank" rel="noopener">${escapeHtml(truncateMiddle(submissionUrl, 96))}</a>` : '';
+            const targetLink = targetUrl ? `<a href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(truncateMiddle(targetUrl, 96))}</a>` : '—';
+
+            const messageHtml = messagePreview
+                ? `<div class="promotion-report-crowd-row crowd-message">
+                        <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdMessage)}</span>
+                        <div class="promotion-report-crowd-value"${messageTitleAttr ? ` title="${messageTitleAttr}"` : ''}>${escapeHtml(messagePreview).replace(/\n/g, '<br>')}</div>
+                   </div>`
+                : `<div class="promotion-report-crowd-row crowd-message">
+                        <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdMessage)}</span>
+                        <div class="promotion-report-crowd-value text-muted">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdNoMessage)}</div>
+                   </div>`;
+
+            const fallbackHtml = fallbackNote
+                ? `<div class="promotion-report-crowd-row crowd-note">
+                        <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdFallbackNote)}</span>
+                        <div class="promotion-report-crowd-value">${escapeHtml(fallbackNote)}</div>
+                   </div>`
+                : '';
+
+            return `
+                <li class="promotion-report-crowd-item">
+                    <div class="promotion-report-crowd-head">
+                        <div class="promotion-report-crowd-badges">${[idBadge, statusBadge, manualBadge].filter(Boolean).join(' ') || '—'}</div>
+                        ${hostingLabel ? `<span class="promotion-report-crowd-host text-muted">${escapeHtml(hostingLabel)}</span>` : ''}
+                    </div>
+                    <div class="promotion-report-crowd-row">
+                        <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdPublication)}</span>
+                        <div class="promotion-report-crowd-value">${resultLink}</div>
+                    </div>
+                    ${submissionLink ? `
+                        <div class="promotion-report-crowd-row">
+                            <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdSubmission)}</span>
+                            <div class="promotion-report-crowd-value">${submissionLink}</div>
+                        </div>
+                    ` : ''}
+                    <div class="promotion-report-crowd-row">
+                        <span class="promotion-report-crowd-label">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdTargetInfo)}</span>
+                        <div class="promotion-report-crowd-value">${targetLink}</div>
+                    </div>
+                    ${messageHtml}
+                    ${fallbackHtml}
+                </li>
+            `;
         }).join('');
+
         return `
             <div class="promotion-report-section">
                 <h6 class="fw-semibold mb-2">${escapeHtml(PROMOTION_REPORT_STRINGS.crowdLinks)} (${items.length})</h6>
@@ -3671,6 +3769,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 node.url || node.target_url || '',
                 node.anchor || '',
                 parentUrl
+            ]);
+        });
+        context.normalized.crowd.forEach(item => {
+            const crowdUrl = item.result_url || item.link_url || '';
+            const message = (item.message_preview || item.message || '').replace(/\s+/g, ' ').trim();
+            rows.push([
+                'crowd',
+                '',
+                crowdUrl,
+                message.length > 120 ? `${message.slice(0, 117)}...` : message,
+                item.target_url || ''
             ]);
         });
         const csv = rows.map(row => row.map(csvEscape).join(';')).join('\n');

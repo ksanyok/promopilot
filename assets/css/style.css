@@ -2762,12 +2762,84 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .promotion-report-table { --bs-table-bg: transparent; }
 .promotion-report-table tbody tr td { vertical-align: middle; font-size: .82rem; }
 .promotion-report-table .badge { font-weight: 600; letter-spacing: .3px; }
-.promotion-report-crowd li {
-  padding: 8px 0;
-  border-bottom: 1px dashed color-mix(in srgb, var(--border) 80%, transparent 20%);
-  font-size: .82rem;
+.promotion-report-crowd {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
-.promotion-report-crowd li:last-child { border-bottom: none; }
+.promotion-report-crowd-item {
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent 25%);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, transparent 6%);
+  box-shadow: 0 6px 18px rgba(15,20,32,.08);
+}
+.promotion-report-crowd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.promotion-report-crowd-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.promotion-report-crowd-badge {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .28px;
+}
+.promotion-report-crowd-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) 1fr;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: .82rem;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent 30%);
+}
+.promotion-report-crowd-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.promotion-report-crowd-label {
+  font-weight: 600;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+}
+.promotion-report-crowd-value {
+  color: var(--text);
+  word-break: break-word;
+}
+.promotion-report-crowd-value a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.promotion-report-crowd-value a:hover { text-decoration: underline; }
+.promotion-report-crowd-row.crowd-message .promotion-report-crowd-value {
+  line-height: 1.4;
+}
+.promotion-report-crowd-row.crowd-note .promotion-report-crowd-value {
+  font-style: italic;
+}
+@media (max-width: 768px) {
+  .promotion-report-crowd-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .promotion-report-crowd-label {
+    font-size: .68rem;
+  }
+  .promotion-report-crowd-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}
 .promotion-report-tabs { margin-bottom: 18px; }
 .promotion-report-tablist { display: flex; gap: 10px; flex-wrap: wrap; }
 .promotion-report-tablist .nav-link {
