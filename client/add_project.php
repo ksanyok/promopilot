@@ -216,6 +216,8 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                      data-text-loading="<?php echo htmlspecialchars(__('Анализируем страницу, это может занять до минуты…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                                      data-text-success="<?php echo htmlspecialchars(__('Анализ завершён. Переходим ко второму шагу.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                                      data-text-error="<?php echo htmlspecialchars(__('Не удалось провести анализ. Проверьте URL и попробуйте ещё раз.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-success-ai="<?php echo htmlspecialchars(__('Анализ завершён. Название и описание предложены нейросетью.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                     data-text-success-fallback="<?php echo htmlspecialchars(__('Анализ завершён. Автозаполнение на основе метаданных — проверьте результат.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                                      data-text-manual="<?php echo htmlspecialchars(__('Вы перешли к редактированию без анализа. Заполните данные вручную.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                                     <?php echo __('Укажите адрес и запустите анализ.'); ?>
                                 </div>
@@ -242,7 +244,9 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                                   data-status-default="<?php echo htmlspecialchars(__('Результаты анализа'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                                                   data-status-loading="<?php echo htmlspecialchars(__('Проводим анализ…'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                                                   data-status-success="<?php echo htmlspecialchars(__('Анализ завершён: данные обновлены.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
-                                                  data-status-error="<?php echo htmlspecialchars(__('Не удалось получить данные. Попробуйте ещё раз или заполните поля вручную.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                                  data-status-error="<?php echo htmlspecialchars(__('Не удалось получить данные. Попробуйте ещё раз или заполните поля вручную.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                  data-status-success-ai="<?php echo htmlspecialchars(__('Анализ завершён: данные сгенерированы нейросетью.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                                  data-status-success-fallback="<?php echo htmlspecialchars(__('Анализ завершён: использованы исходные метаданные.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                                                 <?php echo __('Результаты анализа'); ?>
                                             </span>
                                         </div>

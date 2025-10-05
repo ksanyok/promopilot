@@ -467,13 +467,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 Default: 'bg-secondary',
                 Loading: 'bg-info',
                 Success: 'bg-success',
+                SuccessAi: 'bg-success',
+                SuccessFallback: 'bg-warning',
                 Error: 'bg-danger'
             };
             const normalized = Object.prototype.hasOwnProperty.call(map, mode) ? mode : 'Default';
             const key = `status${normalized}`;
             const text = statusBadge.dataset[key];
             if (text) { statusBadge.textContent = text; }
-            statusBadge.classList.remove('bg-secondary','bg-success','bg-danger','bg-info');
+            statusBadge.classList.remove('bg-secondary','bg-success','bg-danger','bg-info','bg-warning');
             statusBadge.classList.add(map[normalized]);
         };
 
@@ -486,15 +488,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const setAnalysisFeedback = (state) => {
             if (!analysisFeedback) { return; }
-            const normalized = (state || 'idle').toLowerCase();
-            const key = 'text' + normalized.charAt(0).toUpperCase() + normalized.slice(1);
+            const rawState = (state || 'idle').toString();
+            const camelKey = rawState
+                .split(/[-_\s]+/)
+                .filter(Boolean)
+                .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+                .join('');
+            const key = 'text' + (camelKey || 'Idle');
             const fallback = analysisFeedback.dataset.textIdle || '';
-            const text = analysisFeedback.dataset[key] || fallback;
+            let datasetKey = key;
+            if (rawState.toLowerCase() === 'success' && analysisFeedback.dataset.aiError && analysisFeedback.dataset.textSuccessFallback) {
+                datasetKey = 'textSuccessFallback';
+            }
+            const text = analysisFeedback.dataset[datasetKey] || fallback;
             analysisFeedback.textContent = text || fallback;
+            const normalized = rawState.replace(/[^a-z0-9-]+/gi, '-').toLowerCase() || 'idle';
+            const stateToken = (normalized === 'success' && analysisFeedback.dataset.aiError) ? 'success-fallback' : normalized;
             if (normalized === 'idle') {
                 delete analysisFeedback.dataset.state;
             } else {
-                analysisFeedback.dataset.state = normalized;
+                analysisFeedback.dataset.state = stateToken;
             }
         };
 
@@ -567,6 +580,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const resetSteps = (options = {}) => {
             unlockedSteps = new Set([1]);
             setAnalysisFeedback('idle');
+            if (analysisFeedback) {
+                delete analysisFeedback.dataset.aiUsed;
+                delete analysisFeedback.dataset.aiError;
+            }
+            if (resultCard) {
+                delete resultCard.dataset.aiUsed;
+                delete resultCard.dataset.aiError;
+            }
             toggleResultVisibility(false);
             setCardState(null);
             setStatus('Default');
@@ -817,6 +838,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 const data = json.data || {};
                 const meta = (data.meta && typeof data.meta === 'object') ? data.meta : {};
                 const brief = (data.brief && typeof data.brief === 'object') ? data.brief : {};
+                const aiUsed = Boolean(data.ai_used || (brief && brief.used_ai));
+                const aiError = data.ai_error || (brief && brief.ai_error) || (brief.ai && brief.ai.error);
 
                 if (payloadInput) {
                     payloadInput.value = JSON.stringify(data);
@@ -850,9 +873,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     language: suggestedLanguage
                 });
                 setCardState('success');
-                setStatus('Success');
+                if (resultCard) {
+                    resultCard.dataset.aiUsed = aiUsed ? '1' : '0';
+                    if (aiError && !aiUsed) {
+                        resultCard.dataset.aiError = aiError;
+                    } else {
+                        delete resultCard.dataset.aiError;
+                    }
+                }
+                const statusMode = aiUsed ? 'SuccessAi' : (aiError ? 'SuccessFallback' : 'Success');
+                setStatus(statusMode);
                 toggleResultVisibility(true);
-                setAnalysisFeedback('success');
+                if (analysisFeedback) {
+                    analysisFeedback.dataset.aiUsed = aiUsed ? '1' : '0';
+                    if (aiError && !aiUsed) {
+                        analysisFeedback.dataset.aiError = aiError;
+                    } else {
+                        delete analysisFeedback.dataset.aiError;
+                    }
+                }
+                setAnalysisFeedback(aiUsed ? 'successAi' : 'success');
                 unlockStep(2);
                 goToStep(2, { focusSelector: '#project-name' });
             } catch (error) {

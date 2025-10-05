@@ -111,14 +111,36 @@ try {
     $payload['name_suggested_by_ai'] = $suggestedName;
     $payload['description_suggested_by_ai'] = $suggestedDescription;
     $payload['suggested_language_by_ai'] = $suggestedLanguage;
+    $usedAi = false;
+    $aiError = null;
     if (is_array($brief)) {
+        $usedAi = !empty($brief['used_ai']) || (!empty($brief['ai']['used_ai'] ?? null));
+        $aiError = $brief['ai']['error'] ?? $brief['error'] ?? null;
+        if ($aiError && !is_string($aiError)) {
+            $aiError = (string)$aiError;
+        }
+        $briefAi = $brief['ai'] ?? null;
+        if (is_array($briefAi) && array_key_exists('raw', $briefAi)) {
+            unset($briefAi['raw']);
+        }
         $payload['brief'] = [
             'name' => $brief['name'] ?? '',
             'description' => $brief['description'] ?? '',
             'language' => $brief['language'] ?? '',
-            'ai' => $brief['ai'] ?? null,
+            'used_ai' => $usedAi,
+            'ai' => $briefAi,
         ];
+        if ($aiError) {
+            $payload['brief']['ai_error'] = $aiError;
+        }
     }
+
+    $payload['ai_used'] = $usedAi;
+    if ($aiError && !$usedAi) {
+        $payload['ai_error'] = $aiError;
+    }
+    $payload['name_source'] = $usedAi ? 'ai' : 'meta';
+    $payload['description_source'] = $usedAi ? 'ai' : 'meta';
 
     if ($shouldSave && function_exists('pp_save_page_meta')) {
         @pp_save_page_meta($projectId, $url, $meta);
