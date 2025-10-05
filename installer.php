@@ -256,6 +256,71 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         $errors[] = 'Ошибка создания таблицы settings: ' . $mysqli->error;
     }
 
+    // Payment gateways
+    $mysqli->query("CREATE TABLE IF NOT EXISTS payment_gateways (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(60) NOT NULL,
+        title VARCHAR(191) NOT NULL,
+        is_enabled TINYINT(1) NOT NULL DEFAULT 0,
+        config LONGTEXT NULL,
+        instructions LONGTEXT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_payment_gateways_code (code)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы payment_gateways: ' . $mysqli->error;
+    }
+
+    // Payment transactions
+    $mysqli->query("CREATE TABLE IF NOT EXISTS payment_transactions (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        gateway_code VARCHAR(60) NOT NULL,
+        amount DECIMAL(16,2) NOT NULL,
+        currency VARCHAR(10) NOT NULL,
+        status VARCHAR(30) NOT NULL DEFAULT 'pending',
+        provider_reference VARCHAR(191) NULL,
+        provider_payload LONGTEXT NULL,
+        customer_payload LONGTEXT NULL,
+        error_message TEXT NULL,
+        confirmed_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_payment_tx_user (user_id),
+        INDEX idx_payment_tx_status (status),
+        INDEX idx_payment_tx_gateway (gateway_code),
+        INDEX idx_payment_tx_reference (provider_reference),
+        CONSTRAINT fk_payment_tx_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы payment_transactions: ' . $mysqli->error;
+    }
+
+    // Balance history
+    $mysqli->query("CREATE TABLE IF NOT EXISTS balance_history (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        delta DECIMAL(12,2) NOT NULL,
+        balance_before DECIMAL(12,2) NOT NULL,
+        balance_after DECIMAL(12,2) NOT NULL,
+        source VARCHAR(50) NOT NULL,
+        meta_json LONGTEXT NULL,
+        created_by_admin_id INT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_balance_history_user (user_id),
+        INDEX idx_balance_history_source (source),
+        CONSTRAINT fk_balance_history_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_balance_history_admin FOREIGN KEY (created_by_admin_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+    if ($mysqli->error) {
+        $errors[] = 'Ошибка создания таблицы balance_history: ' . $mysqli->error;
+    }
+
     // Promotion runs (cascade execution root)
     $mysqli->query("CREATE TABLE IF NOT EXISTS promotion_runs (
         id INT AUTO_INCREMENT PRIMARY KEY,

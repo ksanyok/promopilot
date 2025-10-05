@@ -101,7 +101,13 @@ if (empty($result['ok'])) {
         'USER_NOT_FOUND' => 'DB',
     ];
     $code = $result['error'] ?? 'UNKNOWN';
-    echo json_encode(['ok' => false, 'error' => $map[$code] ?? $code]);
+    $response = ['ok' => false, 'error' => $map[$code] ?? $code];
+    foreach (['shortfall', 'required', 'balance', 'discount_percent'] as $key) {
+        if (array_key_exists($key, $result)) {
+            $response[$key] = is_numeric($result[$key]) ? (float)$result[$key] : $result[$key];
+        }
+    }
+    echo json_encode($response, JSON_UNESCAPED_UNICODE);
     exit;
 }
 

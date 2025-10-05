@@ -296,7 +296,8 @@ if (!function_exists('pp_payment_transaction_get')) {
             $conn->close();
             return null;
         }
-        $stmt->bind_param('i', $transactionId);
+    $balanceEvent = null;
+    $stmt->bind_param('i', $transactionId);
         $stmt->execute();
         $res = $stmt->get_result();
         $row = $res ? $res->fetch_assoc() : null;
@@ -446,6 +447,32 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
         $stmt->bind_param('ssi', $status, $payloadJson, $transactionId);
         $stmt->execute();
         $stmt->close();
+        $userStmt = $conn->prepare("SELECT id, balance FROM users WHERE id = ? FOR UPDATE");
+        if (!$userStmt) {
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'Balance lock failed'];
+        }
+        $userStmt->bind_param('i', $row['user_id']);
+        if (!$userStmt->execute()) {
+            $userStmt->close();
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'Balance read failed'];
+        }
+        $userRes = $userStmt->get_result();
+        $userRow = $userRes ? $userRes->fetch_assoc() : null;
+        if ($userRes) {
+            $userRes->free();
+        }
+        $userStmt->close();
+        if (!$userRow) {
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'User missing'];
+        }
+        $balanceBefore = (float)$userRow['balance'];
+        $balanceAfter = round($balanceBefore + $creditAmount, 2);
         $stmt = $conn->prepare("UPDATE users SET balance = balance + ? WHERE id = ?");
         if (!$stmt) {
             $conn->rollback();
@@ -456,11 +483,28 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
         $stmt->bind_param('di', $creditAmount, $userId);
         $stmt->execute();
         $stmt->close();
+        $balanceEvent = pp_balance_record_event($conn, [
+            'user_id' => $userId,
+            'delta' => $creditAmount,
+            'balance_before' => $balanceBefore,
+            'balance_after' => $balanceAfter,
+            'source' => 'payment',
+            'meta' => [
+                'transaction_id' => $transactionId,
+                'gateway_code' => (string)$row['gateway_code'],
+                'currency' => (string)$row['currency'],
+                'amount_original' => (float)$row['amount'],
+                'provider_reference' => (string)($row['provider_reference'] ?? ''),
+            ],
+        ]);
         $conn->commit();
         $conn->close();
         $row['status'] = $status;
         $row['provider_payload'] = $payloadStruct;
         $row['confirmed_amount'] = $creditAmount;
+        if (!empty($balanceEvent)) {
+            pp_balance_send_event_notification($balanceEvent);
+        }
         return ['ok' => true, 'already' => false, 'transaction' => $row];
     }
 }

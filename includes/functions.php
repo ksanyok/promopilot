@@ -15,6 +15,8 @@ require_once __DIR__ . '/runtime.php';         // Node/Chrome and runner helpers
 require_once __DIR__ . '/network_check.php';   // Network diagnostics helpers
 require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base url, small utils)
 require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
+require_once __DIR__ . '/mailer.php';          // Email sending helper
+require_once __DIR__ . '/balance.php';         // Balance logging & notifications
 require_once __DIR__ . '/payments.php';        // Payment gateways and transactions
 require_once __DIR__ . '/networks.php';        // Networks registry and utilities
 require_once __DIR__ . '/crowd_links.php';     // Crowd marketing links management
@@ -882,6 +884,46 @@ function ensure_schema(): void {
             @$conn->query("INSERT IGNORE INTO `payment_gateways` (`code`,`title`,`is_enabled`,`config`,`instructions`,`sort_order`,`created_at`,`updated_at`) VALUES ('{$codeEsc}','{$titleEsc}',0,'{}','',{$sort},CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)");
         }
     } catch (Throwable $e) { /* ignore seeding errors */ }
+
+    // Balance change history table
+    $bhCols = $getCols('balance_history');
+    if (empty($bhCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `balance_history` (
+            `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `delta` DECIMAL(12,2) NOT NULL,
+            `balance_before` DECIMAL(12,2) NOT NULL,
+            `balance_after` DECIMAL(12,2) NOT NULL,
+            `source` VARCHAR(50) NOT NULL,
+            `meta_json` LONGTEXT NULL,
+            `created_by_admin_id` INT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_balance_history_user` (`user_id`),
+            INDEX `idx_balance_history_source` (`source`),
+            CONSTRAINT `fk_balance_history_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_balance_history_admin` FOREIGN KEY (`created_by_admin_id`) REFERENCES `users`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ensureBalanceCol = static function(string $column, string $ddl) use ($bhCols, $conn): void {
+            if (!isset($bhCols[$column])) {
+                @$conn->query("ALTER TABLE `balance_history` {$ddl}");
+            }
+        };
+        $ensureBalanceCol('user_id', "ADD COLUMN `user_id` INT NOT NULL AFTER `id`");
+        $ensureBalanceCol('delta', "ADD COLUMN `delta` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `user_id`");
+        $ensureBalanceCol('balance_before', "ADD COLUMN `balance_before` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `delta`");
+        $ensureBalanceCol('balance_after', "ADD COLUMN `balance_after` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `balance_before`");
+        $ensureBalanceCol('source', "ADD COLUMN `source` VARCHAR(50) NOT NULL DEFAULT 'system' AFTER `balance_after`");
+        $ensureBalanceCol('meta_json', "ADD COLUMN `meta_json` LONGTEXT NULL AFTER `source`");
+        $ensureBalanceCol('created_by_admin_id', "ADD COLUMN `created_by_admin_id` INT NULL AFTER `meta_json`");
+        $ensureBalanceCol('created_at', "ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `created_by_admin_id`");
+        if (pp_mysql_index_exists($conn, 'balance_history', 'idx_balance_history_user') === false) {
+            @$conn->query("CREATE INDEX `idx_balance_history_user` ON `balance_history`(`user_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'balance_history', 'idx_balance_history_source') === false) {
+            @$conn->query("CREATE INDEX `idx_balance_history_source` ON `balance_history`(`source`)");
+        }
+    }
 
     // Promotion cascade tables
     $promoRunsCols = $getCols('promotion_runs');

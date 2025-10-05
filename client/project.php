@@ -1397,6 +1397,44 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
     </div>
 </div>
 
+        <!-- Insufficient Funds Modal -->
+        <div class="modal fade modal-fixed-center" id="insufficientFundsModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning-subtle">
+                        <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i><?php echo __('Недостаточно средств'); ?></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-3"><?php echo __('Для запуска продвижения не хватает средств.'); ?></p>
+                        <div class="card shadow-sm border-0 mb-3">
+                            <div class="card-body py-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="text-muted"><?php echo __('Не хватает'); ?>:</span>
+                                    <strong class="fs-5" data-insufficient-amount>—</strong>
+                                </div>
+                                <div class="d-flex justify-content-between small text-muted mb-1">
+                                    <span><?php echo __('Стоимость запуска'); ?>:</span>
+                                    <span data-insufficient-required>—</span>
+                                </div>
+                                <div class="d-flex justify-content-between small text-muted">
+                                    <span><?php echo __('Текущий баланс'); ?>:</span>
+                                    <span data-insufficient-balance>—</span>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="mb-0 text-muted"><?php echo __('Пополните баланс, чтобы продолжить продвижение.'); ?></p>
+                    </div>
+                    <div class="modal-footer justify-content-between">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+                        <a href="<?php echo pp_url('client/balance.php'); ?>" class="btn btn-primary">
+                            <i class="bi bi-credit-card me-2"></i><?php echo __('Пополнить баланс'); ?>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
 <script>
 // Initialize Bootstrap tooltips
 (function(){
@@ -1421,6 +1459,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (addLinkModalEl && addLinkModalEl.parentElement !== document.body) { document.body.appendChild(addLinkModalEl); }
     const promotionConfirmModalEl = document.getElementById('promotionConfirmModal');
     if (promotionConfirmModalEl && promotionConfirmModalEl.parentElement !== document.body) { document.body.appendChild(promotionConfirmModalEl); }
+    const insufficientFundsModalEl = document.getElementById('insufficientFundsModal');
+    if (insufficientFundsModalEl && insufficientFundsModalEl.parentElement !== document.body) { document.body.appendChild(insufficientFundsModalEl); }
 
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
@@ -1433,6 +1473,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const useGlobal = document.getElementById('use_global_wish');
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
+
+    const insufficientAmountEl = insufficientFundsModalEl?.querySelector('[data-insufficient-amount]');
+    const insufficientRequiredEl = insufficientFundsModalEl?.querySelector('[data-insufficient-required]');
+    const insufficientBalanceEl = insufficientFundsModalEl?.querySelector('[data-insufficient-balance]');
 
     if (addLinkModalEl && window.bootstrap) {
         addLinkModalEl.addEventListener('shown.bs.modal', () => {
@@ -1543,6 +1587,47 @@ document.addEventListener('DOMContentLoaded', function() {
         return { amount: finalAmount, formatted: finalFormatted };
     }
 
+    function showInsufficientFundsModal(info) {
+        const modalInstance = getInsufficientFundsModalInstance();
+        if (!modalInstance) {
+            alert('<?php echo __('Недостаточно средств на балансе.'); ?>');
+            return;
+        }
+        const requiredRaw = coerceNumber(info?.required);
+        const balanceRaw = coerceNumber(info?.balance);
+        const shortfallRaw = coerceNumber(info?.shortfall);
+        const fallbackRequired = Number.isFinite(requiredRaw) ? requiredRaw : coerceNumber(PROMOTION_CHARGE_AMOUNT);
+        const computedShortfall = Number.isFinite(shortfallRaw)
+            ? shortfallRaw
+            : (Number.isFinite(fallbackRequired) && Number.isFinite(balanceRaw) ? Math.max(0, fallbackRequired - balanceRaw) : NaN);
+
+        if (insufficientAmountEl) {
+            insufficientAmountEl.textContent = Number.isFinite(computedShortfall)
+                ? formatBalanceLocale(computedShortfall)
+                : '—';
+        }
+
+        if (insufficientRequiredEl) {
+            const displayRequired = Number.isFinite(requiredRaw)
+                ? requiredRaw
+                : (Number.isFinite(fallbackRequired) ? fallbackRequired : NaN);
+            insufficientRequiredEl.textContent = Number.isFinite(displayRequired)
+                ? formatBalanceLocale(displayRequired)
+                : (PROMOTION_CHARGE_AMOUNT_FORMATTED || '—');
+        }
+
+        if (insufficientBalanceEl) {
+            const displayBalance = Number.isFinite(balanceRaw)
+                ? balanceRaw
+                : (Number.isFinite(CURRENT_USER_BALANCE_RAW) ? CURRENT_USER_BALANCE_RAW : coerceNumber(CURRENT_USER_BALANCE_RAW));
+            insufficientBalanceEl.textContent = Number.isFinite(displayBalance)
+                ? formatBalanceLocale(displayBalance)
+                : '—';
+        }
+
+        modalInstance.show();
+    }
+
     function setButtonLoading(btn, loading) {
         if (!btn) { return; }
         const spinnerMarkup = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>';
@@ -1583,6 +1668,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const getPromotionConfirmModalInstance = () => {
         if (!promotionConfirmModalEl || !window.bootstrap) { return null; }
         return bootstrap.Modal.getOrCreateInstance(promotionConfirmModalEl);
+    };
+
+    const getInsufficientFundsModalInstance = () => {
+        if (!insufficientFundsModalEl || !window.bootstrap) { return null; }
+        return bootstrap.Modal.getOrCreateInstance(insufficientFundsModalEl);
     };
 
     if (promotionConfirmModalEl && window.bootstrap) {
@@ -2566,13 +2656,21 @@ document.addEventListener('DOMContentLoaded', function() {
             const res = await fetch('<?php echo pp_url('public/promote_link.php'); ?>', { method: 'POST', body: fd, credentials: 'same-origin' });
             const data = await res.json().catch(()=>null);
             if (!data || !data.ok) {
-                let msg = data?.error || 'ERROR';
+                const errorCode = data?.error || 'ERROR';
+                if (errorCode === 'INSUFFICIENT_FUNDS') {
+                    showInsufficientFundsModal({
+                        shortfall: data?.shortfall,
+                        required: data?.required,
+                        balance: data?.balance,
+                    });
+                    return;
+                }
+                let msg = errorCode;
                 const map = {
                     'LEVEL1_DISABLED': '<?php echo __('Уровень 1 отключен в настройках.'); ?>',
                     'URL_NOT_IN_PROJECT': '<?php echo __('Ссылка не принадлежит проекту.'); ?>',
                     'DB': '<?php echo __('Ошибка базы данных'); ?>',
-                    'FORBIDDEN': '<?php echo __('Нет прав'); ?>',
-                    'INSUFFICIENT_FUNDS': '<?php echo __('Недостаточно средств на балансе.'); ?>'
+                    'FORBIDDEN': '<?php echo __('Нет прав'); ?>'
                 };
                 if (map[msg]) { msg = map[msg]; }
                 alert('<?php echo __('Ошибка запуска продвижения'); ?>: ' + msg);
@@ -2600,6 +2698,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateClientBalance(Math.max(0, priorBalance - chargedAmount), '');
             }
             await pollPromotionStatusesOnce();
+            setTimeout(() => { window.location.reload(); }, 600);
+            return;
         } catch (e) {
             console.error('Promotion start failed', e);
             if (PP_PAGE_UNLOADING || (e && e.name === 'AbortError')) {

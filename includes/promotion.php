@@ -714,6 +714,7 @@ if (!function_exists('pp_promotion_start_run')) {
         $runId = 0;
         $chargedAmount = 0.0;
         $discountPercent = 0.0;
+        $balanceEvent = null;
         try {
             $conn->begin_transaction();
             $userStmt = $conn->prepare('SELECT balance, promotion_discount FROM users WHERE id = ? LIMIT 1 FOR UPDATE');
@@ -743,10 +744,20 @@ if (!function_exists('pp_promotion_start_run')) {
             $balanceAfter = $balance;
 
             if ($chargedAmount > 0 && ($balance + 1e-6) < $chargedAmount) {
+                $shortfall = max(0.0, round($chargedAmount - $balance, 2));
                 $conn->rollback();
                 $conn->close();
-                return ['ok' => false, 'error' => 'INSUFFICIENT_FUNDS'];
+                return [
+                    'ok' => false,
+                    'error' => 'INSUFFICIENT_FUNDS',
+                    'required' => $chargedAmount,
+                    'balance' => $balance,
+                    'shortfall' => $shortfall,
+                    'discount_percent' => $discountPercent,
+                ];
             }
+
+            $linkId = (int)$linkRow['id'];
 
             if ($chargedAmount > 0) {
                 $upd = $conn->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
@@ -764,6 +775,18 @@ if (!function_exists('pp_promotion_start_run')) {
                 }
                 $upd->close();
                 $balanceAfter = max(0.0, round($balance - $chargedAmount, 2));
+                $balanceEvent = pp_balance_record_event($conn, [
+                    'user_id' => $userId,
+                    'delta' => -$chargedAmount,
+                    'balance_before' => $balance,
+                    'balance_after' => $balanceAfter,
+                    'source' => 'promotion',
+                    'meta' => [
+                        'project_id' => $projectId,
+                        'link_id' => $linkId,
+                        'target_url' => $url,
+                    ],
+                ]);
             }
 
             $stmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent) VALUES (?, ?, ?, \'queued\', \'pending_level1\', ?, ?, ?, ?)');
@@ -772,7 +795,6 @@ if (!function_exists('pp_promotion_start_run')) {
                 $conn->close();
                 return ['ok' => false, 'error' => 'DB'];
             }
-            $linkId = (int)$linkRow['id'];
             $stmt->bind_param('iisisdd', $projectId, $linkId, $url, $userId, $settingsJson, $chargedAmount, $discountPercent);
             if (!$stmt->execute()) {
                 $stmt->close();
@@ -789,6 +811,15 @@ if (!function_exists('pp_promotion_start_run')) {
             return ['ok' => false, 'error' => 'DB'];
         }
         $conn->close();
+        if ($balanceEvent && $runId > 0) {
+            if (!isset($balanceEvent['meta']) || !is_array($balanceEvent['meta'])) {
+                $balanceEvent['meta'] = [];
+            }
+            $balanceEvent['meta']['run_id'] = $runId;
+        }
+        if ($balanceEvent) {
+            pp_balance_send_event_notification($balanceEvent);
+        }
         if ($runId > 0) {
             pp_promotion_log('promotion.run_created', [
                 'run_id' => $runId,

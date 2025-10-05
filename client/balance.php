@@ -44,6 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_topup'])) {
 }
 
 $transactions = pp_payment_transactions_for_user($userId, 50, 0);
+$balanceHistory = pp_balance_history_for_user($userId, 25, 0);
 
 $pp_container = false;
 $GLOBALS['pp_layout_has_sidebar'] = true;
@@ -274,6 +275,73 @@ function pp_client_tx_status_badge(string $status): string {
                                         <span class="text-danger"><?php echo htmlspecialchars($tx['error_message']); ?></span>
                                     <?php elseif (!empty($tx['customer_payload']['payment_url'])): ?>
                                         <a href="<?php echo htmlspecialchars($tx['customer_payload']['payment_url']); ?>" target="_blank" rel="noopener"><?php echo __('Ссылка на оплату'); ?></a>
+                                    <?php else: ?>
+                                        <span class="text-muted">—</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h2 class="h5 mb-0"><?php echo __('История изменений баланса'); ?></h2>
+            <span class="badge bg-light text-dark"><?php echo count($balanceHistory); ?></span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th><?php echo __('Дата'); ?></th>
+                        <th><?php echo __('Изменение'); ?></th>
+                        <th><?php echo __('Баланс после изменения'); ?></th>
+                        <th><?php echo __('Причина'); ?></th>
+                        <th><?php echo __('Комментарий администратора'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($balanceHistory)): ?>
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4"><?php echo __('Событий истории пока нет.'); ?></td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($balanceHistory as $event): ?>
+                            <?php
+                                $delta = (float)$event['delta'];
+                                $after = format_currency((float)$event['balance_after']);
+                                $changeClass = $delta >= 0 ? 'text-success fw-semibold' : 'text-danger fw-semibold';
+                                $comment = pp_balance_event_comment($event);
+                                $adminName = '';
+                                if (!empty($event['admin_full_name'])) {
+                                    $adminName = $event['admin_full_name'];
+                                } elseif (!empty($event['admin_username'])) {
+                                    $adminName = $event['admin_username'];
+                                }
+                            ?>
+                            <tr>
+                                <td>
+                                    <div class="small fw-semibold text-dark"><?php echo htmlspecialchars((string)$event['created_at']); ?></div>
+                                    <?php if ($adminName !== ''): ?>
+                                        <div class="small text-muted"><?php echo __('Администратор'); ?>: <?php echo htmlspecialchars($adminName); ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="<?php echo $changeClass; ?>">
+                                    <?php echo htmlspecialchars(pp_balance_sign_amount($delta)); ?>
+                                </td>
+                                <td>
+                                    <span class="small fw-semibold text-dark"><?php echo htmlspecialchars($after); ?></span>
+                                </td>
+                                <td>
+                                    <div class="small text-muted mb-1"><?php echo htmlspecialchars(pp_balance_event_reason($event)); ?></div>
+                                    <span class="badge bg-light text-dark text-uppercase small"><?php echo htmlspecialchars($event['source']); ?></span>
+                                </td>
+                                <td>
+                                    <?php if ($comment !== null): ?>
+                                        <div class="small text-break"><?php echo nl2br(htmlspecialchars($comment)); ?></div>
                                     <?php else: ?>
                                         <span class="text-muted">—</span>
                                     <?php endif; ?>
