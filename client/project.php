@@ -2731,6 +2731,19 @@ document.addEventListener('DOMContentLoaded', function() {
     let PP_PAGE_UNLOADING = false;
     window.addEventListener('beforeunload', () => { PP_PAGE_UNLOADING = true; });
 
+    let PROMOTION_RELOAD_TIMER = null;
+    function schedulePromotionReload(delayMs = 900) {
+        const delay = Number.isFinite(delayMs) ? Math.max(300, delayMs) : 900;
+        if (PROMOTION_RELOAD_TIMER !== null) { return; }
+        PROMOTION_RELOAD_TIMER = window.setTimeout(() => {
+            try {
+                window.location.reload();
+            } catch (_e) {
+                window.location.href = window.location.href.split('#')[0];
+            }
+        }, delay);
+    }
+
     async function startPromotion(btn, url) {
         const csrf = getCsrfToken();
         if (!csrf) { alert('CSRF missing'); return; }
@@ -2790,7 +2803,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateClientBalance(Math.max(0, priorBalance - chargedAmount), '');
             }
             await pollPromotionStatusesOnce();
-            setTimeout(() => { window.location.reload(); }, 600);
+            schedulePromotionReload(800);
             return;
         } catch (e) {
             console.error('Promotion start failed', e);
@@ -2806,6 +2819,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } catch (_) {}
             if (tr && (statusAfterPoll === 'queued' || isPromotionActiveStatus(statusAfterPoll))) {
+                schedulePromotionReload(1500);
                 return;
             }
             alert('<?php echo __('Сетевая ошибка'); ?>');

@@ -980,6 +980,25 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
         $hasComment = false;
         $radioGroups = [];
         $commentFieldName = null;
+        $overridesRaw = isset($identity['overrides']) && is_array($identity['overrides']) ? $identity['overrides'] : [];
+        $overrides = [];
+        foreach ($overridesRaw as $overrideName => $overrideValue) {
+            if (!is_string($overrideName) || trim($overrideName) === '') {
+                continue;
+            }
+            if (is_array($overrideValue)) {
+                $values = [];
+                foreach ($overrideValue as $item) {
+                    if ($item === null) { continue; }
+                    $values[] = (string)$item;
+                }
+                if (!empty($values)) {
+                    $overrides[$overrideName] = $values;
+                }
+            } elseif ($overrideValue !== null) {
+                $overrides[$overrideName] = [(string)$overrideValue];
+            }
+        }
         $nodeList = $xp->query('.//input | .//textarea | .//select', $form);
         $recaptchaPresent = false;
         if ($nodeList) {
@@ -989,6 +1008,30 @@ if (!function_exists('pp_crowd_deep_prepare_fields')) {
                 $name = trim((string)$node->getAttribute('name'));
                 if ($info['role'] === 'captcha') {
                     $recaptchaPresent = true;
+                }
+                if ($name !== '' && !in_array($info['role'], ['captcha','file','honeypot'], true) && array_key_exists($name, $overrides)) {
+                    $overrideValues = $overrides[$name];
+                    if (!empty($overrideValues)) {
+                        $fields[$name] = $overrideValues;
+                        if (!$hasComment) {
+                            if ($info['role'] === 'comment') {
+                                $hasComment = true;
+                                $commentFieldName = $name;
+                            } elseif (count($overrideValues) === 1 && isset($identity['message'])) {
+                                $originalBody = (string)$identity['message'];
+                                $candidate = (string)$overrideValues[0];
+                                if ($originalBody !== '' && $candidate !== '') {
+                                    $origNorm = function_exists('mb_strtolower') ? mb_strtolower($originalBody, 'UTF-8') : strtolower($originalBody);
+                                    $candNorm = function_exists('mb_strtolower') ? mb_strtolower($candidate, 'UTF-8') : strtolower($candidate);
+                                    if ($origNorm === $candNorm || strpos($origNorm, $candNorm) !== false || strpos($candNorm, $origNorm) !== false) {
+                                        $hasComment = true;
+                                        $commentFieldName = $name;
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                 }
                 if ($info['role'] === 'hidden') {
                     if ($name !== '') {
@@ -1131,6 +1174,25 @@ if (!function_exists('pp_crowd_deep_prepare_fields_from_container')) {
         $radioGroups = [];
         $commentFieldName = null;
         $recaptchaPresent = false;
+        $overridesRaw = isset($identity['overrides']) && is_array($identity['overrides']) ? $identity['overrides'] : [];
+        $overrides = [];
+        foreach ($overridesRaw as $overrideName => $overrideValue) {
+            if (!is_string($overrideName) || trim($overrideName) === '') {
+                continue;
+            }
+            if (is_array($overrideValue)) {
+                $values = [];
+                foreach ($overrideValue as $item) {
+                    if ($item === null) { continue; }
+                    $values[] = (string)$item;
+                }
+                if (!empty($values)) {
+                    $overrides[$overrideName] = $values;
+                }
+            } elseif ($overrideValue !== null) {
+                $overrides[$overrideName] = [(string)$overrideValue];
+            }
+        }
         $formId = $form instanceof DOMElement ? (string)$form->getAttribute('id') : '';
         // pick all controls under the container that are not inside another form
         $nodeList = $xp->query('.//input[not(ancestor::form)] | .//textarea[not(ancestor::form)] | .//select[not(ancestor::form)]', $container);
@@ -1145,6 +1207,30 @@ if (!function_exists('pp_crowd_deep_prepare_fields_from_container')) {
                 $info = pp_crowd_deep_classify_field($node, $xp);
                 $name = trim((string)$node->getAttribute('name'));
                 if ($info['role'] === 'captcha') { $recaptchaPresent = true; }
+                if ($name !== '' && !in_array($info['role'], ['captcha','file','honeypot'], true) && array_key_exists($name, $overrides)) {
+                    $overrideValues = $overrides[$name];
+                    if (!empty($overrideValues)) {
+                        $fields[$name] = $overrideValues;
+                        if (!$hasComment) {
+                            if ($info['role'] === 'comment') {
+                                $hasComment = true;
+                                $commentFieldName = $name;
+                            } elseif (count($overrideValues) === 1 && isset($identity['message'])) {
+                                $originalBody = (string)$identity['message'];
+                                $candidate = (string)$overrideValues[0];
+                                if ($originalBody !== '' && $candidate !== '') {
+                                    $origNorm = function_exists('mb_strtolower') ? mb_strtolower($originalBody, 'UTF-8') : strtolower($originalBody);
+                                    $candNorm = function_exists('mb_strtolower') ? mb_strtolower($candidate, 'UTF-8') : strtolower($candidate);
+                                    if ($origNorm === $candNorm || strpos($origNorm, $candNorm) !== false || strpos($candNorm, $origNorm) !== false) {
+                                        $hasComment = true;
+                                        $commentFieldName = $name;
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
                 if ($info['role'] === 'hidden') {
                     if ($name !== '') { $fields[$name][] = $node->getAttribute('value'); }
                     continue;

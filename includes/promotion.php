@@ -928,6 +928,335 @@ if (!function_exists('pp_promotion_launch_worker')) {
     }
 }
 
+if (!function_exists('pp_promotion_launch_crowd_worker')) {
+    function pp_promotion_launch_crowd_worker(?int $taskId = null): bool {
+        $script = PP_ROOT_PATH . '/scripts/promotion_crowd_worker.php';
+        if (!is_file($script)) { return false; }
+        $phpBinary = PHP_BINARY ?: 'php';
+        $args = $taskId ? ' ' . (int)$taskId : '';
+        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        $success = false;
+        if ($isWindows) {
+            $cmd = 'start /B "" ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args;
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $success = true;
+            }
+            return $success;
+        }
+        $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args . ' > /dev/null 2>&1 &';
+        if (function_exists('popen')) {
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $success = true;
+            }
+        }
+        if (!$success) {
+            $execResult = @exec($cmd, $output, $status);
+            if ($status === 0) {
+                $success = true;
+            }
+        }
+        return $success;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_claim_task')) {
+    function pp_promotion_crowd_claim_task(mysqli $conn, ?int $specificTaskId = null): ?array {
+        $taskId = null;
+        if ($specificTaskId !== null && $specificTaskId > 0) {
+            $taskId = $specificTaskId;
+            $stmt = $conn->prepare("UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('planned','queued','running') LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $taskId);
+                $stmt->execute();
+                if ($stmt->affected_rows === 0) {
+                    $stmt->close();
+                    return null;
+                }
+                $stmt->close();
+            } else {
+                return null;
+            }
+        } else {
+            if ($res = @$conn->query("SELECT id FROM promotion_crowd_tasks WHERE status IN ('planned','queued') ORDER BY id ASC LIMIT 1")) {
+                if ($row = $res->fetch_assoc()) {
+                    $taskId = (int)($row['id'] ?? 0);
+                }
+                $res->free();
+            }
+            if (!$taskId) {
+                return null;
+            }
+            $stmt = $conn->prepare("UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('planned','queued') LIMIT 1");
+            if (!$stmt) {
+                return null;
+            }
+            $stmt->bind_param('i', $taskId);
+            $stmt->execute();
+            if ($stmt->affected_rows === 0) {
+                $stmt->close();
+                return null;
+            }
+            $stmt->close();
+        }
+
+        $task = null;
+        $stmt = $conn->prepare('SELECT * FROM promotion_crowd_tasks WHERE id = ? LIMIT 1');
+        if ($stmt) {
+            $stmt->bind_param('i', $taskId);
+            if ($stmt->execute()) {
+                $task = $stmt->get_result()->fetch_assoc();
+            }
+            $stmt->close();
+        }
+        return $task ?: null;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_process_task')) {
+    function pp_promotion_crowd_process_task(mysqli $conn, array $task): void {
+        $taskId = (int)($task['id'] ?? 0);
+        $runId = (int)($task['run_id'] ?? 0);
+        if ($taskId <= 0 || $runId <= 0) {
+            return;
+        }
+
+        $payload = [];
+        if (!empty($task['payload_json'])) {
+            $decoded = json_decode((string)$task['payload_json'], true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            }
+        }
+        $variant = $payload;
+        $body = trim((string)($variant['body'] ?? ''));
+        $body = pp_promotion_clean_text($body);
+        if ($body === '') {
+            $body = __('Коллеги, обратите внимание на материал:') . ' ' . (string)($variant['target_url'] ?? $task['target_url'] ?? '');
+        }
+        $subject = pp_promotion_clean_text((string)($variant['subject'] ?? ''));
+        if ($subject === '') {
+            $subject = __('Комментарий к статье');
+        }
+        $authorName = trim((string)($variant['author_name'] ?? ''));
+        if ($authorName === '') {
+            $authorName = 'PromoPilot Автор';
+        }
+        $token = trim((string)($variant['token'] ?? ''));
+        if ($token === '') {
+            try {
+                $token = substr(bin2hex(random_bytes(8)), 0, 12);
+            } catch (Throwable $e) {
+                $token = substr(sha1($authorName . microtime(true)), 0, 12);
+            }
+        }
+        $articleUrl = trim((string)($variant['target_url'] ?? $task['target_url'] ?? ''));
+        if ($articleUrl === '' && !empty($task['target_url'])) {
+            $articleUrl = (string)$task['target_url'];
+        }
+        $authorEmail = trim((string)($variant['author_email'] ?? ''));
+        if ($authorEmail === '') {
+            $emailSlug = pp_promotion_make_email_slug($authorName);
+            $authorEmail = $emailSlug . '+' . strtolower($token) . '@example.com';
+        }
+
+        $runRow = null;
+        $stmtRun = $conn->prepare('SELECT project_id FROM promotion_runs WHERE id = ? LIMIT 1');
+        if ($stmtRun) {
+            $stmtRun->bind_param('i', $runId);
+            if ($stmtRun->execute()) {
+                $runRow = $stmtRun->get_result()->fetch_assoc();
+            }
+            $stmtRun->close();
+        }
+        $projectId = (int)($runRow['project_id'] ?? 0);
+        $projectRow = $projectId > 0 ? pp_promotion_fetch_project($conn, $projectId) : null;
+        $projectName = trim((string)($projectRow['name'] ?? 'PromoPilot'));
+        if ($projectName === '') {
+            $projectName = 'PromoPilot';
+        }
+
+        $overrides = [];
+        if (!empty($variant['form_values']) && is_array($variant['form_values'])) {
+            foreach ($variant['form_values'] as $fieldName => $fieldValue) {
+                if (!is_string($fieldName) || $fieldName === '') { continue; }
+                if (is_array($fieldValue)) {
+                    $values = [];
+                    foreach ($fieldValue as $fv) {
+                        if ($fv === null) { continue; }
+                        $values[] = (string)$fv;
+                    }
+                    if (!empty($values)) {
+                        $overrides[$fieldName] = $values;
+                    }
+                } elseif ($fieldValue !== null) {
+                    $overrides[$fieldName] = [(string)$fieldValue];
+                }
+            }
+        }
+
+        $identity = [
+            'token' => $token,
+            'message' => $body,
+            'email' => $authorEmail,
+            'name' => $authorName,
+            'website' => $articleUrl !== '' ? $articleUrl : 'https://example.com/',
+            'phone' => pp_promotion_generate_fake_phone(),
+            'password' => substr(sha1($authorEmail . microtime(true)), 0, 12),
+            'company' => $projectName,
+            'fallback' => $projectName,
+            'overrides' => $overrides,
+        ];
+
+        $linkUrl = isset($variant['crowd_link_url']) ? trim((string)$variant['crowd_link_url']) : '';
+        $crowdLinkId = isset($task['crowd_link_id']) ? (int)$task['crowd_link_id'] : 0;
+        if ($linkUrl === '' && $crowdLinkId > 0) {
+            if ($resLink = @$conn->query('SELECT url FROM crowd_links WHERE id=' . $crowdLinkId . ' LIMIT 1')) {
+                if ($rowLink = $resLink->fetch_assoc()) {
+                    $linkUrl = trim((string)($rowLink['url'] ?? ''));
+                }
+                $resLink->free();
+            }
+        }
+        if ($linkUrl === '') {
+            $linkUrl = $articleUrl !== '' ? $articleUrl : (string)($task['target_url'] ?? '');
+        }
+        if ($linkUrl === '') {
+            $statusFallback = 'manual';
+            $payload['auto_result'] = [
+                'status' => 'skipped',
+                'error' => 'Missing crowd link URL',
+                'completed_at' => gmdate('c'),
+            ];
+            $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: '{}';
+            $stmtUpdate = $conn->prepare('UPDATE promotion_crowd_tasks SET status=?, payload_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1');
+            if ($stmtUpdate) {
+                $stmtUpdate->bind_param('ssi', $statusFallback, $payloadJson, $taskId);
+                $stmtUpdate->execute();
+                $stmtUpdate->close();
+            }
+            pp_promotion_log('promotion.crowd.task_missing_url', ['task_id' => $taskId, 'run_id' => $runId]);
+            return;
+        }
+
+        $result = pp_crowd_deep_handle_link(['id' => $crowdLinkId, 'url' => $linkUrl], $identity, []);
+
+        $finalStatus = 'failed';
+        $needsReview = false;
+        switch ($result['status']) {
+            case 'success':
+                $finalStatus = 'completed';
+                break;
+            case 'partial':
+                $finalStatus = 'completed';
+                $needsReview = true;
+                break;
+            case 'blocked':
+                $finalStatus = 'blocked';
+                break;
+            case 'no_form':
+            case 'skipped':
+                $finalStatus = 'manual';
+                break;
+            default:
+                $finalStatus = 'failed';
+                break;
+        }
+
+        if ($finalStatus === 'manual') {
+            $payload['manual_fallback'] = true;
+            if (empty($payload['fallback_reason'])) {
+                $payload['fallback_reason'] = $result['status'];
+            }
+        } else {
+            $payload['manual_fallback'] = false;
+            if ($finalStatus === 'completed') {
+                $payload['fallback_reason'] = null;
+            }
+        }
+
+        $payload['body'] = $body;
+        $payload['subject'] = $subject;
+        $payload['author_name'] = $authorName;
+        $payload['author_email'] = $authorEmail;
+        $payload['token'] = $token;
+        if (!empty($overrides)) {
+            $payload['form_values'] = $overrides;
+        }
+        $payload['auto_result'] = [
+            'status' => $result['status'],
+            'http_status' => $result['http_status'] ?? null,
+            'error' => $result['error'] ?? null,
+            'message_excerpt' => $result['message_excerpt'] ?? null,
+            'response_excerpt' => $result['response_excerpt'] ?? null,
+            'evidence_url' => $result['evidence_url'] ?? null,
+            'request_payload' => $result['request_payload'] ?? null,
+            'duration_ms' => $result['duration_ms'] ?? null,
+            'needs_review' => $needsReview,
+            'completed_at' => gmdate('c'),
+        ];
+        $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($payloadJson === false) {
+            $payloadJson = '{}';
+        }
+
+        $resultUrl = trim((string)($result['evidence_url'] ?? ''));
+        if ($resultUrl === '' && isset($payload['crowd_link_url'])) {
+            $resultUrl = trim((string)$payload['crowd_link_url']);
+        }
+        if ($resultUrl === '') {
+            $resultUrl = $linkUrl;
+        }
+
+        $stmt = $conn->prepare('UPDATE promotion_crowd_tasks SET status=?, result_url=?, payload_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1');
+        if ($stmt) {
+            $resultParam = $resultUrl !== '' ? $resultUrl : null;
+            $stmt->bind_param('sssi', $finalStatus, $resultParam, $payloadJson, $taskId);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        pp_promotion_log('promotion.crowd.task_processed', [
+            'task_id' => $taskId,
+            'run_id' => $runId,
+            'status' => $finalStatus,
+            'result' => $result['status'],
+            'needs_review' => $needsReview,
+            'link_url' => $linkUrl,
+        ]);
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker')) {
+    function pp_promotion_crowd_worker(?int $specificTaskId = null, int $maxIterations = 20): void {
+        if (function_exists('session_write_close')) { @session_write_close(); }
+        @ignore_user_abort(true);
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.crowd.worker_db_error', ['error' => $e->getMessage()]);
+            return;
+        }
+        if (!$conn) {
+            pp_promotion_log('promotion.crowd.worker_db_unavailable', []);
+            return;
+        }
+        for ($i = 0; $i < $maxIterations; $i++) {
+            $task = pp_promotion_crowd_claim_task($conn, $specificTaskId);
+            $specificTaskId = null;
+            if (!$task) {
+                break;
+            }
+            pp_promotion_crowd_process_task($conn, $task);
+            usleep(200000);
+        }
+        $conn->close();
+    }
+}
+
 if (!function_exists('pp_promotion_get_level_requirements')) {
     function pp_promotion_get_level_requirements(): array {
         $settings = pp_promotion_settings();
@@ -1401,6 +1730,302 @@ if (!function_exists('pp_promotion_make_email_slug')) {
     }
 }
 
+if (!function_exists('pp_promotion_normalize_crowd_field_name')) {
+    function pp_promotion_normalize_crowd_field_name(string $name): string {
+        $base = trim($name);
+        if ($base === '') { return ''; }
+        $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $base);
+        if ($ascii === false || $ascii === '') { $ascii = $base; }
+        $normalized = strtolower((string)$ascii);
+        $normalized = preg_replace('~[^a-z0-9]+~', '_', $normalized ?? '');
+        $normalized = trim((string)$normalized, '_');
+        if ($normalized === '') {
+            $normalized = strtolower(preg_replace('~[^a-z0-9]+~', '_', $base));
+            $normalized = trim((string)$normalized, '_');
+        }
+        return $normalized;
+    }
+}
+
+if (!function_exists('pp_promotion_parse_crowd_required_fields')) {
+    /**
+     * @param mixed $raw
+     * @return array<int, array{name: string, type: ?string, normalized: string, raw: string}>
+     */
+    function pp_promotion_parse_crowd_required_fields($raw): array {
+        if (is_array($raw) && !empty($raw)) {
+            $first = reset($raw);
+            if (is_array($first) && isset($first['name'])) {
+                $fields = [];
+                foreach ($raw as $entry) {
+                    if (!is_array($entry)) { continue; }
+                    $name = trim((string)($entry['name'] ?? $entry['field'] ?? ''));
+                    if ($name === '') { continue; }
+                    $type = isset($entry['type']) ? strtolower(trim((string)$entry['type'])) : null;
+                    if ($type === '') { $type = null; }
+                    $normalized = pp_promotion_normalize_crowd_field_name($name);
+                    $fields[] = [
+                        'name' => $name,
+                        'type' => $type,
+                        'normalized' => $normalized,
+                        'raw' => isset($entry['raw']) ? (string)$entry['raw'] : ($type ? ($name . ':' . $type) : $name),
+                    ];
+                }
+                return $fields;
+            }
+        }
+
+        $fields = [];
+        $seen = [];
+        $append = static function(string $name, ?string $type = null, ?string $rawToken = null) use (&$fields, &$seen): void {
+            $cleanName = trim($name);
+            if ($cleanName === '') { return; }
+            $typeClean = $type !== null ? strtolower(trim($type)) : null;
+            if ($typeClean === '') { $typeClean = null; }
+            $normalized = pp_promotion_normalize_crowd_field_name($cleanName);
+            $key = $normalized !== '' ? $normalized : strtolower($cleanName);
+            if ($typeClean) { $key .= ':' . $typeClean; }
+            if (isset($seen[$key])) { return; }
+            $seen[$key] = true;
+            $fields[] = [
+                'name' => $cleanName,
+                'type' => $typeClean,
+                'normalized' => $normalized,
+                'raw' => $rawToken ?? ($typeClean ? ($cleanName . ':' . $typeClean) : $cleanName),
+            ];
+        };
+
+        if (is_array($raw)) {
+            foreach ($raw as $entry) {
+                if (is_string($entry)) {
+                    $entry = trim($entry);
+                    if ($entry === '') { continue; }
+                    $type = null;
+                    $name = $entry;
+                    if (strpos($entry, ':') !== false) {
+                        [$namePart, $typePart] = array_map('trim', explode(':', $entry, 2));
+                        $name = $namePart;
+                        $type = $typePart !== '' ? $typePart : null;
+                    }
+                    $append($name, $type, $entry);
+                } elseif (is_array($entry)) {
+                    $name = trim((string)($entry['name'] ?? $entry['field'] ?? ''));
+                    if ($name === '') { continue; }
+                    $type = isset($entry['type']) ? (string)$entry['type'] : null;
+                    $append($name, $type, null);
+                }
+            }
+            return $fields;
+        }
+
+        $rawString = trim((string)$raw);
+        if ($rawString === '') { return []; }
+
+        $decoded = null;
+        if ($rawString !== '' && ($rawString[0] === '[' || $rawString[0] === '{')) {
+            $decoded = json_decode($rawString, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $entry) {
+                    if (is_string($entry)) {
+                        $entry = trim($entry);
+                        if ($entry === '') { continue; }
+                        $type = null;
+                        $name = $entry;
+                        if (strpos($entry, ':') !== false) {
+                            [$namePart, $typePart] = array_map('trim', explode(':', $entry, 2));
+                            $name = $namePart;
+                            $type = $typePart !== '' ? $typePart : null;
+                        }
+                        $append($name, $type, $entry);
+                    } elseif (is_array($entry)) {
+                        $name = trim((string)($entry['name'] ?? $entry['field'] ?? ''));
+                        if ($name === '') { continue; }
+                        $type = isset($entry['type']) ? (string)$entry['type'] : null;
+                        $append($name, $type, null);
+                    }
+                }
+                if (!empty($fields)) { return $fields; }
+            }
+        }
+
+        $normalizedRaw = str_replace(["\n", "\r", ';', '|'], ',', $rawString);
+        $parts = array_filter(array_map('trim', explode(',', $normalizedRaw)));
+        foreach ($parts as $part) {
+            $type = null;
+            $name = $part;
+            if (strpos($part, ':') !== false) {
+                [$namePart, $typePart] = array_map('trim', explode(':', $part, 2));
+                $name = $namePart;
+                $type = $typePart !== '' ? $typePart : null;
+            }
+            $append($name, $type, $part);
+        }
+
+        return $fields;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_field_is_blocked')) {
+    function pp_promotion_crowd_field_is_blocked(array $field): bool {
+        $normalized = strtolower((string)($field['normalized'] ?? ''));
+        $type = strtolower((string)($field['type'] ?? ''));
+        $blockedKeywords = ['captcha', 'recaptcha', 'antispam', 'anti_spam', 'security', 'security_code', 'securitycode', 'math', 'arithmetic', 'equation', 'sum', 'quiz', 'riddle', 'answer', 'botcheck', 'bot_check', 'g_recaptcha_response'];
+        foreach ($blockedKeywords as $kw) {
+            if ($kw !== '' && strpos($normalized, $kw) !== false) {
+                return true;
+            }
+        }
+        if ($type !== '' && in_array($type, ['captcha','recaptcha','antispam','anti-spam','math'], true)) {
+            return true;
+        }
+        return false;
+    }
+}
+
+if (!function_exists('pp_promotion_generate_fake_phone')) {
+    function pp_promotion_generate_fake_phone(): string {
+        try {
+            $number = (string)random_int(1000000000, 9999999999);
+        } catch (Throwable $e) {
+            $number = (string)mt_rand(1000000000, 9999999999);
+        }
+        $formatted = '+7 ' . substr($number, 0, 3) . ' ' . substr($number, 3, 3) . '-' . substr($number, 6, 2) . '-' . substr($number, 8, 2);
+        return $formatted;
+    }
+}
+
+if (!function_exists('pp_promotion_generate_crowd_field_value')) {
+    function pp_promotion_generate_crowd_field_value(array $field, array $variant, array $project, string $targetUrl, ?array $articleContext = null): ?string {
+        $fieldName = (string)($field['name'] ?? '');
+        $normalized = (string)($field['normalized'] ?? pp_promotion_normalize_crowd_field_name($fieldName));
+        $normalized = strtolower($normalized);
+        $fieldType = strtolower((string)($field['type'] ?? ''));
+
+        $articleTitle = trim((string)($articleContext['title'] ?? $variant['subject'] ?? $project['name'] ?? __('Материал')));
+        if ($articleTitle === '') { $articleTitle = __('Материал'); }
+        $articleSummary = trim((string)($articleContext['summary'] ?? $articleContext['excerpt'] ?? ''));
+        $authorName = trim((string)($variant['author_name'] ?? ''));
+        $authorEmail = trim((string)($variant['author_email'] ?? ''));
+        $body = trim((string)($variant['body'] ?? ''));
+        $subject = trim((string)($variant['subject'] ?? $articleTitle));
+        $projectName = trim((string)($project['name'] ?? $authorName));
+        $projectRegion = trim((string)($project['region'] ?? ''));
+        $articleKeywords = [];
+        if (!empty($articleContext['keywords']) && is_array($articleContext['keywords'])) {
+            foreach ($articleContext['keywords'] as $kw) {
+                $kw = trim((string)$kw);
+                if ($kw !== '') { $articleKeywords[] = $kw; }
+            }
+        }
+
+        $value = null;
+        if ($normalized !== '') {
+            if (strpos($normalized, 'comment') !== false || strpos($normalized, 'message') !== false || strpos($normalized, 'body') !== false || strpos($normalized, 'text') !== false || strpos($normalized, 'content') !== false) {
+                $value = $body !== '' ? $body : $subject;
+            } elseif (strpos($normalized, 'subject') !== false || strpos($normalized, 'topic') !== false || strpos($normalized, 'headline') !== false || strpos($normalized, 'title') !== false) {
+                $value = $subject;
+            } elseif (strpos($normalized, 'name') !== false || strpos($normalized, 'author') !== false || strpos($normalized, 'fio') !== false || strpos($normalized, 'nick') !== false || strpos($normalized, 'user') !== false) {
+                $value = $authorName !== '' ? $authorName : $projectName;
+            } elseif (strpos($normalized, 'mail') !== false || strpos($normalized, 'email') !== false || strpos($normalized, 'e_mail') !== false) {
+                $value = $authorEmail;
+            } elseif (strpos($normalized, 'url') !== false || strpos($normalized, 'website') !== false || strpos($normalized, 'link') !== false || strpos($normalized, 'homepage') !== false || strpos($normalized, 'webpage') !== false) {
+                $value = $targetUrl;
+            } elseif (strpos($normalized, 'company') !== false || strpos($normalized, 'brand') !== false || strpos($normalized, 'organisation') !== false || strpos($normalized, 'organization') !== false || strpos($normalized, 'org') !== false) {
+                $value = $projectName !== '' ? $projectName : $authorName;
+            } elseif (strpos($normalized, 'position') !== false || strpos($normalized, 'role') !== false || strpos($normalized, 'job') !== false) {
+                $value = __('Маркетолог');
+            } elseif (strpos($normalized, 'city') !== false || strpos($normalized, 'location') !== false || strpos($normalized, 'country') !== false || strpos($normalized, 'region') !== false) {
+                $value = $projectRegion !== '' ? $projectRegion : 'Москва';
+            } elseif (strpos($normalized, 'phone') !== false || strpos($normalized, 'tel') !== false || strpos($normalized, 'mobile') !== false) {
+                $value = pp_promotion_generate_fake_phone();
+            } elseif (strpos($normalized, 'summary') !== false || strpos($normalized, 'description') !== false) {
+                $value = $articleSummary !== '' ? $articleSummary : $subject;
+            } elseif (strpos($normalized, 'keyword') !== false || strpos($normalized, 'tag') !== false) {
+                if (!empty($articleKeywords)) {
+                    $value = implode(', ', array_slice($articleKeywords, 0, 5));
+                }
+            } elseif (strpos($normalized, 'age') !== false) {
+                $value = (string)pp_promotion_random_choice(range(24, 44), 30);
+            } elseif (strpos($normalized, 'consent') !== false || strpos($normalized, 'agreement') !== false || strpos($normalized, 'policy') !== false || strpos($normalized, 'terms') !== false) {
+                $value = '1';
+            }
+        }
+
+        if ($value === null) {
+            switch ($fieldType) {
+                case 'email':
+                    $value = $authorEmail;
+                    break;
+                case 'url':
+                case 'link':
+                    $value = $targetUrl;
+                    break;
+                case 'textarea':
+                    $value = $body !== '' ? $body : $subject;
+                    break;
+                case 'text':
+                case 'string':
+                    $value = $subject;
+                    break;
+                case 'checkbox':
+                case 'radio':
+                case 'boolean':
+                    $value = 'on';
+                    break;
+                case 'number':
+                    $value = '1';
+                    break;
+                case 'tel':
+                case 'phone':
+                    $value = pp_promotion_generate_fake_phone();
+                    break;
+            }
+        }
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+        return $value;
+    }
+}
+
+if (!function_exists('pp_promotion_prepare_crowd_form_payload')) {
+    /**
+     * @param mixed $required
+     */
+    function pp_promotion_prepare_crowd_form_payload($required, array $variant, array $project, string $targetUrl, ?array $articleContext = null): array {
+        $fields = is_array($required) && isset($required[0]['name']) ? $required : pp_promotion_parse_crowd_required_fields($required);
+        $result = [
+            'fields' => $fields,
+            'required_raw' => [],
+            'values' => [],
+            'values_ordered' => [],
+            'unsupported' => [],
+        ];
+        if (empty($fields)) { return $result; }
+        foreach ($fields as $field) {
+            $result['required_raw'][] = (string)($field['raw'] ?? $field['name']);
+            if (pp_promotion_crowd_field_is_blocked($field)) {
+                $result['unsupported'][] = (string)($field['name'] ?? '');
+                continue;
+            }
+            $value = pp_promotion_generate_crowd_field_value($field, $variant, $project, $targetUrl, $articleContext);
+            if ($value === null || $value === '') {
+                $result['unsupported'][] = (string)($field['name'] ?? '');
+                continue;
+            }
+            $name = (string)$field['name'];
+            $result['values'][$name] = $value;
+            $result['values_ordered'][] = [
+                'name' => $name,
+                'type' => $field['type'] ?? null,
+                'value' => $value,
+            ];
+        }
+        return $result;
+    }
+}
+
 if (!function_exists('pp_promotion_generate_crowd_payloads')) {
     function pp_promotion_generate_crowd_payloads(string $targetUrl, array $project, array $linkRow, int $uniqueCount, ?array $articleContext = null): array {
         $uniqueCount = max(1, $uniqueCount);
@@ -1461,7 +2086,7 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
 
         $commentTemplates = [
             __('Коллеги, прочитайте статью «{{title}}»: {{link}}. Автор разбирает {{points}}.'),
-            __('Нашёл полезный материал «{{title}}». Коротко: {{points}}. Делюсь ссылкой без анкоров — {{link}}.'),
+            __('Нашёл полезный материал «{{title}}». Коротко: {{points}}. Делюсь ссылкой — {{link}}.'),
             __('Для обсуждения: в «{{title}}» ({{link}}) описаны {{points}}. Как вам подход?'),
             __('В статье «{{title}}» собраны {{points}}. Если есть время, загляните: {{link}}.'),
             __('Скидываю ссылку {{link}} — материал «{{title}}» с акцентом на {{points}}. Нужна обратная связь.'),
@@ -1520,7 +2145,19 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
             } else {
                 $email .= '+' . strtolower($token) . '@example.com';
             }
-            $bodyFull = trim($body);
+            $bodyFull = pp_promotion_clean_text($body);
+            if ($bodyFull === '') {
+                $bodyFull = __('Нашёл полезный материал, делюсь ссылкой:') . ' ' . $targetUrl;
+            }
+            $subject = pp_promotion_clean_text($subject);
+            if ($subject === '') {
+                $subject = __('Комментарий к статье «{{title}}»');
+                $subject = strtr($subject, ['{{title}}' => $articleTitle]);
+            }
+            $fullName = trim(preg_replace('~\s+~u', ' ', $fullName));
+            if ($fullName === '') {
+                $fullName = 'PromoPilot Автор';
+            }
             $hash = md5($subject . '|' . $bodyFull . '|' . $email);
             if (isset($usedHashes[$hash])) {
                 continue;
@@ -1534,6 +2171,9 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
                 'author_email' => $email,
                 'token' => $token,
                 'target_url' => $targetUrl,
+                'article_title' => $articleTitle,
+                'article_summary' => $summary,
+                'talking_points' => $pointsSample,
             ];
         }
 
@@ -1544,7 +2184,7 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
                 } catch (Throwable $e) {
                     $token = (string)mt_rand(100000, 999999);
                 }
-                $fallbackBody = __('Поделюсь ссылкой без анкоров') . ': ' . $targetUrl;
+                $fallbackBody = __('Поделюсь ссылкой на материал') . ': ' . $targetUrl;
                 $payloads[] = [
                     'anchor' => '',
                     'subject' => __('Комментарий к статье'),
@@ -1553,6 +2193,9 @@ if (!function_exists('pp_promotion_generate_crowd_payloads')) {
                     'author_email' => 'promopilot+' . strtolower($token) . '@example.com',
                     'token' => $token,
                     'target_url' => $targetUrl,
+                    'article_title' => $articleTitle,
+                    'article_summary' => $summary,
+                    'talking_points' => $points,
                 ];
             }
         }
@@ -2322,8 +2965,8 @@ if (!function_exists('pp_promotion_process_run')) {
                 $limit = max(1000, $requiredCrowd);
                 $seenCrowd = [];
                 $crowdQueries = [
-                    "SELECT id, url FROM crowd_links WHERE deep_status='success' AND COALESCE(NULLIF(deep_message_excerpt,''), '') <> '' ORDER BY RAND() LIMIT " . $limit,
-                    "SELECT id, url FROM crowd_links WHERE status='ok' ORDER BY RAND() LIMIT " . $limit,
+                    "SELECT id, url, form_required, language, region, deep_message_excerpt FROM crowd_links WHERE deep_status='success' AND COALESCE(NULLIF(deep_message_excerpt,''), '') <> '' ORDER BY RAND() LIMIT " . $limit,
+                    "SELECT id, url, form_required, language, region, deep_message_excerpt FROM crowd_links WHERE deep_status='success' ORDER BY RAND() LIMIT " . $limit,
                 ];
                 foreach ($crowdQueries as $sql) {
                     if (count($crowdIds) >= $limit) { break; }
@@ -2333,9 +2976,16 @@ if (!function_exists('pp_promotion_process_run')) {
                             $curl = trim((string)($row['url'] ?? ''));
                             if ($cid <= 0 || $curl === '' || isset($seenCrowd[$cid])) { continue; }
                             $seenCrowd[$cid] = true;
+                            $formRaw = isset($row['form_required']) ? (string)$row['form_required'] : '';
+                            $parsedRequired = $formRaw !== '' ? pp_promotion_parse_crowd_required_fields($formRaw) : [];
                             $crowdIds[] = [
                                 'id' => $cid,
                                 'url' => $curl,
+                                'form_required_raw' => $formRaw,
+                                'form_required' => $parsedRequired,
+                                'language' => isset($row['language']) ? (string)$row['language'] : '',
+                                'region' => isset($row['region']) ? (string)$row['region'] : '',
+                                'excerpt' => isset($row['deep_message_excerpt']) ? trim((string)$row['deep_message_excerpt']) : '',
                             ];
                             if (count($crowdIds) >= $limit) { break; }
                         }
@@ -2373,26 +3023,81 @@ if (!function_exists('pp_promotion_process_run')) {
                 $variantsCount = max(1, count($payloadVariants));
                 for ($i = 0; $i < $crowdPerArticle; $i++) {
                     $variant = $payloadVariants[$i % $variantsCount];
-                    $chosen = null;
+                    $variant['target_url'] = $targetUrl;
+                    $variant['manual_fallback'] = false;
+                    $variant['fallback_reason'] = null;
                     $crowdLinkId = 0;
                     $crowdLinkUrl = null;
+                    $unsupportedFields = [];
+
                     if ($totalLinks > 0) {
-                        $chosen = $crowdIds[$index % $totalLinks];
-                        $index++;
-                        $crowdLinkId = (int)($chosen['id'] ?? 0);
-                        $crowdLinkUrl = isset($chosen['url']) ? trim((string)$chosen['url']) : null;
+                        $attemptLimit = min($totalLinks, 20);
+                        $selectedCandidate = null;
+                        $selectedForm = null;
+                        for ($attempt = 0; $attempt < $attemptLimit; $attempt++) {
+                            $currentIndex = $index % $totalLinks;
+                            $candidate = $crowdIds[$currentIndex];
+                            $index++;
+                            $formPayload = pp_promotion_prepare_crowd_form_payload($candidate['form_required'] ?? $candidate['form_required_raw'] ?? '', $variant, $project, $targetUrl, $payloadArticleContext);
+                            if (!empty($formPayload['unsupported'])) {
+                                $unsupportedFields = $formPayload['unsupported'];
+                                pp_promotion_log('promotion.crowd.unsupported_required_fields', [
+                                    'run_id' => $runId,
+                                    'node_id' => $nodeId,
+                                    'crowd_link_id' => (int)($candidate['id'] ?? 0),
+                                    'fields' => $unsupportedFields,
+                                    'target_url' => $targetUrl,
+                                ]);
+                                continue;
+                            }
+                            $selectedCandidate = $candidate;
+                            $selectedForm = $formPayload;
+                            break;
+                        }
+                        if ($selectedCandidate) {
+                            $crowdLinkId = (int)($selectedCandidate['id'] ?? 0);
+                            $crowdLinkUrl = isset($selectedCandidate['url']) ? trim((string)$selectedCandidate['url']) : null;
+                            if (!empty($selectedCandidate['excerpt'])) {
+                                $variant['context_excerpt'] = (string)$selectedCandidate['excerpt'];
+                            }
+                            if ($selectedForm) {
+                                if (!empty($selectedForm['fields'])) {
+                                    $variant['form_fields'] = array_map(static function(array $field) {
+                                        return [
+                                            'name' => (string)$field['name'],
+                                            'type' => $field['type'] ?? null,
+                                            'normalized' => $field['normalized'] ?? null,
+                                        ];
+                                    }, $selectedForm['fields']);
+                                }
+                                if (!empty($selectedForm['required_raw'])) {
+                                    $variant['form_required'] = $selectedForm['required_raw'];
+                                }
+                                if (!empty($selectedForm['values'])) {
+                                    $variant['form_values'] = $selectedForm['values'];
+                                }
+                                if (!empty($selectedForm['values_ordered'])) {
+                                    $variant['form_values_ordered'] = $selectedForm['values_ordered'];
+                                }
+                            }
+                        }
                     }
+
                     if ($crowdLinkId <= 0 || !$crowdLinkUrl) {
                         $crowdManualFallback++;
                         $variant['manual_fallback'] = true;
-                        $variant['fallback_reason'] = $totalLinks === 0 ? 'no_available_crowd_links' : 'insufficient_crowd_pool';
+                        if (!empty($unsupportedFields)) {
+                            $variant['fallback_reason'] = 'unsupported_required_fields';
+                            $variant['unsupported_fields'] = array_values(array_unique($unsupportedFields));
+                        } else {
+                            $variant['fallback_reason'] = $totalLinks === 0 ? 'no_available_crowd_links' : 'insufficient_crowd_pool';
+                        }
                     } else {
                         $variant['manual_fallback'] = false;
                         $variant['fallback_reason'] = null;
                     }
                     $variant['crowd_link_id'] = $crowdLinkId > 0 ? $crowdLinkId : null;
                     $variant['crowd_link_url'] = $crowdLinkUrl;
-                    $variant['target_url'] = $targetUrl;
                     if ($hasCrowdPayloadColumn) {
                         $payloadJson = json_encode($variant, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
                         if ($payloadJson === false) { $payloadJson = '{}'; }
@@ -2449,10 +3154,70 @@ if (!function_exists('pp_promotion_process_run')) {
                 ]);
             }
             @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
+            pp_promotion_launch_crowd_worker();
             return;
         }
         if ($stage === 'crowd_ready') {
-            @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+            $pending = 0;
+            $completed = 0;
+            $failed = 0;
+            $total = 0;
+            if ($res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY status')) {
+                while ($row = $res->fetch_assoc()) {
+                    $status = strtolower((string)($row['status'] ?? ''));
+                    $count = (int)($row['c'] ?? 0);
+                    if ($count <= 0) { continue; }
+                    $total += $count;
+                    if (in_array($status, ['completed','success','done','posted','published','ok'], true)) {
+                        $completed += $count;
+                    } elseif (in_array($status, ['failed','error','blocked','cancelled','rejected'], true)) {
+                        $failed += $count;
+                    } elseif (in_array($status, ['planned','queued','running','pending','created','manual'], true)) {
+                        $pending += $count;
+                    } else {
+                        $pending += $count;
+                    }
+                }
+                $res->free();
+            }
+            $remaining = $total - $completed - $failed;
+            if ($remaining > 0) { $pending += $remaining; }
+            if ($total === 0) {
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                return;
+            }
+            if ($pending > 0) {
+                pp_promotion_launch_crowd_worker();
+                return;
+            }
+            if ($failed > 0 && $completed < $total) {
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='CROWD_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                pp_promotion_log('promotion.crowd.failed', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'total' => $total,
+                    'completed' => $completed,
+                    'failed' => $failed,
+                ]);
+                return;
+            }
+            if ($completed >= $total) {
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                return;
+            }
+            if ($failed === 0) {
+                if ($resDone = @$conn->query('SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . " AND COALESCE(NULLIF(result_url,''), '') <> ''")) {
+                    if ($rowDone = $resDone->fetch_assoc()) {
+                        $doneLinks = (int)($rowDone['c'] ?? 0);
+                        if ($doneLinks >= $total) {
+                            $resDone->free();
+                            @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                            return;
+                        }
+                    }
+                    $resDone->free();
+                }
+            }
             return;
         }
         if ($stage === 'report_ready') {
