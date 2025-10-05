@@ -2316,26 +2316,50 @@ if (!function_exists('pp_promotion_process_run')) {
             try {
                 $connCrowd = @connect_db();
             } catch (Throwable $e) { $connCrowd = null; }
+            $requiredCrowd = $crowdPerArticle * max(1, count($finalNodes));
             $crowdIds = [];
             if ($connCrowd) {
-                $limit = max(1000, $crowdPerArticle * max(1, count($finalNodes)));
-                $sql = "SELECT id, url FROM crowd_links WHERE deep_status='success' AND COALESCE(NULLIF(deep_message_excerpt,''), '') <> '' ORDER BY RAND() LIMIT " . $limit;
-                if ($res = @$connCrowd->query($sql)) {
-                    while ($row = $res->fetch_assoc()) {
-                        $crowdIds[] = [
-                            'id' => (int)($row['id'] ?? 0),
-                            'url' => (string)($row['url'] ?? ''),
-                        ];
+                $limit = max(1000, $requiredCrowd);
+                $seenCrowd = [];
+                $crowdQueries = [
+                    "SELECT id, url FROM crowd_links WHERE deep_status='success' AND COALESCE(NULLIF(deep_message_excerpt,''), '') <> '' ORDER BY RAND() LIMIT " . $limit,
+                    "SELECT id, url FROM crowd_links WHERE status='ok' ORDER BY RAND() LIMIT " . $limit,
+                ];
+                foreach ($crowdQueries as $sql) {
+                    if (count($crowdIds) >= $limit) { break; }
+                    if ($res = @$connCrowd->query($sql)) {
+                        while ($row = $res->fetch_assoc()) {
+                            $cid = (int)($row['id'] ?? 0);
+                            $curl = trim((string)($row['url'] ?? ''));
+                            if ($cid <= 0 || $curl === '' || isset($seenCrowd[$cid])) { continue; }
+                            $seenCrowd[$cid] = true;
+                            $crowdIds[] = [
+                                'id' => $cid,
+                                'url' => $curl,
+                            ];
+                            if (count($crowdIds) >= $limit) { break; }
+                        }
+                        $res->free();
                     }
-                    $res->free();
                 }
                 $connCrowd->close();
             }
             $index = 0;
             $totalLinks = count($crowdIds);
             if ($totalLinks > 1) { shuffle($crowdIds); }
+            $crowdShortage = ($totalLinks === 0 || $totalLinks < $requiredCrowd);
+            if ($totalLinks === 0) {
+                pp_promotion_log('promotion.crowd.sources_missing', [
+                    'run_id' => $runId,
+                    'required' => $requiredCrowd,
+                    'project_id' => $projectId,
+                    'target_url' => $run['target_url'] ?? null,
+                ]);
+            }
             $hasCrowdPayloadColumn = pp_promotion_ensure_crowd_payload_column($conn);
             $crowdContextCache = [];
+            $crowdManualFallback = 0;
+            $crowdTasksCreated = 0;
             foreach ($finalNodes as $node) {
                 $targetUrl = (string)($node['result_url'] ?? '');
                 $nodeId = (int)($node['id'] ?? 0);
@@ -2348,44 +2372,60 @@ if (!function_exists('pp_promotion_process_run')) {
                 $payloadVariants = pp_promotion_generate_crowd_payloads($targetUrl, $project, $linkRow, $uniqueMessages, $payloadArticleContext);
                 $variantsCount = max(1, count($payloadVariants));
                 for ($i = 0; $i < $crowdPerArticle; $i++) {
-                    if ($totalLinks === 0) { break 2; }
-                    $chosen = $crowdIds[$index % $totalLinks];
-                    $index++;
                     $variant = $payloadVariants[$i % $variantsCount];
-                    $variant['crowd_link_id'] = $chosen['id'];
-                    $variant['crowd_link_url'] = $chosen['url'];
+                    $chosen = null;
+                    $crowdLinkId = 0;
+                    $crowdLinkUrl = null;
+                    if ($totalLinks > 0) {
+                        $chosen = $crowdIds[$index % $totalLinks];
+                        $index++;
+                        $crowdLinkId = (int)($chosen['id'] ?? 0);
+                        $crowdLinkUrl = isset($chosen['url']) ? trim((string)$chosen['url']) : null;
+                    }
+                    if ($crowdLinkId <= 0 || !$crowdLinkUrl) {
+                        $crowdManualFallback++;
+                        $variant['manual_fallback'] = true;
+                        $variant['fallback_reason'] = $totalLinks === 0 ? 'no_available_crowd_links' : 'insufficient_crowd_pool';
+                    } else {
+                        $variant['manual_fallback'] = false;
+                        $variant['fallback_reason'] = null;
+                    }
+                    $variant['crowd_link_id'] = $crowdLinkId > 0 ? $crowdLinkId : null;
+                    $variant['crowd_link_url'] = $crowdLinkUrl;
                     $variant['target_url'] = $targetUrl;
                     if ($hasCrowdPayloadColumn) {
                         $payloadJson = json_encode($variant, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
                         if ($payloadJson === false) { $payloadJson = '{}'; }
-                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status, payload_json) VALUES (?, ?, ?, ?, \'planned\', ?)');
+                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status, payload_json) VALUES (?, ?, NULLIF(?,0), ?, \'planned\', ?)');
                         if ($stmt) {
-                            $cid = (int)$chosen['id'];
+                            $cid = $crowdLinkId > 0 ? $crowdLinkId : 0;
                             $stmt->bind_param('iiiss', $runId, $nodeId, $cid, $targetUrl, $payloadJson);
                             $stmt->execute();
                             $stmt->close();
+                            $crowdTasksCreated++;
                         } else {
                             pp_promotion_log('promotion.crowd_task_insert_failed', [
                                 'run_id' => $runId,
                                 'node_id' => $nodeId,
-                                'crowd_link_id' => (int)$chosen['id'],
+                                'crowd_link_id' => $crowdLinkId,
                                 'with_payload' => true,
                                 'error' => $conn->error,
                                 'errno' => $conn->errno,
                             ]);
                         }
                     } else {
-                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status) VALUES (?, ?, ?, ?, \'planned\')');
+                        $stmt = $conn->prepare('INSERT INTO promotion_crowd_tasks (run_id, node_id, crowd_link_id, target_url, status) VALUES (?, ?, NULLIF(?,0), ?, \'planned\')');
                         if ($stmt) {
-                            $cid = (int)$chosen['id'];
+                            $cid = $crowdLinkId > 0 ? $crowdLinkId : 0;
                             $stmt->bind_param('iiis', $runId, $nodeId, $cid, $targetUrl);
                             $stmt->execute();
                             $stmt->close();
+                            $crowdTasksCreated++;
                         } else {
                             pp_promotion_log('promotion.crowd_task_insert_failed', [
                                 'run_id' => $runId,
                                 'node_id' => $nodeId,
-                                'crowd_link_id' => (int)$chosen['id'],
+                                'crowd_link_id' => $crowdLinkId,
                                 'with_payload' => false,
                                 'error' => $conn->error,
                                 'errno' => $conn->errno,
@@ -2393,6 +2433,20 @@ if (!function_exists('pp_promotion_process_run')) {
                         }
                     }
                 }
+            }
+            if ($crowdManualFallback > 0) {
+                pp_promotion_log('promotion.crowd.manual_required', [
+                    'run_id' => $runId,
+                    'fallback_tasks' => $crowdManualFallback,
+                    'total_created' => $crowdTasksCreated,
+                    'required' => $requiredCrowd,
+                ]);
+            }
+            if ($crowdTasksCreated === 0 && $crowdShortage) {
+                pp_promotion_log('promotion.crowd.no_tasks_created', [
+                    'run_id' => $runId,
+                    'required' => $requiredCrowd,
+                ]);
             }
             @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
             return;
@@ -2622,6 +2676,7 @@ if (!function_exists('pp_promotion_get_status')) {
             'remaining' => 0,
             'percent' => 0.0,
             'completed_links' => 0,
+            'manual_fallback' => 0,
             'items' => [],
         ];
         if ($res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY status')) {
@@ -2659,6 +2714,8 @@ if (!function_exists('pp_promotion_get_status')) {
                 $messageSubject = null;
                 $messageAuthor = null;
                 $messageEmail = null;
+                $manualFallback = false;
+                $fallbackReason = null;
                 if (!empty($row['payload_json'])) {
                     $payload = json_decode((string)$row['payload_json'], true);
                     if (is_array($payload) && !empty($payload['crowd_link_url'])) {
@@ -2689,6 +2746,13 @@ if (!function_exists('pp_promotion_get_status')) {
                         if (!empty($payload['author_email'])) {
                             $messageEmail = trim((string)$payload['author_email']);
                         }
+                        if (array_key_exists('manual_fallback', $payload)) {
+                            $manualFallback = !empty($payload['manual_fallback']);
+                        }
+                        if (array_key_exists('fallback_reason', $payload)) {
+                            $reason = trim((string)$payload['fallback_reason']);
+                            $fallbackReason = ($reason !== '') ? $reason : null;
+                        }
                     }
                 }
                 $crowdLinkId = isset($row['crowd_link_id']) ? (int)$row['crowd_link_id'] : 0;
@@ -2708,6 +2772,9 @@ if (!function_exists('pp_promotion_get_status')) {
                 $resultUrl = trim((string)($row['result_url'] ?? ''));
                 if ($resultUrl !== '') { $crowdStats['completed_links']++; }
                 $articleUrl = (string)($row['target_url'] ?? '');
+                if ($manualFallback) {
+                    $crowdStats['manual_fallback']++;
+                }
                 $crowdStats['items'][] = [
                     'id' => (int)$row['id'],
                     'status' => $statusRaw,
@@ -2722,6 +2789,8 @@ if (!function_exists('pp_promotion_get_status')) {
                     'subject' => $messageSubject,
                     'author_name' => $messageAuthor,
                     'author_email' => $messageEmail,
+                    'manual_fallback' => $manualFallback,
+                    'fallback_reason' => $fallbackReason,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
                 ];
             }
@@ -2779,6 +2848,8 @@ if (!function_exists('pp_promotion_build_report')) {
                 $messageSubject = null;
                 $messageAuthor = null;
                 $messageEmail = null;
+                $manualFallback = false;
+                $fallbackReason = null;
                 if (!empty($row['payload_json'])) {
                     $payload = json_decode((string)$row['payload_json'], true);
                     if (is_array($payload)) {
@@ -2797,6 +2868,13 @@ if (!function_exists('pp_promotion_build_report')) {
                         }
                         if (!empty($payload['author_email'])) {
                             $messageEmail = trim((string)$payload['author_email']);
+                        }
+                        if (array_key_exists('manual_fallback', $payload)) {
+                            $manualFallback = !empty($payload['manual_fallback']);
+                        }
+                        if (array_key_exists('fallback_reason', $payload)) {
+                            $reason = trim((string)$payload['fallback_reason']);
+                            $fallbackReason = ($reason !== '') ? $reason : null;
                         }
                     }
                 }
@@ -2827,6 +2905,8 @@ if (!function_exists('pp_promotion_build_report')) {
                     'subject' => $messageSubject,
                     'author_name' => $messageAuthor,
                     'author_email' => $messageEmail,
+                    'manual_fallback' => $manualFallback,
+                    'fallback_reason' => $fallbackReason,
                     'status' => (string)($row['status'] ?? ''),
                     'result_url' => isset($row['result_url']) && $row['result_url'] !== null ? (string)$row['result_url'] : null,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,

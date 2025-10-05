@@ -1025,6 +1025,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                         $crowdRunning = (int)($crowdData['running'] ?? 0);
                                         $crowdQueued = (int)($crowdData['queued'] ?? 0);
                                         $crowdFailed = (int)($crowdData['failed'] ?? 0);
+                                        $crowdManual = (int)($crowdData['manual_fallback'] ?? 0);
                                         $crowdTarget = max($crowdTotal, $crowdPlanned);
                                         if ($crowdTarget === 0 && $crowdCompleted > 0) {
                                             $crowdTarget = $crowdCompleted;
@@ -1048,6 +1049,9 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                             }
                                             if ($crowdFailed > 0) {
                                                 $crowdExtras[] = sprintf(__('Ошибок: %d'), $crowdFailed);
+                                            }
+                                            if ($crowdManual > 0) {
+                                                $crowdExtras[] = sprintf(__('Задачи для ручного размещения: %d'), $crowdManual);
                                             }
                                             if (!empty($crowdExtras)) {
                                                 $crowdDetail .= ' (' . implode(', ', $crowdExtras) . ')';
@@ -1136,7 +1140,8 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                             data-crowd-completed="<?php echo $crowdCompleted; ?>"
                                             data-crowd-running="<?php echo $crowdRunning; ?>"
                                             data-crowd-queued="<?php echo $crowdQueued; ?>"
-                                            data-crowd-failed="<?php echo $crowdFailed; ?>">
+                                            data-crowd-failed="<?php echo $crowdFailed; ?>"
+                                            data-crowd-manual="<?php echo $crowdManual; ?>">
                                         <td data-label="#"><?php echo $index + 1; ?></td>
                                         <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                             <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>

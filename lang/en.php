@@ -366,6 +366,7 @@ $lang = [
     'В работе: %d' => 'In progress: %d',
     'Ошибок' => 'Errors',
     'Ошибок: %d' => 'Errors: %d',
+    'Задачи для ручного размещения: %d' => 'Manual crowd tasks: %d',
     'Проверить сети' => 'Check networks',
     'Остановить проверку' => 'Stop check',
     'Показать последний результат' => 'Show latest result',
