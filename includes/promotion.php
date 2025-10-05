@@ -936,7 +936,12 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
             pp_promotion_log('promotion.crowd.worker_missing', ['script' => $script]);
             if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
                 try {
-                    pp_promotion_crowd_worker($taskId, 5);
+                    $processed = pp_promotion_crowd_worker($taskId, 5);
+                    pp_promotion_log('promotion.crowd.worker_fallback_used', [
+                        'task_id' => $taskId,
+                        'processed' => $processed,
+                        'reason' => 'script_missing',
+                    ]);
                     return true;
                 } catch (Throwable $e) {
                     pp_promotion_log('promotion.crowd.worker_fallback_error', ['error' => $e->getMessage()]);
@@ -981,16 +986,51 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
                 'mode' => $isWindows ? 'windows_popen' : 'posix_background',
             ]);
             if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
+                $initialTaskId = $taskId;
+                $inlineIterations = 0;
+                $batchSize = $taskId ? 1 : 12;
+                $maxBatches = $taskId ? 1 : 10;
+                $maxRuntime = $taskId ? 5.0 : 25.0;
+                $start = microtime(true);
+                $batchesRun = 0;
+                $runtimeCapped = false;
+                $finishedRequest = false;
+                $pendingAfter = 0;
                 try {
-                    pp_promotion_crowd_worker($taskId, $taskId ? 1 : 5);
-                    $inlineIterations = $taskId ? 1 : 5;
+                    for ($batch = 0; $batch < $maxBatches; $batch++) {
+                        $processed = pp_promotion_crowd_worker($taskId, $batchSize);
+                        $inlineIterations += $processed;
+                        $batchesRun++;
+                        $taskId = null;
+                        if ($processed === 0) {
+                            break;
+                        }
+                        if (!$finishedRequest && function_exists('fastcgi_finish_request') && PHP_SAPI !== 'cli') {
+                            @fastcgi_finish_request();
+                            $finishedRequest = true;
+                        }
+                        if ($processed < $batchSize) {
+                            break;
+                        }
+                        if ((microtime(true) - $start) >= $maxRuntime) {
+                            $runtimeCapped = true;
+                            break;
+                        }
+                        usleep(150000);
+                    }
+                    $pendingAfter = pp_promotion_crowd_pending_count();
+                    $durationMs = (int)round((microtime(true) - $start) * 1000);
                     pp_promotion_log('promotion.crowd.worker_inline_assist', [
-                        'task_id' => $taskId,
-                        'iterations' => $inlineIterations,
+                        'task_id' => $initialTaskId,
+                        'processed' => $inlineIterations,
+                        'pending_after' => $pendingAfter,
+                        'batches' => $batchesRun,
+                        'duration_ms' => $durationMs,
+                        'runtime_capped' => $runtimeCapped,
                     ]);
                 } catch (Throwable $e) {
                     pp_promotion_log('promotion.crowd.worker_inline_error', [
-                        'task_id' => $taskId,
+                        'task_id' => $initialTaskId,
                         'error' => $e->getMessage(),
                     ]);
                 }
@@ -1006,8 +1046,12 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
 
         if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
             try {
-                pp_promotion_crowd_worker($taskId, 5);
-                pp_promotion_log('promotion.crowd.worker_fallback_used', ['task_id' => $taskId]);
+                $processed = pp_promotion_crowd_worker($taskId, 5);
+                pp_promotion_log('promotion.crowd.worker_fallback_used', [
+                    'task_id' => $taskId,
+                    'processed' => $processed,
+                    'reason' => 'launch_failed',
+                ]);
                 return true;
             } catch (Throwable $e) {
                 pp_promotion_log('promotion.crowd.worker_fallback_error', ['error' => $e->getMessage()]);
@@ -1285,30 +1329,59 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
     }
 }
 
+if (!function_exists('pp_promotion_crowd_pending_count')) {
+    function pp_promotion_crowd_pending_count(?int $specificTaskId = null): int {
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return 0;
+        }
+        if (!$conn) {
+            return 0;
+        }
+        $sql = "SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE status IN ('planned','queued','running')";
+        if ($specificTaskId !== null && $specificTaskId > 0) {
+            $sql .= ' AND id=' . (int)$specificTaskId;
+        }
+        $count = 0;
+        if ($res = @$conn->query($sql)) {
+            if ($row = $res->fetch_assoc()) {
+                $count = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $conn->close();
+        return $count;
+    }
+}
+
 if (!function_exists('pp_promotion_crowd_worker')) {
-    function pp_promotion_crowd_worker(?int $specificTaskId = null, int $maxIterations = 20): void {
+    function pp_promotion_crowd_worker(?int $specificTaskId = null, int $maxIterations = 20): int {
         if (function_exists('session_write_close')) { @session_write_close(); }
         @ignore_user_abort(true);
         try {
             $conn = @connect_db();
         } catch (Throwable $e) {
             pp_promotion_log('promotion.crowd.worker_db_error', ['error' => $e->getMessage()]);
-            return;
+            return 0;
         }
         if (!$conn) {
             pp_promotion_log('promotion.crowd.worker_db_unavailable', []);
-            return;
+            return 0;
         }
+        $processed = 0;
         for ($i = 0; $i < $maxIterations; $i++) {
             $task = pp_promotion_crowd_claim_task($conn, $specificTaskId);
             $specificTaskId = null;
             if (!$task) {
                 break;
             }
+            $processed++;
             pp_promotion_crowd_process_task($conn, $task);
             usleep(200000);
         }
         $conn->close();
+        return $processed;
     }
 }
 

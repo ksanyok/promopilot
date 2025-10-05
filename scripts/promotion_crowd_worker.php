@@ -22,7 +22,11 @@ if (PHP_SAPI === 'cli') {
 }
 
 try {
-    pp_promotion_crowd_worker($taskId, 60);
+    $processed = pp_promotion_crowd_worker($taskId, 60);
+    pp_promotion_log('promotion.crowd.worker_cli_run', [
+        'task_id' => $taskId,
+        'processed' => $processed,
+    ]);
 } catch (Throwable $e) {
     pp_promotion_log('Crowd worker crashed', [
         'error' => $e->getMessage(),
