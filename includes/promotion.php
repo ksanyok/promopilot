@@ -1388,6 +1388,161 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
     }
 }
 
+if (!function_exists('pp_promotion_active_runs_summary')) {
+    function pp_promotion_active_runs_summary(int $staleAfterMinutes = 15): array {
+        $staleAfterMinutes = max(1, min(1440, (int)$staleAfterMinutes));
+        $summary = [
+            'total' => 0,
+            'by_status' => [],
+            'runs' => [],
+            'stale' => [
+                'count' => 0,
+                'ids' => [],
+                'threshold' => gmdate('c', time() - ($staleAfterMinutes * 60)),
+                'threshold_minutes' => $staleAfterMinutes,
+                'max_idle_minutes' => 0,
+            ],
+            'latest_update' => null,
+            'oldest_update' => null,
+        ];
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return $summary;
+        }
+        if (!$conn) {
+            return $summary;
+        }
+        $nowTs = time();
+        $thresholdTs = $nowTs - ($staleAfterMinutes * 60);
+        $sql = "SELECT id, status, stage, updated_at FROM promotion_runs WHERE status NOT IN ('completed','failed','cancelled')";
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $summary['total']++;
+                $status = (string)($row['status'] ?? '');
+                if (!isset($summary['by_status'][$status])) {
+                    $summary['by_status'][$status] = 0;
+                }
+                $summary['by_status'][$status]++;
+                $updatedAt = isset($row['updated_at']) ? (string)$row['updated_at'] : null;
+                $runEntry = [
+                    'id' => (int)($row['id'] ?? 0),
+                    'status' => $status,
+                    'stage' => isset($row['stage']) ? (string)$row['stage'] : null,
+                    'updated_at' => $updatedAt,
+                    'idle_minutes' => 0,
+                ];
+                if ($updatedAt !== null && $updatedAt !== '') {
+                    if ($summary['latest_update'] === null || strcmp($updatedAt, $summary['latest_update']) > 0) {
+                        $summary['latest_update'] = $updatedAt;
+                    }
+                    if ($summary['oldest_update'] === null || strcmp($updatedAt, $summary['oldest_update']) < 0) {
+                        $summary['oldest_update'] = $updatedAt;
+                    }
+                    $updatedTs = strtotime($updatedAt);
+                    if ($updatedTs !== false) {
+                        $idleMinutes = (int)floor(($nowTs - $updatedTs) / 60);
+                        $runEntry['idle_minutes'] = $idleMinutes;
+                        if ($idleMinutes > $summary['stale']['max_idle_minutes']) {
+                            $summary['stale']['max_idle_minutes'] = $idleMinutes;
+                        }
+                        if ($updatedTs < $thresholdTs) {
+                            $summary['stale']['count']++;
+                            if (count($summary['stale']['ids']) < 50) {
+                                $summary['stale']['ids'][] = (int)$row['id'];
+                            }
+                        }
+                    }
+                }
+                $summary['runs'][] = $runEntry;
+            }
+            $res->free();
+        }
+        $conn->close();
+        return $summary;
+    }
+}
+
+if (!function_exists('pp_publication_queue_summary')) {
+    function pp_publication_queue_summary(int $staleAfterMinutes = 30): array {
+        $staleAfterMinutes = max(1, min(1440, (int)$staleAfterMinutes));
+        $thresholdTs = time() - ($staleAfterMinutes * 60);
+        $thresholdSql = date('Y-m-d H:i:s', $thresholdTs);
+        $summary = [
+            'pending' => 0,
+            'queued' => 0,
+            'running' => 0,
+            'recent_failures' => 0,
+            'queue_rows' => 0,
+            'oldest_created' => null,
+            'oldest_created_age_minutes' => 0,
+            'stale_pending' => 0,
+            'stale_threshold' => gmdate('c', $thresholdTs),
+            'threshold_minutes' => $staleAfterMinutes,
+        ];
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            return $summary;
+        }
+        if (!$conn) {
+            return $summary;
+        }
+        $oldest = null;
+        $sql = "SELECT status, COUNT(*) AS c, MIN(COALESCE(scheduled_at, created_at)) AS first_ts FROM publications WHERE status IN ('queued','running') GROUP BY status";
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $status = strtolower((string)($row['status'] ?? ''));
+                $count = (int)($row['c'] ?? 0);
+                if ($status === 'queued') { $summary['queued'] += $count; }
+                if ($status === 'running') { $summary['running'] += $count; }
+                $summary['pending'] += $count;
+                $firstTs = isset($row['first_ts']) ? (string)$row['first_ts'] : '';
+                if ($firstTs !== '') {
+                    if ($oldest === null || strcmp($firstTs, $oldest) < 0) {
+                        $oldest = $firstTs;
+                    }
+                }
+            }
+            $res->free();
+        }
+        if ($oldest !== null) {
+            $summary['oldest_created'] = $oldest;
+            $oldestTimestamp = strtotime($oldest);
+            if ($oldestTimestamp !== false) {
+                $summary['oldest_created_age_minutes'] = (int)max(0, floor((time() - $oldestTimestamp) / 60));
+            }
+        }
+        $stmt = $conn->prepare("SELECT COUNT(*) AS c FROM publications WHERE status IN ('queued','running') AND COALESCE(scheduled_at, created_at) < ?");
+        if ($stmt) {
+            $stmt->bind_param('s', $thresholdSql);
+            if ($stmt->execute()) {
+                if ($resStale = $stmt->get_result()) {
+                    if ($row = $resStale->fetch_assoc()) {
+                        $summary['stale_pending'] = (int)($row['c'] ?? 0);
+                    }
+                    $resStale->free();
+                }
+            }
+            $stmt->close();
+        }
+        if ($res = @$conn->query("SELECT COUNT(*) AS c FROM publications WHERE status = 'failed' AND finished_at >= (CURRENT_TIMESTAMP - INTERVAL 12 HOUR)")) {
+            if ($row = $res->fetch_assoc()) {
+                $summary['recent_failures'] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        if ($res = @$conn->query("SELECT COUNT(*) AS c FROM publication_queue WHERE status IN ('queued','running')")) {
+            if ($row = $res->fetch_assoc()) {
+                $summary['queue_rows'] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $conn->close();
+        return $summary;
+    }
+}
+
 if (!function_exists('pp_promotion_crowd_pending_count')) {
     function pp_promotion_crowd_pending_count(?int $specificTaskId = null): int {
         try {
