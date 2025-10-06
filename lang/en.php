@@ -416,6 +416,7 @@ $lang = [
     'Текст не зафиксирован' => 'No message captured',
     'Ручная доработка' => 'Manual adjustment',
     'В работе: %d' => 'In progress: %d',
+    'Создано задач: %d' => 'Tasks created: %d',
     'Ошибок' => 'Errors',
     'Ошибок: %d' => 'Errors: %d',
     'Задачи для ручного размещения: %d' => 'Manual crowd tasks: %d',

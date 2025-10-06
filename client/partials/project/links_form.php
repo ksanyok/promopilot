@@ -143,13 +143,15 @@
                             $level3Required = (int)($level3Data['required'] ?? 0);
                             $crowdData = (is_array($promotionInfo) && isset($promotionInfo['crowd']) && is_array($promotionInfo['crowd'])) ? $promotionInfo['crowd'] : [];
                             $crowdPlanned = (int)($crowdData['planned'] ?? 0);
-                            $crowdTotal = (int)($crowdData['total'] ?? 0);
+                            $crowdTarget = (int)($crowdData['target'] ?? ($crowdData['total'] ?? 0));
+                            $crowdAttempted = (int)($crowdData['attempted'] ?? 0);
+                            $crowdTotal = $crowdTarget;
                             $crowdCompleted = (int)($crowdData['completed'] ?? 0);
                             $crowdRunning = (int)($crowdData['running'] ?? 0);
                             $crowdQueued = (int)($crowdData['queued'] ?? 0);
                             $crowdFailed = (int)($crowdData['failed'] ?? 0);
                             $crowdManual = (int)($crowdData['manual_fallback'] ?? 0);
-                            $crowdTarget = max($crowdTotal, $crowdPlanned);
+                            $crowdTarget = max($crowdTarget, $crowdPlanned);
                             if ($crowdTarget === 0 && $crowdCompleted > 0) { $crowdTarget = $crowdCompleted; }
                             $promotionDetails = [];
                             if ($level1Success > 0 || $level1Required > 0) {
@@ -167,6 +169,9 @@
                                 $crowdInProgress = $crowdRunning + $crowdQueued;
                                 if ($crowdInProgress > 0) {
                                     $crowdExtras[] = sprintf(__('В работе: %d'), $crowdInProgress);
+                                }
+                                if ($crowdAttempted > 0 && $crowdAttempted > $crowdTarget) {
+                                    $crowdExtras[] = sprintf(__('Создано задач: %d'), $crowdAttempted);
                                 }
                                 if ($crowdFailed > 0) {
                                     $crowdExtras[] = sprintf(__('Ошибок: %d'), $crowdFailed);
@@ -254,6 +259,8 @@
                             data-level3-required="<?php echo $level3Required; ?>"
                             data-crowd-planned="<?php echo $crowdPlanned; ?>"
                             data-crowd-total="<?php echo $crowdTotal; ?>"
+                            data-crowd-target="<?php echo $crowdTarget; ?>"
+                            data-crowd-attempted="<?php echo $crowdAttempted; ?>"
                             data-crowd-completed="<?php echo $crowdCompleted; ?>"
                             data-crowd-running="<?php echo $crowdRunning; ?>"
                             data-crowd-queued="<?php echo $crowdQueued; ?>"
@@ -302,6 +309,8 @@
                                      data-level3-required="<?php echo $level3Required; ?>"
                                      data-crowd-planned="<?php echo $crowdPlanned; ?>"
                                      data-crowd-total="<?php echo $crowdTotal; ?>"
+                                     data-crowd-target="<?php echo $crowdTarget; ?>"
+                                     data-crowd-attempted="<?php echo $crowdAttempted; ?>"
                                      data-crowd-completed="<?php echo $crowdCompleted; ?>"
                                      data-crowd-running="<?php echo $crowdRunning; ?>"
                                      data-crowd-queued="<?php echo $crowdQueued; ?>"

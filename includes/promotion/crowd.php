@@ -558,9 +558,8 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
             $nodeId = (int)$nodeId;
             $needed = max(0, (int)($info['needed'] ?? 0));
             if ($nodeId <= 0 || $needed <= 0) { continue; }
-            $haveCompleted = $existing[$nodeId]['completed'] ?? 0;
             $haveActive = $existing[$nodeId]['active'] ?? 0;
-            $remaining = max(0, $needed - ($haveCompleted + $haveActive));
+            $remaining = max(0, $needed - $haveActive);
             if ($remaining <= 0) { continue; }
             $targetUrl = isset($info['target_url']) ? (string)$info['target_url'] : '';
             $createPlan[$nodeId] = ['target_url' => $targetUrl, 'amount' => $remaining];

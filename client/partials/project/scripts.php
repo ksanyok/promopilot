@@ -527,12 +527,17 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.level3Success = String(payload?.level3_success || 0);
         tr.dataset.level3Required = String(payload?.level3_required || 0);
         tr.dataset.crowdPlanned = String(payload?.crowd_planned || 0);
-        tr.dataset.crowdTotal = String(payload?.crowd_total || 0);
-        tr.dataset.crowdCompleted = String(payload?.crowd_completed || 0);
-        tr.dataset.crowdRunning = String(payload?.crowd_running || 0);
-        tr.dataset.crowdQueued = String(payload?.crowd_queued || 0);
-        tr.dataset.crowdFailed = String(payload?.crowd_failed || 0);
-        tr.dataset.crowdManual = String(payload?.crowd_manual || 0);
+    const crowdTarget = Number(payload?.crowd_target ?? payload?.crowd_total ?? 0) || 0;
+    const crowdAttemptedRaw = payload?.crowd_attempted ?? payload?.crowd_attempted_total ?? payload?.crowd_total_attempted ?? 0;
+    const crowdAttempted = Number(crowdAttemptedRaw || 0) || 0;
+    tr.dataset.crowdTotal = String(crowdTarget);
+    tr.dataset.crowdTarget = String(crowdTarget);
+    tr.dataset.crowdAttempted = String(crowdAttempted);
+    tr.dataset.crowdCompleted = String(payload?.crowd_completed || 0);
+    tr.dataset.crowdRunning = String(payload?.crowd_running || 0);
+    tr.dataset.crowdQueued = String(payload?.crowd_queued || 0);
+    tr.dataset.crowdFailed = String(payload?.crowd_failed || 0);
+    tr.dataset.crowdManual = String(payload?.crowd_manual ?? payload?.crowd_manual_fallback ?? 0);
 
         const promotionChargeAmount = escapeHtml(String(PROMOTION_CHARGE_AMOUNT ?? ''));
         const promotionChargeBase = escapeHtml(String(PROMOTION_CHARGE_BASE ?? ''));
@@ -579,6 +584,8 @@ document.addEventListener('DOMContentLoaded', function() {
                      data-level3-required="0"
                      data-crowd-planned="0"
                      data-crowd-total="0"
+                     data-crowd-target="0"
+                     data-crowd-attempted="0"
                      data-crowd-completed="0"
                      data-crowd-running="0"
                      data-crowd-queued="0"
@@ -718,6 +725,20 @@ document.addEventListener('DOMContentLoaded', function() {
         const progressVisual = block.querySelector('.promotion-progress-visual');
         if (progressVisual) {
             progressVisual.classList.toggle('d-none', !isPromotionActiveStatus(status));
+        }
+
+        if (data.crowd && typeof data.crowd === 'object') {
+            const crowd = data.crowd;
+            tr.dataset.crowdPlanned = String(crowd.planned ?? 0);
+            const crowdTargetVal = Number(crowd.target ?? crowd.total ?? 0) || 0;
+            tr.dataset.crowdTotal = String(crowdTargetVal);
+            tr.dataset.crowdTarget = String(crowdTargetVal);
+            tr.dataset.crowdAttempted = String(crowd.attempted ?? 0);
+            tr.dataset.crowdCompleted = String(crowd.completed ?? 0);
+            tr.dataset.crowdRunning = String(crowd.running ?? 0);
+            tr.dataset.crowdQueued = String(crowd.queued ?? 0);
+            tr.dataset.crowdFailed = String(crowd.failed ?? 0);
+            tr.dataset.crowdManual = String(crowd.manual_fallback ?? 0);
         }
 
         if (data.progress && typeof data.progress === 'object') {

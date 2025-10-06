@@ -1171,6 +1171,8 @@ if (!function_exists('pp_promotion_get_status')) {
             'percent' => 0.0,
             'completed_links' => 0,
             'manual_fallback' => 0,
+            'attempted' => 0,
+            'target' => 0,
             'items' => [],
         ];
         if ($res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY status')) {
@@ -1181,6 +1183,7 @@ if (!function_exists('pp_promotion_get_status')) {
                 if (isset($crowdStats[$status])) {
                     $crowdStats[$status] += $count;
                     if ($status === 'manual') {
+                        $crowdStats['manual_fallback'] += $count;
                         $crowdStats['failed'] += $count;
                     }
                 } elseif ($status === 'posted' || $status === 'success' || $status === 'done') {
@@ -1195,9 +1198,20 @@ if (!function_exists('pp_promotion_get_status')) {
             $crowdStats['completed'] = $crowdStats['queued'] === 0 && $crowdStats['running'] === 0 ? $crowdStats['total'] - ($crowdStats['failed'] ?? 0) - $crowdStats['planned'] : $crowdStats['completed'];
             if ($crowdStats['completed'] < 0) { $crowdStats['completed'] = 0; }
         }
-        $crowdStats['remaining'] = max(0, $crowdStats['total'] - $crowdStats['completed'] - $crowdStats['failed']);
-        if ($crowdStats['total'] > 0) {
-            $crowdStats['percent'] = (float)round(($crowdStats['completed'] / $crowdStats['total']) * 100, 1);
+        $crowdStats['attempted'] = $crowdStats['total'];
+        $crowdPerArticle = pp_promotion_crowd_required_per_article($run);
+        $crowdNodes = pp_promotion_crowd_collect_nodes($conn, $runId);
+        $crowdTarget = (int)($crowdNodes['total'] ?? 0) * $crowdPerArticle;
+        $crowdStats['target'] = $crowdTarget;
+        if ($crowdTarget > 0) {
+            $crowdStats['total'] = $crowdTarget;
+            $crowdStats['remaining'] = max(0, $crowdTarget - $crowdStats['completed']);
+            $crowdStats['percent'] = (float)round(($crowdStats['completed'] / $crowdTarget) * 100, 1);
+        } else {
+            $crowdStats['remaining'] = max(0, $crowdStats['attempted'] - $crowdStats['completed'] - $crowdStats['failed']);
+            if ($crowdStats['attempted'] > 0) {
+                $crowdStats['percent'] = (float)round(($crowdStats['completed'] / $crowdStats['attempted']) * 100, 1);
+            }
         }
         $crowdLinkCache = [];
         $taskSql = 'SELECT id, status, crowd_link_id, result_url, payload_json, target_url, updated_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY updated_at DESC, id DESC LIMIT 80';
