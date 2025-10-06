@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../includes/init.php';
+require_once __DIR__ . '/../includes/admin_helpers.php';
 
 if (!is_logged_in() || !is_admin()) {
     redirect('auth/login.php');

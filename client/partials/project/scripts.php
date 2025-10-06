@@ -1,14 +1,16 @@
 <?php /* Project page scripts extracted from client/project.php */ ?>
 <script>
-// Initialize Bootstrap tooltips
-(function(){
-    if (window.bootstrap) {
-        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        tooltipTriggerList.forEach(function (tooltipTriggerEl) { try { new bootstrap.Tooltip(tooltipTriggerEl); } catch(e){} });
-    }
-})();
-
 document.addEventListener('DOMContentLoaded', function() {
+    if (window.bootstrap && typeof bootstrap.Tooltip === 'function') {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+            try {
+                new bootstrap.Tooltip(tooltipTriggerEl);
+            } catch (e) {
+                console.error('Tooltip init failed', e);
+            }
+        });
+    }
     // Move modals to body
     const projectInfoModalEl = document.getElementById('projectInfoModal');
     if (projectInfoModalEl && projectInfoModalEl.parentElement !== document.body) { document.body.appendChild(projectInfoModalEl); }
@@ -41,6 +43,24 @@ document.addEventListener('DOMContentLoaded', function() {
     const insufficientRequiredEl = insufficientFundsModalEl?.querySelector('[data-insufficient-required]');
     const insufficientBalanceEl = insufficientFundsModalEl?.querySelector('[data-insufficient-balance]');
 
+    const getAddLinkModalInstance = () => {
+        const modalEl = addLinkModalEl || document.getElementById('addLinkModal');
+        if (!modalEl || !window.bootstrap) { return null; }
+        return bootstrap.Modal.getOrCreateInstance(modalEl);
+    };
+
+    if (window.bootstrap) {
+        document.querySelectorAll('.project-hero__action-add').forEach(btn => {
+            btn.addEventListener('click', (event) => {
+                const modalInstance = getAddLinkModalInstance();
+                if (modalInstance) {
+                    event.preventDefault();
+                    modalInstance.show();
+                }
+            }, { passive: false });
+        });
+    }
+
     if (addLinkModalEl && window.bootstrap) {
         addLinkModalEl.addEventListener('shown.bs.modal', () => {
             if (newLinkInput) {
@@ -51,7 +71,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
-    const PROJECT_HOST = '<?php echo htmlspecialchars($pp_normalize_host($project['domain_host'] ?? '')); ?>';
+    const PROJECT_HOST = '<?php echo htmlspecialchars(pp_normalize_host($project['domain_host'] ?? '')); ?>';
     const PROMOTION_CHARGE_AMOUNT = <?php echo json_encode($promotionChargeAmount); ?>;
     const PROMOTION_CHARGE_AMOUNT_FORMATTED = '<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
     const PROMOTION_CHARGE_BASE = <?php echo json_encode($promotionBasePrice); ?>;

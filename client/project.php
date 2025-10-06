@@ -46,6 +46,11 @@ $pp_lang_codes = [
     'zh', 'zh-cn', 'zh-tw', 'ja', 'ko',
 ];
 
+$promotionActiveStates = [
+    'queued', 'running', 'level1_active', 'pending_level2', 'level2_active',
+    'pending_level3', 'level3_active', 'pending_crowd', 'crowd_ready', 'report_ready',
+];
+
 $links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
 
 $snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
