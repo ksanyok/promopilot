@@ -156,6 +156,7 @@ if (!function_exists('pp_mail_send')) {
                 pp_mail_log('mail.skipped.transport_missing', [
                     'to' => $toEmail,
                     'subject' => $subject,
+                    'reason' => 'smtp_config_missing',
                 ]);
                 return false;
             }
@@ -178,10 +179,32 @@ if (!function_exists('pp_mail_send')) {
             $textBody = pp_mail_html_to_text($htmlBody);
         }
         [$fromEmail, $fromName] = pp_mail_from_identity($options['from'] ?? []);
+
+        try {
+            $boundary = '=_PP_' . bin2hex(random_bytes(12));
+        } catch (Throwable $e) {
+            $fallbackSeed = microtime(true) . ':' . mt_rand();
+            $fallbackHash = hash('sha256', $fallbackSeed, true);
+            $boundary = '=_PP_' . bin2hex(substr($fallbackHash, 0, 12));
+        }
+        $subjectEncoded = function_exists('mb_encode_mimeheader') ? mb_encode_mimeheader($subject, 'UTF-8', 'B', "\r\n") : $subject;
+
+        try {
+            $messageHash = bin2hex(random_bytes(16));
+        } catch (Throwable $e) {
+            $fallbackSeed = microtime(true) . ':' . mt_rand();
+            $messageHash = bin2hex(substr(hash('sha256', $fallbackSeed, true), 0, 16));
+        }
+        $messageId = sprintf('<%s@%s>', $messageHash, pp_mail_default_domain());
+
         $headers = [];
+        $headers[] = 'Date: ' . gmdate('D, d M Y H:i:s O');
         $headers[] = 'MIME-Version: 1.0';
         $headers[] = 'X-Mailer: PromoPilot';
+        $headers[] = 'Message-ID: ' . $messageId;
         $headers[] = 'From: ' . pp_mail_format_address($fromEmail, $fromName);
+        $headers[] = 'To: ' . pp_mail_format_address($toEmail);
+        $headers[] = 'Subject: ' . $subjectEncoded;
 
         $replyTo = trim((string)($options['reply_to'] ?? ''));
         if ($replyTo !== '' && filter_var($replyTo, FILTER_VALIDATE_EMAIL)) {
@@ -207,15 +230,6 @@ if (!function_exists('pp_mail_send')) {
                 $headers[] = 'Bcc: ' . implode(', ', array_map(static fn($item) => pp_mail_format_address($item), $bccFiltered));
             }
         }
-
-        try {
-            $boundary = '=_PP_' . bin2hex(random_bytes(12));
-        } catch (Throwable $e) {
-            $fallbackSeed = microtime(true) . ':' . mt_rand();
-            $fallbackHash = hash('sha256', $fallbackSeed, true);
-            $boundary = '=_PP_' . bin2hex(substr($fallbackHash, 0, 12));
-        }
-        $subjectEncoded = function_exists('mb_encode_mimeheader') ? mb_encode_mimeheader($subject, 'UTF-8', 'B', "\r\n") : $subject;
 
         if ($textBody !== '') {
             $headers[] = 'Content-Type: multipart/alternative; boundary="' . $boundary . '"';
@@ -249,6 +263,7 @@ if (!function_exists('pp_mail_send')) {
             'body' => $body,
             'from_email' => $fromEmail,
             'from_name' => $fromName,
+            'message_id' => $messageId,
         ];
 
         if ($transport === 'smtp') {

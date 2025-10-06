@@ -223,12 +223,30 @@ if (!function_exists('pp_balance_send_event_notification')) {
         $afterFormatted = format_currency($event['balance_after']);
         $reason = pp_balance_event_reason($event);
         $changeLabel = $delta >= 0 ? __('Пополнение баланса') : __('Списание с баланса');
-        $subject = $changeLabel . ' — PromoPilot';
+        $subjectEmoji = $delta >= 0 ? '💰' : '⚠️';
+        $subject = $subjectEmoji . ' ' . $changeLabel . ' — PromoPilot';
         $intro = $delta >= 0
             ? sprintf(__('Ваш баланс пополнен на %s.'), $absFormatted)
             : sprintf(__('С вашего баланса списано %s.'), $absFormatted);
         $comment = pp_balance_event_comment($event);
-        $historyUrl = pp_url('client/balance.php');
+            $historyUrl = pp_url('client/balance.php');
+            $topupUrl = pp_url('client/balance.php');
+            $logoSrc = pp_url('assets/img/logo.svg');
+            $logoPath = defined('PP_ROOT_PATH') ? PP_ROOT_PATH . '/assets/img/logo.svg' : null;
+            if ($logoPath && is_readable($logoPath)) {
+                $logoContent = @file_get_contents($logoPath);
+                if ($logoContent !== false && $logoContent !== '') {
+                    $encodedLogo = base64_encode($logoContent);
+                    if ($encodedLogo !== '') {
+                        $logoSrc = 'data:image/svg+xml;base64,' . $encodedLogo;
+                    }
+                }
+            }
+        $supportEmail = trim((string)get_setting('support_email', 'support@' . pp_mail_default_domain()));
+        if (!filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) {
+            $supportEmail = 'support@' . pp_mail_default_domain();
+        }
+        $supportLink = 'mailto:' . $supportEmail;
         $greeting = sprintf(__('Здравствуйте, %s!'), htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
         $rows = [];
         $rows[] = ['label' => __('Сумма изменения'), 'value' => pp_balance_sign_amount($delta)];
@@ -256,26 +274,58 @@ if (!function_exists('pp_balance_send_event_notification')) {
                 . '</tr>';
         }
 
+        $highlights = [
+            __('PromoPilot помогает управлять продвижением и бюджетом в одном окне.'),
+            __('Следите за продвижением в реальном времени и получайте уведомления.'),
+            __('Получайте автоматические отчеты и полную историю транзакций.'),
+        ];
+
+        $highlightsItems = '';
+        foreach ($highlights as $highlight) {
+            $highlightsItems .= '<li style="margin:0 0 8px;padding-left:0;color:#1f2937;font-size:13px;line-height:1.5;">'
+                . htmlspecialchars($highlight, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '</li>';
+        }
+
         $html = '<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>'
             . htmlspecialchars($subject, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . '</title></head><body style="margin:0;padding:0;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;">'
-            . '<div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:12px;box-shadow:0 8px 24px rgba(15,23,42,0.08);overflow:hidden;">'
-            . '<div style="padding:28px 32px;">'
-            . '<h1 style="margin:0 0 12px;font-size:20px;color:#111827;font-weight:700;">' . htmlspecialchars($changeLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h1>'
-            . '<p style="margin:0 0 16px;font-size:14px;color:#374151;">' . $greeting . '</p>'
-            . '<p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#111827;">' . htmlspecialchars($intro, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
-            . '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#f9fafc;border-radius:10px;overflow:hidden;">'
+            . '</title></head><body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;">'
+            . '<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;box-shadow:0 18px 40px rgba(15,23,42,0.12);overflow:hidden;">'
+            . '<div style="background:#0f172a;padding:32px 36px;text-align:center;">'
+            . '<a href="' . htmlspecialchars(pp_url(''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:inline-block;text-decoration:none;">'
+                . '<img src="' . htmlspecialchars($logoSrc, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" alt="PromoPilot" style="height:44px;max-width:160px;margin:0 0 18px;" />'
+            . '</a>'
+            . '<div style="color:#e0e7ff;font-size:18px;font-weight:600;">' . htmlspecialchars($changeLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</div>'
+            . '<div style="margin-top:8px;color:#94a3b8;font-size:13px;line-height:1.6;">' . htmlspecialchars(__('PromoPilot — ваш центр управления продвижением и балансом.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</div>'
+            . '</div>'
+            . '<div style="padding:32px 36px 28px;">'
+            . '<p style="margin:0 0 12px;font-size:15px;color:#1f2937;line-height:1.6;">' . $greeting . '</p>'
+            . '<p style="margin:0 0 22px;font-size:16px;line-height:1.7;color:#0f172a;font-weight:500;">' . htmlspecialchars($intro, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
+            . '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#f8fafc;border-radius:12px;overflow:hidden;">'
             . $tableRows
-            . '</table>';
-        $html .= '<div style="margin-top:24px;">'
-            . '<a href="' . htmlspecialchars($historyUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:inline-block;padding:12px 22px;background:#2563eb;color:#ffffff;font-weight:600;font-size:14px;text-decoration:none;border-radius:8px;">'
+            . '</table>'
+            . '<div style="margin-top:28px;padding:20px;background:#f1f5f9;border-radius:12px;">'
+            . '<div style="font-size:13px;font-weight:600;color:#1f2937;margin-bottom:12px;">' . htmlspecialchars(__('Почему PromoPilot:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</div>'
+            . '<ul style="margin:0;padding-left:20px;list-style:disc;text-align:left;">' . $highlightsItems . '</ul>'
+            . '</div>'
+            . '<div style="margin-top:28px;text-align:center;">'
+            . '<a href="' . htmlspecialchars($historyUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:block;margin:0 0 12px;padding:14px 24px;background:#2563eb;color:#ffffff;font-weight:600;font-size:14px;text-decoration:none;border-radius:10px;">'
             . htmlspecialchars(__('Перейти в кабинет'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . '</a>'
+            . '<a href="' . htmlspecialchars($topupUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '#topup" style="display:block;margin:0 0 12px;padding:14px 24px;background:#e0f2fe;color:#0369a1;font-weight:600;font-size:14px;text-decoration:none;border-radius:10px;">'
+            . htmlspecialchars(__('Пополнить баланс'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</a>'
+            . '<a href="' . htmlspecialchars($supportLink, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:block;padding:14px 24px;border:1px solid #cbd5f5;color:#1d4ed8;font-weight:600;font-size:14px;text-decoration:none;border-radius:10px;">'
+            . htmlspecialchars(__('Связаться с нами'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</a>'
             . '</div>'
-            . '<p style="margin:24px 0 0;font-size:13px;color:#6b7280;">' . htmlspecialchars(__('Если вы не выполняли это действие, срочно свяжитесь с поддержкой.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
+            . '<p style="margin:28px 0 0;font-size:13px;color:#6b7280;line-height:1.7;">' . htmlspecialchars(__('Если вы не выполняли это действие, срочно свяжитесь с поддержкой.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
+            . '<p style="margin:12px 0 0;font-size:13px;color:#475569;">' . htmlspecialchars(__('Поддержка:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' ' . htmlspecialchars($supportEmail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
+            . '<p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">' . htmlspecialchars(__('Команда PromoPilot ✈️'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
             . '</div>'
-            . '<div style="padding:16px 32px;background:#0f172a;color:#cbd5f5;font-size:12px;text-align:center;">'
+            . '<div style="padding:18px 36px;background:#0f172a;color:#cbd5f5;font-size:12px;text-align:center;line-height:1.5;">'
             . 'PromoPilot &mdash; ' . htmlspecialchars(__('Панель управления продвижением и балансом'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '<br />' . htmlspecialchars(__('PromoPilot — ваш центр управления продвижением и балансом.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . '</div>'
             . '</div>'
             . '</body></html>';
@@ -290,13 +340,23 @@ if (!function_exists('pp_balance_send_event_notification')) {
         }
         $textLines[] = '';
         $textLines[] = __('История и пополнение:') . ' ' . $historyUrl;
+        $textLines[] = __('Пополнить баланс:') . ' ' . $topupUrl;
+        $textLines[] = '';
+        $textLines[] = __('Почему PromoPilot:');
+        foreach ($highlights as $highlight) {
+            $textLines[] = '• ' . $highlight;
+        }
         $textLines[] = '';
         $textLines[] = __('Если вы не выполняли это действие, срочно свяжитесь с поддержкой.');
+        $textLines[] = __('Поддержка:') . ' ' . $supportEmail;
         $textLines[] = '';
-        $textLines[] = 'PromoPilot';
+        $textLines[] = __('Команда PromoPilot ✈️');
         $textBody = implode("\n", $textLines);
 
-        $sent = pp_mail_send($email, $subject, $html, $textBody, ['reply_to' => get_setting('mail_reply_to', '')]);
+        $sent = pp_mail_send($email, $subject, $html, $textBody, [
+            'reply_to' => get_setting('mail_reply_to', ''),
+            'from' => ['name' => 'PromoPilot ✈️'],
+        ]);
         if (!$sent) {
             pp_mail_log('mail.balance_notification.failed', [
                 'user_id' => $event['user_id'],
