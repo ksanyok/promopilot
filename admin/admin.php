@@ -15,106 +15,22 @@ $networksMsg = '';
 $diagnosticsMsg = '';
 $crowdMsg = '';
 $crowdImportSummary = null;
-$allowedCurrencies = ['RUB','USD','EUR','GBP','UAH'];
-$settingsKeys = ['currency','openai_api_key','telegram_token','telegram_channel'];
-// Extend settings keys: AI provider and Google OAuth
-$settingsKeys = array_merge($settingsKeys, [
-    'ai_provider',              // openai | byoa
-    'openai_model',             // selected OpenAI model
-    'google_oauth_enabled',     // 0/1
-    'google_client_id',
-    'google_client_secret',
-    // Anti-captcha settings
-    'captcha_provider',         // none | 2captcha | anti-captcha | capsolver
-    'captcha_api_key',
-    'captcha_fallback_provider', // none | 2captcha | anti-captcha | capsolver
-    'captcha_fallback_api_key',
-    // Promotion pricing and levels
-    'promotion_price_per_link',
-    'promotion_level1_count',
-    'promotion_level2_per_level1',
-    'promotion_level3_per_level2',
-    'promotion_crowd_per_article',
-    'promotion_level1_enabled',
-    'promotion_level2_enabled',
-    'promotion_level3_enabled',
-    'promotion_crowd_enabled',
-]);
+$allowedCurrencies = pp_admin_allowed_currencies();
+$settingsKeys = pp_admin_setting_keys();
+[$networkDefaultPriority, $networkDefaultLevels, $networkDefaultLevelsList] = pp_admin_get_network_defaults();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['settings_submit'])) {
         if (!verify_csrf()) {
             $settingsMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $currency = strtoupper(trim((string)($_POST['currency'] ?? 'RUB')));
-            if (!in_array($currency, $allowedCurrencies, true)) { $currency = 'RUB'; }
-            $openai = trim((string)($_POST['openai_api_key'] ?? ''));
-            $openaiModel = trim((string)($_POST['openai_model'] ?? 'gpt-3.5-turbo'));
-            $tgToken = trim((string)($_POST['telegram_token'] ?? ''));
-            $tgChannel = trim((string)($_POST['telegram_channel'] ?? ''));
-
-            // AI provider selection (OpenAI or BYOA only; no custom fields)
-            $aiProvider = in_array(($_POST['ai_provider'] ?? 'openai'), ['openai','byoa'], true) ? $_POST['ai_provider'] : 'openai';
-
-            // Google OAuth config
-            $googleEnabled = isset($_POST['google_oauth_enabled']) ? '1' : '0';
-            $googleClientId = trim((string)($_POST['google_client_id'] ?? ''));
-            $googleClientSecret = trim((string)($_POST['google_client_secret'] ?? ''));
-
-            $priceRaw = str_replace(',', '.', (string)($_POST['promotion_price_per_link'] ?? '0'));
-            $promotionPrice = max(0, round((float)$priceRaw, 2));
-            $level1Count = max(1, min(500, (int)($_POST['promotion_level1_count'] ?? 5)));
-            $level2PerLevel1 = max(1, min(500, (int)($_POST['promotion_level2_per_level1'] ?? 10)));
-            $level3PerLevel2 = max(1, min(500, (int)($_POST['promotion_level3_per_level2'] ?? 5)));
-            $crowdPerArticle = max(0, min(5000, (int)($_POST['promotion_crowd_per_article'] ?? 100)));
-            $pairs = [
-                ['currency', $currency],
-                ['openai_api_key', $openai],
-                ['openai_model', $openaiModel],
-                ['telegram_token', $tgToken],
-                ['telegram_channel', $tgChannel],
-                ['ai_provider', $aiProvider],
-                ['google_oauth_enabled', $googleEnabled],
-                ['google_client_id', $googleClientId],
-                ['google_client_secret', $googleClientSecret],
-                // Anti-captcha
-                ['captcha_provider', in_array(($_POST['captcha_provider'] ?? 'none'), ['none','2captcha','anti-captcha','capsolver'], true) ? $_POST['captcha_provider'] : 'none'],
-                ['captcha_api_key', trim((string)($_POST['captcha_api_key'] ?? ''))],
-                ['captcha_fallback_provider', in_array(($_POST['captcha_fallback_provider'] ?? 'none'), ['none','2captcha','anti-captcha','capsolver'], true) ? $_POST['captcha_fallback_provider'] : 'none'],
-                ['captcha_fallback_api_key', trim((string)($_POST['captcha_fallback_api_key'] ?? ''))],
-                // Promotion
-                ['promotion_price_per_link', number_format($promotionPrice, 2, '.', '')],
-                ['promotion_level1_count', (string)$level1Count],
-                ['promotion_level2_per_level1', (string)$level2PerLevel1],
-                ['promotion_level3_per_level2', (string)$level3PerLevel2],
-                ['promotion_crowd_per_article', (string)$crowdPerArticle],
-                ['promotion_level1_enabled', isset($_POST['promotion_level1_enabled']) ? '1' : '0'],
-                ['promotion_level2_enabled', isset($_POST['promotion_level2_enabled']) ? '1' : '0'],
-                ['promotion_level3_enabled', isset($_POST['promotion_level3_enabled']) ? '1' : '0'],
-                ['promotion_crowd_enabled', isset($_POST['promotion_crowd_enabled']) ? '1' : '0'],
-            ];
-            $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
-            if ($stmt) {
-                foreach ($pairs as [$k, $v]) {
-                    $stmt->bind_param('ss', $k, $v);
-                    $stmt->execute();
-                }
-                $stmt->close();
-                $settingsMsg = __('Настройки сохранены.');
-            } else {
-                $settingsMsg = __('Ошибка сохранения настроек.');
-            }
+            $settingsMsg = pp_admin_handle_settings_submit($conn, $_POST, $allowedCurrencies);
         }
     } elseif (isset($_POST['refresh_networks'])) {
         if (!verify_csrf()) {
             $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            try {
-                pp_refresh_networks(true);
-                $networksMsg = __('Список сетей обновлён.');
-            } catch (Throwable $e) {
-                $networksMsg = __('Ошибка обновления списка сетей.');
-            }
+            $networksMsg = pp_admin_handle_network_refresh();
         }
     } elseif (isset($_POST['delete_network'])) {
         if (!verify_csrf()) {
@@ -122,146 +38,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $slugRaw = (string)($_POST['delete_network'] ?? '');
             $slugNorm = pp_normalize_slug($slugRaw);
-            if ($slugNorm === '') {
-                $networksMsg = __('Не удалось удалить сеть.');
-            } elseif (pp_delete_network($slugNorm)) {
-                $networksMsg = __('Сеть удалена из списка.');
-            } else {
-                $networksMsg = __('Не удалось удалить сеть.');
-            }
+            $networksMsg = pp_admin_handle_network_delete($slugNorm);
         }
     } elseif (isset($_POST['networks_submit'])) {
         if (!verify_csrf()) {
             $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $enabledSlugs = [];
-            if (!empty($_POST['enable']) && is_array($_POST['enable'])) {
-                $enabledSlugs = array_keys($_POST['enable']);
-            }
-            $priorityInput = $_POST['priority'] ?? [];
-            $priorityMap = [];
-            if (is_array($priorityInput)) {
-                foreach ($priorityInput as $slug => $value) {
-                    $slugNorm = pp_normalize_slug((string)$slug);
-                    if ($slugNorm === '') { continue; }
-                    $priorityMap[$slugNorm] = (int)$value;
-                }
-            }
-            $levelInput = $_POST['level'] ?? [];
-            $levelMap = [];
-            if (is_array($levelInput)) {
-                foreach ($levelInput as $slug => $value) {
-                    $slugNorm = pp_normalize_slug((string)$slug);
-                    if ($slugNorm === '') { continue; }
-                    $levelMap[$slugNorm] = $value;
-                }
-            }
-            $defaultPriority = isset($_POST['default_priority']) ? (int)$_POST['default_priority'] : $networkDefaultPriority;
-            if ($defaultPriority < 0) { $defaultPriority = 0; }
-            if ($defaultPriority > 999) { $defaultPriority = 999; }
-            $defaultLevelsRaw = $_POST['default_levels'] ?? [];
-            if (!is_array($defaultLevelsRaw)) { $defaultLevelsRaw = [$defaultLevelsRaw]; }
-            $defaultLevelsValue = pp_normalize_network_levels($defaultLevelsRaw);
-            $nodeBinaryNew = trim((string)($_POST['node_binary'] ?? ''));
-            $puppeteerExecNew = trim((string)($_POST['puppeteer_executable_path'] ?? ''));
-            $puppeteerArgsNew = trim((string)($_POST['puppeteer_args'] ?? ''));
-            set_settings([
-                'node_binary' => $nodeBinaryNew,
-                'puppeteer_executable_path' => $puppeteerExecNew,
-                'puppeteer_args' => $puppeteerArgsNew,
-                'network_default_priority' => $defaultPriority,
-                'network_default_levels' => $defaultLevelsValue,
-            ]);
-            $networkDefaultPriority = $defaultPriority;
-            $networkDefaultLevels = $defaultLevelsValue;
-            $networkDefaultLevelsList = $networkDefaultLevels !== '' ? explode(',', $networkDefaultLevels) : [];
-            if (pp_set_networks_enabled($enabledSlugs, $priorityMap, $levelMap)) {
-                $networksMsg = __('Параметры сетей сохранены.');
-            } else {
-                $networksMsg = __('Не удалось обновить параметры сетей.');
-            }
+            $networksMsg = pp_admin_handle_networks_submit($_POST, $networkDefaultPriority, $networkDefaultLevels, $networkDefaultLevelsList);
         }
     } elseif (isset($_POST['detect_node'])) {
         if (!verify_csrf()) {
             $networksMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $resolved = pp_resolve_node_binary(5, true);
-            if ($resolved) {
-                $path = $resolved['path'];
-                $ver = $resolved['version'] ?? __('Неизвестно');
-                $networksMsg = sprintf(__('Node.js найден: %s (версия %s).'), $path, $ver);
-            } else {
-                $candidates = pp_collect_node_candidates();
-                $msg = __('Не удалось автоматически определить Node.js.');
-                if (!empty($candidates)) {
-                    $msg .= ' ' . __('Проверенные пути:') . ' ' . implode(', ', array_slice($candidates, 0, 10));
-                }
-                $networksMsg = $msg;
-            }
+            $networksMsg = pp_admin_handle_node_detection();
         }
     } elseif (isset($_POST['crowd_import'])) {
         if (!verify_csrf()) {
             $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            try {
-                $crowdImportSummary = pp_crowd_links_import_files($_FILES['crowd_files'] ?? []);
-                if (!empty($crowdImportSummary['ok'])) {
-                    $crowdMsg = sprintf(
-                        __('Импорт завершён. Добавлено: %1$d, дубликатов: %2$d, пропущено: %3$d.'),
-                        (int)($crowdImportSummary['imported'] ?? 0),
-                        (int)($crowdImportSummary['duplicates'] ?? 0),
-                        (int)($crowdImportSummary['invalid'] ?? 0)
-                    );
-                } else {
-                    $errors = (array)($crowdImportSummary['errors'] ?? []);
-                    $crowdMsg = !empty($errors) ? implode(' ', $errors) : __('Не удалось выполнить импорт ссылок.');
-                }
-            } catch (Throwable $e) {
-                $crowdMsg = __('Не удалось выполнить импорт ссылок.');
-            }
+            $importResult = pp_admin_handle_crowd_import($_FILES['crowd_files'] ?? []);
+            $crowdMsg = $importResult['message'];
+            $crowdImportSummary = $importResult['summary'];
         }
     } elseif (isset($_POST['crowd_clear_all'])) {
         if (!verify_csrf()) {
             $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $deleted = pp_crowd_links_delete_all();
-            $crowdMsg = $deleted > 0
-                ? sprintf(__('Удалено %d ссылок.'), $deleted)
-                : __('Ссылки не были удалены.');
+            $crowdMsg = pp_admin_handle_crowd_action('clear_all');
         }
     } elseif (isset($_POST['crowd_delete_errors'])) {
         if (!verify_csrf()) {
             $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $deleted = pp_crowd_links_delete_errors();
-            $crowdMsg = $deleted > 0
-                ? sprintf(__('Удалено ссылок с ошибками: %d.'), $deleted)
-                : __('Не найдено ссылок с ошибками.');
+            $crowdMsg = pp_admin_handle_crowd_action('delete_errors');
         }
     } elseif (isset($_POST['crowd_delete_selected'])) {
         if (!verify_csrf()) {
             $crowdMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
             $selected = $_POST['crowd_selected'] ?? [];
-            if (!is_array($selected)) {
-                $selected = [$selected];
-            }
-            $deleted = pp_crowd_links_delete_selected($selected);
-            $crowdMsg = $deleted > 0
-                ? sprintf(__('Удалено выбранных ссылок: %d.'), $deleted)
-                : __('Не удалось удалить выбранные ссылки.');
+            $crowdMsg = pp_admin_handle_crowd_action('delete_selected', ['selected' => $selected]);
         }
     } elseif (isset($_POST['detect_chrome'])) {
         if (!verify_csrf()) {
             $diagnosticsMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
-            $found = pp_resolve_chrome_path();
-            if ($found) {
-                set_setting('puppeteer_executable_path', $found);
-                $diagnosticsMsg = sprintf(__('Chrome найден: %s. Путь сохранён в настройках.'), $found);
-            } else {
-                $diagnosticsMsg = __('Не удалось автоматически определить Chrome. Проверьте подсказки ниже и установите браузер в корне проекта.');
-            }
+            $diagnosticsMsg = pp_admin_handle_detect_chrome();
         }
     }
 }
@@ -696,12 +518,6 @@ $networks = pp_get_networks(false, true);
 $nodeBinaryStored = trim((string)get_setting('node_binary', ''));
 $puppeteerExecStored = trim((string)get_setting('puppeteer_executable_path', ''));
 $puppeteerArgsStored = trim((string)get_setting('puppeteer_args', ''));
-$networkDefaultPriority = (int)get_setting('network_default_priority', 10);
-if ($networkDefaultPriority < 0) { $networkDefaultPriority = 0; }
-if ($networkDefaultPriority > 999) { $networkDefaultPriority = 999; }
-$networkDefaultLevelsRaw = (string)get_setting('network_default_levels', '');
-$networkDefaultLevels = pp_normalize_network_levels($networkDefaultLevelsRaw);
-$networkDefaultLevelsList = $networkDefaultLevels !== '' ? explode(',', $networkDefaultLevels) : [];
 $resolvedNode = pp_resolve_node_binary(2, true);
 $nodeBinaryEffective = $resolvedNode['path'] ?? pp_get_node_binary();
 $canRunShell = function_exists('shell_exec');

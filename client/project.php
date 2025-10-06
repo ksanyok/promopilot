@@ -1,29 +1,22 @@
 <?php
 require_once __DIR__ . '/../includes/init.php';
+require_once __DIR__ . '/../includes/project_helpers.php';
 
 if (!is_logged_in()) {
     redirect('auth/login.php');
 }
 
 $id = (int)($_GET['id'] ?? 0);
-$user_id = $_SESSION['user_id'];
+$user_id = (int)($_SESSION['user_id']);
 
-$conn = connect_db();
-$stmt = $conn->prepare("SELECT p.*, u.username, u.promotion_discount, u.balance FROM projects p JOIN users u ON p.user_id = u.id WHERE p.id = ?");
-$stmt->bind_param("i", $id);
-$stmt->execute();
-$result = $stmt->get_result();
-
-if ($result->num_rows == 0) {
+$project = pp_project_fetch_with_user($id);
+if (!$project) {
     include '../includes/header.php';
     echo '<div class="alert alert-warning">' . __('Проект не найден.') . '</div>';
     echo '<a class="btn btn-secondary" href="' . pp_url('client/client.php') . '">' . __('Вернуться') . '</a>';
     include '../includes/footer.php';
     exit;
 }
-
-$project = $result->fetch_assoc();
-$stmt->close();
 
 $promotionSettings = function_exists('pp_promotion_settings') ? pp_promotion_settings() : [];
 $promotionBasePrice = max(0.0, (float)($promotionSettings['price_per_link'] ?? 0));
@@ -41,36 +34,93 @@ if ($promotionDiscountPercentAttr === '') { $promotionDiscountPercentAttr = '0';
 $currentUserBalance = (float)($project['balance'] ?? 0);
 $currentUserBalanceFormatted = format_currency($currentUserBalance);
 
-// Build taxonomy (regions/topics) from enabled networks for selectors
 $taxonomy = pp_get_network_taxonomy(true);
 $availableRegions = $taxonomy['regions'] ?? [];
 $availableTopics  = $taxonomy['topics'] ?? [];
 if (empty($availableRegions)) { $availableRegions = ['Global']; }
 if (empty($availableTopics))  { $availableTopics  = ['General']; }
 
-// Define extended language codes for link operations/UI
 $pp_lang_codes = [
     'ru','en','uk','de','fr','es','it','pt','pt-br','pl','tr','nl','cs','sk','bg','ro','el','hu','sv','da','no','fi','et','lv','lt','ka','az','kk','uz','sr','sl','hr','he','ar','fa','hi','id','ms','vi','th','zh','zh-cn','zh-tw','ja','ko'
 ];
 
-// Load links from normalized table
-$links = [];
-if ($pl = $conn->prepare('SELECT id, url, anchor, language, wish FROM project_links WHERE project_id = ? ORDER BY id ASC')) {
-    $pl->bind_param('i', $id);
-    $pl->execute();
-    $res = $pl->get_result();
-    while ($row = $res->fetch_assoc()) {
-        $links[] = [
-            'id' => (int)$row['id'],
-            'url' => (string)$row['url'],
-            'anchor' => (string)$row['anchor'],
-            'language' => (string)($row['language'] ?? ($project['language'] ?? 'ru')),
-            'wish' => (string)($row['wish'] ?? ''),
-        ];
-    }
-    $pl->close();
+$links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
+
+$snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
+$promotionSummary = $snapshot['summary'];
+$promotionStatusByUrl = $snapshot['status_by_url'];
+$canDeleteProject = $snapshot['can_delete'];
+
+if (!is_admin() && (int)$project['user_id'] !== $user_id) {
+    include '../includes/header.php';
+    echo '<div class="alert alert-danger">' . __('Доступ запрещен.') . '</div>';
+    echo '<a class="btn btn-secondary" href="' . pp_url('client/client.php') . '">' . __('Вернуться') . '</a>';
+    include '../includes/footer.php';
+    exit;
 }
-$conn->close();
+
+$pp_is_ajax = (
+    ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest' ||
+    (isset($_POST['ajax']) && $_POST['ajax'] == '1') ||
+    (strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json') !== false)
+);
+
+$message = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['delete_project'])) {
+        if (!verify_csrf()) {
+            $message = __('Ошибка удаления проекта.') . ' (CSRF)';
+        } elseif (!$canDeleteProject) {
+            $message = __('Удаление проекта недоступно: есть активные или выполненные ссылки.');
+        } else {
+            $previewDescriptor = function_exists('pp_project_preview_descriptor') ? pp_project_preview_descriptor($project) : null;
+            $previewPath = (is_array($previewDescriptor) && !empty($previewDescriptor['exists']) && !empty($previewDescriptor['path'])) ? (string)$previewDescriptor['path'] : null;
+            $deleteResult = pp_project_delete_with_relations($id, $user_id, is_admin());
+            if ($deleteResult['ok']) {
+                if ($previewPath && @is_file($previewPath)) {
+                    @unlink($previewPath);
+                }
+                $_SESSION['pp_client_flash'] = ['type' => 'success', 'text' => __('Проект удален.')];
+                redirect('client/client.php');
+                exit;
+            }
+            $message = __('Не удалось удалить проект.');
+        }
+    } elseif (isset($_POST['update_project_info'])) {
+        if (!verify_csrf()) {
+            $message = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $updateInfo = pp_project_update_main_info($id, $project, $_POST, [
+                'allowed_languages' => ['ru','en','es','fr','de'],
+                'available_regions' => $availableRegions,
+                'available_topics' => $availableTopics,
+            ]);
+            $message = $updateInfo['message'];
+        }
+    } elseif (isset($_POST['update_project'])) {
+        if (!verify_csrf()) {
+            $message = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $updateResult = pp_project_handle_links_update($id, $project, $_POST);
+            if ($pp_is_ajax) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode($updateResult, JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $message = $updateResult['message'];
+        }
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$pp_is_ajax) {
+    $links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
+    $snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
+    $promotionSummary = $snapshot['summary'];
+    $promotionStatusByUrl = $snapshot['status_by_url'];
+    $canDeleteProject = $snapshot['can_delete'];
+}
+
+$pubStatusByUrl = pp_project_publication_statuses($id);
 
 if (empty($project['primary_url'])) {
     $project['primary_url'] = $links[0]['url'] ?? null;
@@ -102,534 +152,6 @@ if (function_exists('mb_substr')) {
     $projectInitial = strtoupper(substr((string)($project['name'] ?? ''), 0, 1));
 }
 if ($projectInitial === '') { $projectInitial = '∎'; }
-
-// Helper: normalize host (strip www)
-$pp_normalize_host = function(?string $host): string {
-    $h = strtolower(trim((string)$host));
-    if (strpos($h, 'www.') === 0) { $h = substr($h, 4); }
-    return $h;
-};
-
-// Collect current promotion statuses for project links (used in deletion guard and summary)
-$promotionStatusByUrl = [];
-if (function_exists('pp_promotion_get_status')) {
-    foreach ($links as $item) {
-        $linkUrl = (string)($item['url'] ?? '');
-        if ($linkUrl === '') { continue; }
-        $stat = pp_promotion_get_status((int)$project['id'], $linkUrl);
-        if (is_array($stat) && !empty($stat['ok'])) {
-            $promotionStatusByUrl[$linkUrl] = $stat;
-        }
-    }
-}
-
-$canDeleteProject = true;
-if (!empty($links)) {
-    foreach ($links as $item) {
-        $linkUrl = (string)($item['url'] ?? '');
-        $status = 'idle';
-        if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
-            $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
-        }
-        if ($status !== 'idle') {
-            $canDeleteProject = false;
-            break;
-        }
-    }
-}
-
-// Gather promotion status summary early to reuse in POST handlers and rendering
-$promotionStatusByUrl = [];
-if (function_exists('pp_promotion_get_status')) {
-    foreach ($links as $item) {
-        $linkUrl = (string)($item['url'] ?? '');
-        if ($linkUrl === '') { continue; }
-        $stat = pp_promotion_get_status((int)$project['id'], $linkUrl);
-        if (is_array($stat) && !empty($stat['ok'])) {
-            $promotionStatusByUrl[$linkUrl] = $stat;
-        }
-    }
-}
-
-$promotionSummary = [
-    'total' => count($links),
-    'active' => 0,
-    'completed' => 0,
-    'idle' => 0,
-    'issues' => 0,
-];
-$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
-$promotionIssueStates = ['failed','cancelled'];
-foreach ($links as $item) {
-    $linkUrl = (string)($item['url'] ?? '');
-    $status = 'idle';
-    if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
-        $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
-    }
-    if (in_array($status, $promotionActiveStates, true)) {
-        $promotionSummary['active']++;
-    } elseif ($status === 'completed') {
-        $promotionSummary['completed']++;
-    } elseif (in_array($status, $promotionIssueStates, true)) {
-        $promotionSummary['issues']++;
-    } else {
-        $promotionSummary['idle']++;
-    }
-}
-
-$canDeleteProject = ($promotionSummary['total'] === 0) || ($promotionSummary['idle'] === $promotionSummary['total']);
-
-// Проверить доступ: админ или владелец
-if (!is_admin() && $project['user_id'] != $user_id) {
-    include '../includes/header.php';
-    echo '<div class="alert alert-danger">' . __('Доступ запрещен.') . '</div>';
-    echo '<a class="btn btn-secondary" href="' . pp_url('client/client.php') . '">' . __('Вернуться') . '</a>';
-    include '../includes/footer.php';
-    exit;
-}
-
-// Определяем, является ли запрос AJAX (для автосохранения при добавлении)
-$pp_is_ajax = (
-    ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest' ||
-    (isset($_POST['ajax']) && $_POST['ajax'] == '1') ||
-    (strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json') !== false)
-);
-
-// Обработка формы
-$message = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_project'])) {
-    if (!verify_csrf()) {
-        $message = __('Ошибка удаления проекта.') . ' (CSRF)';
-    } elseif (!$canDeleteProject) {
-        $message = __('Удаление проекта недоступно: есть активные или выполненные ссылки.');
-    } else {
-        $previewDescriptor = function_exists('pp_project_preview_descriptor') ? pp_project_preview_descriptor($project) : null;
-        $previewPath = (is_array($previewDescriptor) && !empty($previewDescriptor['exists']) && !empty($previewDescriptor['path'])) ? (string)$previewDescriptor['path'] : null;
-        $deleteOk = false;
-        $conn = null;
-        $transactionStarted = false;
-        try {
-            $conn = connect_db();
-            if ($conn) {
-                if (method_exists($conn, 'begin_transaction')) {
-                    $transactionStarted = @$conn->begin_transaction();
-                }
-
-                $cleanupStatements = [
-                    'DELETE FROM promotion_crowd_tasks WHERE run_id IN (SELECT id FROM promotion_runs WHERE project_id = ?)',
-                    'DELETE FROM promotion_nodes WHERE run_id IN (SELECT id FROM promotion_runs WHERE project_id = ?)',
-                    'DELETE FROM promotion_nodes WHERE publication_id IN (SELECT id FROM publications WHERE project_id = ?)',
-                    'DELETE FROM promotion_runs WHERE project_id = ?',
-                    'DELETE FROM publication_queue WHERE project_id = ?',
-                    'DELETE FROM publications WHERE project_id = ?',
-                    'DELETE FROM project_links WHERE project_id = ?',
-                    'DELETE FROM page_meta WHERE project_id = ?',
-                ];
-                foreach ($cleanupStatements as $sql) {
-                    $stmt = $conn->prepare($sql);
-                    if ($stmt) {
-                        $stmt->bind_param('i', $id);
-                        $ok = $stmt->execute();
-                        $stmt->close();
-                        if ($ok === false) {
-                            throw new RuntimeException('Cleanup failed: ' . $conn->error, (int)$conn->errno);
-                        }
-                    }
-                }
-
-                if (is_admin()) {
-                    $stmt = $conn->prepare('DELETE FROM projects WHERE id = ?');
-                    if ($stmt) {
-                        $stmt->bind_param('i', $id);
-                        $execOk = $stmt->execute();
-                        $deleteOk = $execOk && (($stmt->affected_rows ?? 0) > 0);
-                        $stmt->close();
-                    }
-                } else {
-                    $stmt = $conn->prepare('DELETE FROM projects WHERE id = ? AND user_id = ?');
-                    if ($stmt) {
-                        $stmt->bind_param('ii', $id, $user_id);
-                        $execOk = $stmt->execute();
-                        $deleteOk = $execOk && (($stmt->affected_rows ?? 0) > 0);
-                        $stmt->close();
-                    }
-                }
-
-                if ($transactionStarted) {
-                    if ($deleteOk) {
-                        @$conn->commit();
-                    } else {
-                        @$conn->rollback();
-                    }
-                    $transactionStarted = false;
-                }
-            }
-        } catch (Throwable $e) {
-            if ($conn && $transactionStarted) {
-                @$conn->rollback();
-                $transactionStarted = false;
-            }
-            @error_log('[PromoPilot] Project delete failed for #' . (int)$id . ': ' . $e->getMessage());
-            $deleteOk = false;
-        } finally {
-            if ($conn) {
-                $conn->close();
-            }
-        }
-
-        if ($deleteOk) {
-            if ($previewPath && @is_file($previewPath)) {
-                @unlink($previewPath);
-            }
-            $_SESSION['pp_client_flash'] = ['type' => 'success', 'text' => __('Проект удален.')];
-            redirect('client/client.php');
-            exit;
-        }
-
-        $message = __('Не удалось удалить проект.');
-    }
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project_info'])) {
-    if (!verify_csrf()) {
-        $message = __('Ошибка обновления.') . ' (CSRF)';
-    } else {
-        $newName = trim($_POST['project_name'] ?? '');
-        $newDesc = trim($_POST['project_description'] ?? '');
-        $newWishes = trim($_POST['project_wishes'] ?? '');
-        // New: allow changing project language from modal
-        $allowedLangs = ['ru','en','es','fr','de'];
-        $newLang = trim($_POST['project_language'] ?? ($project['language'] ?? 'ru'));
-        if (!in_array($newLang, $allowedLangs, true)) { $newLang = $project['language'] ?? 'ru'; }
-        // New: region/topic from taxonomy
-        $newRegion = trim((string)($_POST['project_region'] ?? ($project['region'] ?? '')));
-        $newTopic  = trim((string)($_POST['project_topic']  ?? ($project['topic']  ?? '')));
-        if (!in_array($newRegion, $availableRegions, true)) { $newRegion = $project['region'] ?? ($availableRegions[0] ?? ''); }
-        if (!in_array($newTopic,  $availableTopics,  true)) { $newTopic  = $project['topic']  ?? ($availableTopics[0]  ?? ''); }
-        if ($newName) {
-            $conn = connect_db();
-            // include language, region, topic in update
-            $stmt = $conn->prepare("UPDATE projects SET name = ?, description = ?, wishes = ?, language = ?, region = ?, topic = ? WHERE id = ?");
-            $stmt->bind_param('ssssssi', $newName, $newDesc, $newWishes, $newLang, $newRegion, $newTopic, $id);
-            if ($stmt->execute()) {
-                $message = __('Основная информация обновлена.');
-                $project['name'] = $newName; $project['description'] = $newDesc; $project['wishes'] = $newWishes; $project['language'] = $newLang; $project['region'] = $newRegion; $project['topic'] = $newTopic;
-            } else {
-                $message = __('Ошибка сохранения основной информации.');
-            }
-            $stmt->close(); $conn->close();
-        } else {
-            $message = __('Название не может быть пустым.');
-        }
-    }
-// Завершаем ветку основной информации
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_project'])) {
-    $pp_update_ok = false;
-    $pp_domain_errors = 0;
-    $pp_domain_set = '';
-
-    if (!verify_csrf()) {
-        $message = __('Ошибка обновления.') . ' (CSRF)';
-    } else {
-        // Language validator and defaults
-        $pp_is_valid_lang = function($code): bool {
-            $code = trim((string)$code);
-            if ($code === '') return false;
-            if (strlen($code) > 10) return false;
-            return (bool)preg_match('/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i', $code);
-        };
-        $defaultLang = strtolower((string)($project['language'] ?? 'ru')) ?: 'ru';
-
-        // Enforce single-domain policy
-        $projectHost = $pp_normalize_host($project['domain_host'] ?? '');
-        $domainToSet = '';
-        $domainErrors = 0;
-
-        $conn = connect_db();
-
-        // Удаление ссылок по ID
-        $removeIds = array_map('intval', (array)($_POST['remove_links'] ?? []));
-        $removeIds = array_values(array_filter($removeIds, fn($v) => $v > 0));
-        if (!empty($removeIds)) {
-            $ph = implode(',', array_fill(0, count($removeIds), '?'));
-            $types = str_repeat('i', count($removeIds) + 1);
-            $sql = "DELETE FROM project_links WHERE project_id = ? AND id IN ($ph)";
-            $stmt = $conn->prepare($sql);
-            if ($stmt) {
-                $params = array_merge([$id], $removeIds);
-                $stmt->bind_param($types, ...$params);
-                @$stmt->execute();
-                $stmt->close();
-            }
-        }
-
-        // Редактирование существующих ссылок по ID
-        if (!empty($_POST['edited_links']) && is_array($_POST['edited_links'])) {
-            foreach ($_POST['edited_links'] as $lid => $row) {
-                $linkId = (int)$lid;
-                if ($linkId <= 0) continue;
-                $url = trim((string)($row['url'] ?? ''));
-                $anchor = trim((string)($row['anchor'] ?? ''));
-                $lang = strtolower(trim((string)($row['language'] ?? $defaultLang)));
-                $wish = trim((string)($row['wish'] ?? ''));
-                if ($lang === 'auto' || !$pp_is_valid_lang($lang)) { $lang = $defaultLang; }
-                if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
-                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
-                    if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
-                        $domainErrors++;
-                        continue;
-                    }
-                    // Update row
-                    $st = $conn->prepare('UPDATE project_links SET url = ?, anchor = ?, language = ?, wish = ? WHERE id = ? AND project_id = ?');
-                    if ($st) {
-                        $st->bind_param('ssssii', $url, $anchor, $lang, $wish, $linkId, $id);
-                        @$st->execute();
-                        $st->close();
-                    }
-                    if ($projectHost === '' && $uHost !== '') { $domainToSet = $uHost; $projectHost = $uHost; }
-                }
-            }
-        }
-
-        // Добавление новых ссылок
-        $newLinkPayload = null; // to return to client
-        if (!empty($_POST['added_links']) && is_array($_POST['added_links'])) {
-            foreach ($_POST['added_links'] as $row) {
-                if (!is_array($row)) continue;
-                $url = trim((string)($row['url'] ?? ''));
-                $anchor = trim((string)($row['anchor'] ?? ''));
-                $lang = strtolower(trim((string)($row['language'] ?? $defaultLang)));
-                $wish = trim((string)($row['wish'] ?? ''));
-                if ($url && filter_var($url, FILTER_VALIDATE_URL)) {
-                    $uHost = $pp_normalize_host(parse_url($url, PHP_URL_HOST) ?: '');
-                    if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
-                    if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
-                        $domainErrors++;
-                        continue;
-                    }
-                    // Auto-detect language from page meta/hreflang if requested or invalid
-                    $meta = null;
-                    if ($lang === 'auto' || !$pp_is_valid_lang($lang)) {
-                        if (function_exists('pp_analyze_url_data')) {
-                            try { $meta = pp_analyze_url_data($url); } catch (Throwable $e) { $meta = null; }
-                            $detected = '';
-                            if (is_array($meta)) {
-                                $detected = strtolower(trim((string)($meta['lang'] ?? '')));
-                                if ($detected === '' && !empty($meta['hreflang']) && is_array($meta['hreflang'])) {
-                                    // Prefer hreflang matching project language, otherwise first
-                                    foreach ($meta['hreflang'] as $hl) {
-                                        $h = strtolower(trim((string)($hl['hreflang'] ?? '')));
-                                        if ($h === $defaultLang || strpos($h, $defaultLang . '-') === 0) { $detected = $h; break; }
-                                    }
-                                    if ($detected === '' && isset($meta['hreflang'][0]['hreflang'])) {
-                                        $detected = strtolower(trim((string)$meta['hreflang'][0]['hreflang']));
-                                    }
-                                }
-                            }
-                            if ($detected !== '' && $pp_is_valid_lang($detected)) { $lang = $detected; }
-                            else { $lang = $defaultLang; }
-                        } else {
-                            $lang = $defaultLang;
-                        }
-                    }
-                    $lang = substr($lang, 0, 10);
-
-                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
-                    if ($ins) {
-                        $ins->bind_param('issss', $id, $url, $anchor, $lang, $wish);
-                        if (@$ins->execute()) {
-                            $newId = (int)$conn->insert_id;
-                            $newLinkPayload = ['id'=>$newId,'url'=>$url,'anchor'=>$anchor,'language'=>$lang,'wish'=>$wish];
-                            // Analyze and save microdata best-effort (reuse meta if available)
-                            try {
-                                if (function_exists('pp_save_page_meta')) {
-                                    if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($url); }
-                                    if (is_array($meta)) { @pp_save_page_meta($id, $url, $meta); }
-                                }
-                            } catch (Throwable $e) { /* ignore */ }
-                        }
-                        $ins->close();
-                    }
-                }
-            }
-        } else {
-            // legacy single add fields
-            $new_link = trim($_POST['new_link'] ?? '');
-            $new_anchor = trim($_POST['new_anchor'] ?? '');
-            $new_language = strtolower(trim($_POST['new_language'] ?? $defaultLang));
-            $new_wish = trim($_POST['new_wish'] ?? '');
-            if ($new_link && filter_var($new_link, FILTER_VALIDATE_URL)) {
-                $uHost = $pp_normalize_host(parse_url($new_link, PHP_URL_HOST) ?: '');
-                if ($projectHost === '') { $domainToSet = $uHost; $projectHost = $uHost; }
-                if ($uHost !== '' && $projectHost !== '' && $uHost !== $projectHost) {
-                    $domainErrors++;
-                } else {
-                    // Auto-detect if needed
-                    $meta = null;
-                    if ($new_language === 'auto' || !$pp_is_valid_lang($new_language)) {
-                        if (function_exists('pp_analyze_url_data')) {
-                            try { $meta = pp_analyze_url_data($new_link); } catch (Throwable $e) { $meta = null; }
-                            $detected = '';
-                            if (is_array($meta)) {
-                                $detected = strtolower(trim((string)($meta['lang'] ?? '')));
-                                if ($detected === '' && !empty($meta['hreflang']) && is_array($meta['hreflang'])) {
-                                    foreach ($meta['hreflang'] as $hl) {
-                                        $h = strtolower(trim((string)($hl['hreflang'] ?? '')));
-                                        if ($h === $defaultLang || strpos($h, $defaultLang . '-') === 0) { $detected = $h; break; }
-                                    }
-                                    if ($detected === '' && isset($meta['hreflang'][0]['hreflang'])) {
-                                        $detected = strtolower(trim((string)$meta['hreflang'][0]['hreflang']));
-                                    }
-                                }
-                            }
-                            if ($detected !== '' && $pp_is_valid_lang($detected)) { $new_language = $detected; }
-                            else { $new_language = $defaultLang; }
-                        } else {
-                            $new_language = $defaultLang;
-                        }
-                    }
-                    $new_language = substr($new_language, 0, 10);
-
-                    $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
-                    if ($ins) {
-                        $ins->bind_param('issss', $id, $new_link, $new_anchor, $new_language, $new_wish);
-                        if (@$ins->execute()) {
-                            $newId = (int)$conn->insert_id;
-                            $newLinkPayload = ['id'=>$newId,'url'=>$new_link,'anchor'=>$new_anchor,'language'=>$new_language,'wish'=>$new_wish];
-                            try {
-                                if (function_exists('pp_save_page_meta')) {
-                                    if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($new_link); }
-                                    if (is_array($meta)) { @pp_save_page_meta($id, $new_link, $meta); }
-                                }
-                            } catch (Throwable $e) { /* ignore */ }
-                        }
-                        $ins->close();
-                    }
-                }
-            }
-        }
-
-        // Глобальное пожелание проекта
-        if (isset($_POST['wishes'])) {
-            $wishes = trim((string)$_POST['wishes']);
-        } else {
-            $wishes = (string)($project['wishes'] ?? '');
-        }
-        // язык проекта не редактируется здесь
-        $language = $project['language'] ?? 'ru';
-
-        // Apply project updates
-        if ($domainToSet !== '') {
-            $stmt = $conn->prepare("UPDATE projects SET wishes = ?, language = ?, domain_host = ? WHERE id = ?");
-            $stmt->bind_param('sssi', $wishes, $language, $domainToSet, $id);
-            $project['domain_host'] = $domainToSet;
-        } else {
-            $stmt = $conn->prepare("UPDATE projects SET wishes = ?, language = ? WHERE id = ?");
-            $stmt->bind_param('ssi', $wishes, $language, $id);
-        }
-        if ($stmt) {
-            if ($stmt->execute()) {
-                $pp_update_ok = true;
-                $message = __('Проект обновлен.');
-                if ($domainErrors > 0) { $message .= ' ' . sprintf(__('Отклонено ссылок с другим доменом: %d.'), $domainErrors); }
-                $project['language'] = $language;
-                $project['wishes'] = $wishes;
-            } else {
-                $message = __('Ошибка обновления проекта.');
-            }
-            $stmt->close();
-        }
-
-        // Count links after operations
-        $linksCount = 0;
-        if ($cst = $conn->prepare('SELECT COUNT(*) FROM project_links WHERE project_id = ?')) {
-            $cst->bind_param('i', $id);
-            $cst->execute();
-            $cst->bind_result($linksCount);
-            $cst->fetch();
-            $cst->close();
-        }
-
-        $conn->close();
-
-        // Ответ для AJAX
-        if ($pp_is_ajax) {
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode([
-                'ok' => (bool)$pp_update_ok,
-                'message' => (string)$message,
-                'domain_errors' => (int)$domainErrors,
-                'domain_host' => (string)($project['domain_host'] ?? ''),
-                'links_count' => (int)$linksCount,
-                'new_link' => $newLinkPayload,
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-    }
-}
-
-// Получить статусы публикаций по URL
-$pubStatusByUrl = [];
-try {
-    $conn = connect_db();
-    if ($conn) {
-        $stmt = $conn->prepare("SELECT page_url, post_url, network, status FROM publications WHERE project_id = ?");
-        if ($stmt) {
-            $stmt->bind_param('i', $id);
-            $stmt->execute();
-            $res = $stmt->get_result();
-            while ($row = $res->fetch_assoc()) {
-                $url = (string)$row['page_url'];
-                $postUrl = (string)($row['post_url'] ?? '');
-                $st = trim((string)($row['status'] ?? ''));
-                $status = 'not_published';
-                if ($st === 'partial') {
-                    $status = 'manual_review';
-                } elseif ($postUrl !== '' || $st === 'success') {
-                    $status = 'published';
-                } elseif ($st === 'failed' || $st === 'cancelled') {
-                    $status = 'not_published';
-                } elseif ($st === 'queued' || $st === 'running') {
-                    $status = 'pending';
-                }
-                $info = [ 'status' => $status, 'post_url' => $postUrl, 'network' => trim((string)($row['network'] ?? '')), ];
-                if (!isset($pubStatusByUrl[$url])) {
-                    $pubStatusByUrl[$url] = $info;
-                } elseif ($status === 'published') {
-                    $pubStatusByUrl[$url] = $info;
-                }
-            }
-            $stmt->close();
-        }
-        $conn->close();
-    }
-} catch (Throwable $e) { /* ignore */ }
-
-$promotionSummary = [
-    'total' => count($links),
-    'active' => 0,
-    'completed' => 0,
-    'idle' => 0,
-    'issues' => 0,
-];
-$promotionActiveStates = ['queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
-$promotionIssueStates = ['failed','cancelled'];
-foreach ($links as $item) {
-    $linkUrl = (string)($item['url'] ?? '');
-    $status = 'idle';
-    if (isset($promotionStatusByUrl[$linkUrl]) && is_array($promotionStatusByUrl[$linkUrl])) {
-        $status = (string)($promotionStatusByUrl[$linkUrl]['status'] ?? 'idle');
-    }
-    if (in_array($status, $promotionActiveStates, true)) {
-        $promotionSummary['active']++;
-    } elseif ($status === 'completed') {
-        $promotionSummary['completed']++;
-    } elseif (in_array($status, $promotionIssueStates, true)) {
-        $promotionSummary['issues']++;
-    } else {
-        $promotionSummary['idle']++;
-    }
-}
-
-$canDeleteProject = ($promotionSummary['total'] === 0) || ($promotionSummary['idle'] === $promotionSummary['total']);
 
 // Make this page full-width (no Bootstrap container wrapper from header)
 $pp_container = false;
