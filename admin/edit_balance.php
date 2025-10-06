@@ -101,7 +101,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $messageType = 'danger';
         }
         if ($balanceEvent) {
-            pp_balance_send_event_notification($balanceEvent);
+            $notificationSent = pp_balance_send_event_notification($balanceEvent);
+            if (!$notificationSent) {
+                if ($messageType === 'success') {
+                    $messageType = 'warning';
+                }
+                $message .= ' ' . __('Письмо с уведомлением не было отправлено.');
+                $message .= ' ' . __('Проверьте настройки почты и журнал отправки.');
+            }
         }
     }
 }

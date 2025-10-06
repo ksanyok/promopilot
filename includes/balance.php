@@ -188,14 +188,27 @@ if (!function_exists('pp_balance_send_event_notification')) {
     function pp_balance_send_event_notification(array $event): bool {
         $event = pp_balance_normalize_event($event);
         if (abs($event['delta']) < 0.00001) {
+            pp_mail_log('mail.balance_notification.skipped_delta', [
+                'user_id' => $event['user_id'] ?? null,
+                'delta' => $event['delta'] ?? null,
+            ]);
             return false;
         }
         $user = pp_balance_user_info($event['user_id']);
         if (!$user) {
+            pp_mail_log('mail.balance_notification.user_missing', [
+                'user_id' => $event['user_id'] ?? null,
+                'history_id' => $event['history_id'] ?? null,
+            ]);
             return false;
         }
         $email = trim((string)($user['email'] ?? ''));
         if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            pp_mail_log('mail.balance_notification.invalid_email', [
+                'user_id' => $event['user_id'] ?? null,
+                'email' => $user['email'] ?? null,
+                'history_id' => $event['history_id'] ?? null,
+            ]);
             return false;
         }
         $name = trim((string)($user['full_name'] ?? ''));
@@ -224,6 +237,13 @@ if (!function_exists('pp_balance_send_event_notification')) {
         if ($comment !== null) {
             $rows[] = ['label' => __('Комментарий администратора'), 'value' => $comment];
         }
+
+        pp_mail_log('mail.balance_notification.prepare', [
+            'user_id' => $event['user_id'],
+            'history_id' => $event['history_id'] ?? null,
+            'delta' => $event['delta'],
+            'email' => $email,
+        ]);
 
         $tableRows = '';
         foreach ($rows as $rowItem) {
@@ -276,7 +296,16 @@ if (!function_exists('pp_balance_send_event_notification')) {
         $textLines[] = 'PromoPilot';
         $textBody = implode("\n", $textLines);
 
-        return pp_mail_send($email, $subject, $html, $textBody, ['reply_to' => get_setting('mail_reply_to', '')]);
+        $sent = pp_mail_send($email, $subject, $html, $textBody, ['reply_to' => get_setting('mail_reply_to', '')]);
+        if (!$sent) {
+            pp_mail_log('mail.balance_notification.failed', [
+                'user_id' => $event['user_id'],
+                'history_id' => $event['history_id'] ?? null,
+                'email' => $email,
+                'reason' => pp_mail_disabled_reason(),
+            ]);
+        }
+        return $sent;
     }
 }
 
