@@ -27,6 +27,10 @@ try {
         'task_id' => $taskId,
         'processed' => $processed,
     ]);
+    if ($processed > 0) {
+        pp_promotion_launch_worker();
+        pp_promotion_trigger_worker_inline(null, $processed > 20 ? 6 : 3);
+    }
 } catch (Throwable $e) {
     pp_promotion_log('Crowd worker crashed', [
         'error' => $e->getMessage(),
