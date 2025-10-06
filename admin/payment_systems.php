@@ -19,6 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         switch ($gatewayCode) {
             case 'monobank':
+                $instructions = '';
                 $markupRaw = str_replace(',', '.', (string)($_POST['monobank_usd_markup'] ?? '5'));
                 $markup = is_numeric($markupRaw) ? (float)$markupRaw : 5.0;
                 $markup = max(-99.0, min(200.0, $markup));
@@ -34,7 +35,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $config = [
                     'token' => trim((string)($_POST['monobank_token'] ?? '')),
-                    'merchant_id' => trim((string)($_POST['monobank_merchant_id'] ?? '')),
                     'destination' => trim((string)($_POST['monobank_destination'] ?? '')),
                     'redirect_url' => trim((string)($_POST['monobank_redirect_url'] ?? '')),
                     'invoice_lifetime' => $invoiceLifetime,
@@ -147,7 +147,7 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                 <li><?php echo __('Клиент указывает сумму в USD, система создаёт транзакцию и показывает инструкции по оплате.'); ?></li>
                 <li><?php echo __('Для Monobank счёт формируется в гривне: курс USD→UAH подтягивается автоматически и может быть скорректирован на наценку.'); ?></li>
                 <li><?php echo __('Для Binance выберите мерчант Binance Pay или простой кошелёк USDT TRC20, если мерчанта нет.'); ?></li>
-                <li><?php echo __('После получения средств отметьте транзакцию как подтверждённую в разделе «Транзакции» или настройте вебхуки провайдера.'); ?></li>
+                <li><?php echo __('Monobank проверяется автоматически после возврата клиента; для других систем при необходимости подтверждайте транзакции вручную или подключайте вебхуки провайдера.'); ?></li>
             </ul>
         </div>
     </div>
@@ -181,10 +181,6 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                         <div class="col-md-6">
                             <label class="form-label" for="monobank-token"><?php echo __('X-Token'); ?></label>
                             <input type="text" class="form-control" id="monobank-token" name="monobank_token" value="<?php echo htmlspecialchars($monobankConfig['token'] ?? ''); ?>" placeholder="live_xxxxxxxxx">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="monobank-merchant"><?php echo __('Merchant ID (опционально)'); ?></label>
-                            <input type="text" class="form-control" id="monobank-merchant" name="monobank_merchant_id" value="<?php echo htmlspecialchars($monobankConfig['merchant_id'] ?? ''); ?>">
                         </div>
                         <div class="col-lg-4">
                             <label class="form-label" for="monobank-lifetime"><?php echo __('Время жизни счёта (сек)'); ?></label>
@@ -220,11 +216,6 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                                 </button>
                             </div>
                             <small class="text-muted"><?php echo __('Скопируйте адрес и укажите его в настройках вебхуков Monobank.'); ?></small>
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label" for="monobank-instructions"><?php echo __('Инструкция для клиентов'); ?></label>
-                            <textarea class="form-control" id="monobank-instructions" name="instructions" rows="3" placeholder="<?php echo __('Опишите шаги оплаты через Monobank.'); ?>"><?php echo htmlspecialchars($monobank['instructions'] ?? ''); ?></textarea>
-                            <div class="form-text"><i class="bi bi-info-circle text-muted"></i> <?php echo __('Уточните, что оплата происходит в гривне по курсу, рассчитанному системой.'); ?></div>
                         </div>
                     </div>
                     <div class="mt-4 d-flex justify-content-end gap-2">

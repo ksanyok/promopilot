@@ -214,12 +214,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function setButtonLoading(btn, loading) {
         if (!btn) return;
+        const spinner = btn.querySelector('[data-loading-spinner]');
+        const labelEl = btn.querySelector('[data-loading-label]');
+        if (labelEl && !btn.dataset.loadingLabelDefault) {
+            btn.dataset.loadingLabelDefault = labelEl.textContent.trim();
+        }
+        const defaultLabel = btn.dataset.loadingLabelDefault || '';
+        const loadingLabel = btn.dataset.loadingLabelLoading || btn.dataset.loadingLabel;
+        if (spinner) {
+            spinner.classList.toggle('d-none', !loading);
+        }
+        if (labelEl) {
+            if (loading && loadingLabel) {
+                labelEl.textContent = loadingLabel;
+            } else if (!loading && defaultLabel) {
+                labelEl.textContent = defaultLabel;
+            }
+            labelEl.classList.toggle('opacity-75', !!loading);
+        }
+        btn.classList.toggle('disabled', !!loading);
         if (loading) {
-            btn.classList.add('disabled');
             btn.setAttribute('disabled', 'disabled');
             btn.dataset.loading = '1';
         } else {
-            btn.classList.remove('disabled');
             btn.removeAttribute('disabled');
             delete btn.dataset.loading;
         }
@@ -231,15 +248,45 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function ensureLinksTable() {
-        return document.querySelector('table.table-links tbody');
+        let tbody = document.querySelector('table.table-links tbody');
+        if (tbody) { return tbody; }
+        const cardBody = document.querySelector('#links-card .card-body');
+        if (!cardBody) { return null; }
+        const emptyState = cardBody.querySelector('.empty-state');
+        if (emptyState) { emptyState.remove(); }
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-responsive';
+        wrapper.innerHTML = `
+            <table class="table table-striped table-hover table-sm align-middle table-links">
+                <thead>
+                    <tr>
+                        <th style="width:44px;">#</th>
+                        <th><?php echo __('Ссылка'); ?></th>
+                        <th><?php echo __('Анкор'); ?></th>
+                        <th><?php echo __('Язык'); ?></th>
+                        <th><?php echo __('Пожелание'); ?></th>
+                        <th><?php echo __('Статус'); ?></th>
+                        <th class="text-end" style="width:200px;">&nbsp;</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        `;
+        cardBody.appendChild(wrapper);
+        initTooltips(wrapper);
+        tbody = wrapper.querySelector('tbody');
+        return tbody;
     }
 
     function refreshRowNumbers() {
         const rows = document.querySelectorAll('table.table-links tbody tr');
-        rows.forEach((tr, idx) => {
+        let counter = 0;
+        rows.forEach(tr => {
+            if (tr.dataset.placeholder === '1') { return; }
             const cell = tr.querySelector('td[data-label="#"], td:first-child');
-            if (cell) { cell.textContent = String(idx + 1); }
-            tr.dataset.index = String(idx);
+            counter += 1;
+            if (cell) { cell.textContent = String(counter); }
+            tr.dataset.index = String(counter - 1);
         });
     }
 
@@ -395,6 +442,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const rows = document.querySelectorAll('table.table-links tbody tr');
         let total = 0, active = 0, completed = 0, idle = 0, issues = 0;
         rows.forEach(tr => {
+            if (tr.dataset.placeholder === '1') { return; }
             total++;
             const status = tr.dataset.promotionStatus || 'idle';
             if (status === 'completed') {
@@ -417,6 +465,203 @@ document.addEventListener('DOMContentLoaded', function() {
         if (completedEl) completedEl.textContent = completed.toString();
         if (idleEl) idleEl.textContent = idle.toString();
         if (issuesEl) issuesEl.textContent = issues.toString();
+    }
+
+    function createLinkPlaceholderRow(url) {
+        const tr = document.createElement('tr');
+        tr.dataset.placeholder = '1';
+        const display = url ? (pathFromUrl(url) || url) : '';
+        const extra = display ? `<span class="d-block small mt-1 text-break">${escapeHtml(display)}</span>` : '';
+        tr.innerHTML = `
+            <td colspan="7" class="text-center text-muted py-3">
+                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                <?php echo __('Сохраняем ссылку...'); ?>${extra}
+            </td>
+        `;
+        return tr;
+    }
+
+    function removePlaceholderRow(row) {
+        if (row && row.parentNode) {
+            row.remove();
+        }
+    }
+
+    function buildLinkRow(payload) {
+        const tr = document.createElement('tr');
+        const newId = parseInt(payload?.id || '0', 10) || 0;
+        const urlVal = payload?.url || '';
+        const anchorVal = payload?.anchor || '';
+        const wishVal = payload?.wish || '';
+        const langRaw = (payload?.language || payload?.lang || '').toString().trim().toLowerCase();
+        const languageValue = langRaw || (newLangSelect ? (newLangSelect.value || 'auto') : 'auto');
+        const displayLang = languageValue ? languageValue.toUpperCase() : 'AUTO';
+        const hostDisp = hostFromUrl(urlVal);
+        const pathDisp = pathFromUrl(urlVal);
+        const langOptions = LANG_CODES.map(code => {
+            const val = String(code || '').trim().toLowerCase();
+            const selected = val === languageValue ? 'selected' : '';
+            return `<option value="${escapeHtml(val)}" ${selected}>${escapeHtml(val.toUpperCase())}</option>`;
+        }).join('');
+
+        tr.setAttribute('data-id', String(newId));
+        tr.dataset.index = '0';
+        tr.dataset.postUrl = payload?.post_url || '';
+        tr.dataset.network = payload?.network || '';
+        tr.dataset.publicationStatus = payload?.publication_status || 'not_published';
+        tr.dataset.promotionStatus = payload?.promotion_status || 'idle';
+        tr.dataset.promotionStage = payload?.promotion_stage || '';
+        tr.dataset.promotionRunId = payload?.promotion_run_id ? String(payload.promotion_run_id) : '';
+        tr.dataset.promotionReportReady = payload?.promotion_report_ready ? '1' : '0';
+        tr.dataset.promotionTotal = String(payload?.promotion_total || 0);
+        tr.dataset.promotionDone = String(payload?.promotion_done || 0);
+        tr.dataset.promotionTarget = String(payload?.promotion_target || 0);
+        tr.dataset.promotionAttempted = String(payload?.promotion_attempted || 0);
+        tr.dataset.level1Total = String(payload?.level1_total || 0);
+        tr.dataset.level1Success = String(payload?.level1_success || 0);
+        tr.dataset.level1Required = String(payload?.level1_required || 0);
+        tr.dataset.level2Total = String(payload?.level2_total || 0);
+        tr.dataset.level2Success = String(payload?.level2_success || 0);
+        tr.dataset.level2Required = String(payload?.level2_required || 0);
+        tr.dataset.level3Total = String(payload?.level3_total || 0);
+        tr.dataset.level3Success = String(payload?.level3_success || 0);
+        tr.dataset.level3Required = String(payload?.level3_required || 0);
+        tr.dataset.crowdPlanned = String(payload?.crowd_planned || 0);
+        tr.dataset.crowdTotal = String(payload?.crowd_total || 0);
+        tr.dataset.crowdCompleted = String(payload?.crowd_completed || 0);
+        tr.dataset.crowdRunning = String(payload?.crowd_running || 0);
+        tr.dataset.crowdQueued = String(payload?.crowd_queued || 0);
+        tr.dataset.crowdFailed = String(payload?.crowd_failed || 0);
+        tr.dataset.crowdManual = String(payload?.crowd_manual || 0);
+
+        const promotionChargeAmount = escapeHtml(String(PROMOTION_CHARGE_AMOUNT ?? ''));
+        const promotionChargeBase = escapeHtml(String(PROMOTION_CHARGE_BASE ?? ''));
+        const promotionChargeSavings = escapeHtml(String(PROMOTION_CHARGE_SAVINGS ?? ''));
+
+        tr.innerHTML = `
+            <td data-label="#"></td>
+            <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
+                <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
+                <a href="${escapeHtml(urlVal)}" target="_blank" class="view-url text-truncate-path" title="${escapeHtml(urlVal)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
+                <input type="url" class="form-control d-none edit-url" name="edited_links[${newId}][url]" value="${escapeAttribute(urlVal)}" disabled />
+            </td>
+            <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
+                <span class="view-anchor text-truncate-anchor" title="${escapeHtml(anchorVal)}" data-bs-toggle="tooltip">${escapeHtml(anchorVal)}</span>
+                <input type="text" class="form-control d-none edit-anchor" name="edited_links[${newId}][anchor]" value="${escapeAttribute(anchorVal)}" disabled />
+            </td>
+            <td class="language-cell" data-label="<?php echo __('Язык'); ?>">
+                <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${escapeHtml(displayLang)}</span>
+                <select class="form-select form-select-sm d-none edit-language" name="edited_links[${newId}][language]" disabled>
+                    ${langOptions}
+                </select>
+            </td>
+            <td class="wish-cell" data-label="<?php echo __('Пожелание'); ?>">
+                <button type="button" class="icon-btn action-show-wish" data-wish="${escapeAttribute(wishVal)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
+                <div class="view-wish d-none">${escapeHtml(wishVal)}</div>
+                <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[${newId}][wish]" disabled>${escapeHtml(wishVal)}</textarea>
+            </td>
+            <td data-label="<?php echo __('Статус'); ?>" class="status-cell">
+                <div class="promotion-status-block small mt-2 text-muted"
+                     data-run-id=""
+                     data-status="idle"
+                     data-stage=""
+                     data-total="0"
+                     data-done="0"
+                     data-report-ready="0"
+                     data-level1-total="0"
+                     data-level1-success="0"
+                     data-level1-required="0"
+                     data-level2-total="0"
+                     data-level2-success="0"
+                     data-level2-required="0"
+                     data-level3-total="0"
+                     data-level3-success="0"
+                     data-level3-required="0"
+                     data-crowd-planned="0"
+                     data-crowd-total="0"
+                     data-crowd-completed="0"
+                     data-crowd-running="0"
+                     data-crowd-queued="0"
+                     data-crowd-failed="0">
+                    <div class="promotion-status-top">
+                        <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
+                        <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
+                        <span class="promotion-progress-count ms-1 d-none"></span>
+                    </div>
+                    <div class="promotion-progress-visual mt-2 d-none">
+                        <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 1'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 2'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 3'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Крауд'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="promotion-progress-details text-muted d-none"></div>
+                    <div class="promotion-status-complete mt-2 d-none" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
+                        <i class="bi bi-patch-check-fill text-success"></i>
+                        <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
+                    </div>
+                </div>
+            </td>
+            <td class="text-end" data-label="<?php echo __('Действия'); ?>">
+                <div class="link-actions d-flex flex-wrap justify-content-end gap-2">
+                    <button type="button" class="icon-btn action-analyze" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
+                    <button type="button"
+                            class="btn btn-sm btn-publish action-promote"
+                            data-url="${escapeHtml(urlVal)}"
+                            data-id="${String(newId)}"
+                            data-charge-amount="${promotionChargeAmount}"
+                            data-charge-formatted="${escapeHtml(PROMOTION_CHARGE_AMOUNT_FORMATTED)}"
+                            data-charge-base="${promotionChargeBase}"
+                            data-charge-base-formatted="${escapeHtml(PROMOTION_CHARGE_BASE_FORMATTED)}"
+                            data-charge-savings="${promotionChargeSavings}"
+                            data-charge-savings-formatted="${escapeHtml(PROMOTION_CHARGE_SAVINGS_FORMATTED)}"
+                            data-discount-percent="${escapeHtml(String(PROMOTION_DISCOUNT_PERCENT))}">
+                        <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
+                    </button>
+                    <button type="button" class="btn btn-outline-info btn-sm action-promotion-progress d-none" data-run-id="0" data-url="${escapeHtml(urlVal)}">
+                        <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
+                    </button>
+                    <button type="button" class="btn btn-outline-success btn-sm action-promotion-report d-none" data-run-id="0" data-url="${escapeHtml(urlVal)}">
+                        <i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span>
+                    </button>
+                    <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
+                    <button type="button" class="icon-btn action-remove" data-id="${String(newId)}" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
+                </div>
+            </td>
+        `;
+
+        return tr;
     }
 
     function isPromotionActiveStatus(status) {
@@ -928,6 +1173,12 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (e) {}
 
             setButtonLoading(addLinkBtn, true);
+            let placeholderRow = null;
+            let tbodyRef = ensureLinksTable();
+            if (tbodyRef) {
+                placeholderRow = createLinkPlaceholderRow(url);
+                tbodyRef.appendChild(placeholderRow);
+            }
             try {
                 const fd = new FormData();
                 fd.append('csrf_token', getCsrfToken());
@@ -942,6 +1193,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
                 const data = await res.json();
                 if (!data || !data.ok) {
+                    removePlaceholderRow(placeholderRow);
                     alert('<?php echo __('Ошибка'); ?>: ' + (data && data.message ? data.message : 'ERROR'));
                     return;
                 }
@@ -949,167 +1201,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     applyProjectHost(data.domain_host);
                 }
                 if (data.domain_errors && Number(data.domain_errors) > 0) {
+                    removePlaceholderRow(placeholderRow);
                     alert('<?php echo __('Отклонено ссылок с другим доменом'); ?>: ' + data.domain_errors);
                 }
                 const payload = data.new_link || { id: 0, url, anchor, language: lang, wish: wish };
-                const tbody = ensureLinksTable();
-                if (tbody) {
-                    const tr = document.createElement('tr');
-                    const newId = parseInt(payload.id || '0', 10) || 0;
-                    const newIndex = (data.links_count && data.links_count > 0) ? (data.links_count - 1) : 0;
-                    tr.setAttribute('data-id', String(newId));
-                    tr.setAttribute('data-index', String(newIndex));
-                    tr.dataset.postUrl = '';
-                    tr.dataset.network = '';
-                    tr.dataset.publicationStatus = 'not_published';
-                    tr.dataset.promotionStatus = 'idle';
-                    tr.dataset.promotionStage = '';
-                    tr.dataset.promotionRunId = '';
-                    tr.dataset.promotionReportReady = '0';
-                    tr.dataset.promotionTotal = '0';
-                    tr.dataset.promotionDone = '0';
-                    tr.dataset.promotionTarget = '0';
-                    tr.dataset.promotionAttempted = '0';
-                    tr.dataset.level1Total = '0';
-                    tr.dataset.level1Success = '0';
-                    tr.dataset.level1Required = '0';
-                    tr.dataset.level2Total = '0';
-                    tr.dataset.level2Success = '0';
-                    tr.dataset.level2Required = '0';
-                    tr.dataset.level3Total = '0';
-                    tr.dataset.level3Success = '0';
-                    tr.dataset.level3Required = '0';
-                    tr.dataset.crowdPlanned = '0';
-                    tr.dataset.crowdTotal = '0';
-                    tr.dataset.crowdCompleted = '0';
-                    tr.dataset.crowdRunning = '0';
-                    tr.dataset.crowdQueued = '0';
-                    tr.dataset.crowdFailed = '0';
-                    const pathDisp = pathFromUrl(url);
-                    const hostDisp = hostFromUrl(url);
-                    tr.innerHTML = `
-                        <td></td>
-                        <td class="url-cell">
-                            <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
-                            <a href="${escapeHtml(url)}" target="_blank" class="view-url text-truncate-path" title="${escapeHtml(url)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
-                            <input type="url" class="form-control d-none edit-url" value="${escapeAttribute(url)}" />
-                        </td>
-                        <td class="anchor-cell">
-                            <span class="view-anchor text-truncate-anchor" title="${escapeHtml(anchor)}" data-bs-toggle="tooltip">${escapeHtml(anchor)}</span>
-                            <input type="text" class="form-control d-none edit-anchor" value="${escapeAttribute(anchor)}" />
-                        </td>
-                        <td class="language-cell">
-                            <span class="badge bg-secondary-subtle text-light-emphasis view-language text-uppercase">${(payload.language || lang).toUpperCase()}</span>
-                            <select class="form-select form-select-sm d-none edit-language">
-                                ${LANG_CODES.map(l=>`<option value="${l}" ${l===(payload.language||lang)?'selected':''}>${l.toUpperCase()}</option>`).join('')}
-                            </select>
-                        </td>
-                        <td class="wish-cell">
-                            <button type="button" class="icon-btn action-show-wish" data-wish="${escapeHtml(payload.wish || wish)}" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
-                            <div class="view-wish d-none">${escapeHtml(payload.wish || wish)}</div>
-                            <textarea class="form-control d-none edit-wish" rows="2">${escapeHtml(payload.wish || wish)}</textarea>
-                        </td>
-                        <td class="status-cell">
-                            <div class="promotion-status-block small mt-2 text-muted"
-                                 data-run-id=""
-                                 data-status="idle"
-                                 data-stage=""
-                                 data-total="0"
-                                 data-done="0"
-                                 data-report-ready="0"
-                                 data-level1-total="0"
-                                 data-level1-success="0"
-                                 data-level1-required="0"
-                                 data-level2-total="0"
-                                 data-level2-success="0"
-                                 data-level2-required="0"
-                                 data-level3-total="0"
-                                 data-level3-success="0"
-                                 data-level3-required="0"
-                                 data-crowd-planned="0"
-                                 data-crowd-total="0"
-                                 data-crowd-completed="0"
-                                 data-crowd-running="0"
-                                 data-crowd-queued="0"
-                                 data-crowd-failed="0">
-                                <div class="promotion-status-top">
-                                    <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
-                                    <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
-                                    <span class="promotion-progress-count ms-1 d-none"></span>
-                                </div>
-                                <div class="promotion-progress-visual mt-2 d-none">
-                                    <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
-                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                            <span><?php echo __('Уровень 1'); ?></span>
-                                            <span class="promotion-progress-value">0 / 0</span>
-                                        </div>
-                                        <div class="progress progress-thin">
-                                            <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
-                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                            <span><?php echo __('Уровень 2'); ?></span>
-                                            <span class="promotion-progress-value">0 / 0</span>
-                                        </div>
-                                        <div class="progress progress-thin">
-                                            <div class="promotion-progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
-                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                            <span><?php echo __('Уровень 3'); ?></span>
-                                            <span class="promotion-progress-value">0 / 0</span>
-                                        </div>
-                                        <div class="progress progress-thin">
-                                            <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
-                                        <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                            <span><?php echo __('Крауд'); ?></span>
-                                            <span class="promotion-progress-value">0 / 0</span>
-                                        </div>
-                                        <div class="progress progress-thin">
-                                            <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="promotion-progress-details text-muted d-none"></div>
-                                <div class="promotion-status-complete mt-2 d-none" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
-                                    <i class="bi bi-patch-check-fill text-success"></i>
-                                    <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
-                                </div>
-                            </div>
-                        </td>
-                        <td class="text-end">
-                            <button type="button" class="icon-btn action-analyze me-1" title="<?php echo __('Анализ'); ?>"><i class="bi bi-search"></i></button>
-                            <button type="button" class="btn btn-sm btn-publish me-1 action-promote"
-                                data-url="${escapeHtml(url)}"
-                                data-id="${String(newId)}"
-                                data-charge-amount="${escapeHtml(String(PROMOTION_CHARGE_AMOUNT))}"
-                                data-charge-formatted="${escapeHtml(PROMOTION_CHARGE_AMOUNT_FORMATTED)}"
-                                data-charge-base="${escapeHtml(String(PROMOTION_CHARGE_BASE))}"
-                                data-charge-base-formatted="${escapeHtml(PROMOTION_CHARGE_BASE_FORMATTED)}"
-                                data-charge-savings="${escapeHtml(String(PROMOTION_CHARGE_SAVINGS))}"
-                                data-charge-savings-formatted="${escapeHtml(PROMOTION_CHARGE_SAVINGS_FORMATTED)}"
-                                data-discount-percent="${escapeHtml(String(PROMOTION_DISCOUNT_PERCENT))}">
-                                <i class="bi bi-rocket-takeoff rocket"></i><span class="label d-none d-md-inline ms-1"><?php echo __('Продвинуть'); ?></span>
-                            </button>
-                            <button type="button" class="btn btn-outline-info btn-sm me-1 action-promotion-progress d-none" data-run-id="0" data-url="${escapeHtml(url)}">
-                                <i class="bi bi-list-task me-1"></i><span class="d-none d-lg-inline"><?php echo __('Прогресс'); ?></span>
-                            </button>
-                            <button type="button" class="btn btn-outline-success btn-sm me-1 action-promotion-report d-none" data-run-id="0" data-url="${escapeHtml(url)}">
-                                <i class="bi bi-file-earmark-text me-1"></i><span class="d-none d-lg-inline"><?php echo __('Отчет'); ?></span>
-                            </button>
-                            <button type="button" class="icon-btn action-edit" title="<?php echo __('Редактировать'); ?>"><i class="bi bi-pencil"></i></button>
-                            <button type="button" class="icon-btn action-remove" data-id="${String(newId)}" title="<?php echo __('Удалить'); ?>"><i class="bi bi-trash"></i></button>
-                        </td>`;
-                    tbody.appendChild(tr);
+                removePlaceholderRow(placeholderRow);
+                tbodyRef = ensureLinksTable();
+                if (tbodyRef) {
+                    const tr = buildLinkRow(payload);
+                    tbodyRef.appendChild(tr);
                     refreshRowNumbers();
                     bindDynamicRowActions();
                     initTooltips(tr);
                     recalcPromotionStats();
+                    refreshActionsCell(tr);
                 }
 
                 if (window.bootstrap) {
@@ -1127,6 +1232,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 newWish.value = '';
                 if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
             } catch (e) {
+                removePlaceholderRow(placeholderRow);
                 alert('<?php echo __('Сетевая ошибка'); ?>');
             } finally {
                 setButtonLoading(addLinkBtn, false);
@@ -1143,28 +1249,46 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('project_id', String(PROJECT_ID));
             fd.append('url', url);
             fd.append('charge_amount', String(PROMOTION_CHARGE_AMOUNT));
-            const res = await fetch('<?php echo pp_url('public/promotion_launch.php'); ?>', { method: 'POST', body: fd, credentials: 'same-origin' });
-            const data = await res.json().catch(()=>null);
-            if (!data || !data.ok) {
-                if (data && data.error_code === 'INSUFFICIENT_FUNDS') {
-                    showInsufficientFundsModal(data.details || {});
+            const res = await fetch('<?php echo pp_url('public/promote_link.php'); ?>', { method: 'POST', body: fd, credentials: 'same-origin' });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data) {
+                alert('<?php echo __('Ошибка'); ?>: ' + (res.status ? String(res.status) : 'ERROR'));
+                return;
+            }
+            if (!data.ok) {
+                const errorCode = data.error || data.error_code || 'ERROR';
+                if (errorCode === 'INSUFFICIENT_FUNDS') {
+                    showInsufficientFundsModal({
+                        required: data.required,
+                        balance: data.balance,
+                        shortfall: data.shortfall
+                    });
+                } else if (errorCode === 'URL_NOT_IN_PROJECT') {
+                    alert('<?php echo __('Эта ссылка не принадлежит проекту.'); ?>');
+                } else if (errorCode === 'LEVEL1_DISABLED') {
+                    alert('<?php echo __('Продвижение временно недоступно. Попробуйте позже.'); ?>');
                 } else {
-                    alert('<?php echo __('Ошибка'); ?>: ' + (data && data.error ? data.error : 'ERROR'));
+                    alert('<?php echo __('Ошибка'); ?>: ' + errorCode);
                 }
                 return;
             }
-            if (data.balance) {
-                updateClientBalance(data.balance.amount ?? data.balance, data.balance.formatted ?? '');
+            const balanceAmount = Object.prototype.hasOwnProperty.call(data, 'balance_after')
+                ? data.balance_after
+                : (Object.prototype.hasOwnProperty.call(data, 'balance') ? data.balance : null);
+            const balanceFormatted = data.balance_after_formatted || data.balance_formatted || '';
+            if (balanceAmount !== null && balanceAmount !== undefined) {
+                updateClientBalance(balanceAmount, balanceFormatted);
             }
             const tbody = ensureLinksTable();
             if (tbody) {
                 tbody.querySelectorAll('tr').forEach(tr => {
                     const linkEl = tr.querySelector('.url-cell .view-url');
                     if (linkEl && linkEl.getAttribute('href') === url) {
-                        tr.dataset.promotionStatus = data.status || 'queued';
-                        tr.dataset.promotionRunId = data.run_id ? String(data.run_id) : '';
-                        tr.dataset.promotionReportReady = '0';
-                        updatePromotionBlock(tr, data);
+                        const promotionData = data.promotion || data;
+                        tr.dataset.promotionStatus = promotionData.status || data.status || 'queued';
+                        tr.dataset.promotionRunId = promotionData.run_id ? String(promotionData.run_id) : (data.run_id ? String(data.run_id) : '');
+                        tr.dataset.promotionReportReady = promotionData.report_ready ? '1' : '0';
+                        updatePromotionBlock(tr, promotionData);
                         refreshActionsCell(tr);
                     }
                 });

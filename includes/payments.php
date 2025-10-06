@@ -15,7 +15,6 @@ if (!function_exists('pp_payment_gateway_definitions')) {
                 'sort_order' => 10,
                 'config_defaults' => [
                     'token' => '',
-                    'merchant_id' => '',
                     'destination' => 'Пополнение баланса PromoPilot',
                     'redirect_url' => '',
                     'environment' => 'production',
@@ -760,9 +759,6 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
             'webHookUrl' => $webhookUrl,
             'orderId' => $orderId,
         ];
-        if (!empty($config['merchant_id'])) {
-            $payload['merchantId'] = trim((string)$config['merchant_id']);
-        }
         $lifetime = (int)($config['invoice_lifetime'] ?? 900);
         if ($lifetime > 0) {
             $payload['validity'] = max(60, min(86400, $lifetime));
@@ -941,6 +937,179 @@ if (!function_exists('pp_payment_monobank_get_usd_rate')) {
             'markup_percent' => $markupPercent,
             'source' => $fetched['source'] ?? 'api',
         ];
+    }
+}
+
+if (!function_exists('pp_payment_monobank_extract_invoice_id')) {
+    function pp_payment_monobank_extract_invoice_id(array $transaction): ?string {
+        $reference = trim((string)($transaction['provider_reference'] ?? ''));
+        if ($reference !== '') {
+            return $reference;
+        }
+        $customerPayload = $transaction['customer_payload'] ?? [];
+        if (is_array($customerPayload)) {
+            if (!empty($customerPayload['invoice_id'])) {
+                $candidate = trim((string)$customerPayload['invoice_id']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+            if (!empty($customerPayload['invoiceId'])) {
+                $candidate = trim((string)$customerPayload['invoiceId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+        $providerPayload = $transaction['provider_payload'] ?? [];
+        if (is_array($providerPayload)) {
+            if (!empty($providerPayload['invoiceId'])) {
+                $candidate = trim((string)$providerPayload['invoiceId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+            if (!empty($providerPayload['initial']['invoiceId'])) {
+                $candidate = trim((string)$providerPayload['initial']['invoiceId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+        return null;
+    }
+}
+
+if (!function_exists('pp_payment_monobank_refresh_transaction')) {
+    function pp_payment_monobank_refresh_transaction(int $transactionId, array $options = []): array {
+        $transactionId = (int)$transactionId;
+        if ($transactionId <= 0) {
+            return ['ok' => false, 'error' => 'invalid_transaction'];
+        }
+        $transaction = pp_payment_transaction_get($transactionId);
+        if (!$transaction) {
+            return ['ok' => false, 'error' => 'not_found'];
+        }
+        $expectedUserId = isset($options['expected_user_id']) ? (int)$options['expected_user_id'] : null;
+        if ($expectedUserId !== null && (int)$transaction['user_id'] !== $expectedUserId) {
+            return ['ok' => false, 'error' => 'forbidden'];
+        }
+        $gatewayCode = strtolower((string)($transaction['gateway_code'] ?? ''));
+        if ($gatewayCode !== 'monobank') {
+            return ['ok' => false, 'error' => 'gateway_mismatch', 'transaction' => $transaction];
+        }
+        $currentStatus = strtolower((string)($transaction['status'] ?? ''));
+        if ($currentStatus === 'confirmed') {
+            return ['ok' => true, 'status' => 'confirmed', 'status_changed' => false, 'already' => true, 'transaction' => $transaction];
+        }
+        $invoiceId = pp_payment_monobank_extract_invoice_id($transaction);
+        if ($invoiceId === null || $invoiceId === '') {
+            return ['ok' => false, 'error' => 'missing_invoice', 'transaction' => $transaction];
+        }
+        $gateway = pp_payment_gateway_get('monobank');
+        if (!$gateway || empty($gateway['is_enabled'])) {
+            return ['ok' => false, 'error' => 'gateway_disabled', 'transaction' => $transaction];
+        }
+        $config = $gateway['config'] ?? [];
+        $token = trim((string)($config['token'] ?? ''));
+        if ($token === '') {
+            return ['ok' => false, 'error' => 'token_missing', 'transaction' => $transaction];
+        }
+        $response = pp_payment_monobank_request('invoice/status', ['invoiceId' => $invoiceId], $token, $config);
+        if (empty($response['ok'])) {
+            return ['ok' => false, 'error' => $response['error'] ?? 'status_request_failed', 'transaction' => $transaction];
+        }
+        $data = is_array($response['decoded'] ?? null) ? $response['decoded'] : [];
+        $status = strtolower((string)($data['status'] ?? ''));
+        $eventPayload = [
+            'source' => 'monobank_status_poll',
+            'invoiceId' => $invoiceId,
+            'status' => $status,
+            'payload' => $data,
+            'checked_at' => date('c'),
+        ];
+        $successStatuses = ['success', 'paid', 'confirmed'];
+        $failStatuses = ['expired', 'cancelled', 'canceled', 'failure', 'failed', 'reversed'];
+        if (in_array($status, $successStatuses, true)) {
+            $amountMinor = isset($data['amount']) ? (int)$data['amount'] : null;
+            $amount = $amountMinor !== null ? $amountMinor / 100 : null;
+            $mark = pp_payment_transaction_mark_confirmed($transactionId, $amount, $eventPayload);
+            if (empty($mark['ok'])) {
+                return ['ok' => false, 'error' => $mark['error'] ?? 'confirm_failed', 'status' => 'confirmed', 'transaction' => $transaction];
+            }
+            $updatedTransaction = $mark['transaction'] ?? $transaction;
+            return [
+                'ok' => true,
+                'status' => 'confirmed',
+                'status_changed' => empty($mark['already']),
+                'already' => !empty($mark['already']),
+                'transaction' => $updatedTransaction,
+                'payload' => $data,
+            ];
+        }
+        if (in_array($status, $failStatuses, true)) {
+            pp_payment_transaction_mark_failed($transactionId, $status, $eventPayload, $data['errText'] ?? null);
+            $updatedTransaction = pp_payment_transaction_get($transactionId) ?? $transaction;
+            $finalStatus = strtolower((string)($updatedTransaction['status'] ?? $status ?? 'failed'));
+            return [
+                'ok' => true,
+                'status' => $finalStatus,
+                'status_changed' => true,
+                'transaction' => $updatedTransaction,
+                'payload' => $data,
+            ];
+        }
+        return [
+            'ok' => true,
+            'status' => $status !== '' ? $status : 'unknown',
+            'status_changed' => false,
+            'transaction' => $transaction,
+            'payload' => $data,
+        ];
+    }
+}
+
+if (!function_exists('pp_payment_monobank_refresh_pending_for_user')) {
+    function pp_payment_monobank_refresh_pending_for_user(int $userId, ?int $includeTransactionId = null, int $limit = 5): array {
+        $userId = (int)$userId;
+        $limit = max(1, min(20, (int)$limit));
+        $ids = [];
+        if ($userId > 0) {
+            try {
+                $conn = connect_db();
+            } catch (Throwable $e) {
+                $conn = null;
+            }
+            if ($conn) {
+                $gatewayCode = 'monobank';
+                $stmt = $conn->prepare("SELECT id FROM payment_transactions WHERE user_id = ? AND gateway_code = ? AND status IN ('pending','awaiting_confirmation') ORDER BY id DESC LIMIT ?");
+                if ($stmt) {
+                    $stmt->bind_param('isi', $userId, $gatewayCode, $limit);
+                    if ($stmt->execute()) {
+                        $res = $stmt->get_result();
+                        if ($res) {
+                            while ($row = $res->fetch_assoc()) {
+                                $ids[] = (int)$row['id'];
+                            }
+                            $res->free();
+                        }
+                    }
+                    $stmt->close();
+                }
+                $conn->close();
+            }
+        }
+        if ($includeTransactionId !== null && $includeTransactionId > 0) {
+            $ids[] = (int)$includeTransactionId;
+        }
+        $ids = array_values(array_unique(array_filter($ids, static function ($id) {
+            return $id > 0;
+        })));
+        $results = [];
+        foreach ($ids as $id) {
+            $results[$id] = pp_payment_monobank_refresh_transaction($id, ['expected_user_id' => $userId]);
+        }
+        return ['ok' => true, 'results' => $results];
     }
 }
 

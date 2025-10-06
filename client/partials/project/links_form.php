@@ -60,7 +60,14 @@
                     </div>
                     <div class="d-flex gap-2">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
-                        <button type="button" id="add-link" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></button>
+                        <button type="button"
+                                id="add-link"
+                                class="btn btn-primary"
+                                data-loading-label-default="<?php echo __('Добавить'); ?>"
+                                data-loading-label-loading="<?php echo __('Добавляем...'); ?>">
+                            <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true" data-loading-spinner></span>
+                            <span data-loading-label><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить'); ?></span>
+                        </button>
                     </div>
                 </div>
             </div>

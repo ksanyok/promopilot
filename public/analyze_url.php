@@ -55,13 +55,26 @@ if ($projectId > 0) {
 try {
     $meta = null;
     $brief = null;
+    $usedCache = false;
 
-    if (function_exists('pp_project_brief_prepare_initial')) {
+    if ($projectId > 0 && function_exists('pp_get_page_meta')) {
+        try {
+            $cached = pp_get_page_meta($projectId, $url);
+            if (is_array($cached) && !empty($cached)) {
+                $meta = $cached;
+                $usedCache = true;
+            }
+        } catch (Throwable $e) {
+            // ignore cache errors
+        }
+    }
+
+    if ($meta === null && function_exists('pp_project_brief_prepare_initial')) {
         try {
             $brief = pp_project_brief_prepare_initial($url);
             if (is_array($brief)) {
                 $metaCandidate = $brief['meta'] ?? null;
-                if (is_array($metaCandidate)) {
+                if (is_array($metaCandidate) && !empty($metaCandidate)) {
                     $meta = $metaCandidate;
                 }
             }
@@ -79,6 +92,17 @@ try {
 
     if (!$meta) {
         $response(['ok' => false, 'error' => 'FETCH_OR_PARSE_FAILED']);
+    }
+
+    if ($brief === null && is_array($meta)) {
+        $brief = [
+            'name' => trim((string)($meta['title'] ?? '')),
+            'description' => trim((string)($meta['description'] ?? '')),
+            'language' => trim((string)($meta['lang'] ?? '')),
+            'used_ai' => false,
+            'ai' => ['used_ai' => false],
+            'meta' => $meta,
+        ];
     }
 
     $suggestedName = '';
@@ -108,6 +132,7 @@ try {
     if ($suggestedName !== '') { $payload['suggested_name'] = $suggestedName; }
     if ($suggestedDescription !== '') { $payload['suggested_description'] = $suggestedDescription; }
     if ($suggestedLanguage !== '') { $payload['suggested_language'] = $suggestedLanguage; }
+    $payload['meta_source'] = $usedCache ? 'cache' : 'live';
     $payload['name_suggested_by_ai'] = $suggestedName;
     $payload['description_suggested_by_ai'] = $suggestedDescription;
     $payload['suggested_language_by_ai'] = $suggestedLanguage;
@@ -142,7 +167,7 @@ try {
     $payload['name_source'] = $usedAi ? 'ai' : 'meta';
     $payload['description_source'] = $usedAi ? 'ai' : 'meta';
 
-    if ($shouldSave && function_exists('pp_save_page_meta')) {
+    if ($shouldSave && !$usedCache && function_exists('pp_save_page_meta')) {
         @pp_save_page_meta($projectId, $url, $meta);
     }
 

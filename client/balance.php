@@ -16,6 +16,7 @@ if ($selectedGatewayCode === '' || !isset($paymentGateways[$selectedGatewayCode]
 
 $messages = ['success' => [], 'error' => []];
 $createdPayment = null;
+$requestedTransactionId = isset($_GET['txn']) ? (int)$_GET['txn'] : 0;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_topup'])) {
     if (!verify_csrf()) {
@@ -38,6 +39,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_topup'])) {
                 $messages['success'][] = __('Платёж создан. Следуйте инструкции для завершения.');
             } else {
                 $messages['error'][] = __('Не удалось создать платёж.') . ' ' . htmlspecialchars((string)($result['error'] ?? ''));
+            }
+        }
+    }
+}
+
+if (isset($paymentGateways['monobank']) && function_exists('pp_payment_monobank_refresh_pending_for_user')) {
+    $autoResult = pp_payment_monobank_refresh_pending_for_user($userId, $requestedTransactionId > 0 ? $requestedTransactionId : null, 8);
+    if (!empty($autoResult['results']) && is_array($autoResult['results'])) {
+        foreach ($autoResult['results'] as $txId => $res) {
+            if (!is_array($res)) {
+                continue;
+            }
+            $status = strtolower((string)($res['status'] ?? ''));
+            if (!empty($res['status_changed']) && $status === 'confirmed') {
+                $messages['success'][] = sprintf(__('Платёж #%d через Monobank подтверждён, средства зачислены.'), (int)$txId);
+            } elseif (!empty($res['status_changed']) && in_array($status, ['failed', 'cancelled', 'canceled', 'expired'], true)) {
+                $label = pp_payment_transaction_status_label($status);
+                $messages['error'][] = sprintf(__('Платёж #%d через Monobank завершён со статусом: %s'), (int)$txId, $label);
+            } else {
+                $errorCode = (string)($res['error'] ?? '');
+                if (empty($res['ok']) && $requestedTransactionId === (int)$txId && !in_array($errorCode, ['gateway_disabled', 'token_missing', 'gateway_mismatch', 'forbidden'], true)) {
+                    $messages['error'][] = sprintf(__('Не удалось проверить статус платежа #%d (Monobank). Попробуйте обновить страницу позже.'), (int)$txId);
+                }
             }
         }
     }
@@ -142,12 +166,16 @@ function pp_client_tx_status_badge(string $status): string {
                                 </h2>
                                 <?php if (!empty($selectedGateway['instructions'])): ?>
                                     <div class="small mb-0"><?php echo nl2br(htmlspecialchars($selectedGateway['instructions'])); ?></div>
+                                <?php elseif ($selectedGatewayCode === 'monobank'): ?>
+                                    <div class="small mb-0"><?php echo __('Оплата происходит на странице Monobank. После успешного перевода и возврата сюда мы проверим счёт и зачислим средства автоматически.'); ?></div>
                                 <?php else: ?>
                                     <div class="text-muted small mb-0"><?php echo __('Инструкция не заполнена администратором. Используйте данные провайдера для оплаты.'); ?></div>
                                 <?php endif; ?>
-                                <div class="text-muted small mt-3">
-                                    <?php echo __('После подтверждения платежа система автоматически зачислит сумму на ваш баланс.'); ?>
-                                </div>
+                                <?php if ($selectedGatewayCode === 'monobank'): ?>
+                                    <div class="text-muted small mt-3"><?php echo __('Сохраните вкладку открытой: система регулярно запрашивает статус счёта Monobank и зачисляет оплату сразу после подтверждения.'); ?></div>
+                                <?php else: ?>
+                                    <div class="text-muted small mt-3"><?php echo __('После подтверждения платежа система автоматически зачислит сумму на ваш баланс.'); ?></div>
+                                <?php endif; ?>
                             </div>
                         <?php endif; ?>
 
