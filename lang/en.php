@@ -604,6 +604,7 @@ $lang = [
     'Не удалось проверить статус платежа #%d (Monobank). Попробуйте обновить страницу позже.' => 'Couldn’t check the status of Monobank payment #%d. Please refresh the page later.',
     'Оплата происходит на странице Monobank. После успешного перевода и возврата сюда мы проверим счёт и зачислим средства автоматически.' => 'Payment happens on the Monobank page. After a successful transfer and returning here, we’ll verify the invoice and credit the funds automatically.',
     'Сохраните вкладку открытой: система регулярно запрашивает статус счёта Monobank и зачисляет оплату сразу после подтверждения.' => 'Keep this tab open: the system polls Monobank regularly and credits your balance immediately after confirmation.',
+    'Поповнення: %1$s USD (~%2$s UAH). Комісія за поповнення: %3$s UAH (%4$s%%).' => 'Top-up: %1$s USD (~%2$s UAH). Top-up commission: %3$s UAH (%4$s%%).',
     'Оплатите счёт в Binance Pay (USDT TRC20).' => 'Pay the invoice via Binance Pay (USDT TRC20).',
     'Укажите адрес кошелька для приёма USDT.' => 'Provide the wallet address for receiving USDT.',
     'Переведите указанную сумму USDT на кошелёк ниже. После поступления средств мы подтвердим транзакцию.' => 'Send the specified USDT amount to the wallet below. We will confirm the transaction after the funds arrive.',

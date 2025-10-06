@@ -1313,6 +1313,360 @@ if (!function_exists('pp_promotion_get_status')) {
     }
 }
 
+if (!function_exists('pp_promotion_start_run')) {
+    function pp_promotion_start_run(int $projectId, string $url, int $initiatedBy = 0): array {
+        $projectId = (int)$projectId;
+        $url = trim($url);
+        if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
+            return ['ok' => false, 'error' => 'BAD_INPUT'];
+        }
+        if (!pp_promotion_is_level_enabled(1)) {
+            return ['ok' => false, 'error' => 'LEVEL1_DISABLED'];
+        }
+        try { $conn = connect_db(); } catch (Throwable $e) { return ['ok' => false, 'error' => 'DB']; }
+        if (!$conn) { return ['ok' => false, 'error' => 'DB']; }
+
+        $transactionStarted = false;
+        $shouldCommit = false;
+        $result = ['ok' => false, 'error' => 'DB'];
+        $balanceEvent = null;
+        $runId = 0;
+        $linkId = 0;
+        $ownerId = 0;
+        $balanceAfter = 0.0;
+        $balanceBefore = 0.0;
+        $basePrice = 0.0;
+        $chargedAmount = 0.0;
+        $discountPercent = 0.0;
+        $initiator = $initiatedBy > 0 ? $initiatedBy : 0;
+
+        try {
+            $transactionStarted = method_exists($conn, 'begin_transaction')
+                ? @$conn->begin_transaction()
+                : @$conn->autocommit(false);
+            if ($transactionStarted === false) {
+                @$conn->query('START TRANSACTION');
+                $transactionStarted = true;
+            }
+            if (!$transactionStarted) {
+                return ['ok' => false, 'error' => 'DB'];
+            }
+
+            do {
+                $linkStmt = $conn->prepare('SELECT l.id AS link_id, p.user_id FROM project_links l JOIN projects p ON p.id = l.project_id WHERE p.id = ? AND l.url = ? LIMIT 1 FOR UPDATE');
+                if (!$linkStmt) { break; }
+                $linkStmt->bind_param('is', $projectId, $url);
+                if (!$linkStmt->execute()) { $linkStmt->close(); break; }
+                $linkRes = $linkStmt->get_result();
+                $linkRow = $linkRes ? $linkRes->fetch_assoc() : null;
+                if ($linkRes) { $linkRes->free(); }
+                $linkStmt->close();
+                if (!$linkRow) {
+                    $result = ['ok' => false, 'error' => 'URL_NOT_FOUND'];
+                    break;
+                }
+                $linkId = (int)($linkRow['link_id'] ?? 0);
+                $ownerId = (int)($linkRow['user_id'] ?? 0);
+                if ($linkId <= 0 || $ownerId <= 0) {
+                    $result = ['ok' => false, 'error' => 'URL_NOT_FOUND'];
+                    break;
+                }
+
+                $existingRun = null;
+                $existingStmt = $conn->prepare('SELECT id, status FROM promotion_runs WHERE project_id = ? AND link_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE');
+                if ($existingStmt) {
+                    $existingStmt->bind_param('ii', $projectId, $linkId);
+                    if ($existingStmt->execute()) {
+                        $existingRun = $existingStmt->get_result()->fetch_assoc();
+                    }
+                    $existingStmt->close();
+                }
+                if ($existingRun) {
+                    $statusCurrent = (string)($existingRun['status'] ?? '');
+                    $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+                    if (in_array($statusCurrent, $activeStatuses, true)) {
+                        $result = [
+                            'ok' => true,
+                            'already' => true,
+                            'run_id' => (int)$existingRun['id'],
+                            'status' => $statusCurrent,
+                        ];
+                        break;
+                    }
+                }
+
+                $userStmt = $conn->prepare('SELECT id, balance, promotion_discount FROM users WHERE id = ? FOR UPDATE');
+                if (!$userStmt) { break; }
+                $userStmt->bind_param('i', $ownerId);
+                if (!$userStmt->execute()) { $userStmt->close(); break; }
+                $userRes = $userStmt->get_result();
+                $userRow = $userRes ? $userRes->fetch_assoc() : null;
+                if ($userRes) { $userRes->free(); }
+                $userStmt->close();
+                if (!$userRow) {
+                    $result = ['ok' => false, 'error' => 'USER_NOT_FOUND'];
+                    break;
+                }
+
+                $balanceBefore = (float)($userRow['balance'] ?? 0.0);
+                $discountPercent = max(0.0, min(100.0, (float)($userRow['promotion_discount'] ?? 0.0)));
+                $settings = pp_promotion_settings();
+                $basePrice = max(0.0, (float)($settings['price_per_link'] ?? 0.0));
+                $chargedAmount = max(0.0, round($basePrice * (1 - $discountPercent / 100), 2));
+                $shortfall = max(0.0, round($chargedAmount - $balanceBefore, 2));
+                if ($chargedAmount > $balanceBefore + 0.00001) {
+                    $result = [
+                        'ok' => false,
+                        'error' => 'INSUFFICIENT_FUNDS',
+                        'required' => $chargedAmount,
+                        'balance' => $balanceBefore,
+                        'shortfall' => $shortfall,
+                        'discount_percent' => $discountPercent,
+                    ];
+                    break;
+                }
+
+                $snapshot = [
+                    'level1_count' => (int)($settings['level1_count'] ?? 0),
+                    'level2_per_level1' => (int)($settings['level2_per_level1'] ?? 0),
+                    'level3_per_level2' => (int)($settings['level3_per_level2'] ?? 0),
+                    'level1_enabled' => !empty($settings['level1_enabled']),
+                    'level2_enabled' => !empty($settings['level2_enabled']),
+                    'level3_enabled' => !empty($settings['level3_enabled']),
+                    'crowd_enabled' => !empty($settings['crowd_enabled']),
+                    'crowd_per_article' => (int)($settings['crowd_per_article'] ?? 0),
+                    'price_per_link' => $basePrice,
+                    'discount_percent' => $discountPercent,
+                    'charged_amount' => $chargedAmount,
+                ];
+                foreach (['level1_min_len','level1_max_len','level2_min_len','level2_max_len','level3_min_len','level3_max_len'] as $lenKey) {
+                    if (array_key_exists($lenKey, $settings)) {
+                        $snapshot[$lenKey] = (int)$settings[$lenKey];
+                    }
+                }
+                $snapshotJson = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+                if ($snapshotJson === false) { $snapshotJson = '{}'; }
+
+                $status = 'queued';
+                $stage = 'pending_level1';
+                $progressTotal = max(0, (int)($settings['level1_count'] ?? 0));
+                $progressDone = 0;
+                $initiator = $initiatedBy > 0 ? $initiatedBy : $ownerId;
+
+                $insertStmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent, progress_total, progress_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                if (!$insertStmt) { break; }
+                $chargedParam = $chargedAmount;
+                $discountParam = $discountPercent;
+                $insertStmt->bind_param(
+                    'iisssisddii',
+                    $projectId,
+                    $linkId,
+                    $url,
+                    $status,
+                    $stage,
+                    $initiator,
+                    $snapshotJson,
+                    $chargedParam,
+                    $discountParam,
+                    $progressTotal,
+                    $progressDone
+                );
+                if (!$insertStmt->execute()) {
+                    $insertStmt->close();
+                    break;
+                }
+                $runId = (int)$conn->insert_id;
+                $insertStmt->close();
+
+                $balanceAfter = $balanceBefore;
+                if ($chargedAmount > 0) {
+                    $balanceAfter = round($balanceBefore - $chargedAmount, 2);
+                    $updateBalance = $conn->prepare('UPDATE users SET balance = ? WHERE id = ?');
+                    if (!$updateBalance) { break; }
+                    $updateBalance->bind_param('di', $balanceAfter, $ownerId);
+                    if (!$updateBalance->execute()) {
+                        $updateBalance->close();
+                        break;
+                    }
+                    $updateBalance->close();
+                    $balanceEvent = pp_balance_record_event($conn, [
+                        'user_id' => $ownerId,
+                        'delta' => -$chargedAmount,
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => $balanceAfter,
+                        'source' => 'promotion',
+                        'meta' => [
+                            'project_id' => $projectId,
+                            'link_id' => $linkId,
+                            'url' => $url,
+                            'run_id' => $runId,
+                            'price_per_link' => $basePrice,
+                            'discount_percent' => $discountPercent,
+                            'charged_amount' => $chargedAmount,
+                        ],
+                    ]);
+                }
+
+                $shouldCommit = true;
+                $result = [
+                    'ok' => true,
+                    'run_id' => $runId,
+                    'status' => $status,
+                    'charged' => $chargedAmount,
+                    'discount' => $discountPercent,
+                    'balance_after' => $balanceAfter,
+                    'balance_after_formatted' => format_currency($balanceAfter),
+                ];
+            } while (false);
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.run_start_exception', [
+                'project_id' => $projectId,
+                'target_url' => $url,
+                'error' => $e->getMessage(),
+            ]);
+            $result = $result['ok'] ? $result : ['ok' => false, 'error' => 'DB'];
+        } finally {
+            if ($transactionStarted) {
+                if ($shouldCommit) {
+                    @$conn->commit();
+                } else {
+                    @$conn->rollback();
+                }
+            }
+            $conn->close();
+        }
+
+        if (!empty($result['ok']) && empty($result['already'])) {
+            if ($balanceEvent && !empty($balanceEvent['history_id'])) {
+                pp_balance_send_event_notification($balanceEvent);
+            }
+            if ($runId > 0) {
+                pp_promotion_launch_worker($runId);
+                pp_promotion_log('promotion.run_started', [
+                    'project_id' => $projectId,
+                    'run_id' => $runId,
+                    'link_id' => $linkId,
+                    'target_url' => $url,
+                    'initiated_by' => $initiator,
+                    'charged' => $chargedAmount,
+                    'discount_percent' => $discountPercent,
+                ]);
+            }
+        }
+
+        return $result;
+    }
+}
+
+if (!function_exists('pp_promotion_cancel_run')) {
+    function pp_promotion_cancel_run(int $projectId, string $url, int $initiatedBy = 0): array {
+        $projectId = (int)$projectId;
+        $url = trim($url);
+        if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
+            return ['ok' => false, 'error' => 'BAD_INPUT'];
+        }
+        try { $conn = connect_db(); } catch (Throwable $e) { return ['ok' => false, 'error' => 'DB']; }
+        if (!$conn) { return ['ok' => false, 'error' => 'DB']; }
+
+        $transactionStarted = false;
+        $shouldCommit = false;
+        $result = ['ok' => false, 'error' => 'DB'];
+        $runId = 0;
+
+        try {
+            $transactionStarted = method_exists($conn, 'begin_transaction')
+                ? @$conn->begin_transaction()
+                : @$conn->autocommit(false);
+            if ($transactionStarted === false) {
+                @$conn->query('START TRANSACTION');
+                $transactionStarted = true;
+            }
+            if (!$transactionStarted) {
+                return ['ok' => false, 'error' => 'DB'];
+            }
+
+            do {
+                $runStmt = $conn->prepare('SELECT pr.id, pr.status, pr.stage, pr.link_id, pr.target_url FROM promotion_runs pr JOIN project_links l ON l.id = pr.link_id WHERE pr.project_id = ? AND l.url = ? ORDER BY pr.id DESC LIMIT 1 FOR UPDATE');
+                if (!$runStmt) { break; }
+                $runStmt->bind_param('is', $projectId, $url);
+                if (!$runStmt->execute()) { $runStmt->close(); break; }
+                $runRes = $runStmt->get_result();
+                $runRow = $runRes ? $runRes->fetch_assoc() : null;
+                if ($runRes) { $runRes->free(); }
+                $runStmt->close();
+                if (!$runRow) {
+                    $result = ['ok' => false, 'error' => 'RUN_NOT_FOUND'];
+                    break;
+                }
+                $runId = (int)($runRow['id'] ?? 0);
+                $statusCurrent = (string)($runRow['status'] ?? '');
+                $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+                if (!in_array($statusCurrent, $activeStatuses, true)) {
+                    $result = ['ok' => true, 'status' => $statusCurrent, 'run_id' => $runId, 'already' => true];
+                    break;
+                }
+
+                $pubIds = [];
+                if ($res = @$conn->query('SELECT publication_id FROM promotion_nodes WHERE run_id=' . $runId . ' AND publication_id IS NOT NULL')) {
+                    while ($row = $res->fetch_assoc()) {
+                        $pubId = (int)($row['publication_id'] ?? 0);
+                        if ($pubId > 0) { $pubIds[$pubId] = true; }
+                    }
+                    $res->free();
+                }
+                if (!empty($pubIds)) {
+                    $idList = implode(',', array_map('intval', array_keys($pubIds)));
+                    @$conn->query('UPDATE publications SET cancel_requested=1 WHERE id IN (' . $idList . ')');
+                    @$conn->query("UPDATE publications SET status='cancelled', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), pid=NULL WHERE id IN (" . $idList . ") AND status IN ('queued','running')");
+                    @$conn->query('UPDATE publication_queue SET status=\'cancelled\' WHERE publication_id IN (' . $idList . ')');
+                }
+
+                @$conn->query("UPDATE promotion_nodes SET status='cancelled', error=CASE WHEN error IS NULL OR error='' THEN 'CANCELLED_BY_USER' ELSE error END, finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE run_id=" . $runId . " AND status IN ('pending','queued','running')");
+                @$conn->query('UPDATE promotion_nodes SET updated_at=CURRENT_TIMESTAMP WHERE run_id=' . $runId);
+                @$conn->query("UPDATE promotion_crowd_tasks SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE run_id=" . $runId . " AND status IN ('planned','queued','pending','running','created')");
+
+                $updateRun = $conn->prepare("UPDATE promotion_runs SET status='cancelled', stage='cancelled', error='CANCELLED_BY_USER', finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id = ? LIMIT 1");
+                if ($updateRun) {
+                    $updateRun->bind_param('i', $runId);
+                    $updateRun->execute();
+                    $updateRun->close();
+                }
+
+                pp_promotion_update_progress($conn, $runId);
+                $shouldCommit = true;
+                $result = ['ok' => true, 'status' => 'cancelled', 'run_id' => $runId];
+            } while (false);
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.run_cancel_exception', [
+                'project_id' => $projectId,
+                'target_url' => $url,
+                'error' => $e->getMessage(),
+            ]);
+            $result = $result['ok'] ? $result : ['ok' => false, 'error' => 'DB'];
+        } finally {
+            if ($transactionStarted) {
+                if ($shouldCommit) {
+                    @$conn->commit();
+                } else {
+                    @$conn->rollback();
+                }
+            }
+            $conn->close();
+        }
+
+        if (!empty($result['ok']) && empty($result['already'])) {
+            pp_promotion_log('promotion.run_cancelled', [
+                'project_id' => $projectId,
+                'run_id' => $runId,
+                'target_url' => $url,
+                'initiated_by' => $initiatedBy > 0 ? $initiatedBy : null,
+            ]);
+        }
+
+        return $result;
+    }
+}
+
 if (!function_exists('pp_promotion_build_report')) {
     function pp_promotion_build_report(mysqli $conn, int $runId): array {
         $report = ['level1' => [], 'level2' => [], 'level3' => [], 'crowd' => []];

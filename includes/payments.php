@@ -773,12 +773,20 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
         if ($invoiceId === '' || $pageUrl === '') {
             return ['ok' => false, 'error' => 'Invalid Monobank response', 'status' => 'failed'];
         }
+        $baseRate = (float)($rateInfo['base_rate'] ?? $exchangeRate);
+        if ($baseRate <= 0) {
+            $baseRate = $exchangeRate;
+        }
+        $commissionPercent = isset($rateInfo['markup_percent']) ? (float)$rateInfo['markup_percent'] : 0.0;
+        $expectedBaseUah = round($usdAmount * $baseRate, 2);
+        $commissionUah = round($uahAmount - $expectedBaseUah, 2);
+        $commissionUah = $commissionUah < 0 ? 0.0 : $commissionUah;
         $data['_pp_exchange'] = [
             'usd_amount' => $usdAmount,
             'uah_amount' => round($uahAmount, 2),
             'rate' => $exchangeRate,
-            'base_rate' => $rateInfo['base_rate'] ?? $exchangeRate,
-            'markup_percent' => $rateInfo['markup_percent'] ?? 0.0,
+            'base_rate' => $baseRate,
+            'markup_percent' => $commissionPercent,
             'rate_source' => $rateInfo['source'] ?? 'auto',
         ];
         $customerPayload = [
@@ -791,6 +799,15 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
             'exchange_rate' => number_format($exchangeRate, 6, '.', ''),
             'exchange_source' => $rateInfo['source'] ?? 'auto',
         ];
+        $customerPayload['commission_amount_uah'] = number_format($commissionUah, 2, '.', '');
+        $customerPayload['commission_percent'] = number_format(max(0.0, $commissionPercent), 2, '.', '');
+        $customerPayload['commission_note'] = sprintf(
+            __('Поповнення: %1$s USD (~%2$s UAH). Комісія за поповнення: %3$s UAH (%4$s%%).'),
+            number_format($usdAmount, 2, '.', ''),
+            number_format($uahAmount, 2, '.', ''),
+            number_format($commissionUah, 2, '.', ''),
+            number_format(max(0.0, $commissionPercent), 2, '.', '')
+        );
         if (!empty($data['validity'])) {
             $customerPayload['valid_until'] = (int)$data['validity'];
         }
@@ -980,6 +997,45 @@ if (!function_exists('pp_payment_monobank_extract_invoice_id')) {
     }
 }
 
+if (!function_exists('pp_payment_monobank_extract_order_id')) {
+    function pp_payment_monobank_extract_order_id(array $transaction): ?string {
+        $customerPayload = $transaction['customer_payload'] ?? [];
+        if (is_array($customerPayload)) {
+            if (!empty($customerPayload['order_id'])) {
+                $candidate = trim((string)$customerPayload['order_id']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+            if (!empty($customerPayload['orderId'])) {
+                $candidate = trim((string)$customerPayload['orderId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+        $providerPayload = $transaction['provider_payload'] ?? [];
+        if (is_array($providerPayload)) {
+            if (!empty($providerPayload['orderId'])) {
+                $candidate = trim((string)$providerPayload['orderId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+            if (!empty($providerPayload['initial']['orderId'])) {
+                $candidate = trim((string)$providerPayload['initial']['orderId']);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+        if (!empty($transaction['id'])) {
+            return 'PPM-' . (int)$transaction['id'];
+        }
+        return null;
+    }
+}
+
 if (!function_exists('pp_payment_monobank_refresh_transaction')) {
     function pp_payment_monobank_refresh_transaction(int $transactionId, array $options = []): array {
         $transactionId = (int)$transactionId;
@@ -1006,6 +1062,7 @@ if (!function_exists('pp_payment_monobank_refresh_transaction')) {
         if ($invoiceId === null || $invoiceId === '') {
             return ['ok' => false, 'error' => 'missing_invoice', 'transaction' => $transaction];
         }
+        $orderId = pp_payment_monobank_extract_order_id($transaction);
         $gateway = pp_payment_gateway_get('monobank');
         if (!$gateway || empty($gateway['is_enabled'])) {
             return ['ok' => false, 'error' => 'gateway_disabled', 'transaction' => $transaction];
@@ -1015,23 +1072,63 @@ if (!function_exists('pp_payment_monobank_refresh_transaction')) {
         if ($token === '') {
             return ['ok' => false, 'error' => 'token_missing', 'transaction' => $transaction];
         }
-        $response = pp_payment_monobank_request('invoice/status', ['invoiceId' => $invoiceId], $token, $config);
+        $statusPayload = ['invoiceId' => $invoiceId];
+        if ($orderId !== null && $orderId !== '') {
+            $statusPayload['orderId'] = $orderId;
+        }
+        if (!empty($config['merchant_id'])) {
+            $statusPayload['merchantId'] = trim((string)$config['merchant_id']);
+        }
+        $response = pp_payment_monobank_request('invoice/status', $statusPayload, $token, $config);
+        $softErrors = ['not_found', 'invoice_not_found', 'invoice not found', 'monobank_invoice_not_found', 'noinvoice', 'http 404'];
+        $statusCode = isset($response['status_code']) ? (int)$response['status_code'] : 0;
         if (empty($response['ok'])) {
-            return ['ok' => false, 'error' => $response['error'] ?? 'status_request_failed', 'transaction' => $transaction];
+            $decoded = is_array($response['decoded'] ?? null) ? $response['decoded'] : [];
+            $error = (string)($response['error'] ?? 'status_request_failed');
+            $errCodeRaw = '';
+            if (isset($decoded['errCode'])) {
+                $errCodeRaw = strtolower((string)$decoded['errCode']);
+            } elseif (isset($decoded['errorCode'])) {
+                $errCodeRaw = strtolower((string)$decoded['errorCode']);
+            }
+            if ($errCodeRaw !== '') {
+                $error = $errCodeRaw;
+            }
+            if ($statusCode === 404 || in_array($error, $softErrors, true)) {
+                return [
+                    'ok' => true,
+                    'status' => 'pending',
+                    'status_changed' => false,
+                    'transaction' => $transaction,
+                    'error' => $error,
+                    'payload' => $decoded,
+                    'status_code' => $statusCode,
+                ];
+            }
+            return ['ok' => false, 'error' => $error, 'transaction' => $transaction, 'payload' => $decoded, 'status_code' => $statusCode];
         }
         $data = is_array($response['decoded'] ?? null) ? $response['decoded'] : [];
         $status = strtolower((string)($data['status'] ?? ''));
         $eventPayload = [
             'source' => 'monobank_status_poll',
             'invoiceId' => $invoiceId,
+            'orderId' => $orderId,
             'status' => $status,
             'payload' => $data,
             'checked_at' => date('c'),
         ];
-        $successStatuses = ['success', 'paid', 'confirmed'];
-        $failStatuses = ['expired', 'cancelled', 'canceled', 'failure', 'failed', 'reversed'];
+        if (!empty($data['errCode']) && empty($eventPayload['payload']['errCode_lower'])) {
+            $eventPayload['payload']['errCode_lower'] = strtolower((string)$data['errCode']);
+        }
+        $successStatuses = ['success', 'paid', 'confirmed', 'done', 'completed', 'complete'];
+        $failStatuses = ['expired', 'cancelled', 'canceled', 'failure', 'failed', 'reversed', 'revoked', 'declined', 'error'];
         if (in_array($status, $successStatuses, true)) {
-            $amountMinor = isset($data['amount']) ? (int)$data['amount'] : null;
+            $amountMinor = null;
+            if (isset($data['amount'])) {
+                $amountMinor = (int)$data['amount'];
+            } elseif (isset($data['finalAmount'])) {
+                $amountMinor = (int)$data['finalAmount'];
+            }
             $amount = $amountMinor !== null ? $amountMinor / 100 : null;
             $mark = pp_payment_transaction_mark_confirmed($transactionId, $amount, $eventPayload);
             if (empty($mark['ok'])) {

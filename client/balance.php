@@ -58,8 +58,9 @@ if (isset($paymentGateways['monobank']) && function_exists('pp_payment_monobank_
                 $label = pp_payment_transaction_status_label($status);
                 $messages['error'][] = sprintf(__('Платёж #%d через Monobank завершён со статусом: %s'), (int)$txId, $label);
             } else {
-                $errorCode = (string)($res['error'] ?? '');
-                if (empty($res['ok']) && $requestedTransactionId === (int)$txId && !in_array($errorCode, ['gateway_disabled', 'token_missing', 'gateway_mismatch', 'forbidden'], true)) {
+                $errorCode = strtolower((string)($res['error'] ?? ''));
+                $ignoredErrors = ['gateway_disabled', 'token_missing', 'gateway_mismatch', 'forbidden', 'missing_invoice', 'invalid_transaction', 'not_found', 'invoice_not_found', 'monobank_invoice_not_found', 'status_request_failed', 'pending', 'noinvoice', 'http 404'];
+                if (empty($res['ok']) && $requestedTransactionId === (int)$txId && !in_array($errorCode, $ignoredErrors, true)) {
                     $messages['error'][] = sprintf(__('Не удалось проверить статус платежа #%d (Monobank). Попробуйте обновить страницу позже.'), (int)$txId);
                 }
             }
@@ -197,6 +198,9 @@ function pp_client_tx_status_badge(string $status): string {
                                 <?php if (!empty($payload['prepay_id'])): ?>
                                     <p class="mb-0 small text-muted"><?php echo __('Идентификатор платежа'); ?>: <strong><?php echo htmlspecialchars($payload['prepay_id']); ?></strong></p>
                                 <?php endif; ?>
+                                <?php if (!empty($payload['commission_note'])): ?>
+                                    <p class="mb-0 small text-muted mt-2"><?php echo htmlspecialchars($payload['commission_note']); ?></p>
+                                <?php endif; ?>
                                 <?php if (!empty($payload['wallet_address'])): ?>
                                     <hr class="my-3">
                                     <p class="mb-2"><?php echo __('Для завершения перевода отправьте USDT на кошелёк:'); ?></p>
@@ -303,6 +307,9 @@ function pp_client_tx_status_badge(string $status): string {
                                         <span class="text-danger"><?php echo htmlspecialchars($tx['error_message']); ?></span>
                                     <?php elseif (!empty($tx['customer_payload']['payment_url'])): ?>
                                         <a href="<?php echo htmlspecialchars($tx['customer_payload']['payment_url']); ?>" target="_blank" rel="noopener"><?php echo __('Ссылка на оплату'); ?></a>
+                                        <?php if (!empty($tx['customer_payload']['commission_note'])): ?>
+                                            <div class="text-muted small mt-1"><?php echo htmlspecialchars($tx['customer_payload']['commission_note']); ?></div>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <span class="text-muted">—</span>
                                     <?php endif; ?>
