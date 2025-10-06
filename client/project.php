@@ -41,7 +41,9 @@ if (empty($availableRegions)) { $availableRegions = ['Global']; }
 if (empty($availableTopics))  { $availableTopics  = ['General']; }
 
 $pp_lang_codes = [
-    'ru','en','uk','de','fr','es','it','pt','pt-br','pl','tr','nl','cs','sk','bg','ro','el','hu','sv','da','no','fi','et','lv','lt','ka','az','kk','uz','sr','sl','hr','he','ar','fa','hi','id','ms','vi','th','zh','zh-cn','zh-tw','ja','ko'
+    'ru', 'en', 'uk', 'de', 'fr', 'es', 'it', 'pt', 'pt-br', 'pl', 'tr', 'nl', 'cs', 'sk', 'bg', 'ro', 'el', 'hu', 'sv', 'da',
+    'no', 'fi', 'et', 'lv', 'lt', 'ka', 'az', 'kk', 'uz', 'sr', 'sl', 'hr', 'he', 'ar', 'fa', 'hi', 'id', 'ms', 'vi', 'th',
+    'zh', 'zh-cn', 'zh-tw', 'ja', 'ko',
 ];
 
 $links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
