@@ -12,6 +12,7 @@ $conn = connect_db();
 $conn->query("CREATE TABLE IF NOT EXISTS settings (\n  k VARCHAR(191) PRIMARY KEY,\n  v TEXT,\n  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
 $settingsMsg = '';
+$mailMsg = '';
 $networksMsg = '';
 $diagnosticsMsg = '';
 $crowdMsg = '';
@@ -26,6 +27,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $settingsMsg = __('Ошибка обновления.') . ' (CSRF)';
         } else {
             $settingsMsg = pp_admin_handle_settings_submit($conn, $_POST, $allowedCurrencies);
+        }
+    } elseif (isset($_POST['mail_submit'])) {
+        if (!verify_csrf()) {
+            $mailMsg = __('Ошибка обновления.') . ' (CSRF)';
+        } else {
+            $mailMsg = pp_admin_handle_mail_settings_submit($conn, $_POST);
         }
     } elseif (isset($_POST['refresh_networks'])) {
         if (!verify_csrf()) {
@@ -107,6 +114,18 @@ $settings = [
 ];
 // Defaults for new settings
 $settings += [
+    'mail_enabled' => $settings['mail_enabled'] ?? '1',
+    'notifications_email_enabled' => $settings['notifications_email_enabled'] ?? '1',
+    'mail_disable_all' => $settings['mail_disable_all'] ?? '0',
+    'mail_from_name' => $settings['mail_from_name'] ?? 'PromoPilot',
+    'mail_from_email' => $settings['mail_from_email'] ?? ('noreply@' . (function_exists('pp_mail_default_domain') ? pp_mail_default_domain() : 'example.com')),
+    'mail_reply_to' => $settings['mail_reply_to'] ?? '',
+    'mail_transport' => $settings['mail_transport'] ?? 'native',
+    'mail_smtp_host' => $settings['mail_smtp_host'] ?? '',
+    'mail_smtp_port' => $settings['mail_smtp_port'] ?? '587',
+    'mail_smtp_username' => $settings['mail_smtp_username'] ?? '',
+    'mail_smtp_password' => $settings['mail_smtp_password'] ?? '',
+    'mail_smtp_encryption' => $settings['mail_smtp_encryption'] ?? 'tls',
     'ai_provider' => $settings['ai_provider'] ?? 'openai',
     'openai_model' => $settings['openai_model'] ?? 'gpt-3.5-turbo',
     'google_oauth_enabled' => $settings['google_oauth_enabled'] ?? '0',
@@ -635,6 +654,8 @@ include __DIR__ . '/../includes/admin_sidebar.php';
 <?php include __DIR__ . '/partials/projects_section.php'; ?>
 
 <?php include __DIR__ . '/partials/settings_section.php'; ?>
+
+<?php include __DIR__ . '/partials/mail_section.php'; ?>
 
 <?php include __DIR__ . '/partials/crowd_links_section.php'; ?>
 

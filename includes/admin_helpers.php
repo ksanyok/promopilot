@@ -30,6 +30,18 @@ if (!function_exists('pp_admin_setting_keys')) {
             'captcha_api_key',
             'captcha_fallback_provider',
             'captcha_fallback_api_key',
+            'mail_enabled',
+            'notifications_email_enabled',
+            'mail_disable_all',
+            'mail_from_name',
+            'mail_from_email',
+            'mail_reply_to',
+            'mail_transport',
+            'mail_smtp_host',
+            'mail_smtp_port',
+            'mail_smtp_username',
+            'mail_smtp_password',
+            'mail_smtp_encryption',
             'promotion_price_per_link',
             'promotion_level1_count',
             'promotion_level2_per_level1',
@@ -108,6 +120,87 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
         $stmt->close();
 
         return __('Настройки сохранены.');
+    }
+}
+
+if (!function_exists('pp_admin_handle_mail_settings_submit')) {
+    function pp_admin_handle_mail_settings_submit(mysqli $conn, array $post): string
+    {
+        $mailEnabled = isset($post['mail_enabled']);
+        $notificationsEnabled = isset($post['notifications_email_enabled']);
+        $mailDisableAll = isset($post['mail_disable_all']);
+
+        $fromName = trim((string)($post['mail_from_name'] ?? ''));
+        if ($fromName !== '' && function_exists('mb_detect_encoding') && mb_detect_encoding($fromName, 'UTF-8', true) === false) {
+            $fromName = trim((string)$post['mail_from_name'] ?? '');
+        }
+        if (function_exists('mb_substr')) {
+            $fromName = mb_substr($fromName, 0, 191);
+        } else {
+            $fromName = substr($fromName, 0, 191);
+        }
+
+        $fromEmail = trim((string)($post['mail_from_email'] ?? ''));
+        if ($fromEmail !== '' && !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+            return __('Введите корректный email отправителя.');
+        }
+
+        $replyTo = trim((string)($post['mail_reply_to'] ?? ''));
+        if ($replyTo !== '' && !filter_var($replyTo, FILTER_VALIDATE_EMAIL)) {
+            return __('Введите корректный адрес для ответа.');
+        }
+
+        $transport = strtolower(trim((string)($post['mail_transport'] ?? 'native')));
+        if (!in_array($transport, ['native', 'smtp'], true)) {
+            $transport = 'native';
+        }
+
+        $smtpHost = trim((string)($post['mail_smtp_host'] ?? ''));
+        $smtpPort = (int)($post['mail_smtp_port'] ?? 587);
+        if ($smtpPort <= 0 || $smtpPort > 65535) {
+            $smtpPort = 587;
+        }
+
+        $smtpUser = trim((string)($post['mail_smtp_username'] ?? ''));
+        $smtpPass = (string)($post['mail_smtp_password'] ?? '');
+        if (function_exists('mb_substr')) {
+            $smtpPass = mb_substr($smtpPass, 0, 255);
+        } else {
+            $smtpPass = substr($smtpPass, 0, 255);
+        }
+
+        $encryption = strtolower(trim((string)($post['mail_smtp_encryption'] ?? 'tls')));
+        if (!in_array($encryption, ['none', 'ssl', 'tls'], true)) {
+            $encryption = 'tls';
+        }
+
+        $pairs = [
+            ['mail_enabled', $mailEnabled ? '1' : '0'],
+            ['notifications_email_enabled', $notificationsEnabled ? '1' : '0'],
+            ['mail_disable_all', $mailDisableAll ? '1' : '0'],
+            ['mail_from_name', $fromName],
+            ['mail_from_email', $fromEmail],
+            ['mail_reply_to', $replyTo],
+            ['mail_transport', $transport],
+            ['mail_smtp_host', $smtpHost],
+            ['mail_smtp_port', (string)$smtpPort],
+            ['mail_smtp_username', $smtpUser],
+            ['mail_smtp_password', $smtpPass],
+            ['mail_smtp_encryption', $encryption],
+        ];
+
+        $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");
+        if (!$stmt) {
+            return __('Не удалось сохранить настройки почты.');
+        }
+
+        foreach ($pairs as [$k, $v]) {
+            $stmt->bind_param('ss', $k, $v);
+            $stmt->execute();
+        }
+        $stmt->close();
+
+        return __('Настройки почты сохранены.');
     }
 }
 

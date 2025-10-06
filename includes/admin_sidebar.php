@@ -45,6 +45,13 @@ $generalMenu = [
         'section' => 'settings',
     ],
     [
+        'key' => 'mail',
+        'label' => __('Почта'),
+        'icon' => 'bi-envelope',
+        'href' => $adminBaseUrl . '#mail',
+        'section' => 'mail',
+    ],
+    [
         'key' => 'networks',
         'label' => __('Сети'),
         'icon' => 'bi-diagram-3',

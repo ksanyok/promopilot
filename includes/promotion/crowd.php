@@ -477,16 +477,41 @@ if (!function_exists('pp_promotion_crowd_collect_nodes')) {
         $runId = (int)$runId;
         $result = ['nodes' => [], 'total' => 0];
         $sql = 'SELECT id, level, result_url, target_url, anchor_text, network_slug FROM promotion_nodes WHERE run_id=' . $runId . " AND status IN ('success','completed') ORDER BY level ASC, id ASC";
+        $allNodes = [];
         if ($res = @$conn->query($sql)) {
             while ($row = $res->fetch_assoc()) {
                 $row['id'] = isset($row['id']) ? (int)$row['id'] : 0;
                 $row['level'] = isset($row['level']) ? (int)$row['level'] : null;
                 $row['result_url'] = isset($row['result_url']) ? (string)$row['result_url'] : '';
                 $row['target_url'] = isset($row['target_url']) ? (string)$row['target_url'] : '';
-                $result['nodes'][] = $row;
+                if ($row['result_url'] === '' && $row['target_url'] !== '') {
+                    $row['result_url'] = $row['target_url'];
+                }
+                $allNodes[] = $row;
             }
             $res->free();
         }
+
+        if (!empty($allNodes)) {
+            $maxLevel = null;
+            foreach ($allNodes as $row) {
+                if ($row['level'] === null) { continue; }
+                if ($maxLevel === null || $row['level'] > $maxLevel) {
+                    $maxLevel = $row['level'];
+                }
+            }
+
+            if ($maxLevel !== null) {
+                foreach ($allNodes as $row) {
+                    if ($row['level'] === $maxLevel) {
+                        $result['nodes'][] = $row;
+                    }
+                }
+            } else {
+                $result['nodes'] = $allNodes;
+            }
+        }
+
         $result['total'] = count($result['nodes']);
         return $result;
     }

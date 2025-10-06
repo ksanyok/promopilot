@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Admin sections toggle (users, projects, settings, networks, diagnostics)
-    const sectionKeys = ['overview','users','projects','settings','crowd','networks','diagnostics'];
+    const sectionKeys = ['overview','users','projects','settings','mail','crowd','networks','diagnostics'];
     const sections = {};
     sectionKeys.forEach(key => { sections[key] = document.getElementById(key + '-section'); });
     const hasSections = Object.values(sections).some(Boolean);
