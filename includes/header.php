@@ -167,6 +167,7 @@ if ($pp_nav_balance !== null) {
                                     <li><a class="dropdown-item" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-2"></i><?php echo __('Админка'); ?></a></li>
                                 <?php else: ?>
                                     <li><a class="dropdown-item" href="<?php echo pp_url('client/client.php'); ?>"><i class="bi bi-grid me-2"></i><?php echo __('Дашборд'); ?></a></li>
+                                    <li><a class="dropdown-item" href="<?php echo pp_url('client/referrals.php'); ?>"><i class="bi bi-people me-2"></i><?php echo __('Рефералы'); ?></a></li>
                                     <li><a class="dropdown-item" href="<?php echo pp_url('client/settings.php'); ?>"><i class="bi bi-gear me-2"></i><?php echo __('Настройки'); ?></a></li>
                                 <?php endif; ?>
                                 <li><hr class="dropdown-divider"></li>

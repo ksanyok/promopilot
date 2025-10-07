@@ -8,6 +8,9 @@ if (!is_logged_in() || !is_admin()) {
 
 $conn = connect_db();
 $pp_admin_sidebar_active = 'referral';
+// Use full-width admin layout with sidebar, same as other admin pages
+$pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
 include '../includes/header.php';
 include __DIR__ . '/../includes/admin_sidebar.php';
 
@@ -101,31 +104,10 @@ $refCookieDays = (int)get_setting('referral_cookie_days', '30');
 
     <section class="mb-5">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h2 class="h6 mb-0"><?php echo __('Повышенная комиссия для партнёров'); ?></h2>
-            </div>
             <div class="card-body">
-                <form method="post" action="<?php echo pp_url('admin/referral_set_user.php'); ?>" class="row g-3">
-                    <?php echo csrf_field(); ?>
-                    <div class="col-md-3">
-                        <label class="form-label" for="user-id"><?php echo __('ID пользователя'); ?></label>
-                        <input type="number" min="1" class="form-control" id="user-id" name="user_id" required>
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label" for="user-commission"><?php echo __('Комиссия партнёра (%)'); ?></label>
-                        <input type="number" step="0.01" min="0" max="100" class="form-control" id="user-commission" name="referral_commission_percent" placeholder="например, 10.00">
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label" for="user-refcode"><?php echo __('Реферальный код (опционально)'); ?></label>
-                        <input type="text" class="form-control" id="user-refcode" name="referral_code" placeholder="partner123">
-                    </div>
-                    <div class="col-md-3 d-flex align-items-end">
-                        <button type="submit" class="btn btn-outline-primary w-100"><i class="bi bi-check2-circle me-1"></i><?php echo __('Сохранить для пользователя'); ?></button>
-                    </div>
-                    <div class="col-12">
-                        <div class="form-text"><?php echo __('Оставьте поле комиссии пустым, чтобы сбросить к базовому значению. Код — опционально; если оставить пустым, будет сгенерирован автоматически.'); ?></div>
-                    </div>
-                </form>
+                <p class="mb-0 text-muted">
+                    <?php echo __('Индивидуальную комиссию партнёра и реферальный код теперь можно редактировать в разделе «Пользователи» → действие «Реферальная комиссия».'); ?>
+                </p>
             </div>
         </div>
     </section>

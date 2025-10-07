@@ -44,6 +44,7 @@
                     <a href="admin_login_as.php?user_id=<?php echo (int)$user['id']; ?>&t=<?php echo urlencode($t); ?>" class="btn btn-warning btn-sm"><?php echo __('Войти как'); ?></a>
                     <a href="edit_balance.php?user_id=<?php echo (int)$user['id']; ?>" class="btn btn-info btn-sm"><?php echo __('Изменить баланс'); ?></a>
                     <a href="edit_discount.php?user_id=<?php echo (int)$user['id']; ?>" class="btn btn-outline-primary btn-sm"><?php echo __('Изменить скидку'); ?></a>
+                    <a href="edit_referral.php?user_id=<?php echo (int)$user['id']; ?>" class="btn btn-outline-info btn-sm"><?php echo __('Реферальная комиссия'); ?></a>
                 </td>
             </tr>
         <?php endwhile; ?>
