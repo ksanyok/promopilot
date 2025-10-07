@@ -68,6 +68,47 @@ if (isset($paymentGateways['monobank']) && function_exists('pp_payment_monobank_
     }
 }
 
+if (isset($paymentGateways['binance']) && function_exists('pp_payment_binance_refresh_pending_for_user')) {
+    $autoResult = pp_payment_binance_refresh_pending_for_user($userId, $requestedTransactionId > 0 ? $requestedTransactionId : null, 8);
+    if (!empty($autoResult['results']) && is_array($autoResult['results'])) {
+        foreach ($autoResult['results'] as $txId => $res) {
+            if (!is_array($res)) {
+                continue;
+            }
+            $status = strtolower((string)($res['status'] ?? ''));
+            if (!empty($res['status_changed']) && $status === 'confirmed') {
+                $messages['success'][] = sprintf(__('Платёж #%d через Binance (Spot) подтверждён, средства зачислены.'), (int)$txId);
+            }
+        }
+    }
+}
+
+if (isset($paymentGateways['metamask']) && function_exists('pp_payment_metamask_refresh_pending_for_user')) {
+    $autoResult = pp_payment_metamask_refresh_pending_for_user($userId, $requestedTransactionId > 0 ? $requestedTransactionId : null, 8);
+    if (!empty($autoResult['results']) && is_array($autoResult['results'])) {
+        foreach ($autoResult['results'] as $txId => $res) {
+            if (!is_array($res)) { continue; }
+            $status = strtolower((string)($res['status'] ?? ''));
+            if (!empty($res['status_changed']) && $status === 'confirmed') {
+                $messages['success'][] = sprintf(__('Платёж #%d через MetaMask/EVM подтверждён, средства зачислены.'), (int)$txId);
+            }
+        }
+    }
+}
+
+if (isset($paymentGateways['crypto_universal']) && function_exists('pp_payment_crypto_universal_refresh_pending_for_user')) {
+    $autoResult = pp_payment_crypto_universal_refresh_pending_for_user($userId, $requestedTransactionId > 0 ? $requestedTransactionId : null, 8);
+    if (!empty($autoResult['results']) && is_array($autoResult['results'])) {
+        foreach ($autoResult['results'] as $txId => $res) {
+            if (!is_array($res)) { continue; }
+            $status = strtolower((string)($res['status'] ?? ''));
+            if (!empty($res['status_changed']) && $status === 'confirmed') {
+                $messages['success'][] = sprintf(__('Платёж #%d через Crypto (USDT Multi-Network) подтверждён, средства зачислены.'), (int)$txId);
+            }
+        }
+    }
+}
+
 $transactions = pp_payment_transactions_for_user($userId, 50, 0);
 $balanceHistory = pp_balance_history_for_user($userId, 25, 0);
 

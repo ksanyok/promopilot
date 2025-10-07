@@ -46,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             case 'binance':
                 $mode = strtolower((string)($_POST['binance_mode'] ?? 'merchant'));
-                if (!in_array($mode, ['merchant', 'wallet'], true)) {
+                if (!in_array($mode, ['merchant', 'wallet', 'spot'], true)) {
                     $mode = 'merchant';
                 }
 
@@ -77,6 +77,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ];
                 break;
 
+            case 'metamask':
+                $net = strtoupper((string)($_POST['metamask_network'] ?? 'BSC'));
+                if (!in_array($net, ['ETH', 'BSC'], true)) { $net = 'BSC'; }
+                $unique = isset($_POST['metamask_enable_unique_amount']) ? (int)$_POST['metamask_enable_unique_amount'] : 1;
+                $config = [
+                    'network' => $net,
+                    'recipient_address' => trim((string)($_POST['metamask_address'] ?? '')),
+                    'api_key' => trim((string)($_POST['metamask_api_key'] ?? '')),
+                    'enable_unique_amount' => $unique ? 1 : 0,
+                ];
+                break;
+
+            case 'crypto_universal':
+                $uniqueCU = isset($_POST['cryptou_enable_unique_amount']) ? (int)$_POST['cryptou_enable_unique_amount'] : 1;
+                $config = [
+                    'usdt_trc20_address' => trim((string)($_POST['cryptou_usdt_trc20'] ?? '')),
+                    'usdt_erc20_address' => trim((string)($_POST['cryptou_usdt_erc20'] ?? '')),
+                    'usdt_bep20_address' => trim((string)($_POST['cryptou_usdt_bep20'] ?? '')),
+                    'etherscan_api_key' => trim((string)($_POST['cryptou_etherscan_api_key'] ?? '')),
+                    'bscscan_api_key' => trim((string)($_POST['cryptou_bscscan_api_key'] ?? '')),
+                    'enable_unique_amount' => $uniqueCU ? 1 : 0,
+                ];
+                break;
+
             default:
                 $messages['error'][] = __('Неизвестная платёжная система.');
                 $config = null;
@@ -101,13 +125,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $gateways = pp_payment_gateways(true);
 $monobank = $gateways['monobank'] ?? pp_payment_gateway_get('monobank');
 $binance = $gateways['binance'] ?? pp_payment_gateway_get('binance');
+$metamask = $gateways['metamask'] ?? pp_payment_gateway_get('metamask');
+$cryptoU = $gateways['crypto_universal'] ?? pp_payment_gateway_get('crypto_universal');
 
 $monobankConfig = $monobank['config'] ?? [];
 $binanceConfig = $binance['config'] ?? [];
+$metamaskConfig = $metamask['config'] ?? [];
+$cryptoUConfig = $cryptoU['config'] ?? [];
 $monobankMarkupValue = isset($monobankConfig['usd_markup_percent']) ? (float)$monobankConfig['usd_markup_percent'] : 5.0;
 $monobankManualRateValue = (string)($monobankConfig['usd_manual_rate'] ?? '');
 $binanceMode = strtolower((string)($binanceConfig['mode'] ?? 'merchant'));
-if (!in_array($binanceMode, ['merchant', 'wallet'], true)) {
+if (!in_array($binanceMode, ['merchant', 'wallet', 'spot'], true)) {
     $binanceMode = 'merchant';
 }
 
@@ -153,6 +181,81 @@ include __DIR__ . '/../includes/admin_sidebar.php';
     </div>
 
     <section class="mb-5">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="h5 mb-1"><?php echo htmlspecialchars($cryptoU['title'] ?? 'Crypto (USDT Multi-Network)'); ?></h2>
+                    <p class="mb-0 text-muted small"><?php echo __('Единый приём USDT: TRC20, ERC20, BEP20. Автоподтверждение по блокчейн-сканерам.'); ?></p>
+                </div>
+                <span class="badge bg-<?php echo !empty($cryptoU['is_enabled']) ? 'success' : 'secondary'; ?>">
+                    <?php echo !empty($cryptoU['is_enabled']) ? __('Включено') : __('Отключено'); ?>
+                </span>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="gateway_code" value="crypto_universal">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="cryptou-title"><?php echo __('Название'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-title" name="title" value="<?php echo htmlspecialchars($cryptoU['title'] ?? 'Crypto (USDT Multi-Network)'); ?>" placeholder="Crypto (USDT)">
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" id="cryptou-enabled" name="is_enabled" <?php echo !empty($cryptoU['is_enabled']) ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="cryptou-enabled"><?php echo __('Включить приём USDT'); ?></label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="cryptou-trc"><?php echo __('Адрес USDT TRC20'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-trc" name="cryptou_usdt_trc20" value="<?php echo htmlspecialchars($cryptoUConfig['usdt_trc20_address'] ?? ''); ?>" placeholder="T...">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="cryptou-erc"><?php echo __('Адрес USDT ERC20'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-erc" name="cryptou_usdt_erc20" value="<?php echo htmlspecialchars($cryptoUConfig['usdt_erc20_address'] ?? ''); ?>" placeholder="0x...">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="cryptou-bep"><?php echo __('Адрес USDT BEP20'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-bep" name="cryptou_usdt_bep20" value="<?php echo htmlspecialchars($cryptoUConfig['usdt_bep20_address'] ?? ''); ?>" placeholder="0x...">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="cryptou-ethscan"><?php echo __('API Key Etherscan'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-ethscan" name="cryptou_etherscan_api_key" value="<?php echo htmlspecialchars($cryptoUConfig['etherscan_api_key'] ?? ''); ?>" placeholder="ethscan_xxxxxxx">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="cryptou-bscscan"><?php echo __('API Key BscScan'); ?></label>
+                            <input type="text" class="form-control" id="cryptou-bscscan" name="cryptou_bscscan_api_key" value="<?php echo htmlspecialchars($cryptoUConfig['bscscan_api_key'] ?? ''); ?>" placeholder="bscscan_xxxxxxx">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="cryptou-unique"><?php echo __('Уникальная сумма'); ?></label>
+                            <select class="form-select" id="cryptou-unique" name="cryptou_enable_unique_amount">
+                                <option value="1" <?php echo !empty($cryptoUConfig['enable_unique_amount']) ? 'selected' : ''; ?>><?php echo __('Включено'); ?></option>
+                                <option value="0" <?php echo empty($cryptoUConfig['enable_unique_amount']) ? 'selected' : ''; ?>><?php echo __('Отключено'); ?></option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="cryptou-instructions"><?php echo __('Инструкция для клиентов'); ?></label>
+                            <textarea class="form-control" id="cryptou-instructions" name="instructions" rows="3" placeholder="<?php echo __('Укажите, что можно платить в любой из сетей USDT — TRC20, ERC20, BEP20.'); ?>"><?php echo htmlspecialchars($cryptoU['instructions'] ?? ''); ?></textarea>
+                            <div class="form-text"><i class="bi bi-info-circle text-muted"></i> <?php echo __('Клиент увидит список адресов и точную сумму USDT. После поступления цепочка найдётся сканером; зачисление 1 USDT = 1 USD.'); ?></div>
+                        </div>
+                    </div>
+                    <div class="mt-4 d-flex justify-content-end gap-2">
+                        <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="btn btn-outline-secondary"><i class="bi bi-clock-history me-1"></i><?php echo __('Транзакции'); ?></a>
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+                    </div>
+                </form>
+                <div class="alert alert-secondary small mt-3" role="alert">
+                    <strong><?php echo __('Пошаговая настройка (USDT Multi-Network)'); ?>:</strong>
+                    <ol class="mb-0 ps-3">
+                        <li><?php echo __('Укажите адреса приёма USDT для нужных сетей (минимум один).'); ?></li>
+                        <li><?php echo __('Добавьте API ключи Etherscan/BscScan (только чтение) для авто-подтверждения ERC20/BEP20. Для TRC20 используется TronScan без ключа.'); ?></li>
+                        <li><?php echo __('Рекомендуется включить «Уникальную сумму» для надёжного сопоставления депозита.'); ?></li>
+                        <li><?php echo __('Сохраните настройки и протестируйте небольшой перевод.'); ?></li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </section>
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <div>
@@ -231,8 +334,80 @@ include __DIR__ . '/../includes/admin_sidebar.php';
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <div>
-                    <h2 class="h5 mb-1"><?php echo htmlspecialchars($binance['title'] ?? 'Binance Pay (USDT TRC20)'); ?></h2>
-                    <p class="mb-0 text-muted small"><?php echo __('Принимает криптовалютные платежи USDT TRC20 через Binance Pay.'); ?></p>
+                    <h2 class="h5 mb-1"><?php echo htmlspecialchars($metamask['title'] ?? 'MetaMask / EVM (USDT)'); ?></h2>
+                    <p class="mb-0 text-muted small"><?php echo __('Прямой приём USDT на EVM-сети (ETH/BSC) с авто-подтверждением через Etherscan/BscScan.'); ?></p>
+                </div>
+                <span class="badge bg-<?php echo !empty($metamask['is_enabled']) ? 'success' : 'secondary'; ?>">
+                    <?php echo !empty($metamask['is_enabled']) ? __('Включено') : __('Отключено'); ?>
+                </span>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="gateway_code" value="metamask">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="metamask-title"><?php echo __('Название'); ?></label>
+                            <input type="text" class="form-control" id="metamask-title" name="title" value="<?php echo htmlspecialchars($metamask['title'] ?? 'MetaMask / EVM (USDT)'); ?>" placeholder="MetaMask / EVM (USDT)">
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" id="metamask-enabled" name="is_enabled" <?php echo !empty($metamask['is_enabled']) ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="metamask-enabled"><?php echo __('Включить приём USDT'); ?></label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="metamask-network"><?php echo __('Сеть'); ?></label>
+                            <select class="form-select" id="metamask-network" name="metamask_network">
+                                <option value="BSC" <?php echo ($metamaskConfig['network'] ?? 'BSC') === 'BSC' ? 'selected' : ''; ?>>BSC (TRON-пара USDT BEP20)</option>
+                                <option value="ETH" <?php echo ($metamaskConfig['network'] ?? '') === 'ETH' ? 'selected' : ''; ?>>Ethereum (USDT ERC20)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label" for="metamask-address"><?php echo __('Адрес получателя (EVM)'); ?></label>
+                            <input type="text" class="form-control" id="metamask-address" name="metamask_address" value="<?php echo htmlspecialchars($metamaskConfig['recipient_address'] ?? ''); ?>" placeholder="0x...">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="metamask-api-key"><?php echo __('API Key (Etherscan/BscScan)'); ?></label>
+                            <input type="text" class="form-control" id="metamask-api-key" name="metamask_api_key" value="<?php echo htmlspecialchars($metamaskConfig['api_key'] ?? ''); ?>" placeholder="scan_xxxxxxxxx">
+                            <div class="form-text"><?php echo __('Нужен для авто-подтверждения: только чтение.'); ?></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="metamask-unique"><?php echo __('Уникальная сумма'); ?></label>
+                            <select class="form-select" id="metamask-unique" name="metamask_enable_unique_amount">
+                                <option value="1" <?php echo !empty($metamaskConfig['enable_unique_amount']) ? 'selected' : ''; ?>><?php echo __('Включено'); ?></option>
+                                <option value="0" <?php echo empty($metamaskConfig['enable_unique_amount']) ? 'selected' : ''; ?>><?php echo __('Отключено'); ?></option>
+                            </select>
+                            <div class="form-text"><?php echo __('Добавляет небольшие копейки к сумме для точного сопоставления депозита.'); ?></div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="metamask-instructions"><?php echo __('Инструкция для клиентов'); ?></label>
+                            <textarea class="form-control" id="metamask-instructions" name="instructions" rows="3" placeholder="<?php echo __('Опишите как перевести USDT через MetaMask на указанный адрес.'); ?>"><?php echo htmlspecialchars($metamask['instructions'] ?? ''); ?></textarea>
+                            <div class="form-text"><i class="bi bi-info-circle text-muted"></i> <?php echo __('Клиент увидит адрес, сеть и точную сумму USDT. После поступления на ваш адрес система зачислит 1 USDT = 1 USD.'); ?></div>
+                        </div>
+                    </div>
+                    <div class="mt-4 d-flex justify-content-end gap-2">
+                        <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="btn btn-outline-secondary"><i class="bi bi-clock-history me-1"></i><?php echo __('Транзакции'); ?></a>
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+                    </div>
+                </form>
+                <div class="alert alert-secondary small mt-3" role="alert">
+                    <strong><?php echo __('Пошаговая настройка (EVM/MetaMask)'); ?>:</strong>
+                    <ol class="mb-0 ps-3">
+                        <li><?php echo __('Укажите сеть (BSC/Ethereum) и EVM-адрес получателя, который контролируете.'); ?></li>
+                        <li><?php echo __('Создайте API ключ на BscScan/Etherscan (только чтение) и укажите его.'); ?></li>
+                        <li><?php echo __('Рекомендуется включить «Уникальную сумму», чтобы надёжно сопоставлять депозиты.'); ?></li>
+                        <li><?php echo __('Сохраните настройки и протестируйте небольшой перевод.'); ?></li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </section>
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="h5 mb-1"><?php echo htmlspecialchars($binance['title'] ?? 'Binance (USDT TRC20)'); ?></h2>
+                    <p class="mb-0 text-muted small"><?php echo __('Принимает USDT TRC20 через Binance Pay или прямой спотовый депозит на биржевой счёт.'); ?></p>
                 </div>
                 <span class="badge bg-<?php echo !empty($binance['is_enabled']) ? 'success' : 'secondary'; ?>">
                     <?php echo !empty($binance['is_enabled']) ? __('Включено') : __('Отключено'); ?>
@@ -247,13 +422,14 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                             <label class="form-label" for="binance-mode"><?php echo __('Режим подключения'); ?></label>
                             <select class="form-select" id="binance-mode" name="binance_mode" onchange="ppToggleBinanceMode(this.value);">
                                 <option value="merchant" <?php echo $binanceMode === 'merchant' ? 'selected' : ''; ?>><?php echo __('Мерчант Binance Pay'); ?></option>
+                                <option value="spot" <?php echo $binanceMode === 'spot' ? 'selected' : ''; ?>><?php echo __('Спотовый депозит (USDT TRC20)'); ?></option>
                                 <option value="wallet" <?php echo $binanceMode === 'wallet' ? 'selected' : ''; ?>><?php echo __('Простой кошелёк'); ?></option>
                             </select>
-                            <div class="form-text"><?php echo __('Выберите «Простой кошелёк», если нет доступа к мерчанту Binance Pay.'); ?></div>
+                            <div class="form-text"><?php echo __('Выберите «Спотовый депозит», если хотите принимать USDT напрямую на биржевой счёт (1 USDT = 1 USD, авто-зачисление).'); ?></div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label" for="binance-title"><?php echo __('Название'); ?></label>
-                            <input type="text" class="form-control" id="binance-title" name="title" value="<?php echo htmlspecialchars($binance['title'] ?? 'Binance Pay (USDT TRC20)'); ?>" placeholder="Binance Pay">
+                            <input type="text" class="form-control" id="binance-title" name="title" value="<?php echo htmlspecialchars($binance['title'] ?? 'Binance (USDT TRC20)'); ?>" placeholder="Binance">
                         </div>
                         <div class="col-md-6 d-flex align-items-end">
                             <div class="form-check form-switch">
@@ -261,34 +437,34 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                                 <label class="form-check-label" for="binance-enabled"><?php echo __('Включить приём платежей'); ?></label>
                             </div>
                         </div>
-                        <div class="col-md-6 binance-merchant-field">
+                        <div class="col-md-6 binance-api-field">
                             <label class="form-label" for="binance-api-key"><?php echo __('API Key'); ?></label>
                             <input type="text" class="form-control" id="binance-api-key" name="binance_api_key" value="<?php echo htmlspecialchars($binanceConfig['api_key'] ?? ''); ?>" placeholder="pay_xxxxxxxxx">
                         </div>
-                        <div class="col-md-6 binance-merchant-field">
+                        <div class="col-md-6 binance-api-field">
                             <label class="form-label" for="binance-api-secret"><?php echo __('API Secret'); ?></label>
                             <input type="password" class="form-control" id="binance-api-secret" name="binance_api_secret" value="<?php echo htmlspecialchars($binanceConfig['api_secret'] ?? ''); ?>" placeholder="••••••">
                         </div>
-                        <div class="col-md-6 binance-merchant-field">
+                        <div class="col-md-6 binance-pay-field">
                             <label class="form-label" for="binance-merchant"><?php echo __('Merchant ID (опционально)'); ?></label>
                             <input type="text" class="form-control" id="binance-merchant" name="binance_merchant_id" value="<?php echo htmlspecialchars($binanceConfig['merchant_id'] ?? ''); ?>">
                         </div>
-                        <div class="col-md-6 binance-merchant-field">
+                        <div class="col-md-6 binance-pay-field">
                             <label class="form-label" for="binance-return"><?php echo __('Return URL после оплаты'); ?></label>
                             <input type="url" class="form-control" id="binance-return" name="binance_return_url" value="<?php echo htmlspecialchars($binanceConfig['return_url'] ?? ''); ?>" placeholder="<?php echo htmlspecialchars(pp_url('client/balance.php')); ?>">
                         </div>
-                        <div class="col-md-4 binance-merchant-field">
+                        <div class="col-md-4 binance-pay-field">
                             <label class="form-label" for="binance-environment"><?php echo __('Среда'); ?></label>
                             <select class="form-select" id="binance-environment" name="binance_environment">
                                 <option value="production" <?php echo ($binanceConfig['environment'] ?? 'production') === 'production' ? 'selected' : ''; ?>><?php echo __('Продакшен'); ?></option>
                                 <option value="sandbox" <?php echo ($binanceConfig['environment'] ?? '') === 'sandbox' ? 'selected' : ''; ?>><?php echo __('Песочница'); ?></option>
                             </select>
                         </div>
-                        <div class="col-md-4 binance-merchant-field">
+                        <div class="col-md-4 binance-pay-field">
                             <label class="form-label" for="binance-terminal"><?php echo __('Тип терминала'); ?></label>
                             <input type="text" class="form-control" id="binance-terminal" name="binance_terminal_type" value="<?php echo htmlspecialchars($binanceConfig['terminal_type'] ?? 'WEB'); ?>" placeholder="WEB">
                         </div>
-                        <div class="col-md-4 binance-merchant-field">
+                        <div class="col-md-4 binance-pay-field">
                             <label class="form-label"><?php echo __('Webhook URL'); ?></label>
                             <div class="input-group">
                                 <input type="text" class="form-control" value="<?php echo htmlspecialchars(pp_payment_gateway_webhook_url('binance')); ?>" readonly>
@@ -297,6 +473,37 @@ include __DIR__ . '/../includes/admin_sidebar.php';
                                 </button>
                             </div>
                             <small class="text-muted"><?php echo __('Укажите адрес в настройках уведомлений Binance Pay.'); ?></small>
+                        </div>
+                        <!-- Merchant mode detailed help -->
+                        <div class="col-12 binance-merchant-help">
+                            <div class="alert alert-secondary small" role="alert">
+                                <strong><?php echo __('Мерчант Binance Pay — пошаговая настройка'); ?>:</strong>
+                                <ol class="mb-2 ps-3">
+                                    <li><?php echo __('Убедитесь, что у вас одобрен мерчант-аккаунт Binance Pay.'); ?></li>
+                                    <li><?php echo __('Перейдите в кабинет Binance Pay → API/Интеграции и создайте ключи.'); ?></li>
+                                    <li><?php echo __('Скопируйте API Key и Secret в поля выше. При необходимости укажите Merchant ID.'); ?></li>
+                                    <li><?php echo __('Включите подходящую среду: «Продакшен» или «Песочница» для тестов.'); ?></li>
+                                    <li><?php echo __('Скопируйте Webhook URL (выше) и укажите его в настройках уведомлений Binance Pay. Выберите события об успешной оплате.'); ?></li>
+                                    <li><?php echo __('Укажите Return URL — куда возвращать пользователя после оплаты (например, страницу баланса).'); ?></li>
+                                    <li><?php echo __('Сохраните настройки и создайте тестовый платёж на небольшую сумму.'); ?></li>
+                                </ol>
+                                <div class="text-muted"><?php echo __('Поддерживаемая валюта — USDT. Предпочтительная сеть для клиента — TRC20.'); ?></div>
+                            </div>
+                        </div>
+                        <!-- Spot mode detailed help -->
+                        <div class="col-12 binance-spot-help">
+                            <div class="alert alert-secondary small" role="alert">
+                                <strong><?php echo __('Спотовый депозит (USDT TRC20) — пошаговая настройка'); ?>:</strong>
+                                <ol class="mb-2 ps-3">
+                                    <li><?php echo __('Создайте биржевые API ключи: Профиль Binance → API Management → Create API.'); ?></li>
+                                    <li><?php echo __('Оставьте только разрешение «Enable Reading» (только чтение). Торговля и вывод не нужны.'); ?></li>
+                                    <li><?php echo __('Добавьте белый список IP сервера (рекомендуется), если включена проверка IP-адресов.'); ?></li>
+                                    <li><?php echo __('Включите режим «Спотовый депозит» здесь, укажите API Key/Secret в поля выше.'); ?></li>
+                                    <li><?php echo __('Клиенту будет показан TRC20 адрес и «уникальная» сумма USDT для точной идентификации депозита.'); ?></li>
+                                    <li><?php echo __('Вебхук не требуется: система периодически опрашивает историю депозита и зачисляет 1 USDT = 1 USD при совпадении суммы.'); ?></li>
+                                </ol>
+                                <div class="text-muted"><?php echo __('Сеть: TRC20 (в API Binance это сеть TRX). Адрес подтягивается автоматически из Binance.'); ?></div>
+                            </div>
                         </div>
                         <div class="col-md-6 binance-wallet-field">
                             <label class="form-label" for="binance-wallet-address"><?php echo __('Адрес кошелька USDT'); ?></label>
@@ -329,14 +536,22 @@ include __DIR__ . '/../includes/admin_sidebar.php';
 
 <script>
     function ppToggleBinanceMode(mode) {
-        var merchantFields = document.querySelectorAll('.binance-merchant-field');
+        var payFields = document.querySelectorAll('.binance-pay-field');
+        var merchantFields = document.querySelectorAll('.binance-merchant-field'); // legacy, keep hidden
         var walletFields = document.querySelectorAll('.binance-wallet-field');
-        merchantFields.forEach(function (el) {
-            el.style.display = (mode === 'wallet') ? 'none' : '';
-        });
+        var apiFields = document.querySelectorAll('.binance-api-field');
+        var helpMerchant = document.querySelectorAll('.binance-merchant-help');
+        var helpSpot = document.querySelectorAll('.binance-spot-help');
+        // Hide legacy group if exists
+        merchantFields.forEach(function (el) { el.style.display = 'none'; });
+        // Toggle groups
+        payFields.forEach(function (el) { el.style.display = (mode === 'merchant') ? '' : 'none'; });
+        apiFields.forEach(function (el) { el.style.display = (mode === 'merchant' || mode === 'spot') ? '' : 'none'; });
         walletFields.forEach(function (el) {
             el.style.display = (mode === 'wallet') ? '' : 'none';
         });
+        helpMerchant.forEach(function (el) { el.style.display = (mode === 'merchant') ? '' : 'none'; });
+        helpSpot.forEach(function (el) { el.style.display = (mode === 'spot') ? '' : 'none'; });
     }
     document.addEventListener('DOMContentLoaded', function () {
         ppToggleBinanceMode('<?php echo $binanceMode; ?>');
