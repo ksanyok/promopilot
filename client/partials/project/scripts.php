@@ -1419,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const navBalanceValueEl = document.querySelector('[data-balance-target]');
     const navBalanceLocale = navBalanceValueEl?.dataset.balanceLocale || document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
-    const navBalanceCurrency = navBalanceValueEl?.dataset.balanceCurrency || 'RUB';
+    let navBalanceCurrency = navBalanceValueEl?.dataset.balanceCurrency || 'RUB';
     let CURRENT_USER_BALANCE_RAW = (typeof window.PP_BALANCE === 'number' && !Number.isNaN(window.PP_BALANCE))
         ? window.PP_BALANCE
         : (() => {
@@ -2571,10 +2571,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         // Align modal balance currency with app's global currency code
         const modalChargeCard = document.querySelector('.promotion-confirm-amount');
-        const prevCurrency = navBalanceCurrency;
-        const modalCurrency = modalChargeCard?.getAttribute('data-currency-code') || prevCurrency;
-        if (modalCurrency && modalCurrency !== navBalanceCurrency) {
-            try { navBalanceValueEl && (navBalanceValueEl.dataset.balanceCurrency = modalCurrency); } catch(e) {}
+        const modalCurrency = modalChargeCard?.getAttribute('data-currency-code') || navBalanceCurrency;
+        if (modalCurrency) {
+            promotionPrevCurrency = navBalanceCurrency;
+            navBalanceCurrency = modalCurrency;
         }
         const currentBalanceFormatted = formatBalanceLocale(CURRENT_USER_BALANCE_RAW);
         document.querySelectorAll('[data-current-balance-display]').forEach(el => {
@@ -2601,6 +2601,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const promotionConfirmUrlEl = document.querySelector('[data-promotion-link]');
     const promotionConfirmAcceptBtn = document.getElementById('promotionConfirmAccept');
     let promotionConfirmContext = null;
+    let promotionPrevCurrency = null;
 
     if (promotionConfirmAcceptBtn) {
         promotionConfirmAcceptBtn.addEventListener('click', async () => {
@@ -3097,6 +3098,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (promotionConfirmModalElement && window.bootstrap) {
         promotionConfirmModalElement.addEventListener('hidden.bs.modal', () => {
             promotionConfirmContext = null;
+            if (promotionPrevCurrency) {
+                navBalanceCurrency = promotionPrevCurrency;
+                promotionPrevCurrency = null;
+            }
         });
     }
 

@@ -70,6 +70,11 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
             'length' => ''
         ];
     }
+    $totalLinksOverall = 0;
+    if ($level1Enabled) { $totalLinksOverall += $level1Count; }
+    if ($level2Enabled) { $totalLinksOverall += $level2Total; }
+    if ($level3Enabled) { $totalLinksOverall += $level3Total; }
+    $totalCrowdOverall = $crowdEnabled ? $crowdTotal : 0;
 }
 ?>
 <?php if ($canDeleteProject): ?>
@@ -157,7 +162,7 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
 </div>
 
 <div class="modal fade modal-fixed-center" id="promotionConfirmModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запуск продвижения'); ?></h5>
@@ -184,28 +189,34 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
                                 <i class="bi bi-diagram-3"></i>
                                 <span><?php echo __('Каскад размещений'); ?></span>
                             </div>
-                            <div class="row g-3">
+                            <div class="cascade-grid">
                                 <?php foreach ($promotionCascadeDetails as $idx => $cascadeItem): ?>
-                                    <div class="col-12 col-md-6 col-xl-4">
-                                        <div class="p-3 rounded-3 bg-body-tertiary h-100 border border-secondary-subtle">
-                                            <div class="d-flex align-items-center gap-2 mb-2">
-                                                <div class="badge bg-primary-subtle text-primary-emphasis">
-                                                    <?php echo htmlspecialchars($cascadeItem['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
-                                                </div>
-                                            </div>
-                                            <?php if (!empty($cascadeItem['count'])): ?>
-                                                <div class="small text-muted">
-                                                    <?php echo htmlspecialchars($cascadeItem['count'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
-                                                </div>
-                                            <?php endif; ?>
-                                            <?php if (!empty($cascadeItem['length'])): ?>
-                                                <div class="small text-muted mt-1">
-                                                    <?php echo htmlspecialchars($cascadeItem['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
-                                                </div>
-                                            <?php endif; ?>
+                                    <div class="cascade-item">
+                                        <div class="cascade-item__head">
+                                            <span class="label-badge"><?php echo htmlspecialchars($cascadeItem['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
                                         </div>
+                                        <?php if (!empty($cascadeItem['count'])): ?>
+                                            <div class="meta small text-muted"><?php echo htmlspecialchars($cascadeItem['count'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                        <?php endif; ?>
+                                        <?php if (!empty($cascadeItem['length'])): ?>
+                                            <div class="meta small text-muted"><?php echo htmlspecialchars($cascadeItem['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                        <?php endif; ?>
                                     </div>
                                 <?php endforeach; ?>
+                            </div>
+                            <div class="cascade-summary mt-3">
+                                <?php if ($totalLinksOverall > 0): ?>
+                                    <div class="summary-chip">
+                                        <i class="bi bi-link-45deg"></i>
+                                        <span><?php echo __('Итого ссылок'); ?>: <?php echo htmlspecialchars(number_format($totalLinksOverall, 0, ',', ' ')); ?></span>
+                                    </div>
+                                <?php endif; ?>
+                                <?php if ($totalCrowdOverall > 0): ?>
+                                    <div class="summary-chip">
+                                        <i class="bi bi-chat-dots"></i>
+                                        <span><?php echo __('Крауд упоминаний'); ?>: <?php echo htmlspecialchars(number_format($totalCrowdOverall, 0, ',', ' ')); ?></span>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
