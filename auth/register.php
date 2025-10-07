@@ -39,6 +39,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $stmt = $conn->prepare("INSERT INTO users (username, password, role) VALUES (?, ?, 'client')");
                 $stmt->bind_param("ss", $username, $hashed);
                 if ($stmt->execute()) {
+                    $newUserId = (int)$stmt->insert_id;
+                    // Assign referral if cookie present and generate referral code
+                    try { $conn2 = $conn; if (function_exists('pp_referral_assign_user_if_needed')) { pp_referral_assign_user_if_needed($conn2, $newUserId); } if (function_exists('pp_referral_get_or_create_user_code')) { pp_referral_get_or_create_user_code($conn2, $newUserId); } } catch (Throwable $e) { /* ignore */ }
                     $message = __('Регистрация успешна!') . ' <a href="' . pp_url('auth/login.php') . '">' . __('Войти') . '</a>';
                 } else {
                     $message = __('Ошибка регистрации.');

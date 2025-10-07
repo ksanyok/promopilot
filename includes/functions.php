@@ -41,6 +41,79 @@ function ensure_schema(): void {
 }
 }
 // The rest of the file keeps ensure_schema and domain-specific models.
+    function pp_referral_cookie_name() {
+        return 'pp_ref';
+    }
+
+    function pp_referral_set_cookie($code) {
+        $days = (int)get_setting('referral_cookie_days', '30');
+        if ($days <= 0) { $days = 30; }
+        $expire = time() + ($days * 24 * 60 * 60);
+        setcookie(pp_referral_cookie_name(), $code, $expire, '/', '', isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on', true);
+    }
+
+    function pp_referral_get_cookie() {
+        return isset($_COOKIE[pp_referral_cookie_name()]) ? trim($_COOKIE[pp_referral_cookie_name()]) : '';
+    }
+
+    function pp_referral_clear_cookie() {
+        setcookie(pp_referral_cookie_name(), '', time() - 3600, '/', '', isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on', true);
+    }
+
+    function pp_referral_capture_from_request() {
+        if (!empty($_GET['ref'])) {
+            $code = preg_replace('~[^a-zA-Z0-9_\-]~', '', (string)$_GET['ref']);
+            if ($code !== '') {
+                pp_referral_set_cookie($code);
+            }
+        }
+    }
+
+    function pp_referral_assign_user_if_needed($conn, $userId) {
+        // Assign referred_by to user if not already set and cookie has a valid code
+        $code = pp_referral_get_cookie();
+        if ($code === '') return;
+        $stmt = $conn->prepare("SELECT referred_by FROM users WHERE id = ? LIMIT 1");
+        if (!$stmt) return;
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res ? $res->fetch_assoc() : null;
+        if ($res) $res->free();
+        $stmt->close();
+        if (!$row || (int)$row['referred_by'] > 0) return;
+        $fs = $conn->prepare("SELECT id FROM users WHERE referral_code = ? LIMIT 1");
+        if (!$fs) return;
+        $fs->bind_param('s', $code);
+        $fs->execute();
+        $fr = $fs->get_result();
+        $refUser = $fr ? $fr->fetch_assoc() : null;
+        if ($fr) $fr->free();
+        $fs->close();
+        if (!$refUser) return;
+        $rid = (int)$refUser['id'];
+        if ($rid === $userId) return; // prevent self-referral
+        $us = $conn->prepare("UPDATE users SET referred_by = ? WHERE id = ? AND (referred_by IS NULL OR referred_by = 0)");
+        if ($us) { $us->bind_param('ii', $rid, $userId); $us->execute(); $us->close(); }
+    }
+
+    function pp_referral_get_or_create_user_code($conn, $userId) {
+        $code = '';
+        $st = $conn->prepare("SELECT referral_code FROM users WHERE id = ? LIMIT 1");
+        if ($st) { $st->bind_param('i', $userId); $st->execute(); $r = $st->get_result(); if ($r) { $row = $r->fetch_assoc(); if ($row && !empty($row['referral_code'])) { $code = $row['referral_code']; } $r->free(); } $st->close(); }
+        if ($code !== '') return $code;
+        // Generate a unique code
+        for ($i = 0; $i < 5; $i++) {
+            $candidate = substr(strtoupper(bin2hex(random_bytes(6))), 0, 10);
+            $ck = $conn->prepare("SELECT id FROM users WHERE referral_code = ? LIMIT 1");
+            if ($ck) { $ck->bind_param('s', $candidate); $ck->execute(); $cr = $ck->get_result(); $exists = $cr && $cr->fetch_assoc(); if ($cr) $cr->free(); $ck->close(); if (!$exists) { $code = $candidate; break; } }
+        }
+        if ($code === '') { $code = (string)$userId . 'R'; }
+        $us = $conn->prepare("UPDATE users SET referral_code = ? WHERE id = ?");
+        if ($us) { $us->bind_param('si', $code, $userId); $us->execute(); $us->close(); }
+        return $code;
+    }
+
 
 // ---------- Publication networks helpers ----------
 

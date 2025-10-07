@@ -127,3 +127,8 @@ require_once __DIR__ . '/promotion.php';
 if (function_exists('ensure_schema')) {
     ensure_schema();
 }
+
+// Capture referral code from URL into cookie if present
+if (function_exists('pp_referral_capture_from_request')) {
+    pp_referral_capture_from_request();
+}

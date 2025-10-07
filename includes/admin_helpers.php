@@ -51,6 +51,10 @@ if (!function_exists('pp_admin_setting_keys')) {
             'promotion_level2_enabled',
             'promotion_level3_enabled',
             'promotion_crowd_enabled',
+            // Referral program
+            'referral_enabled',
+            'referral_default_percent',
+            'referral_cookie_days',
         ];
 
         return $keys;
@@ -107,6 +111,10 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
             ['promotion_level2_enabled', isset($post['promotion_level2_enabled']) ? '1' : '0'],
             ['promotion_level3_enabled', isset($post['promotion_level3_enabled']) ? '1' : '0'],
             ['promotion_crowd_enabled', isset($post['promotion_crowd_enabled']) ? '1' : '0'],
+            // Referral program settings
+            ['referral_enabled', isset($post['referral_enabled']) ? '1' : '0'],
+            ['referral_default_percent', number_format(max(0, min(100, (float)str_replace(',', '.', (string)($post['referral_default_percent'] ?? '5')))), 2, '.', '')],
+            ['referral_cookie_days', (string)max(1, min(365, (int)($post['referral_cookie_days'] ?? 30)))],
         ];
 
         $stmt = $conn->prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = CURRENT_TIMESTAMP");

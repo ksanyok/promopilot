@@ -83,6 +83,27 @@ function pp_run_schema_bootstrap(): void {
         @$conn->query("ALTER TABLE `users` ADD COLUMN `promotion_discount` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `balance`");
         $usersCols = $getCols('users');
     }
+    // Users table: referral program fields
+    if (!empty($usersCols) && !isset($usersCols['referred_by'])) {
+        @$conn->query("ALTER TABLE `users` ADD COLUMN `referred_by` INT NULL AFTER `promotion_discount`");
+        $usersCols = $getCols('users');
+    }
+    if (!empty($usersCols) && !isset($usersCols['referral_code'])) {
+        @$conn->query("ALTER TABLE `users` ADD COLUMN `referral_code` VARCHAR(32) NULL AFTER `referred_by`");
+        // unique index for quick lookup
+        if (pp_mysql_index_exists($conn, 'users', 'uniq_users_referral_code') === false) {
+            @$conn->query("CREATE UNIQUE INDEX `uniq_users_referral_code` ON `users`(`referral_code`)");
+        }
+        $usersCols = $getCols('users');
+    }
+    if (!empty($usersCols) && !isset($usersCols['referral_commission_percent'])) {
+        @$conn->query("ALTER TABLE `users` ADD COLUMN `referral_commission_percent` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `referral_code`");
+        $usersCols = $getCols('users');
+    }
+    // Helpful index on referred_by
+    if (pp_mysql_index_exists($conn, 'users', 'idx_users_referred_by') === false && isset($usersCols['referred_by'])) {
+        @$conn->query("CREATE INDEX `idx_users_referred_by` ON `users`(`referred_by`)");
+    }
     // Users table: add profile fields if missing
     if (!empty($usersCols)) {
         if (!isset($usersCols['full_name'])) {

@@ -33,10 +33,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if ($stmt->fetch()) {
                 if (password_verify($password, $hash)) {
                     $stmt->close();
-                    $conn->close();
                     pp_session_regenerate();
                     $_SESSION['user_id'] = $uid;
                     $_SESSION['role'] = $role;
+                    // Ensure referral attachments/code
+                    try { if (function_exists('pp_referral_assign_user_if_needed')) { pp_referral_assign_user_if_needed($conn, (int)$uid); } if (function_exists('pp_referral_get_or_create_user_code')) { pp_referral_get_or_create_user_code($conn, (int)$uid); } } catch (Throwable $e) { /* ignore */ }
+                    $conn->close();
                     session_write_close();
                     redirect($role === 'admin' ? 'admin/admin.php' : 'client/client.php');
                 } else {

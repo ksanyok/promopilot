@@ -87,6 +87,21 @@ $paymentsMenu = [
         'icon' => 'bi-clock-history',
         'href' => pp_url('admin/payment_transactions.php'),
     ],
+    [
+        'key' => 'referral',
+        'label' => __('Реферальная программа'),
+        'icon' => 'bi-people-fill',
+        'href' => pp_url('admin/referral.php'),
+    ],
+];
+
+$referralMenu = [
+    [
+        'key' => 'referral',
+        'label' => __('Реферальная программа'),
+        'icon' => 'bi-people-fill',
+        'href' => pp_url('admin/referral.php'),
+    ],
 ];
 
 ?>

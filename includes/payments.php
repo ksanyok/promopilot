@@ -435,7 +435,7 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
             return ['ok' => false, 'error' => 'DB connection failed'];
         }
         $conn->begin_transaction();
-        $stmt = $conn->prepare("SELECT id, user_id, amount, currency, status, provider_payload FROM payment_transactions WHERE id = ? FOR UPDATE");
+    $stmt = $conn->prepare("SELECT id, user_id, amount, currency, status, provider_payload, gateway_code, provider_reference FROM payment_transactions WHERE id = ? FOR UPDATE");
         if (!$stmt) {
             $conn->rollback();
             $conn->close();
@@ -540,6 +540,53 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
                 'provider_reference' => (string)($row['provider_reference'] ?? ''),
             ],
         ]);
+        // Referral commission: credit referrer if enabled
+        $referralEvent = null;
+        try {
+            $refEnabled = get_setting('referral_enabled', '0') === '1';
+            if ($refEnabled) {
+                $defPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
+                if ($defPercent < 0) { $defPercent = 0; }
+                if ($defPercent > 100) { $defPercent = 100; }
+                // Load referred_by from paying user
+                $u2 = null;
+                $us = $conn->prepare("SELECT referred_by FROM users WHERE id = ? LIMIT 1 FOR UPDATE");
+                if ($us) { $us->bind_param('i', $userId); $us->execute(); $ur = $us->get_result(); $u2 = $ur ? $ur->fetch_assoc() : null; if ($ur) { $ur->free(); } $us->close(); }
+                $referredBy = (int)($u2['referred_by'] ?? 0);
+                if ($referredBy > 0) {
+                    // Load referrer's custom commission percent if any
+                    $pct = $defPercent;
+                    $rf = $conn->prepare("SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1");
+                    if ($rf) { $rf->bind_param('i', $referredBy); $rf->execute(); $rfr = $rf->get_result(); if ($rfr) { $rfrRow = $rfr->fetch_assoc(); if ($rfrRow) { $rc = (float)$rfrRow['referral_commission_percent']; if ($rc > 0) { $pct = $rc; } } $rfr->free(); } $rf->close(); }
+                    if ($pct > 0.00001) {
+                        $commission = round($creditAmount * ($pct / 100.0), 2);
+                        if ($commission > 0) {
+                            // Update referrer balance
+                            $bs = $conn->prepare("UPDATE users SET balance = balance + ? WHERE id = ?");
+                            if ($bs) { $bs->bind_param('di', $commission, $referredBy); $bs->execute(); $bs->close(); }
+                            // Fetch referrer balance for event
+                            $refBal = 0.0;
+                            $br = $conn->prepare("SELECT balance FROM users WHERE id = ? LIMIT 1");
+                            if ($br) { $br->bind_param('i', $referredBy); $br->execute(); $bres = $br->get_result(); if ($bres) { $rowb = $bres->fetch_assoc(); if ($rowb) { $refBal = (float)$rowb['balance']; } $bres->free(); } $br->close(); }
+                            $referralEvent = pp_balance_record_event($conn, [
+                                'user_id' => $referredBy,
+                                'delta' => $commission,
+                                'balance_before' => $refBal - $commission,
+                                'balance_after' => $refBal,
+                                'source' => 'referral',
+                                'meta' => [
+                                    'from_user_id' => $userId,
+                                    'transaction_id' => $transactionId,
+                                    'percent' => $pct,
+                                    'currency' => (string)$row['currency'],
+                                ],
+                            ]);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) { /* ignore referral errors */ }
+
         $conn->commit();
         $conn->close();
         $row['status'] = $status;
@@ -547,6 +594,9 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
         $row['confirmed_amount'] = $creditAmount;
         if (!empty($balanceEvent)) {
             pp_balance_send_event_notification($balanceEvent);
+        }
+        if (!empty($referralEvent)) {
+            pp_balance_send_event_notification($referralEvent);
         }
         return ['ok' => true, 'already' => false, 'transaction' => $row];
     }
