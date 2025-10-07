@@ -3,6 +3,7 @@
 const { generateText, cleanLLMOutput } = require('../ai_client');
 const { htmlToPlainText } = require('./contentFormats');
 const { prepareTextSample } = require('./verification');
+const { generateImage } = require('./generateImage');
 
 let lastGeneratedArticle = null;
 
@@ -213,10 +214,13 @@ function buildDiagnosticArticle(pageUrl, anchorText) {
 <p>Сохраняйте ссылку в закладках и возвращайтесь к ней после каждой проверки. Она служит живым центром знаний по проекту и позволяет специалистам PromoPilot работать слаженно даже в условиях постоянных изменений.</p>`
   ];
 
+  const title = 'PromoPilot: диагностика сетей';
+  const html = `<h1>${title}</h1>\n\n![Image description](https://i.snap.as/D1yn3zC.png)\n\n${sections.join('\n\n')}`;
+
   return {
-    title: 'PromoPilot: диагностика сетей',
+    title,
     author: 'Алексей Петров',
-    html: sections.join('\n\n')
+    html
   };
 }
 
@@ -301,6 +305,33 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
 
   const titleClean = cleanLLMOutput(rawTitle).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
   let content = cleanLLMOutput(rawContent);
+
+  // Add H1 title
+  content = `<h1>${titleClean}</h1>\n${content}`;
+
+  // Generate image prompt
+  const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Ответь только промтом.`;
+  const imagePrompt = await generateText(imagePromptText, { ...aiOpts, systemPrompt: 'Только промт для изображения.', keepRaw: true });
+  await sleep(500);
+  const cleanImagePrompt = cleanLLMOutput(imagePrompt).trim();
+
+  // Generate image
+  let imageUrl = null;
+  try {
+    imageUrl = await generateImage(cleanImagePrompt);
+  } catch (e) {
+    // Ignore image generation errors for now
+  }
+
+  // Insert image after first paragraph
+  if (imageUrl) {
+    const firstPIndex = content.indexOf('<p>');
+    if (firstPIndex !== -1) {
+      const insertPos = content.indexOf('</p>', firstPIndex) + 4;
+      const imageMarkdown = `![Image description](${imageUrl})\n\n`;
+      content = content.slice(0, insertPos) + imageMarkdown + content.slice(insertPos);
+    }
+  }
 
   const wantOur = 2;
   const wantExternal = 1;
