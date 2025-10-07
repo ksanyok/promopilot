@@ -155,39 +155,58 @@ function pp_client_tx_status_badge(string $status): string {
                             <div class="mt-4 d-flex gap-2 flex-wrap">
                                 <button type="submit" class="btn btn-gradient"><i class="bi bi-lightning-charge me-1"></i><?php echo __('Создать платёж'); ?></button>
                                 <a href="<?php echo pp_url('client/balance.php'); ?>" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i><?php echo __('Обновить'); ?></a>
+                                <?php if ($selectedGatewayCode && isset($paymentGateways[$selectedGatewayCode])): ?>
+                                    <button type="button" class="btn btn-outline-info" data-bs-toggle="modal" data-bs-target="#paymentInstructionModal">
+                                        <i class="bi bi-info-circle me-1"></i><?php echo __('Инструкция'); ?>
+                                    </button>
+                                <?php endif; ?>
                             </div>
                         </form>
 
                         <?php if ($selectedGatewayCode && isset($paymentGateways[$selectedGatewayCode])): ?>
                             <?php $selectedGateway = $paymentGateways[$selectedGatewayCode]; ?>
-                            <div class="mt-4 p-3 border rounded bg-light">
-                                <h2 class="h6 d-flex align-items-center gap-2 mb-3">
-                                    <i class="bi bi-info-circle text-primary"></i>
-                                    <span><?php echo __('Инструкция по оплате'); ?> — <?php echo htmlspecialchars($selectedGateway['title']); ?></span>
-                                </h2>
-                                <?php if (!empty($selectedGateway['instructions'])): ?>
-                                    <div class="small mb-0"><?php echo nl2br(htmlspecialchars($selectedGateway['instructions'])); ?></div>
-                                <?php elseif ($selectedGatewayCode === 'monobank'): ?>
-                                    <div class="small mb-0"><?php echo __('Оплата происходит на странице Monobank. После успешного перевода и возврата сюда мы проверим счёт и зачислим средства автоматически.'); ?></div>
-                                <?php else: ?>
-                                    <div class="text-muted small mb-0"><?php echo __('Инструкция не заполнена администратором. Используйте данные провайдера для оплаты.'); ?></div>
-                                <?php endif; ?>
-                                <?php if ($selectedGatewayCode === 'monobank'): ?>
-                                    <div class="text-muted small mt-3"><?php echo __('Сохраните вкладку открытой: система регулярно запрашивает статус счёта Monobank и зачисляет оплату сразу после подтверждения.'); ?></div>
-                                <?php else: ?>
-                                    <div class="text-muted small mt-3"><?php echo __('После подтверждения платежа система автоматически зачислит сумму на ваш баланс.'); ?></div>
-                                <?php endif; ?>
+                            <!-- Payment Instruction Modal -->
+                            <div class="modal fade modal-glass" id="paymentInstructionModal" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content modal-content--glass">
+                                        <div class="modal-ribbon modal-ribbon--info" aria-hidden="true"></div>
+                                        <div class="modal-header modal-header--glass">
+                                            <h5 class="modal-title"><i class="bi bi-info-circle me-2 text-primary"></i><?php echo __('Инструкция по оплате'); ?> — <?php echo htmlspecialchars($selectedGateway['title']); ?></h5>
+                                            <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                                        </div>
+                                        <div class="modal-body modal-body--glass">
+                                            <?php if (!empty($selectedGateway['instructions'])): ?>
+                                                <div class="small mb-0"><?php echo nl2br(htmlspecialchars($selectedGateway['instructions'])); ?></div>
+                                            <?php elseif ($selectedGatewayCode === 'monobank'): ?>
+                                                <div class="small mb-0"><?php echo __('Оплата происходит на странице Monobank. После успешного перевода и возврата сюда мы проверим счёт и зачислим средства автоматически.'); ?></div>
+                                            <?php else: ?>
+                                                <div class="text-muted small mb-0"><?php echo __('Инструкция не заполнена администратором. Используйте данные провайдера для оплаты.'); ?></div>
+                                            <?php endif; ?>
+                                            <hr class="my-3">
+                                            <?php if ($selectedGatewayCode === 'monobank'): ?>
+                                                <div class="text-muted small"><?php echo __('Сохраните вкладку открытой: система регулярно запрашивает статус счёта Monobank и зачисляет оплату сразу после подтверждения.'); ?></div>
+                                            <?php else: ?>
+                                                <div class="text-muted small"><?php echo __('После подтверждения платежа система автоматически зачислит сумму на ваш баланс.'); ?></div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="modal-footer modal-footer--glass">
+                                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         <?php endif; ?>
 
                         <?php if ($createdPayment && !empty($createdPayment['customer_payload'])): ?>
                             <?php $payload = $createdPayment['customer_payload']; ?>
-                            <div class="alert alert-primary mt-4" role="alert">
-                                <h2 class="h6 mb-2"><i class="bi bi-credit-card me-2"></i><?php echo __('Следующий шаг'); ?></h2>
-                                <?php if (!empty($createdPayment['payment_url'])): ?>
-                                    <p class="mb-2"><?php echo __('Перейдите по ссылке ниже, чтобы завершить оплату:'); ?></p>
-                                    <p class="mb-3"><a class="btn btn-primary" href="<?php echo htmlspecialchars($createdPayment['payment_url']); ?>" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Открыть страницу оплаты'); ?></a></p>
-                                <?php endif; ?>
+                            <div class="nextstep-card" role="region" aria-label="<?php echo __('Следующий шаг'); ?>">
+                                <div class="nextstep-card__ribbon" aria-hidden="true"></div>
+                                <div class="nextstep-card__body">
+                                    <div class="nextstep-card__title"><span class="icon"><i class="bi bi-credit-card"></i></span><span><?php echo __('Следующий шаг'); ?></span></div>
+                                    <?php if (!empty($createdPayment['payment_url'])): ?>
+                                        <p class="mb-2 nextstep-card__meta"><?php echo __('Перейдите по ссылке ниже, чтобы завершить оплату:'); ?></p>
+                                        <p class="mb-3"><a class="btn btn-primary" href="<?php echo htmlspecialchars($createdPayment['payment_url']); ?>" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Открыть страницу оплаты'); ?></a></p>
+                                    <?php endif; ?>
                                 <?php if (!empty($payload['qr_content'])): ?>
                                     <p class="mb-2"><?php echo __('Отсканируйте QR-код в приложении Binance Pay:'); ?></p>
                                     <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&amp;data=<?php echo urlencode($payload['qr_content']); ?>" alt="QR" class="border rounded p-2 bg-white" loading="lazy">
@@ -227,6 +246,7 @@ function pp_client_tx_status_badge(string $status): string {
                                         echo htmlspecialchars($walletAmountValue);
                                     ?></strong></p>
                                 <?php endif; ?>
+                                </div>
                             </div>
                         <?php endif; ?>
                     <?php endif; ?>
@@ -391,3 +411,13 @@ function pp_client_tx_status_badge(string $status): string {
 </div>
 
 <?php include '../includes/footer.php'; ?>
+
+<script>
+// Ensure the payment instruction modal sits at the <body> root to avoid z-index/stacking issues with backdrop
+document.addEventListener('DOMContentLoaded', function() {
+    var instModalEl = document.getElementById('paymentInstructionModal');
+    if (instModalEl && instModalEl.parentElement !== document.body) {
+        document.body.appendChild(instModalEl);
+    }
+});
+</script>

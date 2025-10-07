@@ -257,16 +257,17 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
     </div>
 </div>
 
-<div class="modal fade modal-fixed-center" id="insufficientFundsModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade modal-fixed-center modal-glass" id="insufficientFundsModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header bg-warning-subtle">
-                <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i><?php echo __('Недостаточно средств'); ?></h5>
+        <div class="modal-content modal-content--glass">
+            <div class="modal-ribbon modal-ribbon--warning" aria-hidden="true"></div>
+            <div class="modal-header modal-header--glass">
+                <h5 class="modal-title"><i class="bi bi-wallet2 me-2 text-warning"></i><?php echo __('Недостаточно средств'); ?></h5>
                 <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body modal-body--glass">
                 <p class="mb-3"><?php echo __('Для запуска продвижения не хватает средств.'); ?></p>
-                <div class="card shadow-sm border-0 mb-3">
+                <div class="card shadow-sm border-0 mb-3 insufficient-card">
                     <div class="card-body py-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="text-muted"><?php echo __('Не хватает'); ?>:</span>
@@ -284,9 +285,9 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
                 </div>
                 <p class="mb-0 text-muted"><?php echo __('Пополните баланс, чтобы продолжить продвижение.'); ?></p>
             </div>
-            <div class="modal-footer justify-content-between">
+            <div class="modal-footer modal-footer--glass justify-content-between">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
-                <a href="<?php echo pp_url('client/balance.php'); ?>" class="btn btn-primary">
+                <a href="<?php echo pp_url('client/balance.php'); ?>" class="btn btn-gradient">
                     <i class="bi bi-credit-card me-2"></i><?php echo __('Пополнить баланс'); ?>
                 </a>
             </div>

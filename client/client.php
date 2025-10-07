@@ -94,6 +94,94 @@ while ($row = $projectsResult->fetch_assoc()) {
 
 $projectsResult->free();
 $stmt->close();
+
+// Build per-user charts (last 30 days): promotions & publications activity, and finance (topups vs spend)
+$chartWindowDays = 30;
+$chartDays = [];
+for ($i = $chartWindowDays - 1; $i >= 0; $i--) {
+    $ts = strtotime('-' . $i . ' days');
+    $key = date('Y-m-d', $ts);
+    $chartDays[$key] = [
+        'label' => date('d.m', $ts),
+        'promotions' => 0,
+        'publications' => 0,
+        'topups' => 0.0,
+        'spend' => 0.0,
+    ];
+}
+
+// Promotions per day + spend
+if ($st = $conn->prepare("SELECT DATE(pr.created_at) AS day, COUNT(*) AS cnt, COALESCE(SUM(pr.charged_amount), 0) AS sum_amount\n    FROM promotion_runs pr\n    INNER JOIN projects p ON p.id = pr.project_id\n    WHERE p.user_id = ? AND pr.created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)\n    GROUP BY day ORDER BY day")) {
+    $st->bind_param('i', $user_id);
+    $st->execute();
+    if ($res = $st->get_result()) {
+        while ($r = $res->fetch_assoc()) {
+            $day = (string)($r['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['promotions'] = (int)($r['cnt'] ?? 0);
+                $chartDays[$day]['spend'] = (float)($r['sum_amount'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    $st->close();
+}
+
+// Publications per day
+if ($st = $conn->prepare("SELECT DATE(pub.created_at) AS day, COUNT(*) AS cnt\n    FROM publications pub\n    INNER JOIN projects p ON p.id = pub.project_id\n    WHERE p.user_id = ? AND pub.created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)\n    GROUP BY day ORDER BY day")) {
+    $st->bind_param('i', $user_id);
+    $st->execute();
+    if ($res = $st->get_result()) {
+        while ($r = $res->fetch_assoc()) {
+            $day = (string)($r['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['publications'] = (int)($r['cnt'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    $st->close();
+}
+
+// Topups per day
+if ($st = $conn->prepare("SELECT DATE(COALESCE(pt.confirmed_at, pt.created_at)) AS day, COUNT(*) AS cnt, COALESCE(SUM(pt.amount), 0) AS sum_amount\n    FROM payment_transactions pt\n    WHERE pt.status = 'confirmed' AND pt.user_id = ? AND COALESCE(pt.confirmed_at, pt.created_at) >= DATE_SUB(NOW(), INTERVAL 29 DAY)\n    GROUP BY day ORDER BY day")) {
+    $st->bind_param('i', $user_id);
+    $st->execute();
+    if ($res = $st->get_result()) {
+        while ($r = $res->fetch_assoc()) {
+            $day = (string)($r['day'] ?? '');
+            if (isset($chartDays[$day])) {
+                $chartDays[$day]['topups'] = (float)($r['sum_amount'] ?? 0);
+            }
+        }
+        $res->free();
+    }
+    $st->close();
+}
+
+$clientChartData = [
+    'activity' => [
+        'labels' => [],
+        'promotions' => [],
+        'publications' => [],
+    ],
+    'finance' => [
+        'labels' => [],
+        'topups' => [],
+        'spend' => [],
+    ],
+];
+foreach ($chartDays as $info) {
+    $clientChartData['activity']['labels'][] = $info['label'];
+    $clientChartData['activity']['promotions'][] = (int)$info['promotions'];
+    $clientChartData['activity']['publications'][] = (int)$info['publications'];
+    $clientChartData['finance']['labels'][] = $info['label'];
+    $clientChartData['finance']['topups'][] = round((float)$info['topups'], 2);
+    $clientChartData['finance']['spend'][] = round((float)$info['spend'], 2);
+}
+
+$currencyCode = function_exists('get_currency_code') ? get_currency_code() : 'USD';
+
 $conn->close();
 
 $formatActivity = static function (?string $timestamp) {
@@ -182,10 +270,39 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
         </div>
     </div>
 
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="card overview-card h-100">
+                <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-3">
+                        <h5 class="card-title mb-0"><?php echo __('Дневная активность'); ?></h5>
+                        <span class="text-muted small"><?php echo __('Последние 30 дней'); ?></span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="clientActivityChart" height="260"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card overview-card h-100">
+                <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-3">
+                        <h5 class="card-title mb-0"><?php echo __('Финансы'); ?></h5>
+                        <span class="text-muted small"><?php echo __('Последние 30 дней'); ?></span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="clientFinanceChart" height="260"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 dashboard-projects-header">
         <div>
             <h3 class="mb-1"><?php echo __('Ваши проекты'); ?></h3>
-            <div class="text-muted small"><i class="bi bi-question-circle me-1"></i><?php echo __('Каждый проект имеет собственный набор ссылок и историю публикаций.'); ?></div>
+            <div class="text-muted small"><i class="bi bi-question-circle me-1"></i><?php echo __('Каждый проект имеет собственный набор ссылок и историю публикаций. Подсветка означает активное продвижение.'); ?></div>
         </div>
         <?php if ($firstProjectId): ?>
         <a href="<?php echo pp_url('client/history.php?id=' . $firstProjectId); ?>" class="btn btn-outline-secondary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
@@ -223,7 +340,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     if ($projectInitial === '') { $projectInitial = '∎'; }
                 ?>
                 <div class="col-xl-4 col-md-6">
-                    <div class="dashboard-project-card h-100">
+                    <div class="dashboard-project-card h-100 <?php echo ($project['active_runs'] > 0 ? 'dashboard-project-card--active' : ''); ?>">
                         <div class="dashboard-project-card__media">
                             <div class="dashboard-project-card__media-inner">
                                 <a href="<?php echo $projectUrl; ?>" class="dashboard-project-card__media-link" aria-label="<?php echo __('Открыть проект'); ?>">
@@ -236,6 +353,12 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                                     <?php endif; ?>
                                 </a>
                                 <span class="dashboard-project-card__media-glow"></span>
+                                <?php if ($project['active_runs'] > 0): ?>
+                                    <span class="project-status-badge" title="<?php echo __('В продвижении'); ?>">
+                                        <span class="dot"></span>
+                                        <?php echo __('В продвижении'); ?>
+                                    </span>
+                                <?php endif; ?>
                                 <a href="<?php echo $editUrl; ?>" class="dashboard-project-card__edit" title="<?php echo __('Редактировать'); ?>" aria-label="<?php echo __('Редактировать'); ?>">
                                     <i class="bi bi-pencil-square"></i>
                                 </a>
@@ -304,5 +427,111 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
     <?php endif; ?>
 
 </div>
+
+<?php if (!defined('PP_CHART_JS_INCLUDED')): ?>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+    <?php define('PP_CHART_JS_INCLUDED', true); ?>
+<?php endif; ?>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const activityData = <?php echo json_encode($clientChartData['activity'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    const financeData = <?php echo json_encode($clientChartData['finance'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    const currencyCode = <?php echo json_encode($currencyCode, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    const numberFormatter = new Intl.NumberFormat('ru-RU');
+    const currencyFormatter = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    if (typeof Chart === 'undefined') return;
+
+    const activityCanvas = document.getElementById('clientActivityChart');
+    if (activityCanvas && activityData.labels && activityData.labels.length) {
+        new Chart(activityCanvas.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: activityData.labels,
+                datasets: [
+                    {
+                        label: <?php echo json_encode(__('Запуски продвижения'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>,
+                        data: activityData.promotions,
+                        borderColor: 'rgba(61, 220, 151, 0.9)',
+                        backgroundColor: 'rgba(61, 220, 151, 0.18)',
+                        borderWidth: 2,
+                        tension: 0.35,
+                        fill: true,
+                        pointRadius: 2
+                    },
+                    {
+                        label: <?php echo json_encode(__('Публикации ссылок'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>,
+                        data: activityData.publications,
+                        borderColor: 'rgba(77, 163, 255, 0.9)',
+                        backgroundColor: 'rgba(77, 163, 255, 0.20)',
+                        borderWidth: 2,
+                        tension: 0.35,
+                        fill: true,
+                        pointRadius: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: 'rgba(214,223,241,0.85)' } },
+                    tooltip: { callbacks: { label(ctx) { const v = ctx.parsed.y ?? 0; return `${ctx.dataset.label}: ${numberFormatter.format(v)}`; } } }
+                },
+                scales: {
+                    x: { ticks: { color: 'rgba(198,208,231,0.72)' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { beginAtZero: true, ticks: { color: 'rgba(198,208,231,0.72)', precision: 0 }, grid: { color: 'rgba(255,255,255,0.08)' } }
+                }
+            }
+        });
+    }
+
+    const financeCanvas = document.getElementById('clientFinanceChart');
+    if (financeCanvas && financeData.labels && financeData.labels.length) {
+        new Chart(financeCanvas.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: financeData.labels,
+                datasets: [
+                    {
+                        label: <?php echo json_encode(__('Пополнения'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>,
+                        data: financeData.topups,
+                        borderColor: 'rgba(124, 77, 255, 0.95)',
+                        backgroundColor: 'rgba(124, 77, 255, 0.18)',
+                        borderWidth: 2,
+                        tension: 0.35,
+                        fill: true,
+                        pointRadius: 2
+                    },
+                    {
+                        label: <?php echo json_encode(__('Расходы'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>,
+                        data: financeData.spend,
+                        borderColor: 'rgba(255, 176, 32, 0.9)',
+                        backgroundColor: 'rgba(255, 176, 32, 0.16)',
+                        borderWidth: 2,
+                        tension: 0.35,
+                        fill: true,
+                        pointRadius: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: 'rgba(214,223,241,0.85)' } },
+                    tooltip: { callbacks: { label(ctx) { const v = ctx.parsed.y ?? 0; return `${ctx.dataset.label}: ${currencyFormatter.format(v)} ${currencyCode}`; } } }
+                },
+                scales: {
+                    x: { ticks: { color: 'rgba(198,208,231,0.72)' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { beginAtZero: true, ticks: { color: 'rgba(198,208,231,0.72)', callback(v){ return currencyFormatter.format(v); } }, grid: { color: 'rgba(255,255,255,0.08)' } }
+                }
+            }
+        });
+    }
+});
+</script>
 
 <?php include '../includes/footer.php'; ?>
