@@ -65,8 +65,26 @@ function ensure_schema(): void {
             $code = preg_replace('~[^a-zA-Z0-9_\-]~', '', (string)$_GET['ref']);
             if ($code !== '') {
                 pp_referral_set_cookie($code);
+                // Log click once per session per code
+                if (empty($_SESSION['pp_ref_click_logged']) || $_SESSION['pp_ref_click_logged'] !== $code) {
+                    $_SESSION['pp_ref_click_logged'] = $code;
+                    try { $conn = @connect_db(); if ($conn) { pp_referral_log_event_click($conn, $code); $conn->close(); } } catch (Throwable $e) { /* ignore */ }
+                }
             }
         }
+    }
+
+    function pp_referral_log_event_click(mysqli $conn, string $code): void {
+        $referrerId = 0;
+        $st = $conn->prepare("SELECT id FROM users WHERE referral_code = ? LIMIT 1");
+        if ($st) { $st->bind_param('s', $code); $st->execute(); $r = $st->get_result(); $row = $r ? $r->fetch_assoc() : null; if ($r) $r->free(); $st->close(); if ($row) { $referrerId = (int)$row['id']; } }
+        if ($referrerId <= 0) { return; }
+        $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? ($_SERVER['REMOTE_ADDR'] ?? '');
+        $ref = $_SERVER['HTTP_REFERER'] ?? '';
+        $meta = json_encode(['ua' => $ua, 'ip' => $ip, 'referer' => $ref], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+    $ins = $conn->prepare("INSERT INTO referral_events (referrer_user_id, code, user_id, type, meta_json, created_at) VALUES (?, ?, NULL, 'click', ?, CURRENT_TIMESTAMP)");
+        if ($ins) { $ins->bind_param('iss', $referrerId, $code, $meta); $ins->execute(); $ins->close(); }
     }
 
     function pp_referral_assign_user_if_needed($conn, $userId) {
@@ -95,6 +113,8 @@ function ensure_schema(): void {
         if ($rid === $userId) return; // prevent self-referral
         $us = $conn->prepare("UPDATE users SET referred_by = ? WHERE id = ? AND (referred_by IS NULL OR referred_by = 0)");
         if ($us) { $us->bind_param('ii', $rid, $userId); $us->execute(); $us->close(); }
+        // Log signup event
+    try { $meta = json_encode([], JSON_UNESCAPED_UNICODE) ?: '{}'; $ev = $conn->prepare("INSERT INTO referral_events (referrer_user_id, code, user_id, type, meta_json, created_at) VALUES (?, ?, ?, 'signup', ?, CURRENT_TIMESTAMP)"); if ($ev) { $ev->bind_param('isis', $rid, $code, $userId, $meta); $ev->execute(); $ev->close(); } } catch (Throwable $e) { /* ignore */ }
     }
 
     function pp_referral_get_or_create_user_code($conn, $userId) {

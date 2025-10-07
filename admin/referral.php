@@ -30,10 +30,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $defaultPercentRaw = str_replace(',', '.', (string)($_POST['referral_default_percent'] ?? '5'));
         $defaultPercent = max(0, min(100, round((float)$defaultPercentRaw, 2)));
         $cookieDays = max(1, min(365, (int)($_POST['referral_cookie_days'] ?? 30)));
+        $accrualBasis = ($_POST['referral_accrual_basis'] ?? 'payment') === 'spend' ? 'spend' : 'payment';
         set_settings([
             'referral_enabled' => $enabled ? '1' : '0',
             'referral_default_percent' => number_format($defaultPercent, 2, '.', ''),
             'referral_cookie_days' => (string)$cookieDays,
+            'referral_accrual_basis' => $accrualBasis,
         ]);
         $success = __('Настройки сохранены.');
     }
@@ -42,6 +44,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $refEnabled = get_setting('referral_enabled', '0') === '1';
 $refPercent = (string)get_setting('referral_default_percent', '5.00');
 $refCookieDays = (int)get_setting('referral_cookie_days', '30');
+// Commission accrual basis: payment (topups) or spend (promotion charges)
+$refAccrualBasis = get_setting('referral_accrual_basis', 'spend');
 
 ?>
 
@@ -92,6 +96,14 @@ $refCookieDays = (int)get_setting('referral_cookie_days', '30');
                             <label class="form-label" for="ref-cookie-days"><?php echo __('Срок действия реферальной метки (дней)'); ?></label>
                             <input type="number" min="1" max="365" class="form-control" id="ref-cookie-days" name="referral_cookie_days" value="<?php echo (int)$refCookieDays; ?>">
                             <div class="form-text"><?php echo __('Сколько дней хранить идентификатор партнёра в cookie.'); ?></div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="ref-accrual-basis"><?php echo __('Начислять с'); ?></label>
+                            <select class="form-select" id="ref-accrual-basis" name="referral_accrual_basis">
+                                <option value="payment" <?php echo $refAccrualBasis === 'payment' ? 'selected' : ''; ?>><?php echo __('Пополнений баланса'); ?></option>
+                                <option value="spend" <?php echo $refAccrualBasis === 'spend' ? 'selected' : ''; ?>><?php echo __('Трат в сервисе (списаний)'); ?></option>
+                            </select>
+                            <div class="form-text"><?php echo __('Рекомендуется начислять с фактических трат — так партнёры получают процент от реального потребления.'); ?></div>
                         </div>
                     </div>
                     <div class="mt-4 d-flex justify-content-end gap-2">

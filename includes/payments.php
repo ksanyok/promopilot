@@ -540,11 +540,12 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
                 'provider_reference' => (string)($row['provider_reference'] ?? ''),
             ],
         ]);
-        // Referral commission: credit referrer if enabled
+        // Referral commission: credit referrer if enabled and accrual basis is 'payment'
         $referralEvent = null;
         try {
             $refEnabled = get_setting('referral_enabled', '0') === '1';
-            if ($refEnabled) {
+            $accrualBasis = get_setting('referral_accrual_basis', 'spend');
+            if ($refEnabled && $accrualBasis === 'payment') {
                 $defPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
                 if ($defPercent < 0) { $defPercent = 0; }
                 if ($defPercent > 100) { $defPercent = 100; }

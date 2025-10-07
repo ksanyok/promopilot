@@ -1541,6 +1541,14 @@ if (!function_exists('pp_promotion_start_run')) {
                             'charged_amount' => $chargedAmount,
                         ],
                     ]);
+                    // Award referral commission for spend if enabled
+                    if (function_exists('pp_referral_award_for_spend')) {
+                        pp_referral_award_for_spend($conn, $ownerId, $chargedAmount, [
+                            'source' => 'promotion',
+                            'project_id' => $projectId,
+                            'run_id' => $runId,
+                        ]);
+                    }
                 }
 
                 $shouldCommit = true;

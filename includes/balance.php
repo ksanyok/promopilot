@@ -405,6 +405,49 @@ if (!function_exists('pp_balance_send_event_notification')) {
     }
 }
 
+// Award referral commission for spend events if enabled and basis is 'spend'
+if (!function_exists('pp_referral_award_for_spend')) {
+    function pp_referral_award_for_spend(mysqli $conn, int $spendingUserId, float $chargedAmount, array $meta): ?array {
+        try {
+            $enabled = get_setting('referral_enabled', '0') === '1';
+            if (!$enabled) { return null; }
+            $basis = get_setting('referral_accrual_basis', 'payment');
+            if ($basis !== 'spend') { return null; }
+            $defPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
+            if ($defPercent < 0) { $defPercent = 0; }
+            if ($defPercent > 100) { $defPercent = 100; }
+            // find referrer
+            $referredBy = 0; $us = $conn->prepare('SELECT referred_by FROM users WHERE id = ? LIMIT 1');
+            if ($us) { $us->bind_param('i', $spendingUserId); $us->execute(); $r = $us->get_result(); $row = $r ? $r->fetch_assoc() : null; if ($r) $r->free(); $us->close(); if ($row) { $referredBy = (int)$row['referred_by']; } }
+            if ($referredBy <= 0) { return null; }
+            // custom percent
+            $pct = $defPercent; $rf = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1');
+            if ($rf) { $rf->bind_param('i', $referredBy); $rf->execute(); $rr = $rf->get_result(); $rw = $rr ? $rr->fetch_assoc() : null; if ($rr) $rr->free(); $rf->close(); if ($rw && (float)$rw['referral_commission_percent'] > 0) { $pct = (float)$rw['referral_commission_percent']; } }
+            if ($pct <= 0.00001) { return null; }
+            $commission = round($chargedAmount * ($pct / 100.0), 2);
+            if ($commission <= 0) { return null; }
+            // credit referrer
+            $upd = $conn->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+            if ($upd) { $upd->bind_param('di', $commission, $referredBy); $upd->execute(); $upd->close(); }
+            $refBal = 0.0; $br = $conn->prepare('SELECT balance FROM users WHERE id = ? LIMIT 1');
+            if ($br) { $br->bind_param('i', $referredBy); $br->execute(); $bres = $br->get_result(); $rw = $bres ? $bres->fetch_assoc() : null; if ($bres) $bres->free(); $br->close(); if ($rw) { $refBal = (float)$rw['balance']; } }
+            $event = pp_balance_record_event($conn, [
+                'user_id' => $referredBy,
+                'delta' => $commission,
+                'balance_before' => $refBal - $commission,
+                'balance_after' => $refBal,
+                'source' => 'referral',
+                'meta' => array_merge($meta, [
+                    'from_user_id' => $spendingUserId,
+                    'percent' => $pct,
+                ]),
+            ]);
+            if ($event) { pp_balance_send_event_notification($event); }
+            return $event;
+        } catch (Throwable $e) { return null; }
+    }
+}
+
 if (!function_exists('pp_balance_history_for_user')) {
     function pp_balance_history_for_user(int $userId, int $limit = 50, int $offset = 0): array {
         $userId = (int)$userId;

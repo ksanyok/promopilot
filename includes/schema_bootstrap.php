@@ -104,6 +104,26 @@ function pp_run_schema_bootstrap(): void {
     if (pp_mysql_index_exists($conn, 'users', 'idx_users_referred_by') === false && isset($usersCols['referred_by'])) {
         @$conn->query("CREATE INDEX `idx_users_referred_by` ON `users`(`referred_by`)");
     }
+
+    // Referral events table (clicks/signups/activity timeline)
+    $refEventsCols = $getCols('referral_events');
+    if ($refEventsCols === null) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `referral_events` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `referrer_user_id` INT NOT NULL,
+            `code` VARCHAR(32) NULL,
+            `user_id` INT NULL,
+            `type` VARCHAR(16) NOT NULL,
+            `meta_json` TEXT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            INDEX `idx_refev_referrer` (`referrer_user_id`),
+            INDEX `idx_refev_type` (`type`),
+            INDEX `idx_refev_created` (`created_at`),
+            CONSTRAINT `fk_refev_referrer` FOREIGN KEY (`referrer_user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_refev_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
     // Users table: add profile fields if missing
     if (!empty($usersCols)) {
         if (!isset($usersCols['full_name'])) {
