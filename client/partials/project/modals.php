@@ -1,4 +1,77 @@
 <?php /* Project page modals extracted from client/project.php */ ?>
+<?php
+$promotionCascadeDetails = [];
+if (isset($promotionSettings) && is_array($promotionSettings)) {
+    $level1Enabled = !empty($promotionSettings['level1_enabled']);
+    $level2Enabled = $level1Enabled && !empty($promotionSettings['level2_enabled']);
+    $level3Enabled = $level2Enabled && !empty($promotionSettings['level3_enabled']);
+    $crowdEnabled = !empty($promotionSettings['crowd_enabled']);
+
+    $level1Count = max(0, (int)($promotionSettings['level1_count'] ?? 0));
+    $level1MinLen = max(0, (int)($promotionSettings['level1_min_len'] ?? 0));
+    $level1MaxLen = max($level1MinLen, (int)($promotionSettings['level1_max_len'] ?? 0));
+
+    $level2PerLevel1 = max(0, (int)($promotionSettings['level2_per_level1'] ?? 0));
+    $level2MinLen = max(0, (int)($promotionSettings['level2_min_len'] ?? 0));
+    $level2MaxLen = max($level2MinLen, (int)($promotionSettings['level2_max_len'] ?? 0));
+    $level2Total = $level1Count * $level2PerLevel1;
+
+    $level3PerLevel2 = max(0, (int)($promotionSettings['level3_per_level2'] ?? 0));
+    $level3MinLen = max(0, (int)($promotionSettings['level3_min_len'] ?? 0));
+    $level3MaxLen = max($level3MinLen, (int)($promotionSettings['level3_max_len'] ?? 0));
+    $level3Total = $level2Total * $level3PerLevel2;
+
+    $crowdPerArticle = max(0, (int)($promotionSettings['crowd_per_article'] ?? 0));
+    $crowdTotal = $level1Count * $crowdPerArticle;
+
+    if ($level1Enabled && $level1Count > 0) {
+        $promotionCascadeDetails[] = [
+            'label' => __('Уровень 1'),
+            'count' => sprintf(__('Количество: %s шт.'), number_format($level1Count, 0, ',', ' ')),
+            'length' => ($level1MinLen > 0 && $level1MaxLen > 0)
+                ? sprintf(__('Длина: %s–%s знаков'), number_format($level1MinLen, 0, ',', ' '), number_format($level1MaxLen, 0, ',', ' '))
+                : ''
+        ];
+    }
+    if ($level2Enabled && $level2PerLevel1 > 0 && $level2Total > 0) {
+        $promotionCascadeDetails[] = [
+            'label' => __('Уровень 2'),
+            'count' => sprintf(
+                __('Максимум: %1$s шт. (%2$s на статью уровня 1)'),
+                number_format($level2Total, 0, ',', ' '),
+                number_format($level2PerLevel1, 0, ',', ' ')
+            ),
+            'length' => ($level2MinLen > 0 && $level2MaxLen > 0)
+                ? sprintf(__('Длина: %s–%s знаков'), number_format($level2MinLen, 0, ',', ' '), number_format($level2MaxLen, 0, ',', ' '))
+                : ''
+        ];
+    }
+    if ($level3Enabled && $level3PerLevel2 > 0 && $level3Total > 0) {
+        $promotionCascadeDetails[] = [
+            'label' => __('Уровень 3'),
+            'count' => sprintf(
+                __('Максимум: %1$s шт. (%2$s на ссылку уровня 2)'),
+                number_format($level3Total, 0, ',', ' '),
+                number_format($level3PerLevel2, 0, ',', ' ')
+            ),
+            'length' => ($level3MinLen > 0 && $level3MaxLen > 0)
+                ? sprintf(__('Длина: %s–%s знаков'), number_format($level3MinLen, 0, ',', ' '), number_format($level3MaxLen, 0, ',', ' '))
+                : ''
+        ];
+    }
+    if ($crowdEnabled && ($crowdPerArticle > 0 || $crowdTotal > 0)) {
+        $promotionCascadeDetails[] = [
+            'label' => __('Крауд'),
+            'count' => sprintf(
+                __('Максимум: %1$s упоминаний (%2$s на статью уровня 1)'),
+                number_format($crowdTotal, 0, ',', ' '),
+                number_format($crowdPerArticle, 0, ',', ' ')
+            ),
+            'length' => ''
+        ];
+    }
+}
+?>
 <?php if ($canDeleteProject): ?>
 <div class="modal fade modal-fixed-center" id="deleteProjectModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
@@ -102,7 +175,32 @@
                 <ul class="mb-4 ps-3">
                     <li><?php echo __('Процесс запускается сразу после подтверждения и его невозможно отменить.'); ?></li>
                     <li><?php echo __('Несмотря на защиту сценариями сервиса, продвижение может влиять на поисковые позиции — ответственность за запуск несёт владелец проекта.'); ?></li>
+                    <li><?php echo __('После подтверждения страница автоматически обновится, чтобы показать новый статус и списание.'); ?></li>
                 </ul>
+                <?php if (!empty($promotionCascadeDetails)): ?>
+                    <div class="card border-0 shadow-sm promotion-cascade-card mb-3">
+                        <div class="card-body py-3">
+                            <div class="text-muted small text-uppercase fw-semibold mb-2">
+                                <i class="bi bi-diagram-3 me-2"></i><?php echo __('Каскад размещений'); ?>
+                            </div>
+                            <ul class="list-unstyled mb-0 promotion-cascade-list">
+                                <?php foreach ($promotionCascadeDetails as $cascadeItem): ?>
+                                    <li class="mb-2">
+                                        <div class="fw-semibold text-body"><?php echo htmlspecialchars($cascadeItem['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                        <div class="small text-muted"><?php echo htmlspecialchars($cascadeItem['count'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                        <?php if (!empty($cascadeItem['length'])): ?>
+                                            <div class="small text-muted"><?php echo htmlspecialchars($cascadeItem['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                <div class="alert alert-info small d-flex align-items-start gap-2 mb-4" role="alert">
+                    <i class="bi bi-info-circle-fill mt-1"></i>
+                    <div><?php echo __('Фактическое количество размещений может меняться: базы площадок и крауд-задачи регулярно обновляются, недоступные площадки исключаются автоматически.'); ?></div>
+                </div>
                 <div class="promotion-confirm-amount card bg-dark border-secondary-subtle mb-3">
                     <div class="card-body">
                         <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-md-between gap-3">

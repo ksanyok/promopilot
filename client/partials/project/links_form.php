@@ -19,6 +19,10 @@
                             <p class="text-muted small mb-0"><?php echo __('Мы проверим домен, сохраним анкор и сформируем индивидуальное пожелание для команды.'); ?></p>
                         </div>
                     </div>
+                    <?php
+                        $projectLanguageRaw = strtolower(trim((string)($project['language'] ?? 'ru')));
+                        if ($projectLanguageRaw === '') { $projectLanguageRaw = 'ru'; }
+                    ?>
                     <div class="row g-3 modal-field-grid align-items-stretch mb-3">
                         <div class="col-12 col-lg-6">
                             <label class="form-label visually-hidden" for="new_link_input"><?php echo __('URL'); ?></label>
@@ -26,7 +30,13 @@
                         </div>
                         <div class="col-12 col-lg-4">
                             <label class="form-label visually-hidden" for="new_anchor_input"><?php echo __('Анкор'); ?></label>
-                            <input type="text" name="new_anchor" id="new_anchor_input" class="form-control" placeholder="<?php echo __('Анкор'); ?>">
+                            <input type="text" name="new_anchor" id="new_anchor_input" class="form-control" placeholder="<?php echo __('Анкор (подставится автоматически)'); ?>">
+                            <input type="hidden" name="new_anchor_strategy" id="new_anchor_strategy" value="auto">
+                            <div class="form-helper small text-muted mt-2 d-flex align-items-start gap-2">
+                                <i class="bi bi-life-preserver text-primary"></i>
+                                <span><?php echo __('Оставьте поле пустым — мы подберем мягкий безанкорный текст на языке страницы. Можно выбрать готовый вариант ниже.'); ?></span>
+                            </div>
+                            <div class="anchor-presets mt-2" id="anchor-preset-list" data-current-lang="<?php echo htmlspecialchars($projectLanguageRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"></div>
                         </div>
                         <div class="col-12 col-lg-2">
                             <label class="form-label visually-hidden" for="new_language_select"><?php echo __('Язык'); ?></label>

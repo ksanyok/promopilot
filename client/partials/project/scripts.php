@@ -1323,12 +1323,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const addedHidden = document.getElementById('added-hidden');
     const newLinkInput = document.getElementById('new_link_input');
     const newAnchorInput = document.getElementById('new_anchor_input');
+    const newAnchorStrategy = document.getElementById('new_anchor_strategy');
     const newLangSelect = document.getElementById('new_language_select');
+    const anchorPresetContainer = document.getElementById('anchor-preset-list');
     const newWish = document.getElementById('new_wish');
     const globalWish = document.getElementById('global_wishes');
     const useGlobal = document.getElementById('use_global_wish');
     const projectInfoForm = document.getElementById('project-info-form');
     let addIndex = 0;
+    let activeAnchorPreset = null;
+    let anchorUpdateLock = false;
 
     const insufficientAmountEl = insufficientFundsModalEl?.querySelector('[data-insufficient-amount]');
     const insufficientRequiredEl = insufficientFundsModalEl?.querySelector('[data-insufficient-required]');
@@ -1363,6 +1367,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const PROJECT_ID = <?php echo (int)$project['id']; ?>;
     const PROJECT_HOST = '<?php echo htmlspecialchars(pp_normalize_host($project['domain_host'] ?? '')); ?>';
+    const PROJECT_LANGUAGE = '<?php echo htmlspecialchars(strtolower(trim((string)($project['language'] ?? 'ru'))), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
+    const PROJECT_NAME = <?php echo json_encode((string)($project['name'] ?? '')); ?>;
+    const ANCHOR_PRESETS = <?php echo json_encode(pp_project_anchor_presets(), JSON_UNESCAPED_UNICODE); ?>;
     const PROMOTION_CHARGE_AMOUNT = <?php echo json_encode($promotionChargeAmount); ?>;
     const PROMOTION_CHARGE_AMOUNT_FORMATTED = '<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
     const PROMOTION_CHARGE_BASE = <?php echo json_encode($promotionBasePrice); ?>;
@@ -1496,6 +1503,274 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (_) {}
 
         return { amount: finalAmount, formatted: finalFormatted };
+    }
+
+    function normalizeAnchorLanguage(lang) {
+        const raw = (lang || '').toString().toLowerCase();
+        if (!raw || raw === 'auto') {
+            return (PROJECT_LANGUAGE || '').toLowerCase();
+        }
+        return raw;
+    }
+
+    function getAnchorPresetsForLanguage(lang) {
+        if (!ANCHOR_PRESETS || typeof ANCHOR_PRESETS !== 'object') {
+            return [];
+        }
+        const normalized = normalizeAnchorLanguage(lang);
+        const candidates = [];
+        if (normalized) {
+            candidates.push(normalized);
+            const dashIndex = normalized.indexOf('-');
+            if (dashIndex > -1) {
+                candidates.push(normalized.slice(0, dashIndex));
+            }
+        }
+        if (PROJECT_LANGUAGE) {
+            const baseProjectLang = PROJECT_LANGUAGE.toLowerCase();
+            if (baseProjectLang && !candidates.includes(baseProjectLang)) {
+                candidates.push(baseProjectLang);
+            }
+            const dashProject = baseProjectLang.indexOf('-');
+            if (dashProject > -1) {
+                const base = baseProjectLang.slice(0, dashProject);
+                if (!candidates.includes(base)) {
+                    candidates.push(base);
+                }
+            }
+        }
+        candidates.push('default', 'en');
+        for (const candidate of candidates) {
+            if (!candidate) { continue; }
+            if (Object.prototype.hasOwnProperty.call(ANCHOR_PRESETS, candidate)) {
+                const list = ANCHOR_PRESETS[candidate];
+                if (Array.isArray(list) && list.length > 0) {
+                    return list;
+                }
+            }
+        }
+        return [];
+    }
+
+    function extractHostFromUrl(url) {
+        if (!url) { return ''; }
+        try {
+            const u = new URL(url);
+            let host = (u.hostname || '').toLowerCase();
+            if (host.startsWith('www.')) {
+                host = host.slice(4);
+            }
+            return host;
+        } catch (_) {
+            const match = String(url).match(/^[\w.-]+/);
+            return match ? match[0].replace(/^www\./, '').toLowerCase() : '';
+        }
+    }
+
+    function resolveAnchorPresetValue(preset, context = {}) {
+        if (!preset || typeof preset !== 'object') {
+            return '';
+        }
+        const type = String(preset.type || 'static').toLowerCase();
+        const raw = typeof preset.value === 'string' ? preset.value : '';
+        const url = typeof context.url === 'string' ? context.url : '';
+        const projectName = typeof context.projectName === 'string' ? context.projectName : PROJECT_NAME;
+        const projectHost = typeof context.projectHost === 'string' ? context.projectHost : PROJECT_HOST;
+
+        switch (type) {
+            case 'none':
+                return '';
+            case 'domain': {
+                const host = extractHostFromUrl(url) || projectHost || raw;
+                return host || '';
+            }
+            case 'url': {
+                if (url) {
+                    try {
+                        const clean = new URL(url).href;
+                        return clean.replace(/^https?:\/\//i, '').replace(/\/$/, '') || clean;
+                    } catch (_) {
+                        return url.replace(/^https?:\/\//i, '').replace(/\/$/, '') || url;
+                    }
+                }
+                if (projectHost) {
+                    return projectHost;
+                }
+                return raw || '';
+            }
+            case 'project': {
+                if (projectName && projectName.trim() !== '') {
+                    return projectName.trim();
+                }
+                return raw || projectHost || '';
+            }
+            default:
+                return raw || '';
+        }
+    }
+
+    function truncateAnchorText(value) {
+        if (!value) { return ''; }
+        const limit = 64;
+        const chars = Array.from(value);
+        if (chars.length <= limit) {
+            return value;
+        }
+        return chars.slice(0, limit - 1).join('').trimEnd() + '…';
+    }
+
+    function generateAutoAnchor(lang, url) {
+        const presets = getAnchorPresetsForLanguage(lang);
+        if (presets.length === 0) {
+            return '';
+        }
+        let preset = presets.find(item => item && item.default);
+        if (!preset) {
+            preset = presets.find(item => item && String(item.type || '').toLowerCase() !== 'none') || presets[0];
+        }
+        if (!preset) { return ''; }
+        const value = resolveAnchorPresetValue(preset, { url, projectName: PROJECT_NAME, projectHost: PROJECT_HOST });
+        return truncateAnchorText(value);
+    }
+
+    function updateAnchorPresetActiveState() {
+        if (!anchorPresetContainer) { return; }
+        const buttons = anchorPresetContainer.querySelectorAll('button.anchor-preset');
+        buttons.forEach(btn => {
+            const id = btn.dataset.presetId || '';
+            const lang = btn.dataset.presetLang || '';
+            const isActive = !!activeAnchorPreset && activeAnchorPreset.id === id && activeAnchorPreset.lang === lang;
+            btn.classList.toggle('is-active', isActive);
+        });
+    }
+
+    function renderAnchorPresets(lang) {
+        if (!anchorPresetContainer) { return; }
+        const presets = getAnchorPresetsForLanguage(lang);
+        anchorPresetContainer.innerHTML = '';
+        if (presets.length === 0) {
+            anchorPresetContainer.classList.add('d-none');
+            return;
+        }
+        anchorPresetContainer.classList.remove('d-none');
+        const fragment = document.createDocumentFragment();
+        const langKey = normalizeAnchorLanguage(lang) || (PROJECT_LANGUAGE || '').toLowerCase();
+        presets.forEach(preset => {
+            if (!preset) { return; }
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'anchor-preset btn btn-outline-light btn-sm';
+            btn.textContent = preset.label || preset.value || '—';
+            if (preset.description) {
+                btn.title = preset.description;
+            }
+            btn.dataset.presetId = preset.id || '';
+            btn.dataset.presetLang = langKey || '';
+            btn.dataset.presetType = preset.type || 'static';
+            if (preset.default) {
+                btn.classList.add('is-default');
+            }
+            btn.addEventListener('click', () => {
+                applyAnchorPreset(preset, langKey || lang, btn);
+            });
+            fragment.appendChild(btn);
+        });
+        anchorPresetContainer.appendChild(fragment);
+        updateAnchorPresetActiveState();
+    }
+
+    function refreshActivePresetValue() {
+        if (!activeAnchorPreset || !newAnchorInput) { return; }
+        const presets = getAnchorPresetsForLanguage(activeAnchorPreset.lang);
+        const preset = presets.find(item => (item?.id || '') === activeAnchorPreset.id);
+        if (!preset) { return; }
+        const type = String(preset.type || '').toLowerCase();
+        if (!['domain', 'url'].includes(type)) { return; }
+        const value = truncateAnchorText(resolveAnchorPresetValue(preset, { url: newLinkInput?.value?.trim() || '', projectName: PROJECT_NAME, projectHost: PROJECT_HOST }));
+        anchorUpdateLock = true;
+        newAnchorInput.value = value;
+        newAnchorInput.dispatchEvent(new Event('input', { bubbles: true }));
+        anchorUpdateLock = false;
+    }
+
+    function applyAnchorPreset(preset, lang, button) {
+        if (!preset) { return; }
+        const langKey = normalizeAnchorLanguage(lang) || (PROJECT_LANGUAGE || '').toLowerCase();
+        const type = String(preset.type || '').toLowerCase();
+        const value = type === 'none'
+            ? ''
+            : truncateAnchorText(resolveAnchorPresetValue(preset, { url: newLinkInput?.value?.trim() || '', projectName: PROJECT_NAME, projectHost: PROJECT_HOST }));
+
+        activeAnchorPreset = { id: preset.id || '', lang: langKey || '' };
+        anchorUpdateLock = true;
+        if (newAnchorInput) {
+            newAnchorInput.value = value;
+            newAnchorInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        anchorUpdateLock = false;
+        if (newAnchorStrategy) {
+            newAnchorStrategy.value = type === 'none' ? 'none' : 'preset';
+        }
+        updateAnchorPresetActiveState();
+        if (type === 'domain' || type === 'url') {
+            refreshActivePresetValue();
+        }
+    }
+
+    function resetAnchorInputsForWizard(lang) {
+        if (newAnchorStrategy && newAnchorStrategy.value !== 'manual') {
+            newAnchorStrategy.value = 'auto';
+            if (newAnchorStrategy.value === 'auto' && newAnchorInput && !anchorUpdateLock) {
+                anchorUpdateLock = true;
+                newAnchorInput.dispatchEvent(new Event('input', { bubbles: true }));
+                anchorUpdateLock = false;
+            }
+        }
+        if (newAnchorStrategy && newAnchorStrategy.value === 'manual') {
+            renderAnchorPresets(lang);
+            return;
+        }
+        activeAnchorPreset = null;
+        updateAnchorPresetActiveState();
+        renderAnchorPresets(lang);
+    }
+
+    if (anchorPresetContainer) {
+        const initialLang = newLangSelect ? newLangSelect.value : (PROJECT_LANGUAGE || '');
+        renderAnchorPresets(initialLang);
+    }
+
+    if (newLangSelect) {
+        newLangSelect.addEventListener('change', () => {
+            const langVal = newLangSelect.value || '';
+            resetAnchorInputsForWizard(langVal);
+        });
+    }
+
+    if (newLinkInput) {
+        newLinkInput.addEventListener('input', () => {
+            if (activeAnchorPreset) {
+                refreshActivePresetValue();
+            }
+        });
+    }
+
+    if (newAnchorInput) {
+        newAnchorInput.addEventListener('input', () => {
+            if (anchorUpdateLock) { return; }
+            const trimmed = newAnchorInput.value.trim();
+            if (trimmed === '') {
+                if (newAnchorStrategy && newAnchorStrategy.value !== 'none') {
+                    newAnchorStrategy.value = 'auto';
+                }
+            } else if (newAnchorStrategy && newAnchorStrategy.value !== 'preset') {
+                newAnchorStrategy.value = 'manual';
+            }
+            if (activeAnchorPreset) {
+                activeAnchorPreset = null;
+                updateAnchorPresetActiveState();
+            }
+        });
     }
 
     function showInsufficientFundsModal(info) {
@@ -2601,9 +2876,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             const url = newLinkInput.value.trim();
-            const anchor = newAnchorInput.value.trim();
+            let anchor = newAnchorInput.value.trim();
             const lang = (newLangSelect ? newLangSelect.value.trim() : 'auto');
             const wish = newWish.value.trim();
+            let anchorStrategyValue = newAnchorStrategy ? (newAnchorStrategy.value || '') : '';
             if (!isValidUrl(url)) { alert('<?php echo __('Введите корректный URL'); ?>'); return; }
             try {
                 const u = new URL(url);
@@ -2613,6 +2889,25 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
             } catch (e) {}
+
+            if (!anchor && anchorStrategyValue !== 'none') {
+                const autoAnchor = generateAutoAnchor(lang, url);
+                if (autoAnchor) {
+                    anchor = autoAnchor;
+                    if (newAnchorStrategy) {
+                        anchorStrategyValue = 'auto';
+                        newAnchorStrategy.value = 'auto';
+                    }
+                    anchorUpdateLock = true;
+                    newAnchorInput.value = anchor;
+                    newAnchorInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    anchorUpdateLock = false;
+                }
+            }
+
+            if (!anchorStrategyValue) {
+                anchorStrategyValue = anchor ? 'manual' : 'auto';
+            }
 
             setButtonLoading(addLinkBtn, true);
             let placeholderRow = null;
@@ -2631,6 +2926,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 fd.append('added_links[0][anchor]', anchor);
                 fd.append('added_links[0][language]', lang || 'auto');
                 fd.append('added_links[0][wish]', wish);
+                fd.append('added_links[0][anchor_strategy]', anchorStrategyValue);
 
                 const res = await fetch(window.location.href, { method: 'POST', body: fd, headers: { 'Accept':'application/json' }, credentials: 'same-origin' });
                 const data = await res.json();
@@ -2646,7 +2942,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     removePlaceholderRow(placeholderRow);
                     alert('<?php echo __('Отклонено ссылок с другим доменом'); ?>: ' + data.domain_errors);
                 }
-                const payload = data.new_link || { id: 0, url, anchor, language: lang, wish: wish };
+                const payload = data.new_link || { id: 0, url, anchor, language: lang, wish: wish, anchor_strategy: anchorStrategyValue };
                 removePlaceholderRow(placeholderRow);
                 tbodyRef = ensureLinksTable();
                 if (tbodyRef) {
@@ -2670,9 +2966,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 newLinkInput.value = '';
+                anchorUpdateLock = true;
                 newAnchorInput.value = '';
+                newAnchorInput.dispatchEvent(new Event('input', { bubbles: true }));
+                anchorUpdateLock = false;
+                if (newAnchorStrategy) { newAnchorStrategy.value = 'auto'; }
                 newWish.value = '';
                 if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
+                if (anchorPresetContainer) {
+                    renderAnchorPresets(newLangSelect ? newLangSelect.value : PROJECT_LANGUAGE);
+                }
             } catch (e) {
                 removePlaceholderRow(placeholderRow);
                 if (!isAbortError(e)) {
@@ -2685,7 +2988,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     async function startPromotion(btn, url) {
-        if (!url) return;
+        if (!url) return false;
+        let promotionTriggered = false;
         setButtonLoading(btn, true);
         const row = btn && typeof btn.closest === 'function' ? btn.closest('tr') : null;
         const { snapshot: previousSnapshot, applied: optimisticApplied } = applyOptimisticPromotionState(row);
@@ -2702,7 +3006,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     restorePromotionState(row, previousSnapshot);
                 }
                 alert('<?php echo __('Ошибка'); ?>: ' + (res.status ? String(res.status) : 'ERROR'));
-                return;
+                return false;
             }
             if (!data.ok) {
                 if (optimisticApplied) {
@@ -2722,7 +3026,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     alert('<?php echo __('Ошибка'); ?>: ' + errorCode);
                 }
-                return;
+                return false;
             }
             const balanceAmount = Object.prototype.hasOwnProperty.call(data, 'balance_after')
                 ? data.balance_after
@@ -2756,6 +3060,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             startPolling();
             setTimeout(() => { try { pollPromotionStatusesOnce(); } catch (e) {} }, 1200);
+            setTimeout(() => {
+                try { window.location.reload(); } catch (e) {}
+            }, 2600);
+            promotionTriggered = true;
         } catch (e) {
             if (optimisticApplied) {
                 restorePromotionState(row, previousSnapshot);
@@ -2766,6 +3074,7 @@ document.addEventListener('DOMContentLoaded', function() {
         } finally {
             setButtonLoading(btn, false);
         }
+        return promotionTriggered;
     }
 
     initWishAutoFill();
