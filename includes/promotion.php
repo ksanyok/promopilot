@@ -77,7 +77,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     $stmt->close();
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='level1_active', status='level1_active', started_at=COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='level1_active', status='level1_active', started_at=COALESCE(started_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             $res = @$conn->query('SELECT * FROM promotion_nodes WHERE run_id = ' . $runId . ' AND level = 1 AND status = \'pending\'');
             if ($res) {
                 while ($node = $res->fetch_assoc()) {
@@ -128,7 +128,7 @@ if (!function_exists('pp_promotion_process_run')) {
                         'success' => $success,
                         'failed' => $failed,
                     ]);
-                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                     return;
                 }
                 $retrySlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $netsRetry);
@@ -177,18 +177,18 @@ if (!function_exists('pp_promotion_process_run')) {
                     'project_id' => $projectId,
                     'needed' => $needed,
                 ]);
-                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSERT_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_INSERT_FAILED', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             if ($success === 0) {
-                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_FAILED', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             if (!pp_promotion_is_level_enabled(2)) {
-                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
-            @$conn->query("UPDATE promotion_runs SET stage='pending_level2', status='pending_level2' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='pending_level2', status='pending_level2', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             return;
         }
         if ($stage === 'pending_level2') {
@@ -203,7 +203,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 $res->free();
             }
             if (empty($nodesL1)) {
-                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_NO_URL', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL1_NO_URL', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $usage = [];
@@ -252,7 +252,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='level2_active', status='level2_active' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='level2_active', status='level2_active', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             $res2 = @$conn->query('SELECT n.*, p.result_url AS parent_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2 AND n.status=\'pending\'');
             if ($res2) {
                 while ($node = $res2->fetch_assoc()) {
@@ -520,18 +520,18 @@ if (!function_exists('pp_promotion_process_run')) {
                         'project_id' => $projectId,
                         'deficit' => $parentsNeeding,
                     ]);
-                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                    @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_INSUFFICIENT_SUCCESS', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                     return;
                 }
             }
             if ($success === 0) {
-                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL2_FAILED', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             if (pp_promotion_is_level_enabled(3)) {
-                @$conn->query("UPDATE promotion_runs SET stage='pending_level3', status='pending_level3' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='pending_level3', status='pending_level3', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             } else {
-                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             }
             return;
         }
@@ -547,7 +547,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 $res->free();
             }
             if (empty($level2Nodes)) {
-                @$conn->query("UPDATE promotion_runs SET stage='failed', status='failed', error='LEVEL2_NO_URL', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='failed', status='failed', error='LEVEL2_NO_URL', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $usage = [];
@@ -614,7 +614,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                 }
             }
-            @$conn->query("UPDATE promotion_runs SET stage='level3_active', status='level3_active' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='level3_active', status='level3_active', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             $res3 = @$conn->query('SELECT n.*, p.result_url AS parent_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=3 AND n.status=\'pending\'');
             if ($res3) {
                 while ($node = $res3->fetch_assoc()) {
@@ -723,7 +723,7 @@ if (!function_exists('pp_promotion_process_run')) {
             }
             if ($pending > 0) { return; }
             if ($success === 0) {
-                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL3_FAILED', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LEVEL3_FAILED', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             @$conn->query("UPDATE promotion_runs SET stage='pending_crowd', status='pending_crowd' WHERE id=" . $runId . " LIMIT 1");
@@ -731,18 +731,18 @@ if (!function_exists('pp_promotion_process_run')) {
         }
         if ($stage === 'pending_crowd') {
             if (!pp_promotion_is_crowd_enabled()) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $crowdPerArticle = pp_promotion_crowd_required_per_article($run);
             if ($crowdPerArticle <= 0) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $crowdSource = pp_promotion_crowd_collect_nodes($conn, $runId);
             $finalNodes = $crowdSource['nodes'] ?? [];
             if (empty($finalNodes)) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $nodesNeeds = [];
@@ -756,7 +756,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 ];
             }
             if (empty($nodesNeeds)) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
 
@@ -786,24 +786,24 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
 
-            @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             pp_promotion_launch_crowd_worker();
             return;
         }
         if ($stage === 'crowd_ready') {
             if (!pp_promotion_is_crowd_enabled()) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $crowdPerArticle = pp_promotion_crowd_required_per_article($run);
             if ($crowdPerArticle <= 0) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
             $crowdSource = pp_promotion_crowd_collect_nodes($conn, $runId);
             $crowdNodes = $crowdSource['nodes'] ?? [];
             if (empty($crowdNodes)) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
 
@@ -823,7 +823,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 ];
             }
             if (empty($nodeTargets)) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
 
@@ -911,7 +911,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     'shortage' => $topUpResult['shortage'] ?? false,
                 ]);
                 if (($topUpResult['created'] ?? 0) > 0) {
-                    @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready' WHERE id=" . $runId . " LIMIT 1");
+                    @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                     pp_promotion_launch_crowd_worker();
                     return;
                 }
@@ -927,7 +927,7 @@ if (!function_exists('pp_promotion_process_run')) {
             $requiredSuccess = count($nodeTargets) * $crowdPerArticle;
 
             if ($completedSuccess >= $requiredSuccess) {
-                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready' WHERE id=" . $runId . " LIMIT 1");
+                @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
 
@@ -936,7 +936,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 if (!empty($stats['exhausted'])) { $hasExhausted = true; break; }
             }
 
-            @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='CROWD_FAILED_INSUFFICIENT', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='CROWD_FAILED_INSUFFICIENT', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             pp_promotion_log('promotion.crowd.failed', [
                 'run_id' => $runId,
                 'project_id' => $projectId,
@@ -952,7 +952,7 @@ if (!function_exists('pp_promotion_process_run')) {
             $report = pp_promotion_build_report($conn, $runId);
             $reportJson = json_encode($report, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
             if ($reportJson === false) { $reportJson = '{}'; }
-            @$conn->query("UPDATE promotion_runs SET status='completed', stage='completed', report_json='" . $conn->real_escape_string($reportJson) . "', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+            @$conn->query("UPDATE promotion_runs SET status='completed', stage='completed', report_json='" . $conn->real_escape_string($reportJson) . "', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             return;
         }
     }

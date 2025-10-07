@@ -35,7 +35,7 @@ if (is_logged_in()) {
                     $stp->close();
                 }
                 // Active promotion runs (links in promotion stage)
-                $sqlActive = "SELECT COUNT(*) AS cnt FROM promotion_runs pr INNER JOIN projects p ON p.id = pr.project_id WHERE p.user_id = ? AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready')";
+                $sqlActive = "SELECT COUNT(*) AS cnt FROM promotion_runs pr INNER JOIN projects p ON p.id = pr.project_id WHERE p.user_id = ? AND pr.status IN ('queued','pending_level1','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready')";
                 if ($sta = $conn->prepare($sqlActive)) {
                     $sta->bind_param('i', $uid);
                     $sta->execute();

@@ -13,6 +13,7 @@ require_once $root . '/includes/init.php';
 require_once $root . '/includes/promotion.php';
 require_once $root . '/includes/promotion/crowd.php';
 require_once $root . '/includes/promotion/utils.php';
+require_once $root . '/includes/publication_queue.php';
 
 if (function_exists('session_write_close')) {
     @session_write_close();
@@ -45,6 +46,8 @@ $maxRuns = max(1, min(100, $maxRuns));
 
 $runIds = [];
 $crowdPending = 0;
+$pubQueued = 0;
+$pubRunning = 0;
 try {
     $conn = @connect_db();
 } catch (Throwable $e) {
@@ -65,6 +68,15 @@ if ($conn instanceof mysqli) {
         $res->free();
     }
     $crowdPending = pp_promotion_crowd_pending_count();
+    // Publication queue stats (queued and running)
+    if ($resQ = @$conn->query("SELECT COUNT(*) AS c FROM publications WHERE status='queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP)")) {
+        if ($rowQ = $resQ->fetch_assoc()) { $pubQueued = (int)($rowQ['c'] ?? 0); }
+        $resQ->free();
+    }
+    if ($resR = @$conn->query("SELECT COUNT(*) AS c FROM publications WHERE status='running'")) {
+        if ($rowR = $resR->fetch_assoc()) { $pubRunning = (int)($rowR['c'] ?? 0); }
+        $resR->free();
+    }
     $conn->close();
 }
 
@@ -75,12 +87,23 @@ foreach ($runIds as $runId) {
 
 $crowdLaunched = pp_promotion_launch_crowd_worker(null, true);
 
+// Drive publications queue in the background as part of the cron tick.
+// This ensures enqueued publications progress even without any web requests.
+try {
+    $batch = max(1, min(50, (pp_get_max_concurrent_jobs() * 5)));
+    @pp_run_queue_worker($batch);
+} catch (Throwable $e) {
+    pp_promotion_log('promotion.cron.pubqueue_error', ['error' => $e->getMessage()]);
+}
+
 pp_promotion_log('promotion.cron.tick', [
     'runs_checked' => count($runIds),
     'crowd_pending' => $crowdPending,
     'worker_launched' => $workerLaunched,
     'crowd_worker_launched' => $crowdLaunched,
     'max_runs' => $maxRuns,
+    'pub_queued' => $pubQueued,
+    'pub_running' => $pubRunning,
 ]);
 
 exit(0);
