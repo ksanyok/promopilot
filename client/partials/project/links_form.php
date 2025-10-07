@@ -209,7 +209,7 @@
                                     $promotionStatusLabel = __('Подготовка крауда');
                                     break;
                                 case 'crowd_ready':
-                                    $promotionStatusLabel = __('Крауд готов');
+                                    $promotionStatusLabel = __('Крауд выполняется');
                                     break;
                                 case 'report_ready':
                                     $promotionStatusLabel = __('Формируется отчет');

@@ -1749,6 +1749,9 @@ if (!function_exists('pp_promotion_build_report')) {
                 if (!$manualFallback && !in_array($statusNormalized, $allowedStatuses, true)) {
                     continue;
                 }
+                if ($manualFallback) {
+                    continue;
+                }
                 if ($linkUrl === null && isset($row['crowd_link_id'])) {
                     $cid = (int)$row['crowd_link_id'];
                     if ($cid > 0) {
@@ -1777,7 +1780,7 @@ if (!function_exists('pp_promotion_build_report')) {
                     'author_name' => $messageAuthor,
                     'author_email' => $messageEmail,
                     'manual_fallback' => $manualFallback,
-                    'fallback_reason' => $fallbackReason,
+                    'fallback_reason' => null,
                     'status' => $statusRaw,
                     'result_url' => isset($row['result_url']) && $row['result_url'] !== null ? (string)$row['result_url'] : null,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,

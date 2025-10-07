@@ -4,6 +4,51 @@ require_once __DIR__ . '/../crowd_deep.php';
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/utils.php';
 
+if (!function_exists('pp_promotion_crowd_normalize_language')) {
+    function pp_promotion_crowd_normalize_language(?string $language): string {
+        $code = strtolower(trim((string)$language));
+        if ($code === '' || $code === 'auto') { return 'ru'; }
+        if (strpos($code, '-') !== false) {
+            $code = substr($code, 0, 2);
+        }
+        switch ($code) {
+            case 'en':
+            case 'ru':
+                return $code;
+            default:
+                return 'ru';
+        }
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_texts')) {
+    function pp_promotion_crowd_texts(string $language): array {
+        switch ($language) {
+            case 'en':
+                return [
+                    'subject_prefix' => 'Comment',
+                    'subject_default' => 'Comment on the article',
+                    'lead_with_anchor' => 'Sharing a helpful article “%s”.',
+                    'lead_without_anchor' => 'Sharing a helpful article.',
+                    'link_prompt' => 'Please take a look:',
+                    'feedback' => 'We would appreciate your feedback!',
+                    'author_default' => 'PromoPilot Author',
+                ];
+            case 'ru':
+            default:
+                return [
+                    'subject_prefix' => 'Комментарий',
+                    'subject_default' => 'Комментарий к статье',
+                    'lead_with_anchor' => 'Коллеги, делюсь полезным материалом «%s».',
+                    'lead_without_anchor' => 'Коллеги, делюсь полезным материалом.',
+                    'link_prompt' => 'Поделитесь, пожалуйста, мнением по ссылке:',
+                    'feedback' => 'Будем рады обратной связи!',
+                    'author_default' => 'PromoPilot Автор',
+                ];
+        }
+    }
+}
+
 if (!function_exists('pp_promotion_trigger_worker_inline')) {
     function pp_promotion_trigger_worker_inline(?int $runId = null, int $maxIterations = 5): void {
         static $guardActive = false;
@@ -235,36 +280,15 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             }
         }
         $variant = $payload;
-        $body = trim((string)($variant['body'] ?? ''));
-        $body = pp_promotion_clean_text($body);
-        if ($body === '') {
-            $body = __('Коллеги, обратите внимание на материал:') . ' ' . (string)($variant['target_url'] ?? $task['target_url'] ?? '');
-        }
-        $subject = pp_promotion_clean_text((string)($variant['subject'] ?? ''));
-        if ($subject === '') {
-            $subject = __('Комментарий к статье');
-        }
-        $authorName = trim((string)($variant['author_name'] ?? ''));
-        if ($authorName === '') {
-            $authorName = 'PromoPilot Автор';
-        }
-        $token = trim((string)($variant['token'] ?? ''));
-        if ($token === '') {
-            try {
-                $token = substr(bin2hex(random_bytes(8)), 0, 12);
-            } catch (Throwable $e) {
-                $token = substr(sha1($authorName . microtime(true)), 0, 12);
-            }
-        }
+        $rawBody = isset($variant['body']) ? pp_promotion_clean_text((string)$variant['body']) : '';
+        $rawSubject = isset($variant['subject']) ? pp_promotion_clean_text((string)$variant['subject']) : '';
+        $rawAuthorName = trim((string)($variant['author_name'] ?? ''));
+        $rawToken = trim((string)($variant['token'] ?? ''));
         $articleUrl = trim((string)($variant['target_url'] ?? $task['target_url'] ?? ''));
         if ($articleUrl === '' && !empty($task['target_url'])) {
             $articleUrl = (string)$task['target_url'];
         }
-        $authorEmail = trim((string)($variant['author_email'] ?? ''));
-        if ($authorEmail === '') {
-            $emailSlug = pp_promotion_make_email_slug($authorName);
-            $authorEmail = $emailSlug . '+' . strtolower($token) . '@example.com';
-        }
+        $anchor = trim((string)($variant['anchor'] ?? ''));
 
         $runRow = null;
         $stmtRun = $conn->prepare('SELECT project_id FROM promotion_runs WHERE id = ? LIMIT 1');
@@ -281,6 +305,64 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
         if ($projectName === '') {
             $projectName = 'PromoPilot';
         }
+
+        $language = pp_promotion_crowd_normalize_language($variant['language'] ?? $projectRow['language'] ?? null);
+        $texts = pp_promotion_crowd_texts($language);
+        $authorName = $rawAuthorName !== '' ? $rawAuthorName : ($projectName !== '' ? $projectName : $texts['author_default']);
+        $authorName = pp_promotion_clean_text($authorName);
+        if ($authorName === '') {
+            $authorName = $texts['author_default'];
+        }
+        $token = $rawToken;
+        if ($token === '') {
+            try {
+                $token = substr(bin2hex(random_bytes(8)), 0, 12);
+            } catch (Throwable $e) {
+                $token = substr(sha1($authorName . microtime(true)), 0, 12);
+            }
+        }
+        $authorEmail = trim((string)($variant['author_email'] ?? ''));
+        if ($authorEmail === '') {
+            $emailSlug = pp_promotion_make_email_slug($authorName);
+            if ($emailSlug === '') {
+                $emailSlug = 'promopilot';
+            }
+            $authorEmail = $emailSlug . '+' . strtolower($token) . '@example.com';
+        }
+        $body = $rawBody;
+        if ($body === '') {
+            $linkForBody = $articleUrl !== '' ? $articleUrl : (string)($task['target_url'] ?? '');
+            $lead = $anchor !== ''
+                ? sprintf($texts['lead_with_anchor'], $anchor)
+                : $texts['lead_without_anchor'];
+            $bodyParts = [trim($lead)];
+            if ($linkForBody !== '') {
+                $bodyParts[] = trim($linkForBody);
+            }
+            $body = trim(implode(' ', array_filter($bodyParts)));
+            if ($body === '') {
+                $body = trim($texts['link_prompt'] . ' ' . $linkForBody);
+            }
+            if ($body === '') {
+                $body = $texts['link_prompt'];
+            }
+            if (!empty($texts['feedback'])) {
+                $body .= "\n\n" . $texts['feedback'];
+            }
+            $body = pp_promotion_clean_text($body);
+        }
+        $subject = $rawSubject;
+        if ($subject === '') {
+            $subject = $anchor !== '' ? ($texts['subject_prefix'] . ': ' . $anchor) : $texts['subject_default'];
+            if (function_exists('mb_strlen') && mb_strlen($subject, 'UTF-8') > 120) {
+                $subject = rtrim(mb_substr($subject, 0, 118, 'UTF-8')) . '…';
+            } elseif (strlen($subject) > 120) {
+                $subject = rtrim(substr($subject, 0, 118)) . '…';
+            }
+            $subject = pp_promotion_clean_text($subject);
+        }
+        $payload['language'] = $language;
+        $payload['anchor'] = $anchor;
 
         $overrides = [];
         if (!empty($variant['form_values']) && is_array($variant['form_values'])) {
@@ -312,6 +394,7 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             'company' => $projectName,
             'fallback' => $projectName,
             'overrides' => $overrides,
+            'language' => $language,
         ];
 
         $linkUrl = isset($variant['crowd_link_url']) ? trim((string)$variant['crowd_link_url']) : '';
@@ -570,7 +653,7 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
             return $summary;
         }
 
-        $preferredLanguage = strtolower(trim((string)($project['language'] ?? '')));
+    $preferredLanguage = pp_promotion_crowd_normalize_language($linkRow['language'] ?? $project['language'] ?? null);
         $preferredRegion = strtoupper(trim((string)($project['region'] ?? '')));
 
         $excludeLinkIds = array_keys($busyLinks);
@@ -807,31 +890,38 @@ if (!function_exists('pp_promotion_crowd_build_payload')) {
             $targetUrl = trim((string)$nodeMeta['target_url']);
         }
         $projectName = trim((string)($project['name'] ?? ''));
+        $language = pp_promotion_crowd_normalize_language($linkRow['language'] ?? $project['language'] ?? null);
+        $texts = pp_promotion_crowd_texts($language);
         $anchor = trim((string)($linkRow['anchor'] ?? ''));
         if ($anchor === '') {
             $anchor = $projectName !== '' ? $projectName : __('Материал');
         }
-        $subject = __('Комментарий') . ': ' . $anchor;
+        $subject = $anchor !== '' ? ($texts['subject_prefix'] . ': ' . $anchor) : $texts['subject_default'];
         if (function_exists('mb_strlen') && mb_strlen($subject, 'UTF-8') > 120) {
             $subject = rtrim(mb_substr($subject, 0, 118, 'UTF-8')) . '…';
         } elseif (strlen($subject) > 120) {
             $subject = rtrim(substr($subject, 0, 118)) . '…';
         }
-        $sentenceParts = [];
-        $sentenceParts[] = __('Коллеги, делюсь полезным материалом');
-        if ($anchor !== '') {
-            $sentenceParts[] = '«' . $anchor . '»';
+        $lead = $anchor !== ''
+            ? sprintf($texts['lead_with_anchor'], $anchor)
+            : $texts['lead_without_anchor'];
+        $linkForBody = $targetUrl !== '' ? $targetUrl : (string)($options['run']['target_url'] ?? '');
+        $bodyParts = [trim($lead)];
+        if ($linkForBody !== '') {
+            $bodyParts[] = $linkForBody;
         }
-        if ($targetUrl !== '') {
-            $sentenceParts[] = $targetUrl;
-        }
-        $body = implode(' ', array_filter($sentenceParts));
+        $body = trim(implode(' ', array_filter($bodyParts)));
         if ($body === '') {
-            $body = __('Поделитесь, пожалуйста, мнением по ссылке:') . ' ' . ($targetUrl !== '' ? $targetUrl : (string)($options['run']['target_url'] ?? ''));
+            $body = trim($texts['link_prompt'] . ' ' . $linkForBody);
         }
-        $body .= "\n\n" . __('Будем рады обратной связи!');
+        if ($body === '') {
+            $body = $texts['link_prompt'];
+        }
+        if (!empty($texts['feedback'])) {
+            $body .= "\n\n" . $texts['feedback'];
+        }
 
-        $authorName = $projectName !== '' ? $projectName : __('PromoPilot Автор');
+        $authorName = $projectName !== '' ? $projectName : $texts['author_default'];
         try {
             $token = substr(bin2hex(random_bytes(8)), 0, 12);
         } catch (Throwable $e) {
@@ -854,6 +944,8 @@ if (!function_exists('pp_promotion_crowd_build_payload')) {
             'token' => $token,
             'manual_fallback' => $crowdLink ? false : true,
             'fallback_reason' => $crowdLink ? null : 'crowd_link_unavailable',
+            'language' => $language,
+            'anchor' => $anchor,
         ];
 
         $identity = [
@@ -864,6 +956,7 @@ if (!function_exists('pp_promotion_crowd_build_payload')) {
             'website' => $targetUrl !== '' ? $targetUrl : 'https://example.com/',
             'company' => $projectName !== '' ? $projectName : $authorName,
             'phone' => pp_promotion_generate_fake_phone(),
+            'language' => $language,
         ];
 
         $payload['identity'] = $identity;

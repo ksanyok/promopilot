@@ -848,7 +848,9 @@ document.addEventListener('DOMContentLoaded', function() {
         toolbarActions.push(`<button type="button" class="btn btn-outline-secondary btn-sm" data-report-action="download-csv"><i class="bi bi-table me-1"></i><?php echo __('Экспорт CSV'); ?></button>`);
         toolbarActions.push(`<button type="button" class="btn btn-outline-secondary btn-sm" data-report-action="copy-json"><i class="bi bi-clipboard-check me-1"></i><?php echo __('Скопировать JSON'); ?></button>`);
         const toolbarActionsHtml = toolbarActions.length ? `<div class="promotion-report-actions">${toolbarActions.join('')}</div>` : '';
-        const inProgress = statusKey && !['completed', 'crowd_ready'].includes(statusKey);
+        const inProgress = Array.isArray(PROMOTION_ACTIVE_STATUSES) && statusKey
+            ? PROMOTION_ACTIVE_STATUSES.includes(statusKey)
+            : false;
         const infoHtml = inProgress
             ? `<div class="alert alert-info small mb-3" role="alert"><i class="bi bi-hourglass-split me-2"></i><?php echo __('Запуск еще выполняется'); ?></div>`
             : '';
@@ -1378,8 +1380,8 @@ document.addEventListener('DOMContentLoaded', function() {
         'level2_active': '<?php echo __('Уровень 2 выполняется'); ?>',
         'pending_level3': '<?php echo __('Ожидание уровня 3'); ?>',
         'level3_active': '<?php echo __('Уровень 3 выполняется'); ?>',
-        'pending_crowd': '<?php echo __('Подготовка крауда'); ?>',
-        'crowd_ready': '<?php echo __('Крауд готов'); ?>',
+    'pending_crowd': '<?php echo __('Подготовка крауда'); ?>',
+    'crowd_ready': '<?php echo __('Крауд выполняется'); ?>',
         'report_ready': '<?php echo __('Формируется отчет'); ?>',
         'completed': '<?php echo __('Завершено'); ?>',
         'failed': '<?php echo __('Ошибка продвижения'); ?>',
@@ -1398,8 +1400,8 @@ document.addEventListener('DOMContentLoaded', function() {
         'pending_level1': 'bg-warning-subtle text-warning-emphasis',
         'pending_level2': 'bg-warning-subtle text-warning-emphasis',
         'pending_level3': 'bg-warning-subtle text-warning-emphasis',
-        'pending_crowd': 'bg-warning-subtle text-warning-emphasis',
-        'crowd_ready': 'bg-primary-subtle text-primary-emphasis',
+    'pending_crowd': 'bg-warning-subtle text-warning-emphasis',
+    'crowd_ready': 'bg-info-subtle text-info-emphasis',
         'report_ready': 'bg-primary-subtle text-primary-emphasis',
         'manual_fallback': 'bg-secondary-subtle text-secondary-emphasis',
         'cancelled': 'bg-secondary-subtle text-secondary-emphasis',

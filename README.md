@@ -73,15 +73,15 @@ npm install
 - В логах видны версии Puppeteer/Node и путь к Chrome.
 
 ## Планировщик (cron)
-Для автоматического восстановления зависших публикаций и обработки очередей добавьте задачу cron, вызывающую watchdog каждые 5 минут:
+Для автоматического восстановления зависших публикаций, поддержания очереди и крауд-задач добавьте задачу cron (каждую минуту):
 
 ```
-*/5 * * * * cd /home/USER/DOMAIN/promopilot && /usr/bin/php scripts/promotion_watchdog.php >> logs/promotion_watchdog.log 2>&1
+* * * * * cd /home/USER/DOMAIN/promopilot && /usr/bin/php scripts/promotion_cron_tick.php >> logs/promotion_cron.log 2>&1
 ```
 
 - Убедитесь, что путь к PHP (`/usr/bin/php`) и каталогу проекта совпадают с вашим окружением.
-- При необходимости задайте переменные окружения `PROMOPILOT_WATCHDOG_STALE_MINUTES` и `PROMOPILOT_WATCHDOG_QUEUE_STALE_MINUTES` в crontab перед командой, чтобы настроить пороги простоя.
-- Лог перенаправляется в `logs/promotion_watchdog.log`; скорректируйте путь или используйте `>/dev/null 2>&1`, если лог не требуется.
+- Логи можно перенаправить в `/dev/null`, если запись не требуется.
+- Для тикера доступна переменная `PROMOPILOT_CRON_MAX_RUNS` (по умолчанию 25) — ограничивает количество проверяемых запусков за один цикл.
 
 ## Частые проблемы
 – BYOA (собственное API) не отвечает/зависает:
