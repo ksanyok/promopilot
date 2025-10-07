@@ -23,6 +23,33 @@ if (is_logged_in()) {
                 }
                 $st->close();
             }
+
+            // Client mini-stats: projects count, active promotion links, published links
+            if (!is_admin()) {
+                $pp_nav_stats = [ 'projects' => 0, 'active_links' => 0, 'published_links' => 0 ];
+                // Total projects
+                if ($stp = $conn->prepare('SELECT COUNT(*) AS cnt FROM projects WHERE user_id = ?')) {
+                    $stp->bind_param('i', $uid);
+                    $stp->execute();
+                    if ($res = $stp->get_result()) { $pp_nav_stats['projects'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
+                    $stp->close();
+                }
+                // Active promotion runs (links in promotion stage)
+                $sqlActive = "SELECT COUNT(*) AS cnt FROM promotion_runs pr INNER JOIN projects p ON p.id = pr.project_id WHERE p.user_id = ? AND pr.status IN ('queued','running','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready')";
+                if ($sta = $conn->prepare($sqlActive)) {
+                    $sta->bind_param('i', $uid);
+                    $sta->execute();
+                    if ($res = $sta->get_result()) { $pp_nav_stats['active_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
+                    $sta->close();
+                }
+                // Published links (successful publications or known URL)
+                if ($stpub = $conn->prepare("SELECT COUNT(*) AS cnt FROM publications pub INNER JOIN projects p ON p.id = pub.project_id WHERE p.user_id = ? AND (pub.status = 'success' OR pub.post_url <> '')")) {
+                    $stpub->bind_param('i', $uid);
+                    $stpub->execute();
+                    if ($res = $stpub->get_result()) { $pp_nav_stats['published_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
+                    $stpub->close();
+                }
+            }
         }
         $conn->close();
     } catch (Throwable $e) { /* ignore */ }
@@ -77,6 +104,24 @@ if ($pp_nav_balance !== null) {
                     <?php if (is_logged_in()): ?>
                         <?php if (is_admin()): ?>
                             <li class="nav-item"><a class="nav-link" href="<?php echo pp_url('admin/admin.php'); ?>"><i class="bi bi-speedometer2 me-1"></i><?php echo __('Админка'); ?></a></li>
+                        <?php endif; ?>
+                        <?php if (!is_admin() && isset($pp_nav_stats) && is_array($pp_nav_stats)): ?>
+                            <li class="nav-item d-none d-md-block">
+                                <div class="nav-stats-group" role="group" aria-label="<?php echo htmlspecialchars(__('Сводка по проектам')); ?>">
+                                    <span class="nav-stat-chip nav-stat-chip--projects" role="button" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="<?php echo htmlspecialchars(__('Проекты')); ?>" aria-label="<?php echo htmlspecialchars(__('Проекты')); ?>">
+                                        <i class="bi bi-folder2" aria-hidden="true"></i>
+                                        <span class="value"><?php echo (int)$pp_nav_stats['projects']; ?></span>
+                                    </span>
+                                    <span class="nav-stat-chip nav-stat-chip--active" role="button" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="<?php echo htmlspecialchars(__('В продвижении')); ?>" aria-label="<?php echo htmlspecialchars(__('В продвижении')); ?>">
+                                        <i class="bi bi-rocket-takeoff" aria-hidden="true"></i>
+                                        <span class="value"><?php echo (int)$pp_nav_stats['active_links']; ?></span>
+                                    </span>
+                                    <span class="nav-stat-chip nav-stat-chip--published" role="button" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="bottom" title="<?php echo htmlspecialchars(__('Продвинутых ссылок')); ?>" aria-label="<?php echo htmlspecialchars(__('Продвинутых ссылок')); ?>">
+                                        <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                                        <span class="value"><?php echo (int)$pp_nav_stats['published_links']; ?></span>
+                                    </span>
+                                </div>
+                            </li>
                         <?php endif; ?>
                         <?php if ($pp_nav_balance !== null): ?>
                             <li class="nav-item">

@@ -358,10 +358,10 @@ document.addEventListener('DOMContentLoaded', function() {
         start();
     })();
 
-    // Initialize Bootstrap tooltips (добавлено)
+    // Initialize Bootstrap tooltips (with container=body to avoid clipping under navbar)
     if (window.bootstrap && document.querySelector('[data-bs-toggle="tooltip"]')) {
         document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
-            try { new bootstrap.Tooltip(el); } catch(e) { /* noop */ }
+            try { new bootstrap.Tooltip(el, { container: document.body }); } catch(e) { /* noop */ }
         });
     }
 

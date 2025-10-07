@@ -113,6 +113,7 @@ main.page-wrap {
 
 /* Make links readable in both themes */
 a { color: var(--primary); text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent); text-underline-offset: 2px; }
+a[href] { cursor: pointer; }
 a:hover { color: var(--primary-2); text-decoration-color: currentColor; }
 
 /* improve default muted text accessibility */
@@ -179,6 +180,36 @@ a.nav-balance-chip:hover { text-decoration: none; color: rgba(255,255,255,.98); 
 .nav-balance-chip i { color: rgba(56,189,248,.9); font-size: .9rem; }
 .nav-balance-chip__label { opacity: .8; text-transform: uppercase; letter-spacing: .08em; font-size: .68rem; }
 .nav-balance-chip__value { font-weight: 600; letter-spacing: .01em; }
+
+/* Navbar mini stats chips */
+.nav-stats-group { display: inline-flex; align-items: center; gap: .5rem; margin-right: .5rem; }
+.nav-stat-chip {
+  display: inline-flex; align-items: center; gap: .45rem;
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+  border: 1px solid rgba(255,255,255,.18);
+  color: rgba(248,250,252,.96);
+  padding: .35rem .6rem; border-radius: 999px;
+  text-decoration: none; transition: all .2s ease; backdrop-filter: blur(6px);
+}
+.nav-stat-chip:hover { color: rgba(255,255,255,.98); box-shadow: 0 10px 24px -16px rgba(15,46,91,.9), inset 0 1px 0 rgba(255,255,255,.4); transform: translateY(-1px); }
+.nav-stat-chip .bi { color: rgba(191,219,254,.95); font-size: .95rem; }
+.nav-stat-chip .label { opacity: .8; text-transform: uppercase; letter-spacing: .08em; font-size: .66rem; }
+.nav-stat-chip .value { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+/* Color accents per stat type */
+.nav-stat-chip--projects .bi { color: rgba(147,197,253, .95); }
+.nav-stat-chip--active .bi { color: rgba(74,222,128, .95); }
+.nav-stat-chip--published .bi { color: rgba(250,204,21, .95); }
+
+/* Non-link chips are interactive for tooltip only */
+.nav-stat-chip { cursor: default; }
+.nav-stat-chip[role="button"] { cursor: help; }
+
+@media (max-width: 991.98px) {
+  /* collapse mode: make chips full width rows for readability */
+  .nav-stats-group { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0; }
+  .nav-stats-group .nav-stat-chip { padding: .4rem .65rem; }
+}
 
 /* Toggler visibility on dark */
 .navbar-dark .navbar-toggler { border-color: var(--border); }
@@ -2533,7 +2564,7 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 /* Motion reduce respect already handled globally */
 
 /* =================== Tooltip overrides (readability) =================== */
-.tooltip { --pp-tooltip-bg: color-mix(in srgb, var(--bg-2) 82%, #000 18%); }
+.tooltip { --pp-tooltip-bg: color-mix(in srgb, var(--bg-2) 82%, #000 18%); z-index: 3000; }
 .tooltip .tooltip-inner {
   background: var(--pp-tooltip-bg);
   color: var(--text);
