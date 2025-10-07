@@ -455,33 +455,55 @@ document.addEventListener('DOMContentLoaded', function() {
         const safeTitle = escapeHtml(title || '');
         const anchorAttr = options.anchor ? ` data-report-anchor="${escapeAttribute(options.anchor)}"` : '';
         const extraClass = options.className ? ` ${options.className}` : '';
-        if (!Array.isArray(entries) || entries.length === 0) {
-            return `<div class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
-                <h6 class="mb-2">${safeTitle}</h6>
-                <div class="promotion-flow-empty"><?php echo __('Записей не найдено.'); ?></div>
-            </div>`;
+        const count = Array.isArray(entries) ? entries.length : 0;
+        const description = options.description ? `<p class="section-description text-muted mb-0">${escapeHtml(options.description)}</p>` : '';
+        const kicker = options.kicker ? `<div class="section-kicker text-uppercase small fw-semibold text-muted mb-1">${escapeHtml(options.kicker)}</div>` : '';
+        const iconHtml = options.icon ? `<span class="section-icon"><i class="bi ${escapeAttribute(options.icon)}"></i></span>` : '';
+        const headerHtml = `
+            <div class="promotion-report-section-head d-flex align-items-start gap-3">
+                ${iconHtml}
+                <div class="section-headline flex-grow-1">
+                    ${kicker}
+                    <div class="d-flex align-items-center flex-wrap gap-2 section-headline-row">
+                        <h6 class="section-title mb-0">${safeTitle}</h6>
+                        <span class="section-count badge bg-secondary-subtle text-secondary-emphasis">${escapeHtml(String(count))}</span>
+                    </div>
+                    ${description}
+                </div>
+            </div>
+        `;
+
+        if (!Array.isArray(entries) || count === 0) {
+            return `<section class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
+                ${headerHtml}
+                <div class="promotion-report-table-card promotion-report-table-card--empty">
+                    <div class="promotion-flow-empty mb-0"><?php echo __('Записей не найдено.'); ?></div>
+                </div>
+            </section>`;
         }
-        const headerHtml = columns.map(col => {
+
+        const tableHead = columns.map(col => {
             const thClass = col.className ? ` class="${escapeAttribute(col.className)}"` : '';
             return `<th${thClass}>${escapeHtml(col.label || '')}</th>`;
         }).join('');
-        const rowsHtml = entries.map(entry => `<tr>${columns.map(col => {
+
+        const tableBody = entries.map(entry => `<tr>${columns.map(col => {
             const cellClass = col.className ? ` class="${escapeAttribute(col.className)}"` : '';
             const value = col.render ? col.render(entry) : '';
             return `<td${cellClass}>${value}</td>`;
         }).join('')}</tr>`).join('');
-        return `<div class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
-            <div class="promotion-report-section-head d-flex align-items-center justify-content-between gap-2 mb-3">
-                <h6 class="mb-0">${safeTitle}</h6>
-                <span class="badge bg-secondary-subtle text-secondary-emphasis">${escapeHtml(String(entries.length))}</span>
+
+        return `<section class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
+            ${headerHtml}
+            <div class="promotion-report-table-card">
+                <div class="table-responsive">
+                    <table class="table table-sm promotion-report-table">
+                        <thead><tr>${tableHead}</tr></thead>
+                        <tbody>${tableBody}</tbody>
+                    </table>
+                </div>
             </div>
-            <div class="table-responsive">
-                <table class="table table-sm promotion-report-table">
-                    <thead><tr>${headerHtml}</tr></thead>
-                    <tbody>${rowsHtml}</tbody>
-                </table>
-            </div>
-        </div>`;
+        </section>`;
     }
 
     function renderPromotionReportTables(ctx) {
@@ -514,7 +536,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const link = url ? buildReportLinkHtml(url, truncateText(url, 70), { title: url }) : '<span class="text-muted">—</span>';
             const meta = [];
             if (options.includeNetwork !== false && row?.network) {
-                meta.push(`<span class="cell-subtle">${escapeHtml(row.network)}</span>`);
+                meta.push(`<span class="cell-chip cell-chip--network">${escapeHtml(truncateText(row.network, 46))}</span>`);
             }
             if (row?.id !== undefined && row?.id !== null) {
                 meta.push(`<span class="cell-subtle">ID ${escapeHtml(String(row.id))}</span>`);
@@ -535,7 +557,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!anchor) {
                 return '<span class="text-muted">—</span>';
             }
-            return `<div class="cell-stack"><span title="${escapeAttribute(anchor)}">${escapeHtml(truncateText(anchor, 120))}</span></div>`;
+            return `<div class="cell-stack"><span class="anchor-pill" title="${escapeAttribute(anchor)}">${escapeHtml(truncateText(anchor, 120))}</span></div>`;
         };
 
         const renderParentCell = (parentId, map, label) => {
@@ -544,17 +566,34 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             const key = String(parentId);
             const parent = map.get(key) || map.get(parentId);
-            const pieces = [`<span class="cell-chip">${escapeHtml(label)} #${escapeHtml(key)}</span>`];
+            const pieces = [`<span class="cell-chip chip-neutral">${escapeHtml(label)} #${escapeHtml(key)}</span>`];
             if (parent) {
                 const parentUrl = parent?.url || parent?.result_url || '';
                 if (parentUrl) {
                     pieces.push(buildReportLinkHtml(parentUrl, truncateText(parentUrl, 60), { title: parentUrl }));
                 }
                 if (parent?.network) {
-                    pieces.push(`<span class="cell-subtle">${escapeHtml(parent.network)}</span>`);
+                    pieces.push(`<span class="cell-chip cell-chip--network">${escapeHtml(truncateText(parent.network, 46))}</span>`);
                 }
             }
             return `<div class="cell-stack">${pieces.join('')}</div>`;
+        };
+
+        const renderStatusCell = (row) => {
+            const manualFallback = !!row?.manual_fallback;
+            const label = formatNodeStatusLabel(row?.status, manualFallback);
+            const badge = statusBadgeHtml(row?.status, label);
+            const extras = [];
+            if (manualFallback) {
+                extras.push('<span class="cell-chip chip-neutral"><?php echo __('Ручной fallback'); ?></span>');
+            }
+            if (row?.fallback_reason) {
+                extras.push(`<span class="cell-note text-danger">${escapeHtml(truncateText(row.fallback_reason, 120))}</span>`);
+            }
+            if (row?.updated_at) {
+                extras.push(`<span class="cell-subtle">${escapeHtml(truncateText(row.updated_at, 32))}</span>`);
+            }
+            return `<div class="cell-stack">${badge || ''}${extras.join('')}</div>`;
         };
 
         const levelColumns = [
@@ -572,6 +611,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 label: '<?php echo __('Анкор'); ?>',
                 className: 'col-anchor',
                 render: row => renderAnchorCell(row?.anchor)
+            },
+            {
+                label: '<?php echo __('Статус'); ?>',
+                className: 'col-status',
+                render: row => renderStatusCell(row)
             }
         ];
 
@@ -598,6 +642,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 label: '<?php echo __('Анкор'); ?>',
                 className: 'col-anchor',
                 render: row => renderAnchorCell(row?.anchor)
+            },
+            {
+                label: '<?php echo __('Статус'); ?>',
+                className: 'col-status',
+                render: row => renderStatusCell(row)
             }
         ];
 
@@ -621,6 +670,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 label: '<?php echo __('Анкор'); ?>',
                 className: 'col-anchor',
                 render: row => renderAnchorCell(row?.anchor)
+            },
+            {
+                label: '<?php echo __('Статус'); ?>',
+                className: 'col-status',
+                render: row => renderStatusCell(row)
             }
         ];
 
@@ -683,16 +737,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const sections = [];
         if (showLevel1 && level1.length) {
-            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 1'); ?>', level1, levelColumns, { anchor: 'table-level1' }));
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 1'); ?>', level1, levelColumns, {
+                anchor: 'table-level1',
+                icon: 'bi-1-circle',
+                description: '<?php echo __('Прямые публикации на целевой ресурс.'); ?>'
+            }));
         }
         if (showLevel2 && level2.length) {
-            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 2'); ?>', level2, level2Columns, { anchor: 'table-level2' }));
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 2'); ?>', level2, level2Columns, {
+                anchor: 'table-level2',
+                icon: 'bi-diagram-2',
+                description: '<?php echo __('Публикации, ссылающиеся на уровень 1.'); ?>'
+            }));
         }
         if (showLevel3 && level3.length) {
-            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 3'); ?>', level3, level3Columns, { anchor: 'table-level3' }));
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 3'); ?>', level3, level3Columns, {
+                anchor: 'table-level3',
+                icon: 'bi-diagram-3',
+                description: '<?php echo __('Поддерживающие публикации для уровня 2.'); ?>'
+            }));
         }
         if (showCrowd && crowd.length) {
-            sections.push(renderPromotionReportTableSection('<?php echo __('Крауд-задачи'); ?>', crowd, crowdColumns, { anchor: 'table-crowd' }));
+            sections.push(renderPromotionReportTableSection('<?php echo __('Крауд-задачи'); ?>', crowd, crowdColumns, {
+                anchor: 'table-crowd',
+                icon: 'bi-people',
+                description: '<?php echo __('Закрепленные крауд-публикации.'); ?>'
+            }));
         }
 
         if (!sections.length) {

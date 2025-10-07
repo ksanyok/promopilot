@@ -8,7 +8,7 @@
                 <input type="hidden" name="delete_project" value="1" />
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-trash me-2"></i><?php echo __('Удалить проект'); ?></h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                    <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
                 </div>
                 <div class="modal-body">
                     <p class="mb-3"><?php echo __('Проект и все связанные данные будут удалены без возможности восстановления.'); ?></p>
@@ -32,7 +32,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title"><i class="bi bi-search me-2"></i><?php echo __('Анализ страницы'); ?></h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <div id="analyze-loading" class="text-center py-3 d-none">
@@ -54,7 +54,7 @@
       <div class="modal-header">
         <h5 class="modal-title"><i class="bi bi-journal-text me-2"></i><?php echo __('Пожелание'); ?></h5>
         <button type="button" class="btn btn-outline-secondary btn-sm me-2" id="wishCopyBtn"><i class="bi bi-clipboard"></i></button>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <div id="wishContent" class="small"></div>
@@ -66,17 +66,17 @@
   </div>
 </div>
 
-<div class="modal fade" id="promotionReportModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
+<div class="modal fade modal-glass modal-glass-wide" id="promotionReportModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
+        <div class="modal-content modal-content--glass">
+            <div class="modal-header modal-header--glass">
                 <h5 class="modal-title"><i class="bi bi-graph-up-arrow me-2"></i><?php echo __('Отчет по продвижению'); ?></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body modal-body--glass">
                 <div id="promotionReportContent"></div>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer modal-footer--glass">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Закрыть'); ?></button>
             </div>
         </div>
@@ -88,7 +88,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запуск продвижения'); ?></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
@@ -140,7 +140,7 @@
         <div class="modal-content">
             <div class="modal-header bg-warning-subtle">
                 <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i><?php echo __('Недостаточно средств'); ?></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                <button type="button" class="btn-close btn-close-circle" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
             </div>
             <div class="modal-body">
                 <p class="mb-3"><?php echo __('Для запуска продвижения не хватает средств.'); ?></p>
