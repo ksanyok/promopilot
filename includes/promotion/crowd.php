@@ -635,6 +635,29 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
             $res->free();
         }
 
+        $usedDomains = [];
+        $domainLookupIds = array_keys($busyLinks);
+        if (!empty($options['existing_link_map']) && is_array($options['existing_link_map'])) {
+            foreach ($options['existing_link_map'] as $nodeMap) {
+                if (!is_array($nodeMap)) { continue; }
+                foreach ($nodeMap as $linkId) {
+                    $domainLookupIds[] = (int)$linkId;
+                }
+            }
+        }
+        $domainLookupIds = array_values(array_unique(array_filter(array_map('intval', $domainLookupIds))));
+        if (!empty($domainLookupIds)) {
+            $idList = implode(',', $domainLookupIds);
+            if ($resDomains = @$conn->query('SELECT id, domain FROM crowd_links WHERE id IN (' . $idList . ')')) {
+                while ($rowDomain = $resDomains->fetch_assoc()) {
+                    $domainNormalized = strtolower(trim((string)($rowDomain['domain'] ?? '')));
+                    if ($domainNormalized === '') { continue; }
+                    $usedDomains[$domainNormalized] = true;
+                }
+                $resDomains->free();
+            }
+        }
+
         $createPlan = [];
         $requiredTotal = 0;
         foreach ($nodesNeeds as $nodeId => $info) {
@@ -670,11 +693,29 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
         $availableLinks = pp_promotion_crowd_fetch_available_links($conn, $requiredTotal, $excludeLinkIds, [
             'preferred_language' => $preferredLanguage,
             'preferred_region' => $preferredRegion,
+            'exclude_domains' => array_keys($usedDomains),
+            'unique_domain' => true,
         ]);
-        $availableCount = count($availableLinks);
-        if ($availableCount < $requiredTotal) {
+        $reservedDomains = $usedDomains;
+        $filteredLinks = [];
+        foreach ($availableLinks as $linkCandidate) {
+            $domainNormalized = strtolower(trim((string)($linkCandidate['domain'] ?? '')));
+            if ($domainNormalized !== '' && isset($reservedDomains[$domainNormalized])) {
+                continue;
+            }
+            $filteredLinks[] = $linkCandidate;
+            if ($domainNormalized !== '') {
+                $reservedDomains[$domainNormalized] = true;
+            }
+            if (count($filteredLinks) >= $requiredTotal) {
+                break;
+            }
+        }
+        if (count($filteredLinks) < $requiredTotal) {
             $summary['shortage'] = true;
         }
+        $availableLinks = $filteredLinks;
+        $availableCount = count($availableLinks);
 
         $nodeIds = array_keys($createPlan);
         $nodeMeta = [];
@@ -703,6 +744,10 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
                     $linkIndex++;
                     if (isset($crowdLink['id'])) {
                         $busyLinks[(int)$crowdLink['id']] = true;
+                    }
+                    $domainNormalized = strtolower(trim((string)($crowdLink['domain'] ?? '')));
+                    if ($domainNormalized !== '') {
+                        $reservedDomains[$domainNormalized] = true;
                     }
                 }
                 [$payload, $manualFallback] = pp_promotion_crowd_build_payload($project, $linkRow, $meta, $crowdLink, [
@@ -823,8 +868,29 @@ if (!function_exists('pp_promotion_crowd_fetch_available_links')) {
                 $excludeClause = ' AND id NOT IN (' . implode(',', $unique) . ')';
             }
         }
-        $fetchLimit = min(500, max($limit * 3, 50));
-        $sql = "SELECT id, url, status, language, region, form_required FROM crowd_links WHERE status IN ('ok','pending')" . $excludeClause . ' ORDER BY updated_at DESC LIMIT ' . $fetchLimit;
+        $excludeDomainMap = [];
+        if (!empty($options['exclude_domains']) && is_array($options['exclude_domains'])) {
+            foreach ($options['exclude_domains'] as $domain) {
+                $normalized = strtolower(trim((string)$domain));
+                if ($normalized === '') { continue; }
+                $excludeDomainMap[$normalized] = true;
+            }
+        }
+        $domainExcludeClause = '';
+        if (!empty($excludeDomainMap)) {
+            $escapedDomains = [];
+            foreach (array_keys($excludeDomainMap) as $domainValue) {
+                $escapedDomains[] = "'" . $conn->real_escape_string($domainValue) . "'";
+            }
+            if (!empty($escapedDomains)) {
+                $domainExcludeClause = ' AND domain NOT IN (' . implode(',', $escapedDomains) . ')';
+            }
+        }
+
+        $fetchLimit = min(800, max($limit * 6, 60));
+        $sql = "SELECT id, url, domain, status, language, region, form_required, deep_status, deep_checked_at FROM crowd_links WHERE status = 'ok' AND deep_status = 'success'"
+            . $excludeClause . $domainExcludeClause
+            . ' ORDER BY COALESCE(deep_checked_at, updated_at) DESC, id DESC LIMIT ' . $fetchLimit;
         $links = [];
         if ($res = @$conn->query($sql)) {
             while ($row = $res->fetch_assoc()) {
@@ -837,15 +903,44 @@ if (!function_exists('pp_promotion_crowd_fetch_available_links')) {
         }
         $preferredLanguage = strtolower(trim((string)($options['preferred_language'] ?? '')));
         $preferredRegion = strtoupper(trim((string)($options['preferred_region'] ?? '')));
+        $uniqueDomain = !empty($options['unique_domain']);
         usort($links, static function(array $a, array $b) use ($preferredLanguage, $preferredRegion) {
             $scoreA = pp_promotion_crowd_score_link($a, $preferredLanguage, $preferredRegion);
             $scoreB = pp_promotion_crowd_score_link($b, $preferredLanguage, $preferredRegion);
             if ($scoreA === $scoreB) {
+                $timeA = isset($a['deep_checked_at']) ? strtotime((string)$a['deep_checked_at']) : 0;
+                $timeB = isset($b['deep_checked_at']) ? strtotime((string)$b['deep_checked_at']) : 0;
+                if ($timeA !== $timeB) {
+                    return $timeA > $timeB ? -1 : 1;
+                }
                 return ((int)($a['id'] ?? 0)) <=> ((int)($b['id'] ?? 0));
             }
             return $scoreA < $scoreB ? -1 : 1;
         });
-        return array_slice($links, 0, $limit);
+        $filtered = [];
+        $seenDomains = [];
+        foreach ($links as $row) {
+            $domainNormalized = strtolower(trim((string)($row['domain'] ?? '')));
+            if ($domainNormalized !== '' && isset($excludeDomainMap[$domainNormalized])) {
+                continue;
+            }
+            if (!empty($row['deep_status']) && strtolower((string)$row['deep_status']) !== 'success') {
+                continue;
+            }
+            if ($uniqueDomain) {
+                $domainKey = $domainNormalized !== '' ? $domainNormalized : ('__' . (int)($row['id'] ?? 0));
+                if (isset($seenDomains[$domainKey])) {
+                    continue;
+                }
+                $seenDomains[$domainKey] = true;
+            }
+            unset($row['deep_status'], $row['deep_checked_at']);
+            $filtered[] = $row;
+            if (count($filtered) >= $limit) {
+                break;
+            }
+        }
+        return $filtered;
     }
 }
 

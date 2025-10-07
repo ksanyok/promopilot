@@ -2675,7 +2675,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (newLangSelect) newLangSelect.value = newLangSelect.querySelector('option')?.value || newLangSelect.value;
             } catch (e) {
                 removePlaceholderRow(placeholderRow);
-                alert('<?php echo __('Сетевая ошибка'); ?>');
+                if (!isAbortError(e)) {
+                    alert('<?php echo __('Сетевая ошибка'); ?>');
+                }
             } finally {
                 setButtonLoading(addLinkBtn, false);
             }

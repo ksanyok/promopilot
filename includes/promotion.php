@@ -1307,6 +1307,28 @@ if (!function_exists('pp_promotion_get_status')) {
             }
             $res->free();
         }
+        $successfulCrowdStatuses = ['completed','success','done','posted','published','ok'];
+        $visibleCrowdItems = [];
+        foreach ($crowdStats['items'] as $item) {
+            $statusNormalized = strtolower((string)($item['status_normalized'] ?? $item['status'] ?? ''));
+            if (!in_array($statusNormalized, $successfulCrowdStatuses, true)) {
+                continue;
+            }
+            unset($item['fallback_reason'], $item['manual_fallback']);
+            $visibleCrowdItems[] = $item;
+        }
+        $crowdStats['items'] = array_values($visibleCrowdItems);
+        $crowdStats['manual'] = 0;
+        $crowdStats['manual_fallback'] = 0;
+        $crowdStats['failed'] = 0;
+        $crowdStats['attempted'] = (int)$crowdStats['completed'] + (int)$crowdStats['queued'] + (int)$crowdStats['running'] + (int)$crowdStats['planned'];
+        if ($crowdStats['target'] > 0) {
+            $crowdStats['total'] = (int)$crowdStats['target'];
+            $crowdStats['remaining'] = max(0, (int)$crowdStats['target'] - (int)$crowdStats['completed']);
+            $crowdStats['percent'] = $crowdStats['target'] > 0
+                ? (float)round(($crowdStats['completed'] / $crowdStats['target']) * 100, 1)
+                : 0.0;
+        }
         $conn->close();
         return [
             'ok' => true,
