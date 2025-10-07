@@ -1326,6 +1326,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const newAnchorStrategy = document.getElementById('new_anchor_strategy');
     const newLangSelect = document.getElementById('new_language_select');
     const anchorPresetContainer = document.getElementById('anchor-preset-list');
+    const anchorPresetWrapper = anchorPresetContainer ? anchorPresetContainer.closest('[data-anchor-presets-wrapper]') : null;
     const newWish = document.getElementById('new_wish');
     const globalWish = document.getElementById('global_wishes');
     const useGlobal = document.getElementById('use_global_wish');
@@ -1650,9 +1651,15 @@ document.addEventListener('DOMContentLoaded', function() {
         anchorPresetContainer.innerHTML = '';
         if (presets.length === 0) {
             anchorPresetContainer.classList.add('d-none');
+            if (anchorPresetWrapper) {
+                anchorPresetWrapper.classList.add('d-none');
+            }
             return;
         }
         anchorPresetContainer.classList.remove('d-none');
+        if (anchorPresetWrapper) {
+            anchorPresetWrapper.classList.remove('d-none');
+        }
         const fragment = document.createDocumentFragment();
         const langKey = normalizeAnchorLanguage(lang) || (PROJECT_LANGUAGE || '').toLowerCase();
         presets.forEach(preset => {
@@ -2561,6 +2568,13 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 promotionConfirmSavingsBlock.classList.add('d-none');
             }
+        }
+        // Align modal balance currency with app's global currency code
+        const modalChargeCard = document.querySelector('.promotion-confirm-amount');
+        const prevCurrency = navBalanceCurrency;
+        const modalCurrency = modalChargeCard?.getAttribute('data-currency-code') || prevCurrency;
+        if (modalCurrency && modalCurrency !== navBalanceCurrency) {
+            try { navBalanceValueEl && (navBalanceValueEl.dataset.balanceCurrency = modalCurrency); } catch(e) {}
         }
         const currentBalanceFormatted = formatBalanceLocale(CURRENT_USER_BALANCE_RAW);
         document.querySelectorAll('[data-current-balance-display]').forEach(el => {

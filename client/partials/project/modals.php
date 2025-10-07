@@ -14,15 +14,15 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
     $level2PerLevel1 = max(0, (int)($promotionSettings['level2_per_level1'] ?? 0));
     $level2MinLen = max(0, (int)($promotionSettings['level2_min_len'] ?? 0));
     $level2MaxLen = max($level2MinLen, (int)($promotionSettings['level2_max_len'] ?? 0));
-    $level2Total = $level1Count * $level2PerLevel1;
+    $level2Total = $level1Enabled ? ($level1Count * $level2PerLevel1) : 0;
 
     $level3PerLevel2 = max(0, (int)($promotionSettings['level3_per_level2'] ?? 0));
     $level3MinLen = max(0, (int)($promotionSettings['level3_min_len'] ?? 0));
     $level3MaxLen = max($level3MinLen, (int)($promotionSettings['level3_max_len'] ?? 0));
-    $level3Total = $level2Total * $level3PerLevel2;
+    $level3Total = ($level2Enabled && $level2Total > 0) ? ($level2Total * $level3PerLevel2) : 0;
 
     $crowdPerArticle = max(0, (int)($promotionSettings['crowd_per_article'] ?? 0));
-    $crowdTotal = $level1Count * $crowdPerArticle;
+    $crowdTotal = $level1Enabled ? ($level1Count * $crowdPerArticle) : 0;
 
     if ($level1Enabled && $level1Count > 0) {
         $promotionCascadeDetails[] = [
@@ -180,20 +180,33 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
                 <?php if (!empty($promotionCascadeDetails)): ?>
                     <div class="card border-0 shadow-sm promotion-cascade-card mb-3">
                         <div class="card-body py-3">
-                            <div class="text-muted small text-uppercase fw-semibold mb-2">
-                                <i class="bi bi-diagram-3 me-2"></i><?php echo __('Каскад размещений'); ?>
+                            <div class="text-muted small text-uppercase fw-semibold mb-3 d-flex align-items-center gap-2">
+                                <i class="bi bi-diagram-3"></i>
+                                <span><?php echo __('Каскад размещений'); ?></span>
                             </div>
-                            <ul class="list-unstyled mb-0 promotion-cascade-list">
-                                <?php foreach ($promotionCascadeDetails as $cascadeItem): ?>
-                                    <li class="mb-2">
-                                        <div class="fw-semibold text-body"><?php echo htmlspecialchars($cascadeItem['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
-                                        <div class="small text-muted"><?php echo htmlspecialchars($cascadeItem['count'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
-                                        <?php if (!empty($cascadeItem['length'])): ?>
-                                            <div class="small text-muted"><?php echo htmlspecialchars($cascadeItem['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
-                                        <?php endif; ?>
-                                    </li>
+                            <div class="row g-3">
+                                <?php foreach ($promotionCascadeDetails as $idx => $cascadeItem): ?>
+                                    <div class="col-12 col-md-6 col-xl-4">
+                                        <div class="p-3 rounded-3 bg-body-tertiary h-100 border border-secondary-subtle">
+                                            <div class="d-flex align-items-center gap-2 mb-2">
+                                                <div class="badge bg-primary-subtle text-primary-emphasis">
+                                                    <?php echo htmlspecialchars($cascadeItem['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
+                                                </div>
+                                            </div>
+                                            <?php if (!empty($cascadeItem['count'])): ?>
+                                                <div class="small text-muted">
+                                                    <?php echo htmlspecialchars($cascadeItem['count'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($cascadeItem['length'])): ?>
+                                                <div class="small text-muted mt-1">
+                                                    <?php echo htmlspecialchars($cascadeItem['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                 <?php endforeach; ?>
-                            </ul>
+                            </div>
                         </div>
                     </div>
                 <?php endif; ?>
@@ -201,7 +214,7 @@ if (isset($promotionSettings) && is_array($promotionSettings)) {
                     <i class="bi bi-info-circle-fill mt-1"></i>
                     <div><?php echo __('Фактическое количество размещений может меняться: базы площадок и крауд-задачи регулярно обновляются, недоступные площадки исключаются автоматически.'); ?></div>
                 </div>
-                <div class="promotion-confirm-amount card bg-dark border-secondary-subtle mb-3">
+                <div class="promotion-confirm-amount card bg-dark border-secondary-subtle mb-3" data-currency-code="<?php echo htmlspecialchars(get_currency_code(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
                     <div class="card-body">
                         <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-md-between gap-3">
                             <div>

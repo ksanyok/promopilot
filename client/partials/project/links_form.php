@@ -32,11 +32,6 @@
                             <label class="form-label visually-hidden" for="new_anchor_input"><?php echo __('Анкор'); ?></label>
                             <input type="text" name="new_anchor" id="new_anchor_input" class="form-control" placeholder="<?php echo __('Анкор (подставится автоматически)'); ?>">
                             <input type="hidden" name="new_anchor_strategy" id="new_anchor_strategy" value="auto">
-                            <div class="form-helper small text-muted mt-2 d-flex align-items-start gap-2">
-                                <i class="bi bi-life-preserver text-primary"></i>
-                                <span><?php echo __('Оставьте поле пустым — мы подберем мягкий безанкорный текст на языке страницы. Можно выбрать готовый вариант ниже.'); ?></span>
-                            </div>
-                            <div class="anchor-presets mt-2" id="anchor-preset-list" data-current-lang="<?php echo htmlspecialchars($projectLanguageRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"></div>
                         </div>
                         <div class="col-12 col-lg-2">
                             <label class="form-label visually-hidden" for="new_language_select"><?php echo __('Язык'); ?></label>
@@ -46,6 +41,17 @@
                                 <?php endforeach; ?>
                             </select>
                         </div>
+                    </div>
+                    <div class="form-helper form-helper--compact form-helper--anchor-tip mb-2">
+                        <i class="bi bi-life-preserver"></i>
+                        <span><?php echo __('Оставьте поле пустым — мы подберем мягкий безанкорный текст на языке страницы. Можно выбрать готовый вариант ниже.'); ?></span>
+                    </div>
+                    <div class="anchor-presets-panel mt-2 d-none" data-anchor-presets-wrapper>
+                        <div class="anchor-presets-panel__header">
+                            <i class="bi bi-magic"></i>
+                            <span><?php echo __('Готовые варианты анкора'); ?></span>
+                        </div>
+                        <div class="anchor-presets" id="anchor-preset-list" data-current-lang="<?php echo htmlspecialchars($projectLanguageRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"></div>
                     </div>
                     <?php if (!empty($project['domain_host'])): ?>
                     <div class="modal-domain note note--warning mb-3" id="domain-hint"><i class="bi bi-shield-lock me-2"></i><span><?php echo __('Добавлять ссылки можно только в рамках домена проекта'); ?>:</span> <code id="domain-host-code"><?php echo htmlspecialchars($project['domain_host']); ?></code></div>
