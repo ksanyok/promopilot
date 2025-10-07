@@ -1075,8 +1075,11 @@
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 1055;
+  z-index: 1050; /* keep below Bootstrap's .modal to avoid conflicts */
 }
+.modal-backdrop { z-index: 1040; }
+.modal { z-index: 1055; }
+.modal.show { display: block; }
 .pp-modal.show { display: flex; }
 .pp-modal .pp-modal-dialog {
   width: min(800px, 92vw);

@@ -158,7 +158,7 @@ $settings['promotion_crowd_per_article'] = (string)max(0, (int)($settings['promo
 
 
 // Получить пользователей
-$users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.promotion_discount, u.created_at, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");
+$users = $conn->query("SELECT u.id, u.username, u.role, u.email, u.balance, u.promotion_discount, u.created_at, u.referral_commission_percent, u.referral_code, COUNT(p.id) AS projects_count FROM users u LEFT JOIN projects p ON p.user_id = u.id GROUP BY u.id ORDER BY u.id");
 
 $focusUserId = isset($_GET['focus_user']) ? max(0, (int)$_GET['focus_user']) : 0;
 
