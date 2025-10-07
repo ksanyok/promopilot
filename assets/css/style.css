@@ -3710,3 +3710,55 @@ body.project-create-loading { overflow: hidden; }
 :root[data-theme="light"] .promotion-status-complete .promotion-status-complete-text {
   color: color-mix(in srgb, var(--text) 85%, var(--success) 15%);
 }
+
+/* Admin ▸ Transactions Table */
+.table-transactions tbody tr {
+  border-color: rgba(148, 163, 184, 0.08);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.table-transactions tbody tr:hover {
+  background-color: rgba(148, 163, 184, 0.05);
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.3);
+}
+
+.table-transactions tbody tr.manual-row {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.12), rgba(15, 23, 42, 0.12));
+  border-left: 3px solid rgba(56, 189, 248, 0.6);
+}
+
+.table-transactions tbody tr.manual-row:hover {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.18), rgba(15, 23, 42, 0.18));
+}
+
+.table-transactions .status-badge {
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  cursor: pointer;
+  font-size: .75rem;
+  line-height: 1;
+  padding: .45rem .75rem;
+  border-radius: 999px;
+  box-shadow: 0 0 0 rgba(15, 23, 42, 0);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.table-transactions .status-badge:hover,
+.table-transactions .status-badge:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(56, 189, 248, 0.25);
+}
+
+.table-transactions .status-badge:focus-visible {
+  outline: none;
+}
+
+.table-transactions .status-badge.bg-warning {
+  color: #1f2a37;
+}
+
+.table-transactions td .text-muted {
+  color: rgba(148, 163, 184, 0.8) !important;
+}

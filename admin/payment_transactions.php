@@ -77,60 +77,115 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 25;
 $offset = ($page - 1) * $perPage;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action'])) {
-    if (!verify_csrf()) {
-        $messages['error'][] = __('Не удалось выполнить действие (CSRF).');
-    } else {
-        $bulkAction = (string)($_POST['bulk_action'] ?? '');
-        $idList = $_POST['transaction_ids'] ?? [];
-        if (!is_array($idList)) {
-            $idList = [];
-        }
-        $idList = array_unique(array_map('intval', $idList));
-        $idList = array_values(array_filter($idList, static fn($id) => $id > 0));
-        if (empty($idList)) {
-            $messages['error'][] = __('Выберите хотя бы один платёж.');
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['bulk_action'])) {
+        if (!verify_csrf()) {
+            $messages['error'][] = __('Не удалось выполнить действие (CSRF).');
         } else {
-            $supportedActions = ['approve', 'reject'];
-            if (!in_array($bulkAction, $supportedActions, true)) {
-                $messages['error'][] = __('Неизвестное действие.');
+            $bulkAction = (string)($_POST['bulk_action'] ?? '');
+            $idList = $_POST['transaction_ids'] ?? [];
+            if (!is_array($idList)) {
+                $idList = [];
+            }
+            $idList = array_unique(array_map('intval', $idList));
+            $idList = array_values(array_filter($idList, static fn($id) => $id > 0));
+            if (empty($idList)) {
+                $messages['error'][] = __('Выберите хотя бы один платёж.');
             } else {
-                $processed = 0;
-                $already = 0;
-                $failed = 0;
-                foreach ($idList as $txId) {
-                    if ($bulkAction === 'approve') {
-                        $result = pp_payment_transaction_mark_confirmed($txId);
-                        if (!empty($result['ok'])) {
-                            if (!empty($result['already'])) {
-                                $already++;
+                $supportedActions = ['approve', 'reject'];
+                if (!in_array($bulkAction, $supportedActions, true)) {
+                    $messages['error'][] = __('Неизвестное действие.');
+                } else {
+                    $processed = 0;
+                    $already = 0;
+                    $failed = 0;
+                    foreach ($idList as $txId) {
+                        if ($bulkAction === 'approve') {
+                            $result = pp_payment_transaction_mark_confirmed($txId);
+                            if (!empty($result['ok'])) {
+                                if (!empty($result['already'])) {
+                                    $already++;
+                                } else {
+                                    $processed++;
+                                }
                             } else {
-                                $processed++;
+                                $failed++;
                             }
-                        } else {
-                            $failed++;
-                        }
-                    } elseif ($bulkAction === 'reject') {
-                        $result = pp_payment_transaction_mark_failed($txId, 'cancelled', [], __('Отклонено администратором'));
-                        if (!empty($result['ok'])) {
-                            if (!empty($result['already_confirmed'])) {
-                                $already++;
+                        } elseif ($bulkAction === 'reject') {
+                            $result = pp_payment_transaction_mark_failed($txId, 'cancelled', [], __('Отклонено администратором'));
+                            if (!empty($result['ok'])) {
+                                if (!empty($result['already_confirmed'])) {
+                                    $already++;
+                                } else {
+                                    $processed++;
+                                }
                             } else {
-                                $processed++;
+                                $failed++;
                             }
-                        } else {
-                            $failed++;
                         }
                     }
+                    if ($processed > 0) {
+                        $messages['success'][] = sprintf(__('Успешно обработано: %d'), $processed);
+                    }
+                    if ($already > 0) {
+                        $messages['success'][] = sprintf(__('Уже были подтверждены: %d'), $already);
+                    }
+                    if ($failed > 0) {
+                        $messages['error'][] = sprintf(__('Не удалось обработать: %d'), $failed);
+                    }
                 }
-                if ($processed > 0) {
-                    $messages['success'][] = sprintf(__('Успешно обработано: %d'), $processed);
-                }
-                if ($already > 0) {
-                    $messages['success'][] = sprintf(__('Уже были подтверждены: %d'), $already);
-                }
-                if ($failed > 0) {
-                    $messages['error'][] = sprintf(__('Не удалось обработать: %d'), $failed);
+            }
+        }
+    } elseif (isset($_POST['status_modal_action'])) {
+        if (!verify_csrf()) {
+            $messages['error'][] = __('Не удалось обновить статус (CSRF).');
+        } else {
+            $txId = (int)($_POST['transaction_id'] ?? 0);
+            $newStatus = strtolower(trim((string)($_POST['new_status'] ?? '')));
+            if ($newStatus === 'canceled') {
+                $newStatus = 'cancelled';
+            }
+            $allowedStatus = ['pending', 'awaiting_confirmation', 'confirmed', 'failed', 'cancelled', 'expired'];
+            if ($txId <= 0) {
+                $messages['error'][] = __('Не удалось определить платёж.');
+            } elseif (!in_array($newStatus, $allowedStatus, true)) {
+                $messages['error'][] = __('Выбран некорректный статус.');
+            } else {
+                $transaction = pp_payment_transaction_get($txId);
+                if (!$transaction) {
+                    $messages['error'][] = __('Платёж не найден.');
+                } else {
+                    $result = null;
+                    if ($newStatus === 'confirmed') {
+                        $result = pp_payment_transaction_mark_confirmed($txId);
+                    } elseif (in_array($newStatus, ['failed', 'cancelled', 'expired'], true)) {
+                        $result = pp_payment_transaction_mark_failed($txId, $newStatus, [], __('Статус обновлён вручную.'));
+                    } else {
+                        $result = pp_payment_transaction_set_status($txId, $newStatus);
+                    }
+                    if (!empty($result['ok'])) {
+                        if (!empty($result['already'])) {
+                            $messages['success'][] = __('Статус уже был установлен ранее.');
+                        } elseif (!empty($result['already_confirmed'])) {
+                            $messages['error'][] = __('Платёж уже подтверждён, статус оставить без изменений.');
+                        } else {
+                            $statusLabel = pp_payment_transaction_status_label($newStatus);
+                            $messages['success'][] = sprintf(
+                                __('Статус обновлён на «%s».'),
+                                $statusLabel
+                            );
+                        }
+                    } else {
+                        $errorMsg = trim((string)($result['error'] ?? ''));
+                        if ($errorMsg === 'already_confirmed') {
+                            $messages['error'][] = __('Платёж уже подтверждён, статус оставить без изменений.');
+                        } else {
+                            $messages['error'][] = __('Не удалось обновить статус.');
+                            if ($errorMsg !== '') {
+                                $messages['error'][] = $errorMsg;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -458,8 +513,8 @@ function pp_admin_tx_status_badge(string $status): string {
         case 'canceled':
         case 'expired':
             return 'bg-secondary';
-        case 'manual':
-            return 'bg-info text-dark';
+            case 'manual':
+                return 'bg-info text-dark';
         default:
             return 'bg-light text-dark';
     }
@@ -591,7 +646,7 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
             </div>
         </div>
         <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-hover align-middle mb-0 table-transactions">
                 <thead>
                     <tr>
                         <th class="text-center" style="width:36px;">
@@ -617,12 +672,13 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
                             <?php
                                 $isManual = ($tx['record_type'] === 'manual');
                                 $selectable = !$isManual && in_array($tx['status'], ['pending', 'awaiting_confirmation'], true);
-                                $rowClass = $isManual ? 'table-light' : '';
+                                $rowClass = $isManual ? 'manual-row' : '';
                                 $amountClass = $isManual ? ($tx['amount'] >= 0 ? 'text-success' : 'text-danger') : '';
                                 $idLabel = $isManual ? 'M' . (int)$tx['primary_id'] : (int)$tx['primary_id'];
                                 $manualComment = $isManual ? trim((string)($tx['manual_comment'] ?? '')) : '';
                                 $manualAdmin = $isManual ? trim((string)($tx['manual_admin_username'] ?? $tx['manual_admin_full_name'] ?? '')) : '';
                                 $manualBalanceAfter = $isManual && isset($tx['manual_balance_after']) ? (float)$tx['manual_balance_after'] : null;
+                                $gatewayTitle = pp_payment_gateway_title($tx['gateway_code'], strtoupper($tx['gateway_code']));
                             ?>
                             <tr class="<?php echo $rowClass; ?>">
                                 <td class="text-center">
@@ -648,9 +704,9 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
                                 </td>
                                 <td>
                                     <?php if ($isManual): ?>
-                                        <span class="badge bg-info text-dark"><?php echo __('Ручное изменение'); ?></span>
+                                        <span class="badge bg-info text-dark"><?php echo htmlspecialchars($gatewayTitle); ?></span>
                                     <?php else: ?>
-                                        <strong><?php echo htmlspecialchars(pp_payment_gateway_title($tx['gateway_code'], strtoupper($tx['gateway_code']))); ?></strong>
+                                        <strong><?php echo htmlspecialchars($gatewayTitle); ?></strong>
                                     <?php endif; ?>
                                 </td>
                                 <td class="<?php echo $amountClass; ?>">
@@ -665,9 +721,24 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="badge <?php echo pp_admin_tx_status_badge($tx['status']); ?>">
-                                        <?php echo htmlspecialchars(pp_payment_transaction_status_label($tx['status'])); ?>
-                                    </span>
+                                    <?php if ($isManual): ?>
+                                        <span class="badge <?php echo pp_admin_tx_status_badge($tx['status']); ?>">
+                                            <?php echo htmlspecialchars(pp_payment_transaction_status_label($tx['status'])); ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <button type="button"
+                                            class="badge <?php echo pp_admin_tx_status_badge($tx['status']); ?> status-badge js-status-modal"
+                                            data-id="<?php echo (int)$tx['primary_id']; ?>"
+                                            data-display-id="<?php echo htmlspecialchars('#' . (int)$tx['primary_id']); ?>"
+                                            data-status="<?php echo htmlspecialchars(strtolower($tx['status'])); ?>"
+                                            data-status-label="<?php echo htmlspecialchars(pp_payment_transaction_status_label($tx['status'])); ?>"
+                                            data-username="<?php echo htmlspecialchars((string)($tx['username'] ?? sprintf(__('ID %d'), (int)$tx['user_id']))); ?>"
+                                            data-amount="<?php echo htmlspecialchars(number_format($tx['amount'], 2, '.', ' ')); ?>"
+                                            data-currency="<?php echo htmlspecialchars(strtoupper($tx['currency'])); ?>"
+                                            data-gateway="<?php echo htmlspecialchars($gatewayTitle); ?>">
+                                            <?php echo htmlspecialchars(pp_payment_transaction_status_label($tx['status'])); ?>
+                                        </button>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if ($isManual): ?>
@@ -742,6 +813,53 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
 
 </div>
 
+<?php $statusModalOptions = ['pending', 'awaiting_confirmation', 'confirmed', 'failed', 'cancelled', 'expired']; ?>
+<div class="modal fade" id="tx-status-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0">
+            <form method="post" action="<?php echo htmlspecialchars($formAction); ?>" autocomplete="off">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="status_modal_action" value="1">
+                <input type="hidden" name="transaction_id" value="">
+                <div class="modal-header border-0 pb-0">
+                    <div>
+                        <h5 class="modal-title fw-semibold"><?php echo __('Изменить статус платежа'); ?></h5>
+                        <p class="text-muted small mb-0" data-modal-status-context></p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo __('Закрыть'); ?>"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="rounded bg-dark-subtle bg-opacity-50 p-3 mb-3 text-muted small d-flex flex-column gap-1">
+                        <div>
+                            <span class="fw-semibold" data-modal-transaction-id>—</span>
+                            <span class="ms-2" data-modal-transaction-user>—</span>
+                        </div>
+                        <div data-modal-transaction-amount></div>
+                        <div><?php echo __('Текущий статус'); ?>:
+                            <span class="badge bg-secondary" data-modal-status-label>—</span>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="tx-status-select"><?php echo __('Новый статус'); ?></label>
+                        <select class="form-select" id="tx-status-select" name="new_status" required>
+                            <?php foreach ($statusModalOptions as $status): ?>
+                                <option value="<?php echo $status; ?>"><?php echo htmlspecialchars(pp_payment_transaction_status_label($status)); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="alert alert-info small mb-0" role="alert">
+                        <?php echo __('При выборе статуса «Зачислено» средства будут автоматически добавлены на баланс клиента.'); ?>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo __('Отмена'); ?></button>
+                    <button type="submit" class="btn btn-primary"><?php echo __('Сохранить'); ?></button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const checkAll = document.querySelector('[data-bulk-check-all]');
@@ -771,6 +889,58 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     updateButtons();
+
+    const statusButtons = Array.from(document.querySelectorAll('.js-status-modal'));
+    const modalElement = document.getElementById('tx-status-modal');
+    if (modalElement && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+        const modal = new bootstrap.Modal(modalElement);
+        const txIdInput = modalElement.querySelector('input[name="transaction_id"]');
+        const statusSelect = modalElement.querySelector('#tx-status-select');
+        const statusLabel = modalElement.querySelector('[data-modal-status-label]');
+        const txIdLabel = modalElement.querySelector('[data-modal-transaction-id]');
+        const txUserLabel = modalElement.querySelector('[data-modal-transaction-user]');
+        const txAmountLabel = modalElement.querySelector('[data-modal-transaction-amount]');
+        const statusContext = modalElement.querySelector('[data-modal-status-context]');
+
+        statusButtons.forEach(btn => {
+            btn.addEventListener('click', function () {
+                const id = this.getAttribute('data-id');
+                const displayId = this.getAttribute('data-display-id') || ('#' + id);
+                let status = this.getAttribute('data-status') || '';
+                const statusHuman = this.getAttribute('data-status-label') || '';
+                const username = this.getAttribute('data-username') || '';
+                const amount = this.getAttribute('data-amount') || '';
+                const currency = this.getAttribute('data-currency') || '';
+                const gateway = this.getAttribute('data-gateway') || '';
+                txIdInput.value = id;
+                txIdLabel.textContent = displayId;
+                txUserLabel.textContent = username;
+                if (amount !== '') {
+                    txAmountLabel.textContent = '<?php echo addslashes(__('Сумма')); ?>: ' + amount + ' ' + currency;
+                    txAmountLabel.classList.remove('d-none');
+                } else {
+                    txAmountLabel.textContent = '';
+                    txAmountLabel.classList.add('d-none');
+                }
+                statusLabel.textContent = statusHuman;
+                if (gateway !== '') {
+                    statusContext.textContent = '<?php echo addslashes(__('Источник')); ?>: ' + gateway;
+                } else {
+                    statusContext.textContent = '<?php echo addslashes(__('Выберите новый статус для платежа.')); ?>';
+                }
+                if (status === 'canceled') {
+                    status = 'cancelled';
+                }
+                const selectableStatuses = Array.from(statusSelect.options).map(option => option.value);
+                if (selectableStatuses.includes(status)) {
+                    statusSelect.value = status;
+                } else {
+                    statusSelect.selectedIndex = 0;
+                }
+                modal.show();
+            });
+        });
+    }
 });
 </script>
 

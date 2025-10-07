@@ -628,6 +628,82 @@ if (!function_exists('pp_payment_transaction_mark_failed')) {
     }
 }
 
+if (!function_exists('pp_payment_transaction_set_status')) {
+    function pp_payment_transaction_set_status(int $transactionId, string $status): array {
+        $transactionId = (int)$transactionId;
+        $status = strtolower(trim($status));
+        $allowed = ['pending', 'awaiting_confirmation'];
+        if ($transactionId <= 0 || !in_array($status, $allowed, true)) {
+            return ['ok' => false, 'error' => 'status_not_supported'];
+        }
+        try {
+            $conn = connect_db();
+        } catch (Throwable $e) {
+            return ['ok' => false, 'error' => 'DB connection failed'];
+        }
+        if (!$conn) {
+            return ['ok' => false, 'error' => 'DB connection failed'];
+        }
+        $conn->begin_transaction();
+        $stmt = $conn->prepare("SELECT id, status, provider_payload FROM payment_transactions WHERE id = ? FOR UPDATE");
+        if (!$stmt) {
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'Statement failed'];
+        }
+        $stmt->bind_param('i', $transactionId);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res ? $res->fetch_assoc() : null;
+        if ($res) {
+            $res->free();
+        }
+        $stmt->close();
+        if (!$row) {
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'Transaction not found'];
+        }
+        $current = strtolower((string)$row['status']);
+        if ($current === $status) {
+            $conn->commit();
+            $conn->close();
+            return ['ok' => true, 'already' => true, 'status' => $status];
+        }
+        if ($current === 'confirmed') {
+            $conn->commit();
+            $conn->close();
+            return ['ok' => false, 'error' => 'already_confirmed'];
+        }
+        $payloadStruct = pp_payment_json_decode($row['provider_payload'] ?? '', []);
+        if (!isset($payloadStruct['events']) || !is_array($payloadStruct['events'])) {
+            $payloadStruct['events'] = [];
+        }
+        $payloadStruct['events'][] = [
+            'ts' => time(),
+            'status' => $status,
+            'trigger' => 'manual_admin_update',
+        ];
+        $payloadStruct['last_status'] = $status;
+        $payloadJson = json_encode($payloadStruct, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payloadJson === false) {
+            $payloadJson = null;
+        }
+        $stmt = $conn->prepare("UPDATE payment_transactions SET status = ?, provider_payload = ?, error_message = NULL, confirmed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+        if (!$stmt) {
+            $conn->rollback();
+            $conn->close();
+            return ['ok' => false, 'error' => 'Update failed'];
+        }
+        $stmt->bind_param('ssi', $status, $payloadJson, $transactionId);
+        $stmt->execute();
+        $stmt->close();
+        $conn->commit();
+        $conn->close();
+        return ['ok' => true, 'status' => $status];
+    }
+}
+
 if (!function_exists('pp_payment_transaction_create')) {
     function pp_payment_transaction_create(int $userId, string $gatewayCode, float $amount, array $options = []): array {
         $userId = (int)$userId;
