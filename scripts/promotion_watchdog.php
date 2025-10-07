@@ -1,20 +1,15 @@
 <?php
 declare(strict_types=1);
 
-// Deprecated stub: the watchdog functionality has been superseded by scripts/promotion_cron_tick.php.
-// Kept only to surface a clear error for any legacy cron entries still pointing here.
+// Backward compatibility wrapper: promotion_watchdog.php is deprecated and now forwards to promotion_cron_tick.php.
+// Legacy cron entries pointing here will continue to work while logging a warning.
 
-$message = '[promopilot] scripts/promotion_watchdog.php is deprecated. Run scripts/promotion_cron_tick.php instead.';
+$warning = '[promopilot] scripts/promotion_watchdog.php is deprecated. Forwarding to scripts/promotion_cron_tick.php.';
 
 if (PHP_SAPI === 'cli') {
-    fwrite(STDERR, $message . "\n");
+    fwrite(STDERR, $warning . "\n");
 } else {
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode([
-        'ok' => false,
-        'error' => 'DEPRECATED',
-        'message' => 'Use scripts/promotion_cron_tick.php instead of promotion_watchdog.php',
-    ]);
+    header('X-Promopilot-Warning: promotion_watchdog.php deprecated');
 }
 
-exit(1);
+require __DIR__ . '/promotion_cron_tick.php';
