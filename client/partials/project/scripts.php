@@ -26,7 +26,1226 @@ document.addEventListener('DOMContentLoaded', function() {
     if (promotionConfirmModalEl && promotionConfirmModalEl.parentElement !== document.body) { document.body.appendChild(promotionConfirmModalEl); }
     const insufficientFundsModalEl = document.getElementById('insufficientFundsModal');
     if (insufficientFundsModalEl && insufficientFundsModalEl.parentElement !== document.body) { document.body.appendChild(insufficientFundsModalEl); }
+    function formatPromotionStatusLabel(status) {
+        if (!status) {
+            return '';
+        }
+        return PROMOTION_STATUS_LABELS[status] || status;
+    }
 
+    function truncateText(value, limit) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        const str = String(value);
+        if (!Number.isFinite(limit) || limit <= 0 || str.length <= limit) {
+            return str;
+        }
+        return str.slice(0, Math.max(0, limit - 1)).trimEnd() + '…';
+    }
+
+    function statusBadgeHtml(statusKey, customLabel) {
+        const key = statusKey ? String(statusKey) : '';
+        const derivedLabel = customLabel && customLabel !== key ? customLabel : formatPromotionStatusLabel(key) || key;
+        if (!derivedLabel) {
+            return '';
+        }
+        const classes = STATUS_BADGE_CLASS_MAP[key] || 'bg-secondary-subtle text-secondary-emphasis';
+        return `<span class="badge ${classes}">${escapeHtml(derivedLabel)}</span>`;
+    }
+
+    function formatNodeStatusLabel(status, manualFallback) {
+        if (manualFallback) {
+            return '<?php echo __('Ручной fallback'); ?>';
+        }
+        const map = {
+            'success': '<?php echo __('Готово'); ?>',
+            'completed': '<?php echo __('Готово'); ?>',
+            'running': '<?php echo __('В процессе'); ?>',
+            'pending': '<?php echo __('Ожидают запуска'); ?>',
+            'queued': '<?php echo __('Ожидают запуска'); ?>',
+            'created': '<?php echo __('Создан'); ?>',
+            'failed': '<?php echo __('Ошибка'); ?>',
+            'cancelled': '<?php echo __('Отменено'); ?>'
+        };
+        const key = status ? String(status) : '';
+        return map[key] || key;
+    }
+
+    function formatCrowdStatus(status, manualFallback) {
+        if (manualFallback) {
+            return { key: 'manual_fallback', label: '<?php echo __('Ручной fallback'); ?>' };
+        }
+        const key = (status || '').toString().toLowerCase();
+        const map = {
+            'success': '<?php echo __('Готово'); ?>',
+            'completed': '<?php echo __('Готово'); ?>',
+            'running': '<?php echo __('В процессе'); ?>',
+            'pending': '<?php echo __('Ожидают запуска'); ?>',
+            'queued': '<?php echo __('Ожидают запуска'); ?>',
+            'planned': '<?php echo __('Ожидают запуска'); ?>',
+            'created': '<?php echo __('Создан'); ?>',
+            'failed': '<?php echo __('Ошибка'); ?>',
+            'error': '<?php echo __('Ошибка'); ?>',
+            'cancelled': '<?php echo __('Отменено'); ?>'
+        };
+        return { key, label: map[key] || key };
+    }
+
+    function buildReportLinkHtml(url, text, options = {}) {
+        const href = typeof url === 'string' ? url.trim() : '';
+        if (!href) {
+            return '—';
+        }
+        const labelText = text ? String(text) : truncateText(href, options.truncate || 80);
+        const className = options.className ? escapeAttribute(options.className) : 'link-primary';
+        const titleAttr = options.title ? ` title="${escapeAttribute(options.title)}"` : '';
+        return `<a href="${escapeAttribute(href)}" class="${className}" target="_blank" rel="noopener"${titleAttr}>${escapeHtml(labelText)}</a>`;
+    }
+
+    function renderPromotionReportOverview(ctx) {
+        const toNumber = (value) => Number.isFinite(value) ? value : 0;
+        const listOrEmpty = (value) => Array.isArray(value) ? value : [];
+        const levelsEnabled = ctx.levelsEnabled || {};
+        const level1 = levelsEnabled.level1 === false ? [] : listOrEmpty(ctx.level1);
+        const level2 = levelsEnabled.level2 === false ? [] : listOrEmpty(ctx.level2);
+        const level3 = levelsEnabled.level3 === false ? [] : listOrEmpty(ctx.level3);
+        const crowd = levelsEnabled.crowd === false ? [] : listOrEmpty(ctx.crowd);
+        const countNetworks = (items) => {
+            try {
+                return (new Set(items.map(item => (item?.network || '').trim()).filter(Boolean))).size;
+            } catch (_) {
+                return 0;
+            }
+        };
+        const totals = {
+            level1: toNumber(level1.length),
+            level2: toNumber(level2.length),
+            level3: toNumber(level3.length),
+            crowd: toNumber(crowd.length)
+        };
+        const cascadeTotal = totals.level1 + totals.level2 + totals.level3;
+        const overallTotal = cascadeTotal + totals.crowd;
+        const summaryRows = [];
+        if (ctx.targetUrl) {
+            summaryRows.push(`
+                <div class="promotion-report-kv">
+                    <span class="kv-label"><?php echo __('Целевая страница'); ?></span>
+                    <span class="kv-value text-truncate" title="${escapeAttribute(ctx.targetUrl)}">
+                        ${buildReportLinkHtml(ctx.targetUrl, truncateText(ctx.targetUrl, 64), { className: 'link-emphasis', title: ctx.targetUrl })}
+                    </span>
+                </div>
+            `);
+        }
+        summaryRows.push(`
+            <div class="promotion-report-kv">
+                <span class="kv-label"><?php echo __('Текущий статус'); ?></span>
+                <span class="kv-value">${statusBadgeHtml(ctx.statusKey, ctx.statusLabel)}</span>
+            </div>
+        `);
+        summaryRows.push(`
+            <div class="promotion-report-kv">
+                <span class="kv-label"><?php echo __('Всего публикаций'); ?></span>
+                <span class="kv-value">${escapeHtml(String(ctx.totalPublications))}</span>
+            </div>
+        `);
+        summaryRows.push(`
+            <div class="promotion-report-kv">
+                <span class="kv-label"><?php echo __('Уникальных сетей'); ?></span>
+                <span class="kv-value">${escapeHtml(String(ctx.uniqueNetworksCount))}</span>
+            </div>
+        `);
+        if (levelsEnabled.crowd !== false) {
+            summaryRows.push(`
+                <div class="promotion-report-kv">
+                    <span class="kv-label"><?php echo __('Крауд-задачи'); ?></span>
+                    <span class="kv-value">${escapeHtml(String(totals.crowd))}</span>
+                </div>
+            `);
+        }
+        if (ctx.manualFallbackCount > 0) {
+            summaryRows.push(`
+                <div class="promotion-report-kv">
+                    <span class="kv-label"><?php echo __('Ручной fallback'); ?></span>
+                    <span class="kv-value">${escapeHtml(String(ctx.manualFallbackCount))}</span>
+                </div>
+            `);
+        }
+
+        const networksLabel = <?php echo json_encode(__('Сетей')); ?>;
+        const tasksLabel = <?php echo json_encode(__('Задач')); ?>;
+        const metrics = [];
+        if (levelsEnabled.level1 !== false) {
+            metrics.push({
+                key: 'level1',
+                label: '<?php echo __('Уровень 1'); ?>',
+                subtitle: `${networksLabel}: ${countNetworks(level1) || 0}`,
+                value: totals.level1
+            });
+        }
+        if (levelsEnabled.level2 !== false) {
+            metrics.push({
+                key: 'level2',
+                label: '<?php echo __('Уровень 2'); ?>',
+                subtitle: `${networksLabel}: ${countNetworks(level2) || 0}`,
+                value: totals.level2
+            });
+        }
+        if (levelsEnabled.level3 !== false) {
+            metrics.push({
+                key: 'level3',
+                label: '<?php echo __('Уровень 3'); ?>',
+                subtitle: `${networksLabel}: ${countNetworks(level3) || 0}`,
+                value: totals.level3
+            });
+        }
+        if (levelsEnabled.crowd !== false) {
+            metrics.push({
+                key: 'crowd',
+                label: '<?php echo __('Крауд'); ?>',
+                subtitle: `${tasksLabel}: ${totals.crowd}`,
+                value: totals.crowd
+            });
+        }
+        const metricCardsHtml = metrics.map(metric => `
+            <div class="promotion-report-metric-card metric-${metric.key}${metric.value ? '' : ' is-empty'}">
+                <div class="metric-label">${escapeHtml(metric.label)}</div>
+                <div class="metric-value">${escapeHtml(String(metric.value))}</div>
+                <div class="metric-sub">${escapeHtml(metric.subtitle)}</div>
+            </div>
+        `).join('');
+
+        const ratioSegments = metrics.filter(metric => metric.value > 0);
+        const totalForRatio = metrics.reduce((acc, item) => acc + (item.value || 0), 0);
+        const ratioBarHtml = ratioSegments.length
+            ? ratioSegments.map((segment) => {
+                const percent = totalForRatio > 0 ? (segment.value / totalForRatio) * 100 : 0;
+                const width = percent > 0 ? Math.max(percent, 6) : 0;
+                const percentLabel = percent > 0 ? `${percent.toFixed(percent >= 10 ? 0 : 1)}%` : '';
+                return `<div class="promotion-report-ratio-segment metric-${segment.key}" style="--segment-width:${width}%;--segment-grow:${Math.max(segment.value || 1, 1)}">
+                    <span class="segment-label">${escapeHtml(segment.label)}</span>
+                    ${percentLabel ? `<span class="segment-value">${escapeHtml(percentLabel)}</span>` : ''}
+                </div>`;
+            }).join('')
+            : `<div class="promotion-flow-empty mb-0"><?php echo __('Нет данных для расчета.'); ?></div>`;
+        const ratioLegendHtml = metrics.map(metric => `
+            <div class="promotion-report-ratio-legend-item metric-${metric.key}">
+                <span class="legend-dot"></span>
+                <span class="legend-label">${escapeHtml(metric.label)}</span>
+                <span class="legend-value">${escapeHtml(String(metric.value))}</span>
+            </div>
+        `).join('');
+
+        return `
+            <div class="promotion-report-overview">
+                <div class="promotion-report-hero card border-0 mb-3">
+                    <div class="card-body">
+                        <div class="hero-text">
+                            <div class="hero-kicker text-uppercase small fw-semibold text-muted mb-1"><?php echo __('Быстрый обзор'); ?></div>
+                            <h5 class="hero-title mb-3"><?php echo __('Ключевые цифры по каскаду и статусу.'); ?></h5>
+                            <p class="hero-description text-muted mb-4"><?php echo __('Сохраните отчет, чтобы отправить клиенту или сохранить для аудита.'); ?></p>
+                        </div>
+                        <div class="promotion-report-summary-grid">
+                            ${summaryRows.join('')}
+                        </div>
+                    </div>
+                </div>
+                <div class="promotion-report-metric-grid">
+                    ${metricCardsHtml}
+                </div>
+                <div class="promotion-report-ratio card border-0 mt-3">
+                    <div class="card-body">
+                        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
+                            <div>
+                                <div class="text-uppercase small fw-semibold text-muted mb-1"><?php echo __('Распределение уровней'); ?></div>
+                                <h6 class="mb-0"><?php echo __('Диаграмма загрузки по каскаду и крауду.'); ?></h6>
+                            </div>
+                            <div class="promotion-report-ratio-legend">
+                                ${ratioLegendHtml}
+                            </div>
+                        </div>
+                        <div class="promotion-report-ratio-bar">
+                            ${ratioBarHtml}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderPromotionReportCascade(ctx) {
+        const levelsEnabled = ctx.levelsEnabled || {};
+        const level1Enabled = levelsEnabled.level1 !== false;
+        const level2Enabled = levelsEnabled.level2 !== false;
+        const level3Enabled = levelsEnabled.level3 !== false;
+        const crowdEnabled = levelsEnabled.crowd !== false;
+        const level1 = level1Enabled && Array.isArray(ctx.level1) ? ctx.level1 : [];
+        const level2 = level2Enabled && Array.isArray(ctx.level2) ? ctx.level2 : [];
+        const level3 = level3Enabled && Array.isArray(ctx.level3) ? ctx.level3 : [];
+        const crowd = crowdEnabled && Array.isArray(ctx.crowd) ? ctx.crowd : [];
+
+        if (!level1Enabled && !level2Enabled && !level3Enabled && !crowdEnabled) {
+            return `<div class="promotion-flow-empty"><?php echo __('Нет данных для расчета.'); ?></div>`;
+        }
+
+        if (!level1.length && !level2.length && !level3.length && !crowd.length) {
+            return `<div class="promotion-flow-empty"><?php echo __('Нет данных для расчета.'); ?></div>`;
+        }
+
+        const level2ByParent = {};
+        const level2Index = {};
+        level2.forEach(item => {
+            const parentId = item?.parent_id ?? null;
+            if (!level2ByParent[parentId]) {
+                level2ByParent[parentId] = [];
+            }
+            level2ByParent[parentId].push(item);
+            if (item?.id !== undefined && item?.id !== null) {
+                level2Index[item.id] = item;
+            }
+        });
+
+        const level3ByParent = {};
+        level3.forEach(item => {
+            const parentId = item?.parent_id ?? null;
+            if (!level3ByParent[parentId]) {
+                level3ByParent[parentId] = [];
+            }
+            level3ByParent[parentId].push(item);
+        });
+
+        function getRootParentId(level2Id) {
+            const parent = level2Index[level2Id];
+            if (!parent) {
+                return null;
+            }
+            const root = parent?.parent_id;
+            return root !== undefined && root !== null ? String(root) : null;
+        }
+
+        function makeCard(entry, level, extra = {}) {
+            const classes = ['promotion-flow-card'];
+            if (level === 'crowd') {
+                classes.push('level-crowd');
+            } else {
+                classes.push(`level-${level}`);
+            }
+            if (extra.clickable) {
+                classes.push('is-clickable');
+            }
+            const dataAttrs = [];
+            if (entry && entry.id !== undefined && entry.id !== null) {
+                dataAttrs.push(`data-id="${escapeAttribute(String(entry.id))}"`);
+            }
+            if (extra.parentId !== undefined && extra.parentId !== null && extra.parentId !== '') {
+                dataAttrs.push(`data-parent-id="${escapeAttribute(String(extra.parentId))}"`);
+            }
+            if (extra.rootParentId !== undefined && extra.rootParentId !== null && extra.rootParentId !== '') {
+                dataAttrs.push(`data-root-parent-id="${escapeAttribute(String(extra.rootParentId))}"`);
+            }
+            const classesAttr = classes.join(' ');
+            const dataAttr = dataAttrs.length ? ' ' + dataAttrs.join(' ') : '';
+            const network = entry?.network || (level === 'crowd' ? '<?php echo __('Крауд'); ?>' : '—');
+            const manualFallback = !!entry?.manual_fallback;
+            const nodeStatus = level === 'crowd'
+                ? formatCrowdStatus(entry?.status, manualFallback)
+                : { key: entry?.status || '', label: formatNodeStatusLabel(entry?.status, manualFallback) };
+            const badge = statusBadgeHtml(nodeStatus.key || entry?.status, nodeStatus.label);
+            const linkUrl = entry?.url || entry?.result_url || entry?.link_url || entry?.crowd_url || '';
+            const linkHtml = linkUrl
+                ? buildReportLinkHtml(linkUrl, truncateText(linkUrl, 70), { className: 'card-link', title: linkUrl })
+                : '<span class="card-link text-muted">—</span>';
+            const metaParts = [];
+            if (entry?.anchor) {
+                metaParts.push(escapeHtml(truncateText(entry.anchor, 110)));
+            } else if (entry?.message) {
+                metaParts.push(escapeHtml(truncateText(entry.message, 110)));
+            }
+            if (entry?.target_url && level !== 'crowd') {
+                metaParts.push(escapeHtml(truncateText(entry.target_url, 110)));
+            }
+            if (entry?.fallback_reason) {
+                metaParts.push(`<span class="text-danger">${escapeHtml(truncateText(entry.fallback_reason, 100))}</span>`);
+            }
+            if (entry?.updated_at) {
+                metaParts.push(`<span class="text-muted">${escapeHtml(truncateText(entry.updated_at, 32))}</span>`);
+            }
+            const metaHtml = metaParts.length ? `<div class="card-meta">${metaParts.join('<br>')}</div>` : '';
+            return `<div class="${classesAttr}"${dataAttr}>
+                <div class="card-title d-flex justify-content-between align-items-start gap-2">
+                    <span>${escapeHtml(network)}</span>
+                    ${badge}
+                </div>
+                ${linkHtml}
+                ${metaHtml}
+            </div>`;
+        }
+
+        const buildColumn = (key, title, subtitle, bodyHtml, count) => `
+            <div class="promotion-flow-column" data-flow-level="${escapeAttribute(key)}">
+                <div class="promotion-flow-header">
+                    <span class="title">${escapeHtml(title)}</span>
+                    <span class="text-muted small">${escapeHtml(String(count))}</span>
+                    ${subtitle ? `<span class="subtitle text-muted small">${escapeHtml(subtitle)}</span>` : ''}
+                </div>
+                <div class="promotion-flow-body">
+                    ${bodyHtml}
+                </div>
+            </div>
+        `;
+
+        const columns = [];
+
+        if (level1Enabled) {
+            const body = level1.length
+                ? level1.map(entry => {
+                    const hasChildren = (Array.isArray(level2ByParent[entry?.id]) && level2ByParent[entry.id].length > 0) ||
+                        level3.some(node => {
+                            const parentId = node?.parent_id;
+                            const parent = parentId !== undefined && parentId !== null ? level2Index[parentId] : null;
+                            return parent && parent.parent_id === entry?.id;
+                        });
+                    return makeCard(entry, 1, { clickable: hasChildren });
+                }).join('')
+                : `<div class="promotion-flow-empty"><?php echo __('Записей не найдено.'); ?></div>`;
+            columns.push(buildColumn('1', '<?php echo __('Уровень 1'); ?>', '<?php echo __('Прямые публикации на целевой ресурс.'); ?>', body, level1.length));
+        }
+
+        if (level2Enabled) {
+            const body = level2.length
+                ? level2.map(entry => {
+                    const hasChildren = Array.isArray(level3ByParent[entry?.id]) && level3ByParent[entry.id].length > 0;
+                    const parentId = entry?.parent_id ?? '';
+                    return makeCard(entry, 2, { clickable: hasChildren, parentId, rootParentId: parentId });
+                }).join('')
+                : `<div class="promotion-flow-empty"><?php echo __('Для этого уровня нет вложенных публикаций.'); ?></div>`;
+            columns.push(buildColumn('2', '<?php echo __('Уровень 2'); ?>', '<?php echo __('Публикации, ссылающиеся на уровень 1.'); ?>', body, level2.length));
+        }
+
+        if (level3Enabled) {
+            const body = level3.length
+                ? level3.map(entry => {
+                    const parentId = entry?.parent_id ?? '';
+                    const rootParentId = parentId ? getRootParentId(parentId) : null;
+                    return makeCard(entry, 3, { parentId, rootParentId });
+                }).join('')
+                : `<div class="promotion-flow-empty"><?php echo __('Для этого уровня нет вложенных публикаций.'); ?></div>`;
+            columns.push(buildColumn('3', '<?php echo __('Уровень 3'); ?>', '<?php echo __('Поддерживающие публикации для уровня 2.'); ?>', body, level3.length));
+        }
+
+        if (crowdEnabled) {
+            const body = crowd.length
+                ? crowd.map(entry => makeCard(entry, 'crowd')).join('')
+                : `<div class="promotion-flow-empty"><?php echo __('Записей не найдено.'); ?></div>`;
+            columns.push(buildColumn('crowd', '<?php echo __('Крауд'); ?>', '<?php echo __('Закрепленные крауд-публикации.'); ?>', body, crowd.length));
+        }
+
+        if (!columns.length) {
+            return `<div class="promotion-flow-empty"><?php echo __('Нет данных для расчета.'); ?></div>`;
+        }
+
+        return `
+            <div class="promotion-report-flow" data-report-flow>
+                ${columns.join('')}
+            </div>
+        `;
+    }
+
+    function renderPromotionReportTableSection(title, entries, columns, options = {}) {
+        const safeTitle = escapeHtml(title || '');
+        const anchorAttr = options.anchor ? ` data-report-anchor="${escapeAttribute(options.anchor)}"` : '';
+        const extraClass = options.className ? ` ${options.className}` : '';
+        if (!Array.isArray(entries) || entries.length === 0) {
+            return `<div class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
+                <h6 class="mb-2">${safeTitle}</h6>
+                <div class="promotion-flow-empty"><?php echo __('Записей не найдено.'); ?></div>
+            </div>`;
+        }
+        const headerHtml = columns.map(col => {
+            const thClass = col.className ? ` class="${escapeAttribute(col.className)}"` : '';
+            return `<th${thClass}>${escapeHtml(col.label || '')}</th>`;
+        }).join('');
+        const rowsHtml = entries.map(entry => `<tr>${columns.map(col => {
+            const cellClass = col.className ? ` class="${escapeAttribute(col.className)}"` : '';
+            const value = col.render ? col.render(entry) : '';
+            return `<td${cellClass}>${value}</td>`;
+        }).join('')}</tr>`).join('');
+        return `<div class="promotion-report-section mb-4${extraClass}"${anchorAttr}>
+            <div class="promotion-report-section-head d-flex align-items-center justify-content-between gap-2 mb-3">
+                <h6 class="mb-0">${safeTitle}</h6>
+                <span class="badge bg-secondary-subtle text-secondary-emphasis">${escapeHtml(String(entries.length))}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm promotion-report-table">
+                    <thead><tr>${headerHtml}</tr></thead>
+                    <tbody>${rowsHtml}</tbody>
+                </table>
+            </div>
+        </div>`;
+    }
+
+    function renderPromotionReportTables(ctx) {
+        const levelsEnabled = ctx.levelsEnabled || {};
+        const showLevel1 = levelsEnabled.level1 !== false;
+        const showLevel2 = levelsEnabled.level2 !== false;
+        const showLevel3 = levelsEnabled.level3 !== false;
+        const showCrowd = levelsEnabled.crowd !== false;
+
+        const level1 = showLevel1 && Array.isArray(ctx.level1) ? ctx.level1 : [];
+        const level2 = showLevel2 && Array.isArray(ctx.level2) ? ctx.level2 : [];
+        const level3 = showLevel3 && Array.isArray(ctx.level3) ? ctx.level3 : [];
+        const crowd = showCrowd && Array.isArray(ctx.crowd) ? ctx.crowd : [];
+
+        const level1Map = new Map();
+        level1.forEach(item => {
+            if (item && item.id !== undefined && item.id !== null) {
+                level1Map.set(String(item.id), item);
+            }
+        });
+        const level2Map = new Map();
+        level2.forEach(item => {
+            if (item && item.id !== undefined && item.id !== null) {
+                level2Map.set(String(item.id), item);
+            }
+        });
+
+        const renderPublicationCell = (row, options = {}) => {
+            const url = row?.url || row?.result_url || row?.link_url || '';
+            const link = url ? buildReportLinkHtml(url, truncateText(url, 70), { title: url }) : '<span class="text-muted">—</span>';
+            const meta = [];
+            if (options.includeNetwork !== false && row?.network) {
+                meta.push(`<span class="cell-subtle">${escapeHtml(row.network)}</span>`);
+            }
+            if (row?.id !== undefined && row?.id !== null) {
+                meta.push(`<span class="cell-subtle">ID ${escapeHtml(String(row.id))}</span>`);
+            }
+            return `<div class="cell-stack">${link}${meta.join('')}</div>`;
+        };
+
+        const renderTargetCell = (url) => {
+            if (!url) {
+                return '<span class="text-muted">—</span>';
+            }
+            const host = hostFromUrl(url);
+            const meta = host ? `<span class="cell-subtle">${escapeHtml(host)}</span>` : '';
+            return `<div class="cell-stack">${buildReportLinkHtml(url, truncateText(url, 70), { title: url })}${meta}</div>`;
+        };
+
+        const renderAnchorCell = (anchor) => {
+            if (!anchor) {
+                return '<span class="text-muted">—</span>';
+            }
+            return `<div class="cell-stack"><span title="${escapeAttribute(anchor)}">${escapeHtml(truncateText(anchor, 120))}</span></div>`;
+        };
+
+        const renderParentCell = (parentId, map, label) => {
+            if (parentId === undefined || parentId === null) {
+                return '<span class="text-muted">—</span>';
+            }
+            const key = String(parentId);
+            const parent = map.get(key) || map.get(parentId);
+            const pieces = [`<span class="cell-chip">${escapeHtml(label)} #${escapeHtml(key)}</span>`];
+            if (parent) {
+                const parentUrl = parent?.url || parent?.result_url || '';
+                if (parentUrl) {
+                    pieces.push(buildReportLinkHtml(parentUrl, truncateText(parentUrl, 60), { title: parentUrl }));
+                }
+                if (parent?.network) {
+                    pieces.push(`<span class="cell-subtle">${escapeHtml(parent.network)}</span>`);
+                }
+            }
+            return `<div class="cell-stack">${pieces.join('')}</div>`;
+        };
+
+        const levelColumns = [
+            {
+                label: '<?php echo __('Публикация'); ?>',
+                className: 'col-publication',
+                render: row => renderPublicationCell(row)
+            },
+            {
+                label: '<?php echo __('Целевая ссылка'); ?>',
+                className: 'col-target',
+                render: row => renderTargetCell(row?.target_url || '')
+            },
+            {
+                label: '<?php echo __('Анкор'); ?>',
+                className: 'col-anchor',
+                render: row => renderAnchorCell(row?.anchor)
+            }
+        ];
+
+        const parentLabelLevel1 = '<?php echo __('Родитель (уровень 1)'); ?>';
+        const parentLabelLevel2 = '<?php echo __('Родитель (уровень 2)'); ?>';
+
+        const level2Columns = [
+            {
+                label: '<?php echo __('Публикация'); ?>',
+                className: 'col-publication',
+                render: row => renderPublicationCell(row)
+            },
+            {
+                label: parentLabelLevel1,
+                className: 'col-parent',
+                render: row => renderParentCell(row?.parent_id, level1Map, '<?php echo __('Уровень 1'); ?>')
+            },
+            {
+                label: '<?php echo __('Целевая ссылка'); ?>',
+                className: 'col-target',
+                render: row => renderTargetCell(row?.target_url || '')
+            },
+            {
+                label: '<?php echo __('Анкор'); ?>',
+                className: 'col-anchor',
+                render: row => renderAnchorCell(row?.anchor)
+            }
+        ];
+
+        const level3Columns = [
+            {
+                label: '<?php echo __('Публикация'); ?>',
+                className: 'col-publication',
+                render: row => renderPublicationCell(row)
+            },
+            {
+                label: parentLabelLevel2,
+                className: 'col-parent',
+                render: row => renderParentCell(row?.parent_id, level2Map, '<?php echo __('Уровень 2'); ?>')
+            },
+            {
+                label: '<?php echo __('Целевая ссылка'); ?>',
+                className: 'col-target',
+                render: row => renderTargetCell(row?.target_url || '')
+            },
+            {
+                label: '<?php echo __('Анкор'); ?>',
+                className: 'col-anchor',
+                render: row => renderAnchorCell(row?.anchor)
+            }
+        ];
+
+        const crowdColumns = [
+            {
+                label: '<?php echo __('Публикация'); ?>',
+                className: 'col-publication',
+                render: row => {
+                    const value = renderPublicationCell({ ...row, id: row?.task_id }, { includeNetwork: false });
+                    return value;
+                }
+            },
+            {
+                label: '<?php echo __('Целевая ссылка'); ?>',
+                className: 'col-target',
+                render: row => renderTargetCell(row?.target_url || '')
+            },
+            {
+                label: '<?php echo __('Статус'); ?>',
+                className: 'col-status',
+                render: row => {
+                    const state = formatCrowdStatus(row?.status, row?.manual_fallback);
+                    const badge = statusBadgeHtml(state.key || row?.status, state.label || row?.status);
+                    const extras = [];
+                    if (row?.manual_fallback) {
+                        extras.push('<span class="cell-chip chip-neutral"><?php echo __('Ручной fallback'); ?></span>');
+                    }
+                    if (row?.updated_at) {
+                        extras.push(`<span class="cell-subtle">${escapeHtml(truncateText(row.updated_at, 32))}</span>`);
+                    }
+                    return `<div class="cell-stack">${badge}${extras.join('')}</div>`;
+                }
+            },
+            {
+                label: '<?php echo __('Комментарий'); ?>',
+                className: 'col-comment',
+                render: row => {
+                    const fragments = [];
+                    if (row?.subject) {
+                        fragments.push(`<div class="fw-semibold">${escapeHtml(truncateText(row.subject, 80))}</div>`);
+                    }
+                    if (row?.message) {
+                        fragments.push(`<div class="text-muted small">${escapeHtml(truncateText(row.message, 140))}</div>`);
+                    }
+                    if (row?.fallback_reason) {
+                        fragments.push(`<div class="text-danger small">${escapeHtml(truncateText(row.fallback_reason, 140))}</div>`);
+                    }
+                    if (row?.author_name || row?.author_email) {
+                        const name = row?.author_name ? escapeHtml(truncateText(row.author_name, 60)) : '';
+                        const email = row?.author_email ? escapeHtml(row.author_email) : '';
+                        const tail = [name, email].filter(Boolean).join(' • ');
+                        if (tail) {
+                            fragments.push(`<div class="text-muted small">${tail}</div>`);
+                        }
+                    }
+                    return fragments.length ? `<div class="cell-stack">${fragments.join('')}</div>` : '<span class="text-muted">—</span>';
+                }
+            }
+        ];
+
+        const sections = [];
+        if (showLevel1 && level1.length) {
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 1'); ?>', level1, levelColumns, { anchor: 'table-level1' }));
+        }
+        if (showLevel2 && level2.length) {
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 2'); ?>', level2, level2Columns, { anchor: 'table-level2' }));
+        }
+        if (showLevel3 && level3.length) {
+            sections.push(renderPromotionReportTableSection('<?php echo __('Публикации уровня 3'); ?>', level3, level3Columns, { anchor: 'table-level3' }));
+        }
+        if (showCrowd && crowd.length) {
+            sections.push(renderPromotionReportTableSection('<?php echo __('Крауд-задачи'); ?>', crowd, crowdColumns, { anchor: 'table-crowd' }));
+        }
+
+        if (!sections.length) {
+            return `<div class="promotion-flow-empty"><?php echo __('Нет данных для расчета.'); ?></div>`;
+        }
+        return sections.join('');
+    }
+
+    function renderPromotionReportContent(data) {
+        if (!data || !data.ok) {
+            const message = (data && data.error) ? String(data.error) : '<?php echo __('Не удалось загрузить отчет.'); ?>';
+            return `<div class="alert alert-danger" role="alert">${escapeHtml(message)}</div>`;
+        }
+        const report = data.report && typeof data.report === 'object' ? data.report : {};
+        const levelsEnabled = data.levels_enabled && typeof data.levels_enabled === 'object' ? data.levels_enabled : {};
+        const level1Raw = Array.isArray(report.level1) ? report.level1 : [];
+        const level2Raw = Array.isArray(report.level2) ? report.level2 : [];
+        const level3Raw = Array.isArray(report.level3) ? report.level3 : [];
+        const crowdRaw = Array.isArray(report.crowd) ? report.crowd : [];
+        const level1 = levelsEnabled.level1 === false ? [] : level1Raw;
+        const level2 = levelsEnabled.level2 === false ? [] : level2Raw;
+        const level3 = levelsEnabled.level3 === false ? [] : level3Raw;
+        const crowd = levelsEnabled.crowd === false ? [] : crowdRaw;
+        const allNetworks = [...level1, ...level2, ...level3]
+            .map(item => (item?.network || '').trim())
+            .filter(Boolean);
+        const uniqueNetworksCount = (new Set(allNetworks)).size;
+        const totalPublications = level1.length + level2.length + level3.length;
+        const manualFallbackCount = crowd.filter(task => task && task.manual_fallback).length;
+        const targetUrl = typeof data.target_url === 'string' ? data.target_url : '';
+        const statusKey = data.status ? String(data.status) : '';
+        const statusLabel = formatPromotionStatusLabel(statusKey);
+        const context = {
+            targetUrl,
+            statusKey,
+            statusLabel,
+            level1,
+            level2,
+            level3,
+            crowd,
+            totalPublications,
+            uniqueNetworksCount,
+            manualFallbackCount,
+            levelsEnabled
+        };
+        const overviewHtml = renderPromotionReportOverview(context);
+        const cascadeHtml = renderPromotionReportCascade(context);
+        const tablesHtml = renderPromotionReportTables(context);
+        const toolbarActions = [];
+        const quickLinks = [];
+        const navLevels = levelsEnabled;
+        if (navLevels.level1 !== false && level1.length) {
+            quickLinks.push(`<button type="button" class="dropdown-item" data-report-jump="table-level1"><?php echo __('Уровень 1'); ?></button>`);
+        }
+        if (navLevels.level2 !== false && level2.length) {
+            quickLinks.push(`<button type="button" class="dropdown-item" data-report-jump="table-level2"><?php echo __('Уровень 2'); ?></button>`);
+        }
+        if (navLevels.level3 !== false && level3.length) {
+            quickLinks.push(`<button type="button" class="dropdown-item" data-report-jump="table-level3"><?php echo __('Уровень 3'); ?></button>`);
+        }
+        if (navLevels.crowd !== false && crowd.length) {
+            quickLinks.push(`<button type="button" class="dropdown-item" data-report-jump="table-crowd"><?php echo __('Крауд'); ?></button>`);
+        }
+        if (level1.length || level2.length || level3.length || crowd.length) {
+            quickLinks.unshift(`<button type="button" class="dropdown-item" data-report-jump="top"><?php echo __('К началу'); ?></button>`);
+        }
+        if (quickLinks.length) {
+            toolbarActions.push(`
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-lightning-charge me-1"></i><?php echo __('Быстрые переходы'); ?>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end">
+                        ${quickLinks.join('')}
+                    </div>
+                </div>
+            `);
+        }
+        if (targetUrl) {
+            toolbarActions.push(`<a class="btn btn-outline-secondary btn-sm" href="${escapeAttribute(targetUrl)}" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Открыть страницу'); ?></a>`);
+        }
+        toolbarActions.push(`<button type="button" class="btn btn-outline-secondary btn-sm" data-report-action="download-json"><i class="bi bi-filetype-json me-1"></i><?php echo __('Экспорт JSON'); ?></button>`);
+        toolbarActions.push(`<button type="button" class="btn btn-outline-secondary btn-sm" data-report-action="download-csv"><i class="bi bi-table me-1"></i><?php echo __('Экспорт CSV'); ?></button>`);
+        toolbarActions.push(`<button type="button" class="btn btn-outline-secondary btn-sm" data-report-action="copy-json"><i class="bi bi-clipboard-check me-1"></i><?php echo __('Скопировать JSON'); ?></button>`);
+        const toolbarActionsHtml = toolbarActions.length ? `<div class="promotion-report-actions">${toolbarActions.join('')}</div>` : '';
+        const inProgress = statusKey && !['completed', 'crowd_ready'].includes(statusKey);
+        const infoHtml = inProgress
+            ? `<div class="alert alert-info small mb-3" role="alert"><i class="bi bi-hourglass-split me-2"></i><?php echo __('Запуск еще выполняется'); ?></div>`
+            : '';
+        return `
+            <div class="promotion-report-wrapper" data-report-wrapper data-run-status="${escapeHtml(statusKey)}">
+                <div class="promotion-report-toolbar">
+                    <div class="promotion-report-tabs" role="tablist">
+                        <button type="button" class="promotion-report-tab active" data-report-view="overview">
+                            <i class="bi bi-speedometer2"></i>
+                            <span><?php echo __('Обзор'); ?></span>
+                        </button>
+                        <button type="button" class="promotion-report-tab" data-report-view="cascade">
+                            <i class="bi bi-diagram-3"></i>
+                            <span><?php echo __('Каскад'); ?></span>
+                        </button>
+                        <button type="button" class="promotion-report-tab" data-report-view="tables">
+                            <i class="bi bi-table"></i>
+                            <span><?php echo __('Таблицы'); ?></span>
+                        </button>
+                    </div>
+                    ${toolbarActionsHtml}
+                </div>
+                ${infoHtml}
+                <div class="promotion-report-views">
+                    <div class="promotion-report-view" data-report-view-panel="overview">${overviewHtml}</div>
+                    <div class="promotion-report-view d-none" data-report-view-panel="cascade">${cascadeHtml}</div>
+                    <div class="promotion-report-view d-none" data-report-view-panel="tables">${tablesHtml}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    function initPromotionReportInteractions(root, data) {
+        if (!root) {
+            return;
+        }
+        const viewButtons = Array.from(root.querySelectorAll('[data-report-view]'));
+        const panels = Array.from(root.querySelectorAll('[data-report-view-panel]'));
+        const setView = (view) => {
+            panels.forEach(panel => {
+                panel.classList.toggle('d-none', panel.getAttribute('data-report-view-panel') !== view);
+            });
+            viewButtons.forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-report-view') === view);
+            });
+        };
+        if (viewButtons.length) {
+            setView(viewButtons[0].getAttribute('data-report-view'));
+        }
+        viewButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const view = btn.getAttribute('data-report-view');
+                if (!view) {
+                    return;
+                }
+                setView(view);
+            });
+        });
+
+        const escapeSelector = (value) => {
+            if (typeof value !== 'string') {
+                return '';
+            }
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(value);
+            }
+            return value.replace(/[^a-zA-Z0-9_-]/g, (match) => `\\${match}`);
+        };
+
+        const scrollToAnchor = (anchorId) => {
+            if (!anchorId) {
+                return;
+            }
+            const wrapper = root.querySelector('[data-report-wrapper]') || root;
+            const target = anchorId === 'top'
+                ? wrapper
+                : root.querySelector(`[data-report-anchor="${escapeSelector(anchorId)}"]`);
+            if (!target) {
+                return;
+            }
+            try {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } catch (_) {
+                target.scrollIntoView(true);
+            }
+        };
+        root.querySelectorAll('[data-report-jump]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const anchor = btn.getAttribute('data-report-jump') || '';
+                if (!anchor) {
+                    return;
+                }
+                const dropdownMenu = btn.closest('.dropdown-menu');
+                if (dropdownMenu && window.bootstrap) {
+                    const dropdownInstance = bootstrap.Dropdown.getInstance(dropdownMenu.previousElementSibling) || bootstrap.Dropdown.getOrCreateInstance(dropdownMenu.previousElementSibling);
+                    dropdownInstance?.hide?.();
+                }
+                if (anchor !== 'top') {
+                    setView('tables');
+                }
+                scrollToAnchor(anchor);
+            });
+        });
+
+        const flowEl = root.querySelector('[data-report-flow]');
+        if (flowEl) {
+            const level1Cards = Array.from(flowEl.querySelectorAll('.promotion-flow-card.level-1'));
+            const level2Cards = Array.from(flowEl.querySelectorAll('.promotion-flow-card.level-2'));
+            const level3Cards = Array.from(flowEl.querySelectorAll('.promotion-flow-card.level-3'));
+            let activeLevel1 = null;
+            let activeLevel2 = null;
+
+            const clearLevel2Highlight = () => {
+                activeLevel2 = null;
+                level2Cards.forEach(card => card.classList.remove('is-active', 'is-dimmed'));
+                level3Cards.forEach(card => card.classList.remove('is-dimmed'));
+            };
+
+            const applyLevel2Highlight = (level2Id) => {
+                activeLevel2 = level2Id;
+                level2Cards.forEach(card => {
+                    const isCurrent = card.dataset.id === level2Id;
+                    card.classList.toggle('is-active', isCurrent);
+                });
+                level3Cards.forEach(card => {
+                    const parentId = card.dataset.parentId || '';
+                    card.classList.toggle('is-dimmed', parentId !== level2Id);
+                });
+            };
+
+            const clearLevel1Highlight = () => {
+                activeLevel1 = null;
+                flowEl.classList.remove('has-filter');
+                level1Cards.forEach(card => card.classList.remove('is-active'));
+                level2Cards.forEach(card => card.classList.remove('is-dimmed', 'is-active'));
+                level3Cards.forEach(card => card.classList.remove('is-dimmed'));
+                clearLevel2Highlight();
+            };
+
+            const applyLevel1Highlight = (level1Id) => {
+                activeLevel1 = level1Id;
+                flowEl.classList.add('has-filter');
+                level1Cards.forEach(card => {
+                    const match = card.dataset.id === level1Id;
+                    card.classList.toggle('is-active', match);
+                });
+                level2Cards.forEach(card => {
+                    const parentId = card.dataset.parentId || '';
+                    const match = parentId === level1Id;
+                    card.classList.toggle('is-dimmed', !match);
+                    if (!match) {
+                        card.classList.remove('is-active');
+                    }
+                });
+                level3Cards.forEach(card => {
+                    const rootParentId = card.dataset.rootParentId || '';
+                    card.classList.toggle('is-dimmed', rootParentId !== level1Id);
+                });
+                clearLevel2Highlight();
+            };
+
+            level1Cards.forEach(card => {
+                card.addEventListener('click', () => {
+                    const id = card.dataset.id || '';
+                    if (!id) {
+                        return;
+                    }
+                    if (activeLevel1 === id) {
+                        clearLevel1Highlight();
+                    } else {
+                        applyLevel1Highlight(id);
+                    }
+                });
+            });
+
+            level2Cards.forEach(card => {
+                card.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const id = card.dataset.id || '';
+                    if (!id) {
+                        return;
+                    }
+                    if (!activeLevel1) {
+                        const parentId = card.dataset.parentId || '';
+                        if (parentId) {
+                            applyLevel1Highlight(parentId);
+                        }
+                    }
+                    if (activeLevel2 === id) {
+                        clearLevel2Highlight();
+                    } else {
+                        applyLevel2Highlight(id);
+                    }
+                });
+            });
+        }
+
+        const baseFileName = (ext) => {
+            const parts = ['promotion', 'report'];
+            if (data?.project_id) {
+                parts.push(`project${data.project_id}`);
+            }
+            if (data?.run_id) {
+                parts.push(`run${data.run_id}`);
+            }
+            return parts.join('-') + '.' + ext;
+        };
+        const triggerDownload = (content, filename, mime) => {
+            try {
+                const blob = new Blob([content], { type: mime || 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = filename;
+                document.body.appendChild(anchor);
+                anchor.click();
+                setTimeout(() => {
+                    document.body.removeChild(anchor);
+                    URL.revokeObjectURL(url);
+                }, 0);
+            } catch (error) {
+                console.error('Download failed', error);
+            }
+        };
+
+        const csvSeparator = ';';
+        const csvHeaders = [
+            <?php echo json_encode(__('Уровень/тип')); ?>,
+            <?php echo json_encode(__('ID')); ?>,
+            <?php echo json_encode(__('Сеть')); ?>,
+            <?php echo json_encode(__('Целевая страница')); ?>,
+            <?php echo json_encode(__('Публикация')); ?>,
+            <?php echo json_encode(__('Анкор/сообщение')); ?>,
+            <?php echo json_encode(__('Родитель (уровень 1)')); ?>,
+            <?php echo json_encode(__('Родитель (уровень 2)')); ?>,
+            <?php echo json_encode(__('Ручной fallback')); ?>,
+            <?php echo json_encode(__('Статус')); ?>,
+            <?php echo json_encode(__('Комментарий')); ?>,
+            <?php echo json_encode(__('Создано')); ?>,
+            <?php echo json_encode(__('Обновлено')); ?>
+        ];
+        const boolYes = <?php echo json_encode(__('Да')); ?>;
+        const boolNo = <?php echo json_encode(__('Нет')); ?>;
+        const crowdLabel = '<?php echo __('Крауд'); ?>';
+        const levelLabels = {
+            level1: '<?php echo __('Уровень 1'); ?>',
+            level2: '<?php echo __('Уровень 2'); ?>',
+            level3: '<?php echo __('Уровень 3'); ?>',
+            crowd: crowdLabel
+        };
+        const escapeCsvValue = (value) => {
+            if (value === null || value === undefined) {
+                return '';
+            }
+            const str = String(value);
+            if (str === '') {
+                return '';
+            }
+            return /[";\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+        };
+        const buildCsvContent = () => {
+            const rows = [csvHeaders.map(escapeCsvValue).join(csvSeparator)];
+            const report = data?.report || {};
+            const levelsEnabledExport = data?.levels_enabled || {};
+            const level1Rows = levelsEnabledExport.level1 === false ? [] : (Array.isArray(report.level1) ? report.level1 : []);
+            const level2Rows = levelsEnabledExport.level2 === false ? [] : (Array.isArray(report.level2) ? report.level2 : []);
+            const level3Rows = levelsEnabledExport.level3 === false ? [] : (Array.isArray(report.level3) ? report.level3 : []);
+            const crowdRows = levelsEnabledExport.crowd === false ? [] : (Array.isArray(report.crowd) ? report.crowd : []);
+            const level1Map = new Map();
+            level1Rows.forEach(item => {
+                if (item && item.id !== undefined && item.id !== null) {
+                    level1Map.set(String(item.id), item);
+                }
+            });
+            const level2Map = new Map();
+            level2Rows.forEach(item => {
+                if (item && item.id !== undefined && item.id !== null) {
+                    level2Map.set(String(item.id), item);
+                }
+            });
+            const collectAnchor = (entry) => entry?.anchor || entry?.message || entry?.title || '';
+            const collectPublication = (entry) => entry?.url || entry?.result_url || entry?.link_url || entry?.crowd_url || '';
+            const collectTarget = (entry) => entry?.target_url || entry?.article_url || '';
+            const collectComment = (entry) => entry?.fallback_reason || entry?.error || entry?.comment || '';
+            const collectCreated = (entry) => entry?.created_at || entry?.created || entry?.queued_at || entry?.planned_at || '';
+            const collectUpdated = (entry) => entry?.updated_at || entry?.finished_at || entry?.published_at || entry?.completed_at || '';
+            const describeParent = (entry, map, label) => {
+                const parentId = entry?.parent_id;
+                if (parentId === undefined || parentId === null) {
+                    return '';
+                }
+                const key = String(parentId);
+                const parent = map.get(key) || map.get(parentId);
+                const parts = [`${label} #${key}`];
+                const parentUrl = parent?.url || parent?.result_url || '';
+                if (parentUrl) {
+                    parts.push(parentUrl);
+                }
+                return parts.join(' | ');
+            };
+            const pushRows = (entries, key) => {
+                const label = levelLabels[key] || key;
+                entries.forEach((entry) => {
+                    const manualFallback = entry?.manual_fallback ? boolYes : boolNo;
+                    const statusInfo = key === 'crowd'
+                        ? formatCrowdStatus(entry?.status, entry?.manual_fallback)
+                        : { label: formatNodeStatusLabel(entry?.status, entry?.manual_fallback) };
+                    const parentLevel1 = key === 'level2' || key === 'level3'
+                        ? describeParent(entry, level1Map, '<?php echo __('Уровень 1'); ?>')
+                        : '';
+                    const parentLevel2 = key === 'level3'
+                        ? describeParent(entry, level2Map, '<?php echo __('Уровень 2'); ?>')
+                        : '';
+                    const row = [
+                        label,
+                        entry?.id ?? entry?.task_id ?? '',
+                        entry?.network || (key === 'crowd' ? crowdLabel : ''),
+                        collectTarget(entry),
+                        collectPublication(entry) || collectTarget(entry),
+                        collectAnchor(entry),
+                        parentLevel1,
+                        parentLevel2,
+                        manualFallback,
+                        statusInfo.label || '',
+                        collectComment(entry),
+                        collectCreated(entry),
+                        collectUpdated(entry)
+                    ];
+                    rows.push(row.map(escapeCsvValue).join(csvSeparator));
+                });
+            };
+            pushRows(level1Rows, 'level1');
+            pushRows(level2Rows, 'level2');
+            pushRows(level3Rows, 'level3');
+            pushRows(crowdRows, 'crowd');
+            return rows.join('\r\n');
+        };
+
+        const markSuccess = (button, originalHtml) => {
+            button.innerHTML = `<i class="bi bi-check2 me-1"></i><?php echo __('Готово'); ?>`;
+            button.classList.remove('btn-outline-secondary', 'btn-danger');
+            button.classList.add('btn-success');
+            setTimeout(() => {
+                button.innerHTML = originalHtml;
+                button.classList.remove('btn-success');
+                button.classList.add('btn-outline-secondary');
+            }, 1800);
+        };
+        const markError = (button) => {
+            button.classList.remove('btn-outline-secondary', 'btn-success');
+            button.classList.add('btn-danger');
+            setTimeout(() => {
+                button.classList.remove('btn-danger');
+                button.classList.add('btn-outline-secondary');
+            }, 1500);
+        };
+
+        const downloadJsonButton = root.querySelector('[data-report-action="download-json"]');
+        if (downloadJsonButton && data) {
+            const originalHtml = downloadJsonButton.innerHTML;
+            downloadJsonButton.addEventListener('click', () => {
+                try {
+                    const rawJson = JSON.stringify(data, null, 2);
+                    triggerDownload(rawJson, baseFileName('json'), 'application/json;charset=utf-8');
+                    markSuccess(downloadJsonButton, originalHtml);
+                } catch (error) {
+                    console.error('JSON export failed', error);
+                    markError(downloadJsonButton);
+                }
+            }, { passive: true });
+        }
+
+        const downloadCsvButton = root.querySelector('[data-report-action="download-csv"]');
+        if (downloadCsvButton && data) {
+            const originalHtml = downloadCsvButton.innerHTML;
+            downloadCsvButton.addEventListener('click', () => {
+                try {
+                    const csvContent = buildCsvContent();
+                    triggerDownload(csvContent, baseFileName('csv'), 'text/csv;charset=utf-8');
+                    markSuccess(downloadCsvButton, originalHtml);
+                } catch (error) {
+                    console.error('CSV export failed', error);
+                    markError(downloadCsvButton);
+                }
+            }, { passive: true });
+        }
+
+        const copyButton = root.querySelector('[data-report-action="copy-json"]');
+        if (copyButton && data) {
+            const rawJson = JSON.stringify(data, null, 2);
+            const originalHtml = copyButton.innerHTML;
+            copyButton.addEventListener('click', async () => {
+                try {
+                    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+                        window.prompt('<?php echo __('Скопировать JSON'); ?>', rawJson);
+                        return;
+                    }
+                    await navigator.clipboard.writeText(rawJson);
+                    markSuccess(copyButton, originalHtml);
+                } catch (error) {
+                    markError(copyButton);
+                }
+            });
+        }
+    }
+
+    async function openPromotionReport(btn) {
+        const runId = btn?.dataset.runId || '';
+        if (!runId) {
+            return;
+        }
+        const modalEl = document.getElementById('promotionReportModal');
+        if (!modalEl || !window.bootstrap) {
+            return;
+        }
+        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+        const content = modalEl.querySelector('#promotionReportContent');
+        if (content) {
+            content.innerHTML = '<div class="text-center py-3"><span class="spinner-border" role="status"></span></div>';
+        }
+        modalInstance.show();
+        const params = new URLSearchParams();
+        params.set('project_id', String(PROJECT_ID));
+        params.set('run_id', runId);
+        try {
+            const response = await fetch('<?php echo pp_url('public/promotion_report.php'); ?>?' + params.toString(), { credentials: 'same-origin' });
+            let payload = null;
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                payload = await response.json();
+            } else {
+                const text = await response.text();
+                try {
+                    payload = JSON.parse(text);
+                } catch (error) {
+                    if (content) {
+                        content.innerHTML = text;
+                    }
+                    return;
+                }
+            }
+            if (!response.ok || !payload) {
+                const message = payload && payload.error ? payload.error : (response.status ? String(response.status) : '<?php echo __('Не удалось загрузить отчет.'); ?>');
+                if (content) {
+                    content.innerHTML = `<div class="alert alert-danger" role="alert">${escapeHtml(String(message))}</div>`;
+                }
+                return;
+            }
+            if (content) {
+                if (typeof payload === 'object' && payload !== null) {
+                    payload.run_id = runId;
+                    if (!payload.generated_at) {
+                        try {
+                            payload.generated_at = new Date().toISOString();
+                        } catch (_) {}
+                    }
+                }
+                content.innerHTML = renderPromotionReportContent(payload);
+                initPromotionReportInteractions(content, payload);
+                initTooltips(content);
+            }
+        } catch (error) {
+            if (content) {
+                content.innerHTML = '<div class="alert alert-danger"><?php echo __('Не удалось загрузить отчет.'); ?></div>';
+            }
+        }
+    }
     const form = document.getElementById('project-form');
     const addLinkBtn = document.getElementById('add-link');
     const addedHidden = document.getElementById('added-hidden');
@@ -80,6 +1299,42 @@ document.addEventListener('DOMContentLoaded', function() {
     const PROMOTION_CHARGE_SAVINGS = <?php echo json_encode($promotionChargeSavings); ?>;
     const PROMOTION_CHARGE_SAVINGS_FORMATTED = '<?php echo htmlspecialchars($promotionChargeSavingsFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
     const PROMOTION_ACTIVE_STATUSES = <?php echo json_encode($promotionActiveStates); ?>;
+    const PROMOTION_STATUS_LABELS = {
+        'queued': '<?php echo __('Уровень 1 выполняется'); ?>',
+        'pending_level1': '<?php echo __('Уровень 1 выполняется'); ?>',
+        'running': '<?php echo __('Уровень 1 выполняется'); ?>',
+        'level1_active': '<?php echo __('Уровень 1 выполняется'); ?>',
+        'pending_level2': '<?php echo __('Ожидание уровня 2'); ?>',
+        'level2_active': '<?php echo __('Уровень 2 выполняется'); ?>',
+        'pending_level3': '<?php echo __('Ожидание уровня 3'); ?>',
+        'level3_active': '<?php echo __('Уровень 3 выполняется'); ?>',
+        'pending_crowd': '<?php echo __('Подготовка крауда'); ?>',
+        'crowd_ready': '<?php echo __('Крауд готов'); ?>',
+        'report_ready': '<?php echo __('Формируется отчет'); ?>',
+        'completed': '<?php echo __('Завершено'); ?>',
+        'failed': '<?php echo __('Ошибка продвижения'); ?>',
+        'cancelled': '<?php echo __('Отменено'); ?>',
+        'idle': '<?php echo __('Продвижение не запускалось'); ?>'
+    };
+    const STATUS_BADGE_CLASS_MAP = {
+        'success': 'bg-success-subtle text-success-emphasis',
+        'completed': 'bg-success-subtle text-success-emphasis',
+        'running': 'bg-info-subtle text-info-emphasis',
+        'level1_active': 'bg-info-subtle text-info-emphasis',
+        'level2_active': 'bg-info-subtle text-info-emphasis',
+        'level3_active': 'bg-info-subtle text-info-emphasis',
+        'queued': 'bg-warning-subtle text-warning-emphasis',
+        'pending': 'bg-warning-subtle text-warning-emphasis',
+        'pending_level1': 'bg-warning-subtle text-warning-emphasis',
+        'pending_level2': 'bg-warning-subtle text-warning-emphasis',
+        'pending_level3': 'bg-warning-subtle text-warning-emphasis',
+        'pending_crowd': 'bg-warning-subtle text-warning-emphasis',
+        'crowd_ready': 'bg-primary-subtle text-primary-emphasis',
+        'report_ready': 'bg-primary-subtle text-primary-emphasis',
+        'manual_fallback': 'bg-secondary-subtle text-secondary-emphasis',
+        'cancelled': 'bg-secondary-subtle text-secondary-emphasis',
+        'failed': 'bg-danger-subtle text-danger-emphasis'
+    };
     const LANG_CODES = <?php echo json_encode(array_merge(['auto'], $pp_lang_codes)); ?>;
 
     const navBalanceValueEl = document.querySelector('[data-balance-target]');
@@ -704,22 +1959,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (labelEl) {
-            const labels = {
-                'queued': '<?php echo __('Уровень 1 выполняется'); ?>',
-                'running': '<?php echo __('Уровень 1 выполняется'); ?>',
-                'level1_active': '<?php echo __('Уровень 1 выполняется'); ?>',
-                'pending_level2': '<?php echo __('Ожидание уровня 2'); ?>',
-                'level2_active': '<?php echo __('Уровень 2 выполняется'); ?>',
-                'pending_level3': '<?php echo __('Ожидание уровня 3'); ?>',
-                'level3_active': '<?php echo __('Уровень 3 выполняется'); ?>',
-                'pending_crowd': '<?php echo __('Подготовка крауда'); ?>',
-                'crowd_ready': '<?php echo __('Крауд готов'); ?>',
-                'report_ready': '<?php echo __('Формируется отчет'); ?>',
-                'completed': '<?php echo __('Завершено'); ?>',
-                'failed': '<?php echo __('Ошибка продвижения'); ?>',
-                'cancelled': '<?php echo __('Отменено'); ?>'
-            };
-            labelEl.textContent = labels[status] || (status === 'idle' ? '<?php echo __('Продвижение не запускалось'); ?>' : status);
+            const resolved = PROMOTION_STATUS_LABELS[status] || (status === 'idle' ? '<?php echo __('Продвижение не запускалось'); ?>' : status);
+            labelEl.textContent = resolved;
         }
 
         const progressVisual = block.querySelector('.promotion-progress-visual');
@@ -782,6 +2023,137 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    function parseDatasetNumber(tr, key) {
+        if (!tr || !tr.dataset) return 0;
+        const raw = tr.dataset[key];
+        if (raw === undefined) { return 0; }
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+    }
+
+    function snapshotPromotionState(tr) {
+        if (!tr) return null;
+        const read = (key, fallback = 0) => {
+            const value = parseDatasetNumber(tr, key);
+            return Number.isFinite(value) ? value : fallback;
+        };
+        const levels = {
+            1: {
+                total: read('level1Total'),
+                success: read('level1Success'),
+                required: read('level1Required')
+            },
+            2: {
+                total: read('level2Total'),
+                success: read('level2Success'),
+                required: read('level2Required')
+            },
+            3: {
+                total: read('level3Total'),
+                success: read('level3Success'),
+                required: read('level3Required')
+            }
+        };
+        const crowd = {
+            planned: read('crowdPlanned'),
+            total: read('crowdTotal'),
+            target: read('crowdTarget'),
+            attempted: read('crowdAttempted'),
+            completed: read('crowdCompleted'),
+            running: read('crowdRunning'),
+            queued: read('crowdQueued'),
+            failed: read('crowdFailed'),
+            manual_fallback: read('crowdManual')
+        };
+        const targetRaw = read('promotionTarget');
+        const totalRaw = read('promotionTotal');
+        return {
+            status: tr.dataset.promotionStatus || 'idle',
+            stage: tr.dataset.promotionStage || '',
+            runId: tr.dataset.promotionRunId || '',
+            reportReady: tr.dataset.promotionReportReady === '1',
+            target: targetRaw > 0 ? targetRaw : totalRaw,
+            done: read('promotionDone'),
+            levels,
+            crowd
+        };
+    }
+
+    function buildPayloadFromSnapshot(snapshot) {
+        if (!snapshot) return null;
+        const levels = {};
+        [1, 2, 3].forEach(level => {
+            if (snapshot.levels && snapshot.levels[level]) {
+                levels[level] = {
+                    required: snapshot.levels[level].required,
+                    total: snapshot.levels[level].total,
+                    success: snapshot.levels[level].success
+                };
+            }
+        });
+        const payload = {
+            status: snapshot.status,
+            stage: snapshot.stage,
+            run_id: snapshot.runId,
+            report_ready: snapshot.reportReady,
+            target: snapshot.target,
+            done: snapshot.done,
+            levels
+        };
+        if (snapshot.crowd) {
+            payload.crowd = {
+                planned: snapshot.crowd.planned,
+                total: snapshot.crowd.total,
+                target: snapshot.crowd.target,
+                attempted: snapshot.crowd.attempted,
+                completed: snapshot.crowd.completed,
+                running: snapshot.crowd.running,
+                queued: snapshot.crowd.queued,
+                failed: snapshot.crowd.failed,
+                manual_fallback: snapshot.crowd.manual_fallback
+            };
+        }
+        return payload;
+    }
+
+    function applyPromotionPayload(tr, payload, options = {}) {
+        if (!tr || !payload) return;
+        updatePromotionBlock(tr, payload);
+        refreshActionsCell(tr);
+        if (!options.skipStats) {
+            recalcPromotionStats();
+        }
+    }
+
+    function applyOptimisticPromotionState(tr) {
+        if (!tr) return { snapshot: null, applied: false };
+        const snapshot = snapshotPromotionState(tr);
+        const payload = buildPayloadFromSnapshot(snapshot);
+        if (!payload) {
+            return { snapshot, applied: false };
+        }
+        payload.status = 'queued';
+        payload.stage = 'pending_level1';
+        payload.run_id = '';
+        payload.report_ready = false;
+        applyPromotionPayload(tr, payload);
+        return { snapshot, applied: true };
+    }
+
+    function restorePromotionState(tr, snapshot) {
+        if (!tr || !snapshot) return;
+        const payload = buildPayloadFromSnapshot(snapshot);
+        if (!payload) return;
+        applyPromotionPayload(tr, payload);
+    }
+
+    function isAbortError(error) {
+        if (!error) return false;
+        if (error.name === 'AbortError') return true;
+        if (typeof error.code === 'number' && error.code === 20) return true;
+        return false;
+    }
+
     function updateRowUI(url, status, payload) {
         const rows = document.querySelectorAll('table.table-links tbody tr');
         rows.forEach(tr => {
@@ -797,30 +2169,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function openPromotionReport(btn) {
-        const runId = btn?.dataset.runId || '';
-        const url = btn?.dataset.url || '';
-        if (!runId) return;
-        const modalEl = document.getElementById('promotionReportModal');
-        if (!modalEl || !window.bootstrap) return;
-        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
-        const content = modalEl.querySelector('#promotionReportContent');
-        if (content) {
-            content.innerHTML = '<div class="text-center py-3"><span class="spinner-border" role="status"></span></div>';
-        }
-        modalInstance.show();
-        const params = new URLSearchParams();
-        params.set('project_id', String(PROJECT_ID));
-        params.set('run_id', runId);
-        fetch('<?php echo pp_url('public/promotion_report.php'); ?>?' + params.toString(), { credentials: 'same-origin' })
-            .then(res => res.text())
-            .then(html => {
-                if (content) content.innerHTML = html;
-            })
-            .catch(() => {
-                if (content) content.innerHTML = '<div class="alert alert-danger"><?php echo __('Не удалось загрузить отчет.'); ?></div>';
-            });
-    }
+    
 
     function openPromotionConfirm(btn, url) {
         const modalInstance = getPromotionConfirmModalInstance();
@@ -1264,6 +2613,8 @@ document.addEventListener('DOMContentLoaded', function() {
     async function startPromotion(btn, url) {
         if (!url) return;
         setButtonLoading(btn, true);
+        const row = btn && typeof btn.closest === 'function' ? btn.closest('tr') : null;
+        const { snapshot: previousSnapshot, applied: optimisticApplied } = applyOptimisticPromotionState(row);
         try {
             const fd = new FormData();
             fd.append('csrf_token', getCsrfToken());
@@ -1273,10 +2624,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const res = await fetch('<?php echo pp_url('public/promote_link.php'); ?>', { method: 'POST', body: fd, credentials: 'same-origin' });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data) {
+                if (optimisticApplied) {
+                    restorePromotionState(row, previousSnapshot);
+                }
                 alert('<?php echo __('Ошибка'); ?>: ' + (res.status ? String(res.status) : 'ERROR'));
                 return;
             }
             if (!data.ok) {
+                if (optimisticApplied) {
+                    restorePromotionState(row, previousSnapshot);
+                }
                 const errorCode = data.error || data.error_code || 'ERROR';
                 if (errorCode === 'INSUFFICIENT_FUNDS') {
                     showInsufficientFundsModal({
@@ -1300,23 +2657,38 @@ document.addEventListener('DOMContentLoaded', function() {
             if (balanceAmount !== null && balanceAmount !== undefined) {
                 updateClientBalance(balanceAmount, balanceFormatted);
             }
+            const promotionDataRaw = data.promotion ? { ...data.promotion } : { ...data };
+            if (!promotionDataRaw.run_id && data.run_id) {
+                promotionDataRaw.run_id = data.run_id;
+            }
+            if (!promotionDataRaw.status && data.status) {
+                promotionDataRaw.status = data.status;
+            }
+            let updated = false;
             const tbody = ensureLinksTable();
             if (tbody) {
-                tbody.querySelectorAll('tr').forEach(tr => {
+                const rows = tbody.querySelectorAll('tr');
+                for (const tr of rows) {
                     const linkEl = tr.querySelector('.url-cell .view-url');
                     if (linkEl && linkEl.getAttribute('href') === url) {
-                        const promotionData = data.promotion || data;
-                        tr.dataset.promotionStatus = promotionData.status || data.status || 'queued';
-                        tr.dataset.promotionRunId = promotionData.run_id ? String(promotionData.run_id) : (data.run_id ? String(data.run_id) : '');
-                        tr.dataset.promotionReportReady = promotionData.report_ready ? '1' : '0';
-                        updatePromotionBlock(tr, promotionData);
-                        refreshActionsCell(tr);
+                        applyPromotionPayload(tr, promotionDataRaw);
+                        updated = true;
+                        break;
                     }
-                });
+                }
             }
-            recalcPromotionStats();
+            if (!updated && row) {
+                applyPromotionPayload(row, promotionDataRaw);
+            }
+            startPolling();
+            setTimeout(() => { try { pollPromotionStatusesOnce(); } catch (e) {} }, 1200);
         } catch (e) {
-            alert('<?php echo __('Сетевая ошибка'); ?>');
+            if (optimisticApplied) {
+                restorePromotionState(row, previousSnapshot);
+            }
+            if (!isAbortError(e)) {
+                alert('<?php echo __('Сетевая ошибка'); ?>');
+            }
         } finally {
             setButtonLoading(btn, false);
         }

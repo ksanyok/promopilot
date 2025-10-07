@@ -78,6 +78,7 @@ $response = [
     'target_url' => $report['target_url'] ?? '',
     'status' => $report['status'] ?? 'completed',
     'report' => $report['report'] ?? [],
+    'levels_enabled' => $report['levels_enabled'] ?? null,
 ];
 
 echo json_encode($response, JSON_UNESCAPED_UNICODE);

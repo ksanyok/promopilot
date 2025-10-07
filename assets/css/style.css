@@ -2638,30 +2638,220 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 
 /* ===== Promotion report modal ===== */
 .promotion-report-wrapper { color: var(--text); }
-.promotion-report-toolbar .btn { border-color: color-mix(in srgb, var(--border) 80%, transparent 20%); }
-.promotion-report-grid {
-  display: grid;
-  gap: 18px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-.promotion-report-panel {
-  background: color-mix(in srgb, var(--surface) 85%, transparent 15%);
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent 20%);
+.promotion-report-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 12px 16px;
   border-radius: var(--radius-sm);
-  padding: 18px;
-  box-shadow: 0 14px 28px rgba(15,20,32,.18);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent 8%);
+  box-shadow: 0 16px 34px rgba(15,20,32,.18);
 }
-.promotion-report-panel h6 { font-size: .95rem; letter-spacing: .2px; }
-.promotion-report-summary-list { display: flex; flex-direction: column; gap: 10px; }
-.promotion-report-summary-item {
-  display: flex; align-items: center; justify-content: space-between;
-  background: color-mix(in srgb, var(--surface-2) 65%, transparent 35%);
+.promotion-report-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.promotion-report-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
   border-radius: var(--radius-xs);
-  padding: 10px 14px;
-  font-size: .88rem;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--surface) 90%, transparent 10%);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: .82rem;
+  letter-spacing: .02em;
+  transition: all .2s ease;
 }
-.promotion-report-summary-item .label { color: var(--muted); }
-.promotion-report-summary-item .value { font-weight: 600; color: var(--text); }
+.promotion-report-tab i { font-size: .95rem; opacity: .8; }
+.promotion-report-tab:hover { color: var(--text); border-color: color-mix(in srgb, var(--primary) 30%, transparent 70%); }
+.promotion-report-tab.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 65%, transparent 35%);
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface) 82%);
+  box-shadow: 0 10px 24px rgba(32,68,166,.26);
+}
+.promotion-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.promotion-report-actions .dropdown-menu { min-width: 180px; }
+.promotion-report-actions .dropdown-item { font-size: .82rem; }
+.promotion-report-actions .btn {
+  border-color: color-mix(in srgb, var(--border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--surface) 94%, transparent 6%);
+}
+.promotion-report-actions .btn:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent 55%);
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface) 84%);
+}
+.promotion-report-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.promotion-report-hero {
+  background: color-mix(in srgb, var(--surface) 94%, transparent 6%);
+  box-shadow: 0 20px 40px rgba(15,20,32,.22);
+  border-radius: var(--radius-sm);
+}
+.promotion-report-hero .card-body { padding: 24px; }
+.promotion-report-hero .hero-title { font-weight: 600; }
+.promotion-report-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.promotion-report-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent 30%);
+  font-size: .85rem;
+}
+.promotion-report-kv .kv-label {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  font-size: .68rem;
+}
+.promotion-report-kv .kv-value { font-weight: 600; color: var(--text); }
+.link-emphasis { color: var(--accent); font-weight: 600; text-decoration: none; }
+.link-emphasis:hover { text-decoration: underline; }
+.promotion-report-metric-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.promotion-report-metric-card {
+  position: relative;
+  padding: 18px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent 35%);
+  background: color-mix(in srgb, var(--surface) 90%, transparent 10%);
+  box-shadow: 0 18px 36px rgba(15,20,32,.18);
+  overflow: hidden;
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.promotion-report-metric-card::after {
+  content: '';
+  position: absolute;
+  inset: auto -40% -50% auto;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  opacity: .35;
+  background: color-mix(in srgb, var(--accent) 25%, transparent 75%);
+  transform: rotate(35deg);
+}
+.promotion-report-metric-card .metric-label {
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.promotion-report-metric-card .metric-value { font-size: 2.1rem; font-weight: 700; line-height: 1; color: var(--text); }
+.promotion-report-metric-card .metric-sub { margin-top: 8px; font-size: .76rem; color: var(--muted); letter-spacing: .02em; }
+.promotion-report-metric-card.is-empty { opacity: .65; }
+.promotion-report-metric-card.metric-level1 {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent 45%);
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface) 82%);
+}
+.promotion-report-metric-card.metric-level1::after { background: color-mix(in srgb, var(--primary) 50%, transparent 50%); }
+.promotion-report-metric-card.metric-level2 {
+  border-color: color-mix(in srgb, var(--success) 55%, transparent 45%);
+  background: color-mix(in srgb, var(--success) 18%, var(--surface) 82%);
+}
+.promotion-report-metric-card.metric-level2::after { background: color-mix(in srgb, var(--success) 50%, transparent 50%); }
+.promotion-report-metric-card.metric-level3 {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent 40%);
+  background: color-mix(in srgb, var(--warning) 20%, var(--surface) 80%);
+}
+.promotion-report-metric-card.metric-level3::after { background: color-mix(in srgb, var(--warning) 55%, transparent 45%); }
+.promotion-report-metric-card.metric-crowd {
+  border-color: color-mix(in srgb, var(--info, #38bdf8) 55%, transparent 45%);
+  background: color-mix(in srgb, var(--info, #38bdf8) 20%, var(--surface) 80%);
+}
+.promotion-report-metric-card.metric-crowd::after { background: color-mix(in srgb, var(--info, #38bdf8) 55%, transparent 45%); }
+.promotion-report-metric-card:hover { transform: translateY(-2px); box-shadow: 0 24px 42px rgba(15,20,32,.28); }
+.promotion-report-ratio {
+  background: color-mix(in srgb, var(--surface) 94%, transparent 6%);
+  box-shadow: 0 18px 38px rgba(15,20,32,.2);
+  border-radius: var(--radius-sm);
+}
+.promotion-report-ratio .card-body { padding: 22px 24px; }
+.promotion-report-ratio-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.promotion-report-ratio-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .78rem;
+  color: var(--muted);
+  letter-spacing: .02em;
+}
+.promotion-report-ratio-legend-item .legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 45%, transparent 55%);
+}
+.promotion-report-ratio-legend-item .legend-value { font-weight: 600; color: var(--text); }
+.promotion-report-ratio-legend-item.metric-level1 .legend-dot { background: color-mix(in srgb, var(--primary) 60%, transparent 40%); }
+.promotion-report-ratio-legend-item.metric-level2 .legend-dot { background: color-mix(in srgb, var(--success) 60%, transparent 40%); }
+.promotion-report-ratio-legend-item.metric-level3 .legend-dot { background: color-mix(in srgb, var(--warning) 65%, transparent 35%); }
+.promotion-report-ratio-legend-item.metric-crowd .legend-dot { background: color-mix(in srgb, var(--info, #38bdf8) 65%, transparent 35%); }
+.promotion-report-ratio-bar {
+  display: flex;
+  min-height: 52px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent 8%);
+}
+.promotion-report-ratio-segment {
+  position: relative;
+  flex: 0 0 var(--segment-width, 25%);
+  flex-grow: var(--segment-grow, 1);
+  min-width: 48px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: rgba(255,255,255,.92);
+  font-size: .78rem;
+}
+.promotion-report-ratio-segment .segment-label { font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.promotion-report-ratio-segment .segment-value { font-weight: 600; opacity: .92; }
+.promotion-report-ratio-segment + .promotion-report-ratio-segment { border-left: 1px solid rgba(255,255,255,.25); }
+.promotion-report-ratio-segment.metric-level1 {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 82%, #0f1324 18%), color-mix(in srgb, var(--primary) 65%, #0f1324 35%));
+}
+.promotion-report-ratio-segment.metric-level2 {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--success) 80%, #0f1324 20%), color-mix(in srgb, var(--success) 60%, #0f1324 40%));
+}
+.promotion-report-ratio-segment.metric-level3 {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warning) 78%, #0f1324 22%), color-mix(in srgb, var(--warning) 58%, #0f1324 42%));
+}
+.promotion-report-ratio-segment.metric-crowd {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--info, #38bdf8) 80%, #0f1324 20%), color-mix(in srgb, var(--info, #38bdf8) 58%, #0f1324 42%));
+}
 .promotion-report-flow {
   display: grid;
   gap: 14px;
@@ -2749,6 +2939,8 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 }
 .promotion-flow-subgroup.is-hidden { display: none; }
 .promotion-report-flow.has-filter .promotion-flow-card.level-2.is-dimmed { opacity: .35; }
+.promotion-report-flow.has-filter .promotion-flow-card.level-3.is-dimmed,
+.promotion-report-flow.has-filter .promotion-flow-card.level-crowd.is-dimmed { opacity: .35; }
 .promotion-flow-card.level-crowd {
   border-style: dashed;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
@@ -2759,6 +2951,30 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
   padding: 12px 0;
 }
 .promotion-report-section h6 { font-size: .9rem; letter-spacing: .2px; }
+.promotion-report-section-head .badge { font-size: .68rem; font-weight: 600; }
+.promotion-report-section[data-report-anchor] { scroll-margin-top: 72px; }
+.promotion-report-table .col-publication { min-width: 260px; }
+.promotion-report-table .col-target { min-width: 240px; }
+.promotion-report-table .col-anchor { min-width: 200px; }
+.promotion-report-table .col-parent { min-width: 220px; }
+.promotion-report-table .col-comment { min-width: 260px; }
+.promotion-report-table .col-status { min-width: 180px; }
+.promotion-report-table .cell-stack { display: flex; flex-direction: column; gap: 4px; }
+.promotion-report-table .cell-stack > a { word-break: break-word; }
+.promotion-report-table .cell-subtle { font-size: .72rem; color: var(--muted); }
+.promotion-report-table .cell-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: .74rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent 30%);
+  color: color-mix(in srgb, var(--text) 80%, var(--muted) 20%);
+}
+.promotion-report-table .chip-neutral { background: color-mix(in srgb, var(--surface-2) 60%, var(--primary) 10%); color: var(--text); }
 .promotion-report-table { --bs-table-bg: transparent; }
 .promotion-report-table tbody tr td { vertical-align: middle; font-size: .82rem; }
 .promotion-report-table .badge { font-weight: 600; letter-spacing: .3px; }

@@ -1706,7 +1706,7 @@ if (!function_exists('pp_promotion_build_report')) {
             $res->free();
         }
         $crowdLinkCache = [];
-        if ($res = @$conn->query('SELECT id, status, crowd_link_id, target_url, result_url, payload_json, updated_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY id ASC')) {
+        if ($res = @$conn->query('SELECT id, status, crowd_link_id, target_url, result_url, payload_json, updated_at, created_at FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' ORDER BY id ASC')) {
             while ($row = $res->fetch_assoc()) {
                 $linkUrl = null;
                 $messageBody = null;
@@ -1743,6 +1743,12 @@ if (!function_exists('pp_promotion_build_report')) {
                         }
                     }
                 }
+                $statusRaw = (string)($row['status'] ?? '');
+                $statusNormalized = strtolower($statusRaw);
+                $allowedStatuses = ['completed', 'success', 'done', 'posted', 'published', 'ok', 'manual'];
+                if (!$manualFallback && !in_array($statusNormalized, $allowedStatuses, true)) {
+                    continue;
+                }
                 if ($linkUrl === null && isset($row['crowd_link_id'])) {
                     $cid = (int)$row['crowd_link_id'];
                     if ($cid > 0) {
@@ -1772,9 +1778,10 @@ if (!function_exists('pp_promotion_build_report')) {
                     'author_email' => $messageEmail,
                     'manual_fallback' => $manualFallback,
                     'fallback_reason' => $fallbackReason,
-                    'status' => (string)($row['status'] ?? ''),
+                    'status' => $statusRaw,
                     'result_url' => isset($row['result_url']) && $row['result_url'] !== null ? (string)$row['result_url'] : null,
                     'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
+                    'created_at' => isset($row['created_at']) ? (string)$row['created_at'] : null,
                 ];
             }
             $res->free();
@@ -1809,6 +1816,12 @@ if (!function_exists('pp_promotion_get_report')) {
             'project_id' => (int)$row['project_id'],
             'target_url' => (string)$row['target_url'],
             'report' => $report,
+            'levels_enabled' => [
+                'level1' => pp_promotion_is_level_enabled(1),
+                'level2' => pp_promotion_is_level_enabled(2),
+                'level3' => pp_promotion_is_level_enabled(3),
+                'crowd' => pp_promotion_is_crowd_enabled(),
+            ],
         ];
     }
 }
