@@ -61,14 +61,13 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
                 'reference' => $orderId,
                 'destination' => $destination,
                 'comment' => 'PromoPilot balance top-up #' . (int)$transaction['id'],
+                'redirectUrl' => $redirectUrl,
+                'webHookUrl' => $webhookUrl,
             ],
-            'redirectUrl' => $redirectUrl,
-            'webHookUrl' => $webhookUrl,
-            'orderId' => $orderId,
         ];
         $lifetime = (int)($config['invoice_lifetime'] ?? 900);
         if ($lifetime > 0) {
-            $payload['validity'] = max(60, min(86400, $lifetime));
+            $payload['merchantPaymInfo']['validity'] = max(60, min(86400, $lifetime));
         }
         $response = pp_payment_monobank_request('invoice/create', $payload, $token, $config);
         if (empty($response['ok'])) {
@@ -126,6 +125,100 @@ if (!function_exists('pp_payment_gateway_initiate_monobank')) {
             'provider_payload' => $data,
             'customer_payload' => $customerPayload,
         ];
+    }
+}
+
+// Expose helper to perform GET requests to Monobank merchant API at top-level
+if (!function_exists('pp_payment_monobank_request_get')) {
+    function pp_payment_monobank_request_get(string $path, array $query, string $token, array $config = []): array {
+        $base = trim((string)($config['base_url'] ?? ''));
+        if ($base === '') {
+            $base = 'https://api.monobank.ua/api/merchant';
+        }
+        $url = rtrim($base, '/') . '/' . ltrim($path, '/');
+        if (!empty($query)) {
+            $qs = http_build_query($query);
+            if ($qs !== '') {
+                $url .= (strpos($url, '?') === false ? '?' : '&') . $qs;
+            }
+        }
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'X-Token: ' . $token,
+            ],
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+        $body = curl_exec($ch);
+        $err = $body === false ? curl_error($ch) : null;
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false) {
+            return ['ok' => false, 'error' => $err ?? 'curl_failed'];
+        }
+        $decoded = json_decode($body, true);
+        if ($code < 200 || $code >= 300) {
+            $errorText = is_array($decoded) ? ($decoded['errText'] ?? $decoded['message'] ?? ('HTTP ' . $code)) : ('HTTP ' . $code);
+            return ['ok' => false, 'error' => $errorText, 'status_code' => $code, 'body' => $body, 'decoded' => is_array($decoded) ? $decoded : null];
+        }
+        return ['ok' => true, 'decoded' => is_array($decoded) ? $decoded : [], 'status_code' => $code, 'body' => $body];
+    }
+}
+
+// Expose helper to fetch and cache Monobank public key for webhook verification at top-level
+if (!function_exists('pp_payment_monobank_get_pubkey')) {
+    function pp_payment_monobank_get_pubkey(array $config = []): array {
+        static $cache = null;
+        static $cacheTs = 0;
+        // cache for 24h
+        if ($cache && (time() - $cacheTs) < 86400) {
+            return $cache;
+        }
+        $token = trim((string)($config['token'] ?? ''));
+        if ($token === '') {
+            return ['ok' => false, 'error' => 'token_missing'];
+        }
+        // GET /api/merchant/pubkey (base64-encoded PEM)
+        $base = trim((string)($config['base_url'] ?? ''));
+        if ($base === '') {
+            $base = 'https://api.monobank.ua/api/merchant';
+        }
+        $url = rtrim($base, '/') . '/pubkey';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'X-Token: ' . $token,
+            ],
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+        $body = curl_exec($ch);
+        $err = $body === false ? curl_error($ch) : null;
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false) {
+            return ['ok' => false, 'error' => $err ?? 'curl_failed'];
+        }
+        if ($code < 200 || $code >= 300) {
+            return ['ok' => false, 'error' => 'pubkey_http_' . $code, 'body' => $body];
+        }
+        $pubKeyBase64 = trim($body);
+        if ($pubKeyBase64 === '') {
+            return ['ok' => false, 'error' => 'empty_pubkey'];
+        }
+        $cache = ['ok' => true, 'pubkey_base64' => $pubKeyBase64];
+        $cacheTs = time();
+        return $cache;
     }
 }
 
@@ -379,14 +472,7 @@ if (!function_exists('pp_payment_monobank_refresh_transaction')) {
         if ($token === '') {
             return ['ok' => false, 'error' => 'token_missing', 'transaction' => $transaction];
         }
-        $statusPayload = ['invoiceId' => $invoiceId];
-        if ($orderId !== null && $orderId !== '') {
-            $statusPayload['orderId'] = $orderId;
-        }
-        if (!empty($config['merchant_id'])) {
-            $statusPayload['merchantId'] = trim((string)$config['merchant_id']);
-        }
-        $response = pp_payment_monobank_request('invoice/status', $statusPayload, $token, $config);
+        $response = pp_payment_monobank_request_get('invoice/status', ['invoiceId' => $invoiceId], $token, $config);
         $softErrors = ['not_found', 'invoice_not_found', 'invoice not found', 'monobank_invoice_not_found', 'noinvoice', 'http 404'];
         $statusCode = isset($response['status_code']) ? (int)$response['status_code'] : 0;
         if (empty($response['ok'])) {
@@ -430,14 +516,18 @@ if (!function_exists('pp_payment_monobank_refresh_transaction')) {
         $successStatuses = ['success', 'paid', 'confirmed', 'done', 'completed', 'complete'];
         $failStatuses = ['expired', 'cancelled', 'canceled', 'failure', 'failed', 'reversed', 'revoked', 'declined', 'error'];
         if (in_array($status, $successStatuses, true)) {
-            $amountMinor = null;
+            // Monobank returns amount in UAH minor units. Our transaction currency is USD.
+            // To avoid over-crediting USD with UAH value, use the original transaction USD amount.
+            // Passing null makes pp_payment_transaction_mark_confirmed use the stored transaction amount (USD).
+            // We still attach raw amounts to the event payload for audit.
             if (isset($data['amount'])) {
-                $amountMinor = (int)$data['amount'];
+                $eventPayload['amount_minor'] = (int)$data['amount'];
+                $eventPayload['amount_uah'] = $eventPayload['amount_minor'] / 100;
             } elseif (isset($data['finalAmount'])) {
-                $amountMinor = (int)$data['finalAmount'];
+                $eventPayload['amount_minor'] = (int)$data['finalAmount'];
+                $eventPayload['amount_uah'] = $eventPayload['amount_minor'] / 100;
             }
-            $amount = $amountMinor !== null ? $amountMinor / 100 : null;
-            $mark = pp_payment_transaction_mark_confirmed($transactionId, $amount, $eventPayload);
+            $mark = pp_payment_transaction_mark_confirmed($transactionId, null, $eventPayload);
             if (empty($mark['ok'])) {
                 return ['ok' => false, 'error' => $mark['error'] ?? 'confirm_failed', 'status' => 'confirmed', 'transaction' => $transaction];
             }
@@ -529,17 +619,34 @@ if (!function_exists('pp_payment_handle_monobank_webhook')) {
         }
         $headersLower = [];
         foreach ($headers as $k => $v) {
-            $headersLower[strtolower($k)] = $v;
+            $headersLower[strtolower($k)] = is_array($v) ? implode(',', $v) : $v;
         }
-        $signature = $headersLower['x-signature'] ?? ($headersLower['x-sign'] ?? '');
-        if ($signature === '' && isset($payload['signature'])) {
-            $signature = (string)$payload['signature'];
+        $signatureB64 = $headersLower['x-sign'] ?? ($headersLower['x-signature'] ?? '');
+        if ($signatureB64 === '' && isset($payload['signature'])) {
+            $signatureB64 = (string)$payload['signature'];
         }
-        if ($signature === '') {
+        if ($signatureB64 === '') {
             return ['ok' => false, 'status' => 400, 'error' => 'signature_missing'];
         }
-        $expected = base64_encode(hash_hmac('sha256', $rawBody, $token, true));
-        if (!hash_equals($expected, $signature)) {
+        $pub = pp_payment_monobank_get_pubkey($gateway['config'] ?? []);
+        if (empty($pub['ok'])) {
+            return ['ok' => false, 'status' => 503, 'error' => 'pubkey_unavailable'];
+        }
+        $pubKeyPemBase64 = (string)$pub['pubkey_base64'];
+        $pubKeyPem = base64_decode($pubKeyPemBase64, true);
+        if ($pubKeyPem === false || $pubKeyPem === '') {
+            return ['ok' => false, 'status' => 503, 'error' => 'pubkey_decode_failed'];
+        }
+        $publicKey = openssl_pkey_get_public($pubKeyPem);
+        if (!$publicKey) {
+            return ['ok' => false, 'status' => 503, 'error' => 'pubkey_load_failed'];
+        }
+        $signatureBin = base64_decode($signatureB64, true);
+        if ($signatureBin === false) {
+            return ['ok' => false, 'status' => 400, 'error' => 'signature_decode_failed'];
+        }
+        $verifyRes = openssl_verify($rawBody, $signatureBin, $publicKey, OPENSSL_ALGO_SHA256);
+        if ($verifyRes !== 1) {
             return ['ok' => false, 'status' => 401, 'error' => 'signature_invalid'];
         }
         $invoiceId = (string)($payload['invoiceId'] ?? '');
@@ -556,9 +663,9 @@ if (!function_exists('pp_payment_handle_monobank_webhook')) {
         }
         $status = strtolower((string)($payload['status'] ?? ''));
         if (in_array($status, ['success', 'paid', 'confirmed'], true)) {
-            $amountMinor = isset($payload['amount']) ? (int)$payload['amount'] : null;
-            $amount = $amountMinor !== null ? $amountMinor / 100 : null;
-            $result = pp_payment_transaction_mark_confirmed((int)$transaction['id'], $amount, $payload);
+            // As with polling, Monobank webhook amount is in UAH minor. Credit should be in USD.
+            // Pass null to use the transaction's original USD amount.
+            $result = pp_payment_transaction_mark_confirmed((int)$transaction['id'], null, $payload);
             if (!empty($result['ok'])) {
                 $httpStatus = !empty($result['already']) ? 200 : 200;
                 return ['ok' => true, 'status' => $httpStatus];
