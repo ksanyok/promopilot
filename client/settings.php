@@ -15,6 +15,10 @@ if ($res->num_rows === 0) { $stmt->close(); $conn->close(); redirect('auth/login
 $user = $res->fetch_assoc();
 $stmt->close();
 
+$notificationPrefs = pp_notification_get_user_settings($uid);
+$notificationCatalog = pp_notification_event_catalog();
+$notificationCategories = pp_notification_event_categories();
+
 $errors = [];
 $success = '';
 
@@ -120,6 +124,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $stmt->close();
         }
+  } elseif ($action === 'notifications') {
+    $selected = $_POST['notifications'] ?? [];
+    if (!is_array($selected)) {
+      $selected = [];
+    }
+    $selected = array_map(static fn($value) => trim((string)$value), $selected);
+    $selected = array_values(array_filter($selected, static fn($value) => $value !== ''));
+    $payload = [];
+    foreach ($notificationCatalog as $key => $info) {
+      $payload[$key] = in_array($key, $selected, true);
+    }
+    if (!pp_notification_update_user_settings($uid, $payload)) {
+      $errors[] = __('Не удалось обновить настройки уведомлений. Попробуйте позже.');
+    } else {
+      $success = __('Настройки уведомлений обновлены.');
+      $notificationPrefs = pp_notification_get_user_settings($uid);
+    }
     }
 }
 
@@ -196,6 +217,53 @@ include __DIR__ . '/../includes/client_sidebar.php';
 
         <div class="col-12 text-end">
           <button type="submit" class="btn btn-gradient"><i class="bi bi-save me-1"></i><span class="btn-text"><?php echo __('Сохранить'); ?></span></button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Notifications section -->
+  <?php
+    $groupedNotifications = [];
+    foreach ($notificationCatalog as $eventKey => $info) {
+        $category = $info['category'] ?? 'other';
+        $groupedNotifications[$category][$eventKey] = $info;
+    }
+  ?>
+  <div class="card section mb-3" id="notifications-settings">
+    <div class="section-header">
+      <div class="label"><i class="bi bi-bell"></i><span><?php echo __('Уведомления'); ?></span></div>
+      <div class="toolbar"></div>
+    </div>
+    <div class="card-body">
+      <form method="post" class="d-flex flex-column gap-4">
+        <input type="hidden" name="action" value="notifications">
+        <?php foreach ($groupedNotifications as $categoryKey => $notices): ?>
+          <?php if (empty($notices)) { continue; } ?>
+          <?php $categoryLabel = $notificationCategories[$categoryKey] ?? ($notificationCategories['other'] ?? __('Прочее')); ?>
+          <div>
+            <div class="text-uppercase text-muted small fw-semibold mb-2"><?php echo htmlspecialchars($categoryLabel); ?></div>
+            <div class="row g-3">
+              <?php foreach ($notices as $eventKey => $info): ?>
+                <?php $inputId = 'notif-' . preg_replace('~[^a-z0-9_-]+~i', '-', $eventKey); ?>
+                <?php $isEnabled = !empty($notificationPrefs[$eventKey]); ?>
+                <div class="col-12 col-md-6">
+                  <div class="form-check form-switch bg-dark-subtle bg-opacity-50 border border-dark-subtle rounded-4 h-100 p-3 shadow-sm">
+                    <input class="form-check-input" type="checkbox" role="switch" id="<?php echo htmlspecialchars($inputId); ?>" name="notifications[]" value="<?php echo htmlspecialchars($eventKey); ?>" <?php echo $isEnabled ? 'checked' : ''; ?>>
+                    <label class="form-check-label ms-2" for="<?php echo htmlspecialchars($inputId); ?>">
+                      <span class="fw-semibold d-block mb-1"><?php echo htmlspecialchars((string)($info['label'] ?? '')); ?></span>
+                      <?php if (!empty($info['description'])): ?>
+                        <span class="text-muted small d-block"><?php echo htmlspecialchars((string)$info['description']); ?></span>
+                      <?php endif; ?>
+                    </label>
+                  </div>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        <?php endforeach; ?>
+        <div class="text-end">
+          <button type="submit" class="btn btn-outline-light"><i class="bi bi-save me-1"></i><span class="btn-text"><?php echo __('Сохранить уведомления'); ?></span></button>
         </div>
       </form>
     </div>

@@ -117,6 +117,20 @@ function pp_run_schema_bootstrap(): void {
         }
     }
 
+    // User notification preferences table
+    $notifCols = $getCols('user_notification_settings');
+    if (empty($notifCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `user_notification_settings` (
+            `user_id` INT NOT NULL,
+            `event_key` VARCHAR(64) NOT NULL,
+            `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`user_id`, `event_key`),
+            INDEX `idx_user_notification_event` (`event_key`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    }
+
     // Publications table for history
     $pubCols = $getCols('publications');
     if (empty($pubCols)) {

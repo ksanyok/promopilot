@@ -184,6 +184,27 @@ if (!function_exists('pp_balance_event_comment')) {
     }
 }
 
+if (!function_exists('pp_balance_notification_event_key')) {
+    function pp_balance_notification_event_key(array $event): ?string {
+        $event = pp_balance_normalize_event($event);
+        $delta = (float)($event['delta'] ?? 0);
+        $source = strtolower(trim((string)($event['source'] ?? '')));
+        if ($source === 'manual') {
+            return 'balance_manual_adjustment';
+        }
+        if ($delta > 0.00001) {
+            return 'balance_topup';
+        }
+        if ($source === 'promotion') {
+            return 'promotion_charge';
+        }
+        if ($delta < -0.00001) {
+            return 'balance_debit';
+        }
+        return null;
+    }
+}
+
 if (!function_exists('pp_balance_send_event_notification')) {
     function pp_balance_send_event_notification(array $event): bool {
         $event = pp_balance_normalize_event($event);
@@ -191,6 +212,15 @@ if (!function_exists('pp_balance_send_event_notification')) {
             pp_mail_log('mail.balance_notification.skipped_delta', [
                 'user_id' => $event['user_id'] ?? null,
                 'delta' => $event['delta'] ?? null,
+            ]);
+            return false;
+        }
+        $eventKey = pp_balance_notification_event_key($event);
+        if ($eventKey !== null && !pp_notification_user_allows((int)$event['user_id'], $eventKey)) {
+            pp_mail_log('mail.balance_notification.skipped_pref', [
+                'user_id' => $event['user_id'] ?? null,
+                'history_id' => $event['history_id'] ?? null,
+                'event_key' => $eventKey,
             ]);
             return false;
         }
@@ -229,19 +259,20 @@ if (!function_exists('pp_balance_send_event_notification')) {
             ? sprintf(__('Ваш баланс пополнен на %s.'), $absFormatted)
             : sprintf(__('С вашего баланса списано %s.'), $absFormatted);
         $comment = pp_balance_event_comment($event);
-            $historyUrl = pp_url('client/balance.php');
-            $topupUrl = pp_url('client/balance.php');
-            $logoSrc = pp_url('assets/img/logo.svg');
-            $logoPath = defined('PP_ROOT_PATH') ? PP_ROOT_PATH . '/assets/img/logo.svg' : null;
-            if ($logoPath && is_readable($logoPath)) {
-                $logoContent = @file_get_contents($logoPath);
-                if ($logoContent !== false && $logoContent !== '') {
-                    $encodedLogo = base64_encode($logoContent);
-                    if ($encodedLogo !== '') {
-                        $logoSrc = 'data:image/svg+xml;base64,' . $encodedLogo;
-                    }
+    $historyUrl = pp_url('client/history.php');
+        $topupUrl = pp_url('client/balance.php');
+        $notificationsUrl = pp_url('client/settings.php#notifications-settings');
+        $logoSrc = pp_url('assets/img/logo.svg');
+        $logoPath = defined('PP_ROOT_PATH') ? PP_ROOT_PATH . '/assets/img/logo.svg' : null;
+        if ($logoPath && is_readable($logoPath)) {
+            $logoContent = @file_get_contents($logoPath);
+            if ($logoContent !== false && $logoContent !== '') {
+                $encodedLogo = base64_encode($logoContent);
+                if ($encodedLogo !== '') {
+                    $logoSrc = 'data:image/svg+xml;base64,' . $encodedLogo;
                 }
             }
+        }
         $supportEmail = trim((string)get_setting('support_email', 'support@' . pp_mail_default_domain()));
         if (!filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) {
             $supportEmail = 'support@' . pp_mail_default_domain();
@@ -321,6 +352,10 @@ if (!function_exists('pp_balance_send_event_notification')) {
             . '</div>'
             . '<p style="margin:28px 0 0;font-size:13px;color:#6b7280;line-height:1.7;">' . htmlspecialchars(__('Если вы не выполняли это действие, срочно свяжитесь с поддержкой.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
             . '<p style="margin:12px 0 0;font-size:13px;color:#475569;">' . htmlspecialchars(__('Поддержка:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' ' . htmlspecialchars($supportEmail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
+            . '<p style="margin:18px 0 0;font-size:12px;color:#475569;">'
+            . htmlspecialchars(__('Хотите изменить, какие письма получать?'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . ' <a href="' . htmlspecialchars($notificationsUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="color:#2563eb;font-weight:600;">'
+            . htmlspecialchars(__('Настройки уведомлений'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</a></p>'
             . '<p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">' . htmlspecialchars(__('Команда PromoPilot ✈️'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
             . '</div>'
             . '<div style="padding:18px 36px;background:#0f172a;color:#cbd5f5;font-size:12px;text-align:center;line-height:1.5;">'
@@ -348,7 +383,8 @@ if (!function_exists('pp_balance_send_event_notification')) {
         }
         $textLines[] = '';
         $textLines[] = __('Если вы не выполняли это действие, срочно свяжитесь с поддержкой.');
-        $textLines[] = __('Поддержка:') . ' ' . $supportEmail;
+    $textLines[] = __('Поддержка:') . ' ' . $supportEmail;
+    $textLines[] = __('Настройки уведомлений:') . ' ' . $notificationsUrl;
         $textLines[] = '';
         $textLines[] = __('Команда PromoPilot ✈️');
         $textBody = implode("\n", $textLines);

@@ -15,6 +15,7 @@ require_once __DIR__ . '/runtime.php';         // Node/Chrome and runner helpers
 require_once __DIR__ . '/network_check.php';   // Network diagnostics helpers
 require_once __DIR__ . '/core.php';            // Core (i18n, csrf, auth, base url, small utils)
 require_once __DIR__ . '/db.php';              // DB, settings, currency, avatars
+require_once __DIR__ . '/notifications.php';   // User notification preferences
 require_once __DIR__ . '/mailer.php';          // Email sending helper
 require_once __DIR__ . '/balance.php';         // Balance logging & notifications
 require_once __DIR__ . '/payments.php';        // Payment gateways and transactions
