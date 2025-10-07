@@ -43,6 +43,13 @@ if (!function_exists('pp_notification_event_catalog')) {
                 'default_enabled' => true,
                 'sort' => 50,
             ],
+            'service_updates' => [
+                'label' => __('Новости и акции сервиса'),
+                'description' => __('Получайте новости, акции и рекомендации от PromoPilot.'),
+                'category' => 'updates',
+                'default_enabled' => true,
+                'sort' => 60,
+            ],
         ];
         uasort($catalog, static function (array $a, array $b): int {
             $sa = $a['sort'] ?? 0;
@@ -61,6 +68,7 @@ if (!function_exists('pp_notification_event_categories')) {
         return [
             'balance' => __('Баланс и платежи'),
             'promotion' => __('Продвижение'),
+            'updates' => __('Новости и акции'),
             'other' => __('Прочее'),
         ];
     }

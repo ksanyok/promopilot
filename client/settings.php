@@ -230,13 +230,13 @@ include __DIR__ . '/../includes/client_sidebar.php';
         $groupedNotifications[$category][$eventKey] = $info;
     }
   ?>
-  <div class="card section mb-3" id="notifications-settings">
+  <div class="card section mb-3 notification-settings-card" id="notifications-settings">
     <div class="section-header">
       <div class="label"><i class="bi bi-bell"></i><span><?php echo __('Уведомления'); ?></span></div>
       <div class="toolbar"></div>
     </div>
     <div class="card-body">
-      <form method="post" class="d-flex flex-column gap-4">
+      <form method="post" class="notification-settings-form d-flex flex-column gap-4">
         <input type="hidden" name="action" value="notifications">
         <?php foreach ($groupedNotifications as $categoryKey => $notices): ?>
           <?php if (empty($notices)) { continue; } ?>
@@ -248,7 +248,7 @@ include __DIR__ . '/../includes/client_sidebar.php';
                 <?php $inputId = 'notif-' . preg_replace('~[^a-z0-9_-]+~i', '-', $eventKey); ?>
                 <?php $isEnabled = !empty($notificationPrefs[$eventKey]); ?>
                 <div class="col-12 col-md-6">
-                  <div class="form-check form-switch bg-dark-subtle bg-opacity-50 border border-dark-subtle rounded-4 h-100 p-3 shadow-sm">
+                  <div class="form-check form-switch notification-toggle h-100 p-3">
                     <input class="form-check-input" type="checkbox" role="switch" id="<?php echo htmlspecialchars($inputId); ?>" name="notifications[]" value="<?php echo htmlspecialchars($eventKey); ?>" <?php echo $isEnabled ? 'checked' : ''; ?>>
                     <label class="form-check-label ms-2" for="<?php echo htmlspecialchars($inputId); ?>">
                       <span class="fw-semibold d-block mb-1"><?php echo htmlspecialchars((string)($info['label'] ?? '')); ?></span>
@@ -263,7 +263,7 @@ include __DIR__ . '/../includes/client_sidebar.php';
           </div>
         <?php endforeach; ?>
         <div class="text-end">
-          <button type="submit" class="btn btn-outline-light"><i class="bi bi-save me-1"></i><span class="btn-text"><?php echo __('Сохранить уведомления'); ?></span></button>
+          <button type="submit" class="btn btn-gradient"><i class="bi bi-save me-1"></i><span class="btn-text"><?php echo __('Сохранить уведомления'); ?></span></button>
         </div>
       </form>
     </div>
