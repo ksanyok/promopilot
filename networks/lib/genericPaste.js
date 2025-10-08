@@ -56,6 +56,9 @@ function createGenericPastePublisher(config) {
       testMode: !!jobOptions.testMode,
       cascade,
       article: rawArticle,
+      disableImages: jobOptions.disableImages !== undefined
+        ? !!jobOptions.disableImages
+        : !!config.disableImages,
     };
 
     logLine('Publish start', { slug, pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });

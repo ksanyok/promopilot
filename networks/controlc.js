@@ -315,6 +315,7 @@ const config = {
   slug: 'controlc',
   baseUrl: 'https://controlc.com/',
   contentFormat: 'text',
+  disableImages: true,
   waitUntil: 'domcontentloaded',
   waitForSelector: 'form textarea',
   submitSelectors: [

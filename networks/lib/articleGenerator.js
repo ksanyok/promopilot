@@ -136,15 +136,33 @@ function cleanupGeneratedHtml(html) {
   s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
   s = s.replace(/\s*\$+\s*$/g, '');
   return s.trim();
-}
+      const titlePromptLines = isRu
+        ? [
+            `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicLine}.`,
+            isHigherLevel
+              ? `Передай связь с целевой страницей, но не повторяй дословно фразу "${anchorText}".`
+              : `Укажи фокус: ${anchorText}.`,
+            'Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.'
+          ]
+        : [
+            `Write a clear, specific headline in ${pageLang} for: ${topicLine}.`,
+            isHigherLevel
+              ? `Show the connection to the target page without repeating the exact phrase "${anchorText}".`
+              : `Highlight the key phrase "${anchorText}".`,
+            'Requirements: no quotes or emoji, no URLs, 6–12 words. Return only the headline.'
+          ];
+      let titlePrompt = titlePromptLines.join('\n');
+      if (keywordReminder) {
+        titlePrompt += `\n${keywordReminder}`;
+      }
+      if (cascadeInfo.titleReminder) {
+        titlePrompt += `\n${cascadeInfo.titleReminder}`;
+      }
 
-function extractPlainText(fragment) {
-  return String(fragment || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function buildFallbackListItems(html, { isRu } = {}) {
-  let listCandidates = [];
-  const source = String(html || '');
+      const prompts = {
+        title: titlePrompt,
+        content: contentPrompt,
+      };
   const headingMatches = [...source.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
   headingMatches.forEach((match) => {
     const text = extractPlainText(match[1]);
@@ -259,6 +277,40 @@ function buildLevelPromptHints({ level, isRu, minLength, maxLength }) {
       isRu
         ? 'Структурируй материал: введение, глубокие аналитические блоки, практические советы и убедительное заключение.'
         : 'Structure the piece with an introduction, deep analytical sections, practical guidance, and a persuasive conclusion.',
+    ];
+    return { lengthSentence, requirementLine, extraRequirementLines, toneLines };
+  }
+
+  if (level === 2 || level === 3) {
+    const min = Math.max(normalizedMin || 0, 3000);
+    let max = normalizeLengthHint(maxLength);
+    if (!max) {
+      max = 4000;
+    }
+    if (max < min + 200) {
+      max = min + 200;
+    }
+    if (max > 4200) {
+      max = 4200;
+    }
+    const lengthSentence = isRu
+      ? `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально около 3200–3800).`
+      : `Aim for ${min}-${max} characters (excluding HTML markup; ideally around 3200-3800).`;
+    const requirementLine = isRu
+      ? `- Объем ${min}–${max} знаков (без учета HTML).`
+      : `- Length ${min}-${max} characters (excluding HTML).`;
+    const extraRequirementLines = [
+      isRu
+        ? '- Структура: краткое введение, 2–3 смысловых блока и финальный вывод.'
+        : '- Structure: short intro, 2–3 focused sections, and a concise takeaway.',
+      isRu
+        ? '- Обязательно покажи связь с материалами предыдущего уровня и добавь конкретные детали из темы.'
+        : '- Show the connection to the previous-level material and add concrete details from the topic.'
+    ];
+    const toneLines = [
+      isRu
+        ? 'Тон — практический и основанный на фактах: без воды, с конкретными наблюдениями и выводами.'
+        : 'Tone — practical and fact-driven: avoid fluff, include concrete observations and conclusions.'
     ];
     return { lengthSentence, requirementLine, extraRequirementLines, toneLines };
   }
@@ -381,7 +433,8 @@ async function generateArticle({
   meta,
   testMode,
   cascade,
-  article: articleConfig
+  article: articleConfig,
+  disableImages
 }, logLine) {
   const pageMeta = meta || {};
   const pageLang = language || pageMeta.lang || 'ru';
@@ -434,6 +487,13 @@ async function generateArticle({
     minLength: articleHints.minLength,
     maxLength: articleHints.maxLength,
   });
+  const levelNumber = Number.isFinite(inferredLevel) ? inferredLevel : 1;
+  const isHigherLevel = levelNumber >= 2;
+  const anchorUsageInstruction = isHigherLevel
+    ? (isRu
+        ? `Анкоры ссылок подбирай из смысловых фраз текста (2–5 слов), не повторяй подзаголовки и не используй точное выражение "${anchorText}".`
+        : `Choose 2–5 word anchor phrases that grow naturally from the sentences; do not reuse headings or the exact phrase "${anchorText}".`)
+    : '';
   const isTest = !!testMode;
 
   if (isTest) {
@@ -504,24 +564,75 @@ async function generateArticle({
       }
     });
   }
+  if (anchorUsageInstruction) {
+    contentLines.push(anchorUsageInstruction);
+  }
   contentLines.push(avoidGeneric);
 
-  const requirementLines = [
-    lengthHints.requirementLine,
-    `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):`,
-    `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.`,
-    `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").`,
-    `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en).`,
-  ];
+  const requirementLines = [];
+  if (lengthHints.requirementLine) {
+    requirementLines.push(lengthHints.requirementLine);
+  }
+  if (isHigherLevel) {
+    requirementLines.push(
+      isRu
+        ? '- Всего три активные ссылки (формат <a href="...">...</a>) и ни одной лишней.'
+        : '- Use exactly three active links (format <a href="...">...</a>) and nothing else.'
+    );
+    requirementLines.push(
+      isRu
+        ? `  • Две ссылки ведут на ${pageUrl} с разными органичными анкорами (2–5 слов), отличными от подзаголовков и без фразы "${anchorText}".`
+        : `  • Two links must point to ${pageUrl} with distinct natural 2–5 word anchors that differ from headings and avoid the exact phrase "${anchorText}".`
+    );
+    requirementLines.push(
+      isRu
+        ? '  • Первую ссылку размести в первой половине статьи, вторую — ближе к заключению; обе внутри абзацев, а не списков или заголовков.'
+        : '  • Place the first internal link in the first half of the article and the second near the conclusion; both must live inside paragraphs, not lists or headings.'
+    );
+    requirementLines.push(
+      isRu
+        ? `  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на языке ${pageLang} или en; URL действительный.`
+        : `  • The third link points to a reputable external source (Wikipedia, official reports, industry research) in ${pageLang} or English with a valid URL.`
+    );
+  } else {
+    requirementLines.push(
+      isRu
+        ? '- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):'
+        : '- Exactly three active links in the article (format <a href="...">...</a>):'
+    );
+    requirementLines.push(
+      isRu
+        ? `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.`
+        : `  1) Link to our URL with the exact anchor "${anchorText}": <a href="${pageUrl}">${anchorText}</a>, placed naturally in the first half of the article.`
+    );
+    requirementLines.push(
+      isRu
+        ? `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").`
+        : `  2) A second link to the same URL with a different organic anchor (not "${anchorText}").`
+    );
+    requirementLines.push(
+      isRu
+        ? `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en).`
+        : `  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; the URL must be valid and ideally in ${pageLang} or English.`
+    );
+  }
   if (Array.isArray(lengthHints.extraRequirementLines) && lengthHints.extraRequirementLines.length) {
     requirementLines.push(...lengthHints.extraRequirementLines);
   }
   requirementLines.push(
-    `- Используй только простой HTML: абзацы <p>, подзаголовки <h3>, списки (<ul>/<ol>) и цитаты <blockquote>. Без markdown и кода.`,
-    `- 3–5 смысловых секций и короткое заключение.`,
-    `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.`
+    isRu
+      ? '- Используй только простой HTML: абзацы <p>, подзаголовки <h3>, списки (<ul>/<ol>) и цитаты <blockquote>. Без markdown и кода.'
+      : '- Use only basic HTML: paragraphs <p>, subheadings <h3>, lists (<ul>/<ol>), and blockquotes <blockquote>. No markdown or code.',
+    isRu
+      ? '- 3–5 смысловых секций и короткое заключение.'
+      : '- Provide 3–5 meaningful sections and a short conclusion.',
+    isRu
+      ? '- Кроме указанных трёх ссылок — никаких иных ссылок или URL.'
+      : '- Do not add any links beyond the three specified above.'
   );
-  const requirementsBlock = ['Требования:', ...requirementLines, 'Ответь только телом статьи.'].join('\n');
+  const requirementsHeading = isRu ? 'Требования:' : 'Requirements:';
+  const returnBodyLine = isRu ? 'Ответь только телом статьи.' : 'Return only the article body.';
+  const requirementsBlock = [requirementsHeading, ...requirementLines, returnBodyLine].join('\n');
   contentLines.push(requirementsBlock);
 
   const contentPrompt = contentLines.filter(Boolean).join('\n');
@@ -547,42 +658,44 @@ async function generateArticle({
   // Add H1 title
   content = `<h1>${titleClean}</h1>\n${content}`;
 
-  // Generate image prompt
-  const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Обязательно подчеркни, что это реалистичная профессиональная фотография в формате 16:9 без текста, логотипов и водяных знаков, с натуральным светом и живой композицией. Ответь только промтом.`;
-  const imagePrompt = await generateText(imagePromptText, { ...aiOpts, systemPrompt: 'Только промт для изображения.', keepRaw: true });
-  await sleep(500);
-  const cleanImagePrompt = cleanLLMOutput(imagePrompt).trim();
-  let finalImagePrompt = cleanImagePrompt;
-
-  if (finalImagePrompt) {
-    finalImagePrompt = finalImagePrompt.replace(/\b(illustration|cartoon|drawing|render|digital painting|concept art)\b/gi, 'photograph');
-    const enforcedPhrases = [
-      'photorealistic',
-      'professional photograph',
-      'natural lighting',
-      'ultra-detailed',
-      '16:9 aspect ratio',
-      'no text',
-      'no watermark',
-      'no logo',
-      'no captions'
-    ];
-    enforcedPhrases.forEach((phrase) => {
-      const phraseRegex = new RegExp(phrase.replace(/\s+/g, '\\s+'), 'i');
-      if (!phraseRegex.test(finalImagePrompt)) {
-        finalImagePrompt += `, ${phrase}`;
-      }
-    });
-  }
-
-  // Generate image
   let imageUrl = null;
-  try {
+  if (!disableImages) {
+    // Generate image prompt
+    const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Обязательно подчеркни, что это реалистичная профессиональная фотография в формате 16:9 без текста, логотипов и водяных знаков, с натуральным светом и живой композицией. Ответь только промтом.`;
+    const imagePrompt = await generateText(imagePromptText, { ...aiOpts, systemPrompt: 'Только промт для изображения.', keepRaw: true });
+    await sleep(500);
+    const cleanImagePrompt = cleanLLMOutput(imagePrompt).trim();
+    let finalImagePrompt = cleanImagePrompt;
+
     if (finalImagePrompt) {
-      imageUrl = await generateImage(finalImagePrompt);
+      finalImagePrompt = finalImagePrompt.replace(/\b(illustration|cartoon|drawing|render|digital painting|concept art)\b/gi, 'photograph');
+      const enforcedPhrases = [
+        'photorealistic',
+        'professional photograph',
+        'natural lighting',
+        'ultra-detailed',
+        '16:9 aspect ratio',
+        'no text',
+        'no watermark',
+        'no logo',
+        'no captions'
+      ];
+      enforcedPhrases.forEach((phrase) => {
+        const phraseRegex = new RegExp(phrase.replace(/\s+/g, '\\s+'), 'i');
+        if (!phraseRegex.test(finalImagePrompt)) {
+          finalImagePrompt += `, ${phrase}`;
+        }
+      });
     }
-  } catch (e) {
-    // Ignore image generation errors for now
+
+    // Generate image
+    try {
+      if (finalImagePrompt) {
+        imageUrl = await generateImage(finalImagePrompt);
+      }
+    } catch (e) {
+      // Ignore image generation errors for now
+    }
   }
 
   // Insert image after first paragraph

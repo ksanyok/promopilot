@@ -26,6 +26,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if (promotionConfirmModalEl && promotionConfirmModalEl.parentElement !== document.body) { document.body.appendChild(promotionConfirmModalEl); }
     const insufficientFundsModalEl = document.getElementById('insufficientFundsModal');
     if (insufficientFundsModalEl && insufficientFundsModalEl.parentElement !== document.body) { document.body.appendChild(insufficientFundsModalEl); }
+
+    let pageUnloading = false;
+    const markPageUnloading = () => {
+        pageUnloading = true;
+        try { stopPolling(); } catch (_) {}
+    };
+    window.addEventListener('beforeunload', markPageUnloading, { passive: true });
+    window.addEventListener('pagehide', markPageUnloading, { passive: true });
     function formatPromotionStatusLabel(status) {
         if (!status) {
             return '';
@@ -3328,7 +3336,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } catch (e) {
                 removePlaceholderRow(placeholderRow);
-                if (!isAbortError(e)) {
+                if (!isAbortError(e) && !pageUnloading) {
                     alert('<?php echo __('Сетевая ошибка'); ?>');
                 }
             } finally {
@@ -3418,7 +3426,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (optimisticApplied) {
                 restorePromotionState(row, previousSnapshot);
             }
-            if (!isAbortError(e)) {
+            if (!isAbortError(e) && !pageUnloading) {
                 alert('<?php echo __('Сетевая ошибка'); ?>');
             }
         } finally {

@@ -104,6 +104,7 @@ async function loginNotepin(username, password, job = {}) {
       testMode: !!job.testMode,
       meta,
       page_meta: meta,
+      disableImages: true,
     };
     let article = null;
     try {
