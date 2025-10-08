@@ -215,7 +215,7 @@ function buildDiagnosticArticle(pageUrl, anchorText) {
   ];
 
   const title = 'PromoPilot: диагностика сетей';
-  const html = `<h1>${title}</h1>\n\n![Image description](https://i.snap.as/D1yn3zC.png)\n\n${sections.join('\n\n')}`;
+  const html = sections.join('\n\n');
 
   return {
     title,
@@ -248,23 +248,6 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     ? 'Не используй шаблонные фразы вроде «разбор кейса», «быстрый обзор», «пошаговый гайд» без конкретики. Излагай факты и контекст из исходной темы.'
     : 'Avoid generic phrases like “case study breakdown”, “quick overview”, or “step-by-step guide” without concrete detail. Ground every section in the original topic context.';
 
-  if (isTest) {
-    const preset = buildDiagnosticArticle(pageUrl, anchorText);
-    const stats = analyzeLinks(preset.html, pageUrl, anchorText);
-    if (typeof logLine === 'function') {
-      logLine('Diagnostic article prepared', { links: stats, length: preset.html.length, author: preset.author });
-    }
-    const article = {
-      title: preset.title,
-      htmlContent: preset.html,
-      language: pageLang,
-      linkStats: stats,
-      author: preset.author,
-    };
-    lastGeneratedArticle = { ...article };
-    return article;
-  }
-
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = {
     provider,
@@ -272,6 +255,35 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     model: process.env.OPENAI_MODEL || undefined,
     temperature: 0.2,
   };
+
+  if (isTest) {
+    const preset = buildDiagnosticArticle(pageUrl, anchorText);
+    const stats = analyzeLinks(preset.html, pageUrl, anchorText);
+    if (typeof logLine === 'function') {
+      logLine('Diagnostic article prepared', { links: stats, length: preset.html.length, author: preset.author });
+    }
+    let article = {
+      title: preset.title,
+      htmlContent: preset.html,
+      language: pageLang,
+      linkStats: stats,
+      author: preset.author,
+    };
+
+    // Add H1 and image for test
+    article.htmlContent = `<h1>${article.title}</h1>\n${article.htmlContent}`;
+
+    // For test, add fake image
+    const firstPIndex = article.htmlContent.indexOf('<p>');
+    if (firstPIndex !== -1) {
+      const insertPos = article.htmlContent.indexOf('</p>', firstPIndex) + 4;
+      const imageMarkdown = `![Image description](https://i.snap.as/D1yn3zC.png)\n\n`;
+      article.htmlContent = article.htmlContent.slice(0, insertPos) + imageMarkdown + article.htmlContent.slice(insertPos);
+    }
+
+    lastGeneratedArticle = { ...article };
+    return article;
+  }
 
   const prompts = {
     title:
