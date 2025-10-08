@@ -65,11 +65,18 @@ function ensure_schema(): void {
             $code = preg_replace('~[^a-zA-Z0-9_\-]~', '', (string)$_GET['ref']);
             if ($code !== '') {
                 pp_referral_set_cookie($code);
-                // Log click once per session per code
-                if (empty($_SESSION['pp_ref_click_logged']) || $_SESSION['pp_ref_click_logged'] !== $code) {
-                    $_SESSION['pp_ref_click_logged'] = $code;
+                $logged = $_SESSION['pp_ref_click_logged'] ?? [];
+                if (!is_array($logged)) { $logged = []; }
+                $now = time();
+                $last = isset($logged[$code]) ? (int)$logged[$code] : 0;
+                if ($last <= 0 || ($now - $last) >= 300) { // throttle: once per 5 minutes per code per session
                     try { $conn = @connect_db(); if ($conn) { pp_referral_log_event_click($conn, $code); $conn->close(); } } catch (Throwable $e) { /* ignore */ }
+                    $logged[$code] = $now;
+                    if (count($logged) > 50) {
+                        $logged = array_slice($logged, -50, 50, true);
+                    }
                 }
+                $_SESSION['pp_ref_click_logged'] = $logged;
             }
         }
     }

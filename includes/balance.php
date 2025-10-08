@@ -411,7 +411,7 @@ if (!function_exists('pp_referral_award_for_spend')) {
         try {
             $enabled = get_setting('referral_enabled', '0') === '1';
             if (!$enabled) { return null; }
-            $basis = get_setting('referral_accrual_basis', 'payment');
+            $basis = get_setting('referral_accrual_basis', 'spend');
             if ($basis !== 'spend') { return null; }
             $defPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
             if ($defPercent < 0) { $defPercent = 0; }

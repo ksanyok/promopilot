@@ -104,7 +104,7 @@ if (is_logged_in() && !is_admin()) {
                 $conn->close();
             }
         } catch (Throwable $e) { /* ignore */ }
-        $refLink = pp_url('') . '/?ref=' . rawurlencode($code);
+        $refLink = pp_url('?ref=' . rawurlencode($code));
     ?>
     <div class="menu-block sidebar-panel sidebar-panel--referral">
         <div class="sidebar-panel__header">

@@ -256,7 +256,7 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     }
                 } catch (Throwable $e) {}
                 $conn2->close();
-                $refLink = pp_url('') . '/?ref=' . rawurlencode($userCode);
+                $refLink = pp_url('?ref=' . rawurlencode($userCode));
         ?>
         <div class="hero-referral-strip">
             <div class="hero-referral-strip__content">

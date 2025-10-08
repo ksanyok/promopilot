@@ -20,7 +20,7 @@ try {
 } catch (Throwable $e) { /* ignore */ }
 
 // Build referral link (root URL with ?ref=code)
-$refLink = pp_url('') . '/?ref=' . rawurlencode($code);
+$refLink = pp_url('?ref=' . rawurlencode($code));
 
 // Stats: total referred users and earnings
 $totalUsers = 0; $totalEarnings = 0.0; $personalPercent = 0.0;
@@ -42,9 +42,9 @@ $activitySeries = [
     'labels' => $periodLabels,
     'click' => array_fill(0, $periodDays, 0),
     'signup' => array_fill(0, $periodDays, 0),
-    'payout' => array_fill(0, $periodDays, 0),
+    'payout' => array_fill(0, $periodDays, 0.0),
 ];
-$activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0];
+$activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0.0];
 $periodTotals = $activityTotals;
 
 // Basic stats: personal percent, total referred users, total referral earnings, recent referral payout events
@@ -122,6 +122,7 @@ $clicksPerPage = 20;
 $clickPage = max(1, (int)($_GET['clicks_page'] ?? $_GET['page'] ?? 1));
 $clickEvents = [];
 $clickPagination = ['page' => $clickPage, 'pages' => 1, 'total' => 0];
+$payoutEventsCount = 0;
 
 try {
     // Trim old click events beyond the analytics window
@@ -131,16 +132,20 @@ try {
         $del->close();
     }
 
-    // Aggregate clicks into activity series using timestamp buckets (avoid DATE/timezone mismatch)
-    $startTs = strtotime($periodCutoff);
-    if ($st = $conn->prepare('SELECT FLOOR((UNIX_TIMESTAMP(created_at) - ?) / 86400) AS idx, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = \"click\" AND created_at >= ? GROUP BY idx')) {
-        $st->bind_param('iis', $startTs, $uid, $periodCutoff);
+    // Aggregate timeline metrics grouped by calendar day
+    $dateIndex = $labelIndex;
+    if (!is_array($dateIndex)) { $dateIndex = []; }
+
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ? GROUP BY day")) {
+        $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $idx = isset($row['idx']) ? (int)$row['idx'] : -1;
+                $day = (string)($row['day'] ?? '');
                 $count = (int)($row['c'] ?? 0);
-                if ($count <= 0 || $idx < 0 || $idx >= $periodDays) { continue; }
+                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
+                $idx = (int)$dateIndex[$day];
+                if ($idx < 0 || $idx >= $periodDays) { continue; }
                 $activitySeries['click'][$idx] = $count;
             }
             $res->free();
@@ -148,80 +153,61 @@ try {
         $st->close();
     }
 
-    // Aggregate payout events from balance history using timestamp buckets
-    if ($st = $conn->prepare("SELECT FLOOR((UNIX_TIMESTAMP(created_at) - ?) / 86400) AS idx, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY idx")) {
-        $st->bind_param('iis', $startTs, $uid, $periodCutoff);
+    if ($st = $conn->prepare('SELECT DATE(created_at) AS day, COUNT(*) AS c FROM users WHERE referred_by = ? AND created_at >= ? GROUP BY day')) {
+        $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $idx = isset($row['idx']) ? (int)$row['idx'] : -1;
+                $day = (string)($row['day'] ?? '');
                 $count = (int)($row['c'] ?? 0);
-                if ($count <= 0 || $idx < 0 || $idx >= $periodDays) { continue; }
-                $activitySeries['payout'][$idx] = $count;
+                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
+                $idx = (int)$dateIndex[$day];
+                if ($idx < 0 || $idx >= $periodDays) { continue; }
+                $activitySeries['signup'][$idx] = $count;
             }
             $res->free();
         }
         $st->close();
     }
 
-    // Aggregate signups from both sources with per-day unique user de-duplication
-    // We'll bucket by day index using start timestamp to avoid date-string/zone mismatches
-    // $startTs already computed above
-    $signupUsersByBucket = []; // bucketIdx => [userId => true]
-    if ($st = $conn->prepare('SELECT id, UNIX_TIMESTAMP(created_at) AS ts FROM users WHERE referred_by = ? AND created_at >= ?')) {
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(DISTINCT user_id) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'signup' AND created_at >= ? GROUP BY day")) {
         $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $ts = isset($row['ts']) ? (int)$row['ts'] : 0;
-                $userId = (int)($row['id'] ?? 0);
-                if ($ts <= 0 || $userId <= 0) { continue; }
-                $idx = (int)floor(($ts - $startTs) / 86400);
+                $day = (string)($row['day'] ?? '');
+                $count = (int)($row['c'] ?? 0);
+                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
+                $idx = (int)$dateIndex[$day];
                 if ($idx < 0 || $idx >= $periodDays) { continue; }
-                if (!isset($signupUsersByBucket[$idx])) { $signupUsersByBucket[$idx] = []; }
-                $signupUsersByBucket[$idx][$userId] = true;
+                if ($count > $activitySeries['signup'][$idx]) {
+                    $activitySeries['signup'][$idx] = $count;
+                }
             }
             $res->free();
         }
         $st->close();
     }
 
-    // 2) Also collect from referral_events signup events (covers cases where assignment happened on event level)
-    if ($st = $conn->prepare("SELECT user_id, UNIX_TIMESTAMP(created_at) AS ts FROM referral_events WHERE referrer_user_id = ? AND type = 'signup' AND created_at >= ?")) {
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, SUM(delta) AS s, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY day")) {
         $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $ts = isset($row['ts']) ? (int)$row['ts'] : 0;
-                $userId = (int)($row['user_id'] ?? 0);
-                if ($ts <= 0 || $userId <= 0) { continue; }
-                $idx = (int)floor(($ts - $startTs) / 86400);
+                $day = (string)($row['day'] ?? '');
+                $sum = isset($row['s']) ? (float)$row['s'] : 0.0;
+                $count = (int)($row['c'] ?? 0);
+                if ($day === '' || ($sum <= 0 && $count <= 0) || !isset($dateIndex[$day])) { continue; }
+                $idx = (int)$dateIndex[$day];
                 if ($idx < 0 || $idx >= $periodDays) { continue; }
-                if (!isset($signupUsersByBucket[$idx])) { $signupUsersByBucket[$idx] = []; }
-                $signupUsersByBucket[$idx][$userId] = true; // de-dupe across sources
+                $activitySeries['payout'][$idx] = round($sum, 2);
+                $payoutEventsCount += $count;
             }
             $res->free();
         }
         $st->close();
     }
 
-    // 3) Build signup series as counts of unique users per day
-    $signupSeries = array_fill(0, $periodDays, 0);
-    foreach ($signupUsersByBucket as $idx => $usersSet) {
-        $idx = (int)$idx;
-        if ($idx < 0 || $idx >= $periodDays) { continue; }
-        $signupSeries[$idx] = count($usersSet);
-    }
-    // Combine with raw referral_events signup counts as a fallback to avoid showing empty series
-    // Take the maximum per day between deduped user series and pre-aggregated event counts
-    $combinedSignup = $signupSeries;
-    if (isset($activitySeries['signup']) && is_array($activitySeries['signup'])) {
-        for ($i = 0; $i < $periodDays; $i++) {
-            $existing = isset($activitySeries['signup'][$i]) ? (int)$activitySeries['signup'][$i] : 0;
-            if ($existing > $combinedSignup[$i]) { $combinedSignup[$i] = $existing; }
-        }
-    }
-    $activitySeries['signup'] = $combinedSignup;
 
     // Paginated list of recent click events within the window
     if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ?")) {
@@ -297,6 +283,7 @@ try {
 $conn->close();
 $refEnabled = get_setting('referral_enabled', '0') === '1';
 $accrualBasis = get_setting('referral_accrual_basis', 'spend');
+$currencyCode = get_currency_code();
 $periodStartLabel = $activitySeries['labels'][0] ?? date('Y-m-d');
 $periodEndLabel = $activitySeries['labels'] ? $activitySeries['labels'][count($activitySeries['labels']) - 1] : $periodStartLabel;
 $chartPayload = [
@@ -304,6 +291,7 @@ $chartPayload = [
     'click' => $activitySeries['click'],
     'signup' => $activitySeries['signup'],
     'payout' => $activitySeries['payout'],
+    'currency' => $currencyCode,
 ];
 $chartPayloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 if ($chartPayloadJson === false) { $chartPayloadJson = '{}'; }
@@ -397,11 +385,11 @@ include __DIR__ . '/../includes/client_sidebar.php';
                     <div class="d-flex align-items-start justify-content-between">
                         <div>
                             <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Начисления за период'); ?></p>
-                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$periodTotals['payout'], 0, '.', ' '); ?></div>
+                            <div class="display-6 fw-bold mb-0"><?php echo htmlspecialchars(format_currency($periodTotals['payout']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
                         </div>
                         <div class="ref-metric-icon"><i class="bi bi-cash-stack"></i></div>
                     </div>
-                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?></p>
+                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?> · <?php echo sprintf(__('выплат: %d'), (int)$payoutEventsCount); ?></p>
                 </div>
             </div>
         </div>
@@ -458,7 +446,8 @@ include __DIR__ . '/../includes/client_sidebar.php';
                         <div class="col-sm-6">
                             <div class="stat-tile shadow-sm">
                                 <div class="stat-label"><?php echo __('Начислений за период'); ?></div>
-                                <div class="stat-value"><?php echo number_format((int)$periodTotals['payout'], 0, '.', ' '); ?></div>
+                                <div class="stat-value"><?php echo htmlspecialchars(format_currency($periodTotals['payout']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></div>
+                                <div class="text-muted small mt-1"><?php echo sprintf(__('выплат: %d'), (int)$payoutEventsCount); ?></div>
                             </div>
                         </div>
                     </div>
@@ -745,7 +734,17 @@ document.addEventListener('DOMContentLoaded', function(){
         const clickData = chartPayload.click ?? [];
         const signupData = chartPayload.signup ?? [];
         const payoutData = chartPayload.payout ?? [];
-        console.log('Chart data:', {labels, clickData, signupData, payoutData});
+        const currency = typeof chartPayload.currency === 'string' ? chartPayload.currency : '';
+        const payoutLabel = '<?php echo __('Начисления'); ?>';
+        const formatNumber = (value, decimals = 0) => {
+            const num = Number(value);
+            if (!Number.isFinite(num)) { return '0'; }
+            return num.toLocaleString(undefined, {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals
+            });
+        };
+        console.log('Chart data:', {labels, clickData, signupData, payoutData, currency});
         const ctx = chartElement.getContext('2d');
         new Chart(ctx, {
             type: 'line',
@@ -771,7 +770,7 @@ document.addEventListener('DOMContentLoaded', function(){
                         fill: true,
                     },
                     {
-                        label: '<?php echo __('Начисления'); ?>',
+                        label: payoutLabel,
                         data: payoutData,
                         borderColor: '#6f42c1',
                         backgroundColor: 'rgba(111, 66, 193, 0.15)',
@@ -805,7 +804,11 @@ document.addEventListener('DOMContentLoaded', function(){
                             label: function(context) {
                                 const label = context.dataset.label || '';
                                 const value = Number(context.raw || 0);
-                                return `${label}: ${value}`;
+                                if (label === payoutLabel) {
+                                    const formatted = formatNumber(value, 2);
+                                    return currency ? `${label}: ${formatted} ${currency}` : `${label}: ${formatted}`;
+                                }
+                                return `${label}: ${formatNumber(value)}`;
                             }
                         }
                     }
@@ -822,9 +825,13 @@ document.addEventListener('DOMContentLoaded', function(){
                     y: {
                         beginAtZero: true,
                         ticks: {
-                            precision: 0,
-                            stepSize: 1,
-                            color: '#cbd5f5'
+                            color: '#cbd5f5',
+                            callback: function(value) {
+                                const num = Number(value);
+                                if (!Number.isFinite(num)) { return value; }
+                                const decimals = Number.isInteger(num) ? 0 : 2;
+                                return formatNumber(num, decimals);
+                            }
                         },
                         grid: {
                             color: 'rgba(148, 163, 184, 0.18)'
