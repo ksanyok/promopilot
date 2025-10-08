@@ -76,6 +76,28 @@ function normalizeContent(html) {
   s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
   s = s.replace(/\s*\$+\s*$/g, '');
 
+  // Drop orphaned "Key Takeaways" heading if it has no content afterwards
+  const headingRegex = /<h3[^>]*>[^<]*key\s*takeaways[^<]*<\/h3>/i;
+  const headingMatcher = new RegExp(headingRegex.source, 'gi');
+  let match;
+  while ((match = headingMatcher.exec(s))) {
+    const start = match.index;
+    const afterHeading = start + match[0].length;
+    const remainder = s.slice(afterHeading);
+    const nextHeadingOffset = remainder.search(/<h[1-6][^>]*>/i);
+    const sectionEnd = nextHeadingOffset === -1 ? s.length : afterHeading + nextHeadingOffset;
+    const section = s.slice(afterHeading, sectionEnd);
+    const hasList = /<(ul|ol)[^>]*>/i.test(section);
+    const hasMeaningfulText = section
+      .replace(/<p[^>]*>(?:\s|&nbsp;|<br[^>]*>)*<\/p>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .trim().length > 0;
+    if (!hasList && !hasMeaningfulText) {
+      s = `${s.slice(0, start)}${s.slice(sectionEnd)}`;
+      headingMatcher.lastIndex = Math.max(0, start - 1);
+    }
+  }
+
   return s.trim();
 }
 

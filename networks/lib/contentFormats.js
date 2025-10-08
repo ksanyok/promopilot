@@ -30,7 +30,26 @@ function htmlToPlainText(html) {
 function htmlToMarkdown(html) {
   if (!html) return '';
   let out = String(html);
+  const convertImage = (fragment) => {
+    if (!fragment) return '';
+    const srcMatch = fragment.match(/src=["']([^"']+)["']/i);
+    const src = srcMatch && srcMatch[1] ? srcMatch[1].trim() : '';
+    if (!src) return '';
+    const altMatch = fragment.match(/alt=["']([^"']*)["']/i);
+    let altText = altMatch && altMatch[1] ? altMatch[1].trim() : '';
+    if (!altText) {
+      const captionMatch = fragment.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i);
+      if (captionMatch && captionMatch[1]) {
+        altText = stripTags(captionMatch[1]);
+      }
+    }
+    const safeAlt = altText.replace(/[\[\]]/g, '').trim();
+    return `\n\n![${safeAlt}](${src})\n\n`;
+  };
+
   out = convertAnchors(out, (text, href) => `[${text}](${href})`);
+  out = out.replace(/<figure[^>]*>[\s\S]*?<img[^>]*>[\s\S]*?<\/figure>/gi, (m) => convertImage(m));
+  out = out.replace(/<img[^>]*>/gi, (m) => convertImage(m));
   out = out.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (m, inner) => `\n# ${stripTags(inner)}\n\n`);
   out = out.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (m, inner) => `\n## ${stripTags(inner)}\n\n`);
   out = out.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (m, inner) => `\n### ${stripTags(inner)}\n\n`);

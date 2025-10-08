@@ -124,6 +124,25 @@ async function loginNotepin(username, password, job = {}) {
       .replace(/\s+target\s*=\s*(['])(?:[^']*?)\1/gi, '')
       .replace(/\s+rel\s*=\s*(["'])[^"]*?\1/gi, '')
       .replace(/\s+rel\s*=\s*(['])(?:[^']*?)\1/gi, '');
+
+    const absoluteBase = (() => {
+      const raw = String(process.env.PP_BASE_URL || '').trim();
+      if (!raw) return '';
+      return /^https?:\/\//i.test(raw) ? raw.replace(/\/?$/, '').replace(/\/+$/, '') : '';
+    })();
+
+    const preparedContent = contentForEditor
+      .replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, (fragment) => {
+        const imgMatch = fragment.match(/<img[^>]*>/i);
+        return imgMatch ? imgMatch[0] : '';
+      })
+      .replace(/<img([^>]*?)src=["']\/\/([^"']+)["']([^>]*)>/gi, ($0, before, hostPath, after) => `<img${before}src="https://${hostPath}"${after}>`)
+      .replace(/<img([^>]*?)src=["'](\/[^"']*)["']([^>]*)>/gi, ($0, before, pathValue, after) => {
+        if (!absoluteBase) {
+          return $0;
+        }
+        return `<img${before}src="${absoluteBase}${pathValue}"${after}>`;
+      });
     await page.evaluate((html) => {
       const el = document.querySelector('.pad .elements .element.medium-editor-element[contenteditable="true"]');
       if (el) {
@@ -141,12 +160,15 @@ async function loginNotepin(username, password, job = {}) {
         } catch {}
         try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}
       }
-    }, contentForEditor).catch(() => {});
+    }, preparedContent).catch(() => {});
 
     // 9) Click Publish -> wait for logged-in modal
     const navPub = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
     await page.click('.publish button, .publish > button').catch(async () => {
-      await page.evaluate(() => { const b = document.querySelector('.publish button, .publish > button'); if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+      await page.evaluate(() => {
+        const b = document.querySelector('.publish button, .publish > button');
+        if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
     });
     const modalAppeared = await page.waitForSelector('.publishMenu', { timeout: 15000 }).then(() => true).catch(() => false);
     if (!modalAppeared) {

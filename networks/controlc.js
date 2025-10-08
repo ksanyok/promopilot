@@ -45,10 +45,14 @@ function wrapAnchorForControlC(match, href, inner) {
   if (!cleanHref) {
     return cleanText;
   }
-  if (!cleanText || cleanText === cleanHref) {
+  const text = (cleanText || '').trim();
+  if (!text) {
     return cleanHref;
   }
-  return `[url=${cleanHref}]${cleanText}[/url]`;
+  if (text.includes(cleanHref)) {
+    return text;
+  }
+  return `${text} (${cleanHref})`;
 }
 
 function extractAttribute(fragment, name) {
@@ -58,18 +62,7 @@ function extractAttribute(fragment, name) {
 }
 
 function convertFigureToControlC(fragment) {
-  const src = extractAttribute(fragment, 'src');
-  if (!src) {
-    return '';
-  }
-  const alt = extractAttribute(fragment, 'alt');
-  let caption = '';
-  const captionMatch = /<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i.exec(fragment || '');
-  if (captionMatch && captionMatch[1]) {
-    caption = decodeBasicEntities(stripTags(captionMatch[1]));
-  }
-  const description = decodeBasicEntities(alt || caption).trim();
-  return `\n[img]${src.trim()}[/img]${description ? `\n${description}` : ''}\n`;
+  return '';
 }
 
 function formatHeading(inner, size) {
@@ -86,8 +79,8 @@ function convertHtmlToControlCMarkup(html) {
     return '';
   }
 
-  out = out.replace(/<figure[^>]*>[\s\S]*?<img[\s\S]*?>[\s\S]*?<\/figure>/gi, (match) => convertFigureToControlC(match));
-  out = out.replace(/<img[^>]*>/gi, (match) => convertFigureToControlC(match));
+  out = out.replace(/<figure[^>]*>[\s\S]*?<img[\s\S]*?>[\s\S]*?<\/figure>/gi, () => '');
+  out = out.replace(/<img[^>]*>/gi, () => '');
   out = out.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, wrapAnchorForControlC);
 
   out = out.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_, inner) => formatHeading(inner, 7));
