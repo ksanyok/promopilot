@@ -119,6 +119,8 @@ async function loginNotepin(username, password, job = {}) {
     // Convert http(s) links to protocol-relative to avoid 'https' substring in href
     const contentForEditor = String(htmlContent || '')
       .replace(/(href\s*=\s*["'])https?:\/\//gi, '$1//')
+      .replace(/(src\s*=\s*["'])https?:\/\//gi, '$1//')
+      .replace(/(srcset\s*=\s*["'])([^"']*)(["'])/gi, (match, prefix, urls, suffix) => `${prefix}${urls.replace(/https?:\/\//gi, '//')}${suffix}`)
       // remove target and rel to reduce filtering by platform
       .replace(/\s+target\s*=\s*(["'])[^"]*?\1/gi, '')
       .replace(/\s+target\s*=\s*(['])(?:[^']*?)\1/gi, '')
@@ -136,7 +138,6 @@ async function loginNotepin(username, password, job = {}) {
         const imgMatch = fragment.match(/<img[^>]*>/i);
         return imgMatch ? imgMatch[0] : '';
       })
-      .replace(/<img([^>]*?)src=["']\/\/([^"']+)["']([^>]*)>/gi, ($0, before, hostPath, after) => `<img${before}src="https://${hostPath}"${after}>`)
       .replace(/<img([^>]*?)src=["'](\/[^"']*)["']([^>]*)>/gi, ($0, before, pathValue, after) => {
         if (!absoluteBase) {
           return $0;
@@ -156,6 +157,20 @@ async function loginNotepin(username, password, job = {}) {
             if (m && m[1]) a.setAttribute('href', `//${m[1]}`);
             a.removeAttribute('target');
             a.removeAttribute('rel');
+          }
+        } catch {}
+        try {
+          const images = Array.from(el.querySelectorAll('img[src]'));
+          for (const img of images) {
+            const src = img.getAttribute('src') || '';
+            const matchHttp = src.match(/^https?:\/\/(.*)$/i);
+            if (matchHttp && matchHttp[1]) {
+              img.setAttribute('src', `//${matchHttp[1]}`);
+            }
+            const srcset = img.getAttribute('srcset');
+            if (srcset) {
+              img.setAttribute('srcset', srcset.replace(/https?:\/\//gi, '//'));
+            }
           }
         } catch {}
         try { el.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch {}

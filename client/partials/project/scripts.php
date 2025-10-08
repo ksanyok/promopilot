@@ -2005,16 +2005,253 @@ document.addEventListener('DOMContentLoaded', function() {
         recalcPromotionStats();
     }
 
+    function refreshTooltip(el) {
+        if (!el || !window.bootstrap || !bootstrap.Tooltip) return;
+        try {
+            const existing = bootstrap.Tooltip.getInstance(el);
+            if (existing) {
+                existing.dispose();
+            }
+            bootstrap.Tooltip.getOrCreateInstance(el);
+        } catch (e) {}
+    }
+
+    function applyRowValues(row, values) {
+        if (!row || !values) return;
+        const { url, anchor, language, wish } = values;
+        const normalizedLang = (typeof language === 'string' && language.trim() !== '') ? language.trim().toLowerCase() : 'auto';
+
+        if (typeof url === 'string') {
+            const trimmedUrl = url.trim();
+            const urlInput = row.querySelector('.edit-url');
+            if (urlInput) { urlInput.value = trimmedUrl; }
+            const hostEl = row.querySelector('.host-muted');
+            if (hostEl) {
+                const hostDisp = hostFromUrl(trimmedUrl) || trimmedUrl;
+                hostEl.innerHTML = '<i class="bi bi-globe2 me-1"></i>' + escapeHtml(hostDisp);
+            }
+            const viewUrl = row.querySelector('.view-url');
+            if (viewUrl) {
+                const pathDisp = pathFromUrl(trimmedUrl) || trimmedUrl;
+                viewUrl.setAttribute('href', trimmedUrl);
+                viewUrl.textContent = pathDisp;
+                viewUrl.setAttribute('title', trimmedUrl);
+                refreshTooltip(viewUrl);
+            }
+            const promoteBtn = row.querySelector('.action-promote');
+            if (promoteBtn) {
+                promoteBtn.setAttribute('data-url', trimmedUrl);
+            }
+        }
+
+        if (typeof anchor === 'string') {
+            const anchorVal = anchor.trim();
+            const anchorInput = row.querySelector('.edit-anchor');
+            if (anchorInput) { anchorInput.value = anchorVal; }
+            const viewAnchor = row.querySelector('.view-anchor');
+            if (viewAnchor) {
+                viewAnchor.textContent = anchorVal;
+                viewAnchor.setAttribute('title', anchorVal);
+                refreshTooltip(viewAnchor);
+            }
+        }
+
+        const langInput = row.querySelector('.edit-language');
+        if (langInput) {
+            langInput.value = normalizedLang || 'auto';
+        }
+        const viewLang = row.querySelector('.view-language');
+        if (viewLang) {
+            viewLang.textContent = (normalizedLang || 'auto').toUpperCase();
+        }
+
+        if (typeof wish === 'string') {
+            const wishVal = wish;
+            const wishTextarea = row.querySelector('.edit-wish');
+            if (wishTextarea) { wishTextarea.value = wishVal; }
+            const viewWish = row.querySelector('.view-wish');
+            if (viewWish) { viewWish.textContent = wishVal; }
+            const wishBtn = row.querySelector('.action-show-wish');
+            if (wishBtn) { wishBtn.setAttribute('data-wish', wishVal); }
+        }
+    }
+
+    async function persistEditedLink(row, payload, previousState, btn) {
+        if (!row || !payload || !payload.id) {
+            return;
+        }
+        try {
+            if (btn) {
+                btn.disabled = true;
+                btn.dataset.saving = '1';
+            }
+            const fd = new FormData();
+            fd.append('csrf_token', getCsrfToken());
+            fd.append('update_project', '1');
+            fd.append('ajax', '1');
+            fd.append(`edited_links[${payload.id}][url]`, payload.url);
+            fd.append(`edited_links[${payload.id}][anchor]`, payload.anchor);
+            fd.append(`edited_links[${payload.id}][language]`, payload.language);
+            fd.append(`edited_links[${payload.id}][wish]`, payload.wish);
+            const res = await fetch(window.location.href, {
+                method: 'POST',
+                body: fd,
+                headers: { 'Accept': 'application/json' },
+                credentials: 'same-origin'
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || !data.ok) {
+                const msg = (data && (data.message || data.error)) ? (data.message || data.error) : 'ERROR';
+                throw new Error(msg);
+            }
+            if (data.domain_host) {
+                applyProjectHost(data.domain_host);
+            }
+            delete row.dataset.edited;
+            row.classList.add('link-row-saved');
+            setTimeout(() => row.classList.remove('link-row-saved'), 1200);
+        } catch (error) {
+            row.dataset.edited = '1';
+            applyRowValues(row, previousState);
+            row.classList.add('editing');
+            const viewSelector = '.view-url, .view-anchor, .view-language, .view-wish';
+            const editSelector = '.edit-url, .edit-anchor, .edit-language, .edit-wish';
+            row.querySelectorAll(viewSelector).forEach(el => el.classList.add('d-none'));
+            row.querySelectorAll(editSelector).forEach(el => {
+                el.classList.remove('d-none');
+                el.removeAttribute('disabled');
+            });
+            const urlInput = row.querySelector('.edit-url');
+            if (urlInput) { urlInput.value = payload.url; }
+            const anchorInput = row.querySelector('.edit-anchor');
+            if (anchorInput) { anchorInput.value = payload.anchor; }
+            const langInput = row.querySelector('.edit-language');
+            if (langInput) { langInput.value = payload.language || 'auto'; }
+            const wishInput = row.querySelector('.edit-wish');
+            if (wishInput) { wishInput.value = payload.wish; }
+            if (btn) {
+                btn.dataset.mode = 'save';
+                btn.setAttribute('title', '<?php echo __('Сохранить изменения'); ?>');
+                const icon = btn.querySelector('i');
+                if (icon) {
+                    icon.classList.remove('bi-pencil');
+                    icon.classList.add('bi-check-lg');
+                }
+                refreshTooltip(btn);
+            }
+            alert('<?php echo __('Не удалось сохранить ссылку'); ?>: ' + (error && error.message ? error.message : 'ERROR'));
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                delete btn.dataset.saving;
+            }
+        }
+    }
+
     function handleEditButton(btn) {
         const row = btn.closest('tr');
         if (!row) return;
-        row.classList.toggle('editing');
-        row.querySelectorAll('.view-url, .view-anchor, .view-language, .view-wish').forEach(el => el.classList.toggle('d-none'));
-        row.querySelectorAll('.edit-url, .edit-anchor, .edit-language, .edit-wish').forEach(el => el.classList.toggle('d-none'));
-        if (row.classList.contains('editing')) {
-            row.querySelectorAll('input, textarea, select').forEach(el => el.removeAttribute('disabled'));
+        if (btn && btn.dataset.saving === '1') return;
+        const isEditing = row.classList.contains('editing');
+        const editFieldsSelector = '.edit-url, .edit-anchor, .edit-language, .edit-wish';
+        const viewFieldsSelector = '.view-url, .view-anchor, .view-language, .view-wish';
+
+        if (!isEditing) {
+            row.classList.add('editing');
+            row.querySelectorAll(viewFieldsSelector).forEach(el => el.classList.add('d-none'));
+            row.querySelectorAll(editFieldsSelector).forEach(el => {
+                el.classList.remove('d-none');
+                el.removeAttribute('disabled');
+            });
+            btn.setAttribute('title', '<?php echo __('Сохранить изменения'); ?>');
+            btn.dataset.mode = 'save';
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.classList.remove('bi-pencil');
+                icon.classList.add('bi-check-lg');
+            }
+            refreshTooltip(btn);
+            row.querySelector('.edit-url')?.focus();
+            return;
+        }
+
+        const rowId = parseInt(row.getAttribute('data-id') || '0', 10);
+        if (!rowId) {
+            alert('<?php echo __('Не удалось определить ссылку для сохранения. Обновите страницу.'); ?>');
+            return;
+        }
+        const urlInput = row.querySelector('.edit-url');
+        const anchorInput = row.querySelector('.edit-anchor');
+        const langSelect = row.querySelector('.edit-language');
+        const wishTextarea = row.querySelector('.edit-wish');
+        const urlVal = (urlInput?.value || '').trim();
+        if (!isValidUrl(urlVal)) {
+            alert('<?php echo __('Введите корректный URL'); ?>');
+            urlInput?.focus();
+            return;
+        }
+        if (CURRENT_PROJECT_HOST) {
+            try {
+                const host = (new URL(urlVal).hostname || '').toLowerCase().replace(/^www\./, '');
+                if (host && host !== CURRENT_PROJECT_HOST) {
+                    alert('<?php echo __('Ссылка должна быть в рамках домена проекта'); ?>: ' + CURRENT_PROJECT_HOST);
+                    urlInput?.focus();
+                    return;
+                }
+            } catch (e) {}
+        }
+        const anchorVal = (anchorInput?.value || '').trim();
+        const langVal = (langSelect?.value || '').trim() || 'auto';
+        const wishVal = (wishTextarea?.value || '').trim();
+
+        const viewUrl = row.querySelector('.view-url');
+        const prevUrl = viewUrl ? (viewUrl.getAttribute('href') || '') : '';
+        const viewAnchor = row.querySelector('.view-anchor');
+        const prevAnchor = viewAnchor ? (viewAnchor.textContent || '').trim() : '';
+        const viewLang = row.querySelector('.view-language');
+        const prevLang = viewLang ? ((viewLang.textContent || '').trim().toLowerCase()) : '';
+        const viewWish = row.querySelector('.view-wish');
+        const prevWish = viewWish ? (viewWish.textContent || '').trim() : '';
+        const previousState = {
+            url: prevUrl,
+            anchor: prevAnchor,
+            language: prevLang,
+            wish: prevWish
+        };
+
+        applyRowValues(row, { url: urlVal, anchor: anchorVal, language: langVal, wish: wishVal });
+
+        const changed = (prevUrl !== urlVal) || (prevAnchor !== anchorVal) || (prevLang !== langVal.toLowerCase()) || (prevWish !== wishVal);
+        if (changed) {
+            row.dataset.edited = '1';
         } else {
-            row.querySelectorAll('input, textarea, select').forEach(el => el.setAttribute('disabled', 'disabled'));
+            delete row.dataset.edited;
+        }
+
+        row.classList.remove('editing');
+        row.querySelectorAll(viewFieldsSelector).forEach(el => el.classList.remove('d-none'));
+        row.querySelectorAll(editFieldsSelector).forEach(el => {
+            el.classList.add('d-none');
+            el.setAttribute('disabled', 'disabled');
+        });
+        btn.removeAttribute('data-mode');
+        btn.setAttribute('title', '<?php echo __('Редактировать'); ?>');
+        const icon = btn.querySelector('i');
+        if (icon) {
+            icon.classList.remove('bi-check-lg');
+            icon.classList.add('bi-pencil');
+        }
+        refreshTooltip(btn);
+
+        if (changed) {
+            const payload = {
+                id: rowId,
+                url: urlVal,
+                anchor: anchorVal,
+                language: langVal || 'auto',
+                wish: wishVal
+            };
+            persistEditedLink(row, payload, previousState, btn);
         }
     }
 
@@ -2921,13 +3158,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    if (form) {
-        form.addEventListener('submit', () => {
-            if (!form.querySelector('.editing')) return;
-            alert('<?php echo __('Сохраните изменения в ссылке перед отправкой формы.'); ?>');
-        });
-    }
-
     let CURRENT_PROJECT_HOST = PROJECT_HOST;
 
     if (useGlobal && globalWish) {
@@ -2941,7 +3171,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function serializeEditedRows() {
         const edited = {};
         document.querySelectorAll('table.table-links tbody tr').forEach(tr => {
-            if (!tr.classList.contains('editing')) return;
+            if (tr.dataset.edited !== '1') return;
             const id = tr.getAttribute('data-id');
             if (!id) return;
             const urlInput = tr.querySelector('.edit-url');
@@ -2949,40 +3179,40 @@ document.addEventListener('DOMContentLoaded', function() {
             const langSelect = tr.querySelector('.edit-language');
             const wishTextarea = tr.querySelector('.edit-wish');
             edited[id] = {
-                url: urlInput?.value || '',
-                anchor: anchorInput?.value || '',
-                language: langSelect?.value || '',
-                wish: wishTextarea?.value || ''
+                url: (urlInput?.value || '').trim(),
+                anchor: (anchorInput?.value || '').trim(),
+                language: (langSelect?.value || '').trim(),
+                wish: (wishTextarea?.value || '').trim()
             };
         });
         return edited;
     }
 
     if (form) {
-        form.addEventListener('submit', () => {
+        form.addEventListener('submit', (event) => {
+            const editingRow = form.querySelector('tr.editing');
+            if (editingRow) {
+                event.preventDefault();
+                alert('<?php echo __('Завершите редактирование ссылки перед сохранением.'); ?>');
+                editingRow.querySelector('.edit-url')?.focus();
+                return;
+            }
             const edited = serializeEditedRows();
+            form.querySelectorAll('input[data-edited-hidden="1"]').forEach(el => el.remove());
             Object.keys(edited).forEach(id => {
                 const data = edited[id];
-                const hidden = document.createElement('input');
-                hidden.type = 'hidden';
-                hidden.name = `edited_links[${id}][url]`;
-                hidden.value = data.url;
-                form.appendChild(hidden);
-                const hiddenAnchor = document.createElement('input');
-                hiddenAnchor.type = 'hidden';
-                hiddenAnchor.name = `edited_links[${id}][anchor]`;
-                hiddenAnchor.value = data.anchor;
-                form.appendChild(hiddenAnchor);
-                const hiddenLang = document.createElement('input');
-                hiddenLang.type = 'hidden';
-                hiddenLang.name = `edited_links[${id}][language]`;
-                hiddenLang.value = data.language;
-                form.appendChild(hiddenLang);
-                const hiddenWish = document.createElement('input');
-                hiddenWish.type = 'hidden';
-                hiddenWish.name = `edited_links[${id}][wish]`;
-                hiddenWish.value = data.wish;
-                form.appendChild(hiddenWish);
+                const makeHidden = (name, value) => {
+                    const hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = `edited_links[${id}][${name}]`;
+                    hidden.value = value;
+                    hidden.dataset.editedHidden = '1';
+                    form.appendChild(hidden);
+                };
+                makeHidden('url', data.url);
+                makeHidden('anchor', data.anchor);
+                makeHidden('language', data.language);
+                makeHidden('wish', data.wish);
             });
         });
     }

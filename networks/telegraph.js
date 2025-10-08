@@ -148,85 +148,124 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await page.goto('https://telegra.ph/', { waitUntil: 'networkidle2' });
 
   // 1) Fill content first to avoid Telegraph auto-overriding title from first <h2>
-  logLine('Fill content');
   const editorSelector = '.tl_article_content .ql-editor, article .tl_article_content .ql-editor, article .ql-editor, .ql-editor';
   await page.waitForSelector(editorSelector);
   try { await page.click(editorSelector); } catch (_) {}
   const cleanedContent = normalizeContent(rawContent);
   logLine('Normalized link analysis', analyzeLinks(cleanedContent, pageUrl, anchorText));
-  await page.evaluate((html) => {
-    const root = document.querySelector('.tl_article_content .ql-editor')
-      || document.querySelector('article .tl_article_content .ql-editor')
-      || document.querySelector('article .ql-editor')
-      || document.querySelector('.ql-editor');
-    if (!root) {
-      return;
-    }
 
-    const normalizeEmptyBlocks = () => {
-      const isEmptyNode = (node) => {
-        const text = (node.textContent || '').replace(/\u200b/g, '').trim();
-        const hasMedia = node.querySelector('img, figure');
-        return !text && !hasMedia;
+  const applyEditorContent = async (html) => {
+    await page.evaluate((payload) => {
+      const html = payload && payload.html ? String(payload.html) : '';
+      const root = document.querySelector('.tl_article_content .ql-editor')
+        || document.querySelector('article .tl_article_content .ql-editor')
+        || document.querySelector('article .ql-editor')
+        || document.querySelector('.ql-editor');
+      if (!root) {
+        return { applied: false, fallback: false };
+      }
+
+      const stripPlaceholders = () => {
+        root.querySelectorAll('h1[data-placeholder], address[data-placeholder]').forEach((node) => {
+          node.remove();
+        });
       };
 
-      const removeEmptyParagraphs = () => {
-        root.querySelectorAll('p').forEach((node) => {
-          if (!node) return;
-          const hasMedia = node.querySelector('img, figure');
-          if (hasMedia) return;
-          const html = (node.innerHTML || '').replace(/<br[^>]*>/gi, '').replace(/&nbsp;/gi, ' ').trim();
+      const normalizeEmptyBlocks = () => {
+        const isEmptyNode = (node) => {
           const text = (node.textContent || '').replace(/\u200b/g, '').trim();
-          if (!html && !text) {
-            node.remove();
-          }
+          const hasMedia = node.querySelector('img, figure');
+          return !text && !hasMedia;
+        };
+
+        const removeEmptyParagraphs = () => {
+          root.querySelectorAll('p').forEach((node) => {
+            if (!node) return;
+            const hasMedia = node.querySelector('img, figure');
+            if (hasMedia) return;
+            const htmlInner = (node.innerHTML || '').replace(/<br[^>]*>/gi, '').replace(/&nbsp;/gi, ' ').trim();
+            const text = (node.textContent || '').replace(/\u200b/g, '').trim();
+            if (!htmlInner && !text) {
+              node.remove();
+            }
+          });
+        };
+
+        const selectors = ['h3', 'blockquote', 'h4'];
+        selectors.forEach((sel) => {
+          root.querySelectorAll(sel).forEach((node) => {
+            if (isEmptyNode(node)) {
+              node.remove();
+            }
+          });
         });
+
+        removeEmptyParagraphs();
+
+        root.querySelectorAll('br').forEach((br) => {
+          br.removeAttribute('class');
+        });
+
+        if (!root.textContent || !root.textContent.trim()) {
+          root.innerHTML = '<p></p>';
+        }
       };
 
-      const selectors = ['h3', 'blockquote', 'h4'];
-      selectors.forEach((sel) => {
-        root.querySelectorAll(sel).forEach((node) => {
-          if (isEmptyNode(node)) {
-            node.remove();
-          }
-        });
-      });
+      const expectedIntroMatch = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+      const expectedIntro = expectedIntroMatch ? expectedIntroMatch[1].replace(/<[^>]+>/g, '').trim().slice(0, 160) : '';
+      const expectList = /<(ul|ol)[^>]*>/i.test(html);
 
-      removeEmptyParagraphs();
-
-      root.querySelectorAll('br').forEach((br) => {
-        br.removeAttribute('class');
-      });
-
-      if (!root.textContent || !root.textContent.trim()) {
-        root.innerHTML = '<p></p>';
-      }
-    };
-
-    try { root.focus(); } catch (_) {}
-    const quill = root.__quill || (window.Quill && window.Quill.find ? window.Quill.find(root) : null);
-    if (quill && quill.clipboard && typeof quill.clipboard.dangerouslyPasteHTML === 'function') {
-      try { quill.setContents([]); } catch (_) {}
-      quill.clipboard.dangerouslyPasteHTML(html || '', 'user');
-      if (quill.history && typeof quill.history.clear === 'function') {
-        try { quill.history.clear(); } catch (_) {}
-      }
-    } else {
-      root.innerHTML = html || '<p></p>';
-    }
-    normalizeEmptyBlocks();
-    try {
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => normalizeEmptyBlocks());
+      try { root.focus(); } catch (_) {}
+      const quill = root.__quill || (window.Quill && window.Quill.find ? window.Quill.find(root) : null);
+      if (quill && quill.clipboard && typeof quill.clipboard.dangerouslyPasteHTML === 'function') {
+        try { quill.setContents([]); } catch (_) {}
+        quill.clipboard.dangerouslyPasteHTML(html || '', 'user');
+        if (quill.history && typeof quill.history.clear === 'function') {
+          try { quill.history.clear(); } catch (_) {}
+        }
       } else {
+        root.innerHTML = html || '<p></p>';
+      }
+
+      stripPlaceholders();
+      normalizeEmptyBlocks();
+
+      const currentIntroNode = root.querySelector('p');
+      const currentIntro = currentIntroNode ? (currentIntroNode.textContent || '').replace(/\u200b/g, '').trim().slice(0, 160) : '';
+      const hasListNow = /<(ul|ol)[^>]*>/i.test(root.innerHTML || '');
+      let fallback = false;
+
+      if ((expectedIntro && currentIntro && currentIntro.indexOf(expectedIntro) === -1) || (expectList && !hasListNow)) {
+        if (quill && quill.clipboard && typeof quill.clipboard.dangerouslyPasteHTML === 'function') {
+          try { quill.setContents([]); } catch (_) {}
+          quill.clipboard.dangerouslyPasteHTML(html || '', 'api');
+          if (quill.history && typeof quill.history.clear === 'function') {
+            try { quill.history.clear(); } catch (_) {}
+          }
+        } else {
+          root.innerHTML = html || '<p></p>';
+        }
+        stripPlaceholders();
+        normalizeEmptyBlocks();
+        fallback = true;
+      }
+
+      try {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => normalizeEmptyBlocks());
+        } else {
+          setTimeout(() => normalizeEmptyBlocks(), 60);
+        }
+      } catch (_) {
         setTimeout(() => normalizeEmptyBlocks(), 60);
       }
-    } catch (_) {
-      setTimeout(() => normalizeEmptyBlocks(), 60);
-    }
-    try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-  }, cleanedContent);
-  await waitForTimeoutSafe(page, 120);
+      try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+      return { applied: true, fallback };
+    }, { html });
+    await waitForTimeoutSafe(page, 120);
+  };
+
+  await applyEditorContent(cleanedContent);
 
   // Helper to set text in editable fields (title/author) via keyboard only
   const setEditableText = async (selector, value) => {
@@ -304,6 +343,9 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
     }, author);
   } catch (_) {}
   await waitForTimeoutSafe(page, 80);
+
+  // Re-apply content after title/author updates to ensure Telegraph watchers haven't trimmed blocks
+  await applyEditorContent(cleanedContent);
 
   // Diagnostic: check final DOM title
   try {

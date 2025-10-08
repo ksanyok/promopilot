@@ -1,3 +1,18 @@
+.table-links tbody tr.link-row-saved {
+  animation: link-row-saved-flash 1.5s ease-in-out;
+}
+
+@keyframes link-row-saved-flash {
+  0% {
+    background-color: rgba(25, 135, 84, 0.32);
+  }
+  60% {
+    background-color: rgba(25, 135, 84, 0.12);
+  }
+  100% {
+    background-color: inherit;
+  }
+}
 .promotion-cascade-card { background: rgba(17,24,39,.55); border-radius: 16px; border: 1px solid rgba(148,163,184,.18); }
 .promotion-cascade-card .card-body { padding: 1rem 1.1rem; }
 .cascade-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .9rem; }
