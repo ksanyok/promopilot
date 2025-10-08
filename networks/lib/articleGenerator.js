@@ -142,9 +142,10 @@ function extractPlainText(fragment) {
   return String(fragment || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function injectFallbackList(html, { isRu } = {}) {
+function buildFallbackListItems(html, { isRu } = {}) {
   let listCandidates = [];
-  const headingMatches = [...String(html || '').matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
+  const source = String(html || '');
+  const headingMatches = [...source.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
   headingMatches.forEach((match) => {
     const text = extractPlainText(match[1]);
     if (text) {
@@ -152,7 +153,7 @@ function injectFallbackList(html, { isRu } = {}) {
     }
   });
   if (listCandidates.length < 3) {
-    const paragraphMatches = [...String(html || '').matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
+    const paragraphMatches = [...source.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
     paragraphMatches.forEach((match) => {
       const sentences = extractPlainText(match[1])
         .split(/(?<=[.!?])\s+/)
@@ -175,7 +176,16 @@ function injectFallbackList(html, { isRu } = {}) {
           'Emerging creators and trends shaping the 2025 market',
         ];
   }
-  const listHtml = `<ul>${listCandidates.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+  return listCandidates;
+}
+
+function buildFallbackListHtml(html, options = {}) {
+  const items = buildFallbackListItems(html, options);
+  return `<ul>${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+}
+
+function injectFallbackList(html, { isRu } = {}) {
+  const listHtml = buildFallbackListHtml(html, { isRu });
   if (/<h3/i.test(html)) {
     return html.replace(/<h3/i, `${listHtml}\n<h3`);
   }
@@ -578,6 +588,7 @@ async function generateArticle({
         requirements.push(isRu
           ? '- Добавь структурированный список (<ul>/<ol> с <li>), который подытоживает ключевые выводы.'
           : '- Add a structured list (<ul>/<ol> with <li>) that summarizes the key takeaways.');
+        content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
       }
       if (!hasQuote) {
         requirements.push(isRu
@@ -586,6 +597,7 @@ async function generateArticle({
       }
       const adjustPrompt =
         `Отредактируй HTML статьи, сохранив структуру, заголовок <h1>, все подзаголовки <h3> и ссылки.\n` +
+
         `${requirements.join('\n')}\n` +
         (isRu
           ? 'Не добавляй новые URL, не удаляй существующие <a href> и их текст. Можно расширить существующие абзацы.'
@@ -626,8 +638,30 @@ async function generateArticle({
   };
   await ensureStructureWithFallback();
 
+
+  const ensureKeyTakeawaysList = () => {
+    const keyRegex = /<h3[^>]*>([\s\S]*?key\s*takeaways[\s\S]*?)<\/h3>/i;
+    const match = keyRegex.exec(content);
+    if (!match) {
+      return;
+    }
+    const headingStart = match.index;
+    const headingEnd = headingStart + match[0].length;
+    const rest = content.slice(headingEnd);
+    const nextHeadingMatch = rest.match(/<h[1-3][^>]*>/i);
+    const sectionEnd = nextHeadingMatch ? headingEnd + nextHeadingMatch.index : content.length;
+    const sectionContent = content.slice(headingEnd, sectionEnd);
+    if (/<(ul|ol)\b/i.test(sectionContent) && /<li\b/i.test(sectionContent)) {
+      return;
+    }
+    const listHtml = buildFallbackListHtml(content, { isRu });
+    const cleanedSection = sectionContent.replace(/^(?:\s|<p[^>]*>(?:\s|&nbsp;|<br[^>]*>)*<\/p>)+/gi, '');
+    content = `${content.slice(0, headingEnd)}\n${listHtml}\n${cleanedSection}${content.slice(sectionEnd)}`;
+    content = cleanupGeneratedHtml(content);
+  };
   const wantOur = 2;
   const wantExternal = 1;
+  ensureKeyTakeawaysList();
   const wantTotal = 3;
   let stat = analyzeLinks(content, pageUrl, anchorText);
 
@@ -642,6 +676,7 @@ async function generateArticle({
     }
   }
   await ensureStructureWithFallback();
+  ensureKeyTakeawaysList();
 
   const authorFromMeta = (pageMeta.author || '').toString().trim();
   const author = authorFromMeta || pickAuthorName(pageLang, `${pageUrl}|${anchorText}|${topicTitle}|${topicDesc}|${region}`);

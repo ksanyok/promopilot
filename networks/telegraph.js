@@ -25,29 +25,57 @@ function logLine(msg, data){
   try { fs.appendFileSync(LOG_FILE, line); } catch(_) {}
 }
 function normalizeContent(html) {
-  let s = String(html || '').trim();
-  if (!s) {
+  let s = String(html || '');
+  if (!s.trim()) {
     return '';
   }
-  const sanitizeLinkText = (text) => {
-    return String(text || '').replace(/\s+/g, ' ').trim().replace(/[<>"']/g, '') || 'Изображение';
-  };
-  // Flatten figures and convert images to plain links (Telegraph better handles pasted URLs)
-  s = s.replace(/<figure[^>]*>\s*([\s\S]*?)\s*<\/figure>/gi, '$1');
-  s = s.replace(/<img[^>]*src=["']([^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*>/gi, (_match, src, alt) => {
-    const safeLabel = sanitizeLinkText(alt);
-    return `<p><a href="${src}">${safeLabel}</a></p>`;
+
+  const sanitizeText = (text) => String(text || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[<>"']/g, '')
+    .trim();
+
+  // Remove scripts/styles and inline event handlers
+  s = s.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '');
+  s = s.replace(/ on[a-z]+="[^"]*"/gi, '');
+
+  // Drop outer figures but keep content for re-normalization
+  s = s.replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, (match) => {
+    const imgMatch = match.match(/<img[\s\S]*?>/i);
+    return imgMatch ? imgMatch[0] : '';
   });
-  s = s.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (_match, src) => `<p><a href="${src}">Изображение</a></p>`);
-  // Remove the article title (Telegraph handles title separately)
+
+  // Normalize images into standalone figure blocks
+  s = s.replace(/<img[^>]*>/gi, (raw) => {
+    const srcMatch = raw.match(/src=["']([^"']+)["']/i);
+    if (!srcMatch || !srcMatch[1]) {
+      return '';
+    }
+    const altMatch = raw.match(/alt=["']([^"']*)["']/i);
+    const altText = sanitizeText(altMatch ? altMatch[1] : '') || 'Article illustration';
+    return `<figure><img src="${srcMatch[1]}" alt="${altText}" loading="lazy" /></figure>`;
+  });
+
+  // Remove article title — Telegraph manages the title separately
   s = s.replace(/<h1[^>]*>[\s\S]*?<\/h1>/gi, '');
-  // Convert secondary headings to h3 (Telegraph prefers h3 inside body)
-  s = s.replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '</h3>');
-  // Clean empty headings and paragraphs
-  s = s.replace(/<h3[^>]*>\s*<\/h3>/gi, '');
+
+  // Convert secondary headings to h3 (preferred structure inside Telegraph body)
+  s = s.replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '<\/h3>');
+
+  // Collapse excessive breaks and whitespace
+  s = s.replace(/(<br[^>]*>\s*){2,}/gi, '<br>');
+  s = s.replace(/&nbsp;/gi, ' ');
+
+  // Remove empty structural nodes
+  s = s.replace(/<h3[^>]*>(?:\s|<br[^>]*>)*<\/h3>/gi, '');
+  s = s.replace(/<blockquote[^>]*>(?:\s|<br[^>]*>)*<\/blockquote>/gi, '');
   s = s.replace(/<p[^>]*>(?:\s|<br[^>]*>)*<\/p>/gi, '');
+
+  // Clean stray dollars and trailing whitespace
   s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
   s = s.replace(/\s*\$+\s*$/g, '');
+
   return s.trim();
 }
 
@@ -105,11 +133,76 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const cleanedContent = normalizeContent(rawContent);
   logLine('Normalized link analysis', analyzeLinks(cleanedContent, pageUrl, anchorText));
   await page.evaluate((html) => {
-    const root = document.querySelector('.tl_article_content .ql-editor') || document.querySelector('article .tl_article_content .ql-editor') || document.querySelector('article .ql-editor') || document.querySelector('.ql-editor');
-    if (root) {
-      root.innerHTML = html || '<p></p>';
-      try { root.dispatchEvent(new InputEvent('input', { bubbles: true })); } catch(_) { try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch(__) {} }
+    const root = document.querySelector('.tl_article_content .ql-editor')
+      || document.querySelector('article .tl_article_content .ql-editor')
+      || document.querySelector('article .ql-editor')
+      || document.querySelector('.ql-editor');
+    if (!root) {
+      return;
     }
+
+    const normalizeEmptyBlocks = () => {
+      const isEmptyNode = (node) => {
+        const text = (node.textContent || '').replace(/\u200b/g, '').trim();
+        const hasMedia = node.querySelector('img, figure');
+        return !text && !hasMedia;
+      };
+
+      const removeEmptyParagraphs = () => {
+        root.querySelectorAll('p').forEach((node) => {
+          if (!node) return;
+          const hasMedia = node.querySelector('img, figure');
+          if (hasMedia) return;
+          const html = (node.innerHTML || '').replace(/<br[^>]*>/gi, '').replace(/&nbsp;/gi, ' ').trim();
+          const text = (node.textContent || '').replace(/\u200b/g, '').trim();
+          if (!html && !text) {
+            node.remove();
+          }
+        });
+      };
+
+      const selectors = ['h3', 'blockquote', 'h4'];
+      selectors.forEach((sel) => {
+        root.querySelectorAll(sel).forEach((node) => {
+          if (isEmptyNode(node)) {
+            node.remove();
+          }
+        });
+      });
+
+      removeEmptyParagraphs();
+
+      root.querySelectorAll('br').forEach((br) => {
+        br.removeAttribute('class');
+      });
+
+      if (!root.textContent || !root.textContent.trim()) {
+        root.innerHTML = '<p></p>';
+      }
+    };
+
+    try { root.focus(); } catch (_) {}
+    const quill = root.__quill || (window.Quill && window.Quill.find ? window.Quill.find(root) : null);
+    if (quill && quill.clipboard && typeof quill.clipboard.dangerouslyPasteHTML === 'function') {
+      try { quill.setContents([]); } catch (_) {}
+      quill.clipboard.dangerouslyPasteHTML(html || '', 'user');
+      if (quill.history && typeof quill.history.clear === 'function') {
+        try { quill.history.clear(); } catch (_) {}
+      }
+    } else {
+      root.innerHTML = html || '<p></p>';
+    }
+    normalizeEmptyBlocks();
+    try {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => normalizeEmptyBlocks());
+      } else {
+        setTimeout(() => normalizeEmptyBlocks(), 60);
+      }
+    } catch (_) {
+      setTimeout(() => normalizeEmptyBlocks(), 60);
+    }
+    try { root.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
   }, cleanedContent);
   await waitForTimeoutSafe(page, 120);
 
