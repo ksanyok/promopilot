@@ -153,16 +153,20 @@ async function publishToAnotepad(pageUrl, anchorText, language, openaiApiKey, ai
     ancestorTrail: Array.isArray(rawArticle.ancestorTrail) ? rawArticle.ancestorTrail : (Array.isArray(jobOptions.ancestorTrail) ? jobOptions.ancestorTrail : []),
   };
 
+  const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
   const articleJob = {
+    ...jobOptions,
     pageUrl,
     anchorText,
-    language,
+    language: jobOptions.language || language,
     openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
     aiProvider: provider,
     wish: jobOptions.wish || wish,
-    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
     testMode: !!jobOptions.testMode,
+    meta,
+    page_meta: meta,
     cascade,
+    article: rawArticle,
   };
 
   const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)

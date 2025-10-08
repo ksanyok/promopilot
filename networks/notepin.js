@@ -92,15 +92,18 @@ async function loginNotepin(username, password, job = {}) {
   // On write page
 
     // 7) Generate or use provided article
+    const meta = job.page_meta || job.meta || null;
     const genJob = {
+      ...job,
       pageUrl: job.url || job.pageUrl || job.jobUrl || '',
       anchorText: job.anchor || 'PromoPilot link',
       language: job.language || 'ru',
       aiProvider: (job.aiProvider || process.env.PP_AI_PROVIDER || 'byoa').toLowerCase(),
       openaiApiKey: job.openaiApiKey || process.env.OPENAI_API_KEY || '',
       wish: job.wish || '',
-      meta: job.page_meta || job.meta || null,
-      testMode: !!job.testMode
+      testMode: !!job.testMode,
+      meta,
+      page_meta: meta,
     };
     let article = null;
     try {

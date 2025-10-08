@@ -44,6 +44,7 @@ function createGenericPastePublisher(config) {
     };
 
     const job = {
+      ...jobOptions,
       pageUrl,
       anchorText,
       language: jobOptions.language || language,
@@ -51,8 +52,10 @@ function createGenericPastePublisher(config) {
       aiProvider: provider,
       wish: jobOptions.wish || wish,
       meta,
+      page_meta: meta,
       testMode: !!jobOptions.testMode,
       cascade,
+      article: rawArticle,
     };
 
     logLine('Publish start', { slug, pageUrl, anchorText, language: job.language, provider, testMode: job.testMode });

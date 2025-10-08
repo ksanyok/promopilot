@@ -38,15 +38,18 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
+  const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
   const articleJob = {
+    ...jobOptions,
     pageUrl,
     anchorText,
-    language,
-    openaiApiKey,
+    language: jobOptions.language || language,
+    openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
     aiProvider: provider,
-    wish,
-    meta: pageMeta,
-    testMode: !!jobOptions.testMode
+    wish: jobOptions.wish || wish,
+    testMode: !!jobOptions.testMode,
+    meta,
+    page_meta: meta,
   };
 
   const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)

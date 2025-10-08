@@ -19,15 +19,18 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
   const slug = 'rextester';
   const { LOG_FILE, logLine } = createLogger(slug);
   const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+  const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
   const job = {
+    ...jobOptions,
     pageUrl,
     anchorText,
     language: jobOptions.language || language,
     openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
     aiProvider: provider,
     wish: jobOptions.wish || wish,
-    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
-    testMode: !!jobOptions.testMode
+    testMode: !!jobOptions.testMode,
+    meta,
+    page_meta: meta,
   };
   logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
 

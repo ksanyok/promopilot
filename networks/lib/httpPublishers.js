@@ -49,15 +49,29 @@ function createHttpPublisher(config) {
   async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
     const { LOG_FILE, logLine } = createLogger(slug);
     const provider = (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
+    const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
+    const rawArticle = jobOptions.article || {};
+    const cascade = {
+      level: rawArticle.level ?? null,
+      parentUrl: rawArticle.parentUrl || jobOptions.parentUrl || null,
+      parentContext: rawArticle.parentContext || jobOptions.parentContext || null,
+      ancestorTrail: Array.isArray(rawArticle.ancestorTrail)
+        ? rawArticle.ancestorTrail
+        : (Array.isArray(jobOptions.ancestorTrail) ? jobOptions.ancestorTrail : []),
+    };
     const job = {
+      ...jobOptions,
       pageUrl,
       anchorText,
       language: jobOptions.language || language,
       openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
       aiProvider: provider,
       wish: jobOptions.wish || wish,
-      meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
-      testMode: !!jobOptions.testMode
+      meta,
+      page_meta: meta,
+      testMode: !!jobOptions.testMode,
+      cascade,
+      article: rawArticle,
     };
     logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
 

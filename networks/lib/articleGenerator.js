@@ -124,6 +124,69 @@ function buildCascadeGuidance(cascade, language) {
   };
 }
 
+function normalizeLengthHint(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  const rounded = Math.round(num);
+  return rounded > 0 ? rounded : null;
+}
+
+function buildLevelPromptHints({ level, isRu, minLength, maxLength }) {
+  const normalizedMin = normalizeLengthHint(minLength);
+  const baseMin = normalizedMin ? Math.max(normalizedMin, 3000) : 3000;
+  const defaultLengthSentence = isRu
+    ? `Объем материала — не меньше ${baseMin} знаков (без учета HTML).`
+    : `Length must be at least ${baseMin} characters (excluding HTML markup).`;
+  const defaultRequirement = isRu
+    ? `- Минимум ${baseMin} знаков (без учета HTML).`
+    : `- Minimum ${baseMin} characters (excluding HTML).`;
+
+  if (level === 1) {
+    const min = Math.max(normalizedMin || 0, 5000);
+    let max = normalizeLengthHint(maxLength);
+    if (!max || max < min + 200) {
+      max = Math.max(10000, min + 200);
+    } else {
+      max = Math.max(max, min + 200);
+    }
+    const lengthSentence = isRu
+      ? `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально 5000–10000).`
+      : `Aim for ${min}-${max} characters (excluding HTML markup; ideally around 5000–10000).`;
+    const requirementLine = isRu
+      ? `- Объем ${min}–${max} знаков (без учета HTML).`
+      : `- Length ${min}-${max} characters (excluding HTML).`;
+    const extraRequirementLines = [
+      isRu
+        ? '- Добавь минимум один структурированный список (<ul>/<ol> с <li>).'
+        : '- Include at least one structured list (<ul>/<ol> with <li> items).',
+      isRu
+        ? '- Используй хотя бы один блок <blockquote> с цитатой, статистикой или ключевой мыслью.'
+        : '- Use at least one <blockquote> containing a quote, statistic, or key insight.',
+      isRu
+        ? '- В основных разделах приводи конкретные примеры, данные или наблюдения из практики.'
+        : '- In the main sections, provide concrete examples, data, or field observations.',
+    ];
+    const toneLines = [
+      isRu
+        ? 'Стиль — экспертный и аналитический: объясняй причины, опирайся на исследования/данные и давай практические рекомендации.'
+        : 'Tone — expert and analytical: explain underlying causes, reference research or data, and give actionable recommendations.',
+      isRu
+        ? 'Структурируй материал: введение, глубокие аналитические блоки, практические советы и убедительное заключение.'
+        : 'Structure the piece with an introduction, deep analytical sections, practical guidance, and a persuasive conclusion.',
+    ];
+    return { lengthSentence, requirementLine, extraRequirementLines, toneLines };
+  }
+
+  return {
+    lengthSentence: defaultLengthSentence,
+    requirementLine: defaultRequirement,
+    extraRequirementLines: [],
+    toneLines: [],
+  };
+}
+
 function analyzeLinks(html, url, anchor) {
   try {
     const str = String(html || '');
@@ -224,16 +287,38 @@ function buildDiagnosticArticle(pageUrl, anchorText) {
   };
 }
 
-async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, meta, testMode, cascade }, logLine) {
+async function generateArticle({
+  pageUrl,
+  anchorText,
+  language,
+  openaiApiKey,
+  aiProvider,
+  wish,
+  meta,
+  testMode,
+  cascade,
+  article
+}, logLine) {
   const pageMeta = meta || {};
   const pageLang = language || pageMeta.lang || 'ru';
   const topicTitle = (pageMeta.title || '').toString().trim();
   const topicDesc = (pageMeta.description || '').toString().trim();
   const region = (pageMeta.region || '').toString().trim();
-  const extraNote = wish ? `\nNote (use if helpful): ${wish}` : '';
-  const isTest = !!testMode;
-  const cascadeInfo = buildCascadeGuidance(cascade, pageLang);
+  const articleHints = (article && typeof article === 'object') ? article : {};
   const isRu = String(pageLang || '').toLowerCase().startsWith('ru');
+  const wishLine = wish
+    ? (isRu ? `Учитывай пожелание клиента: ${wish}.` : `Consider this client note: ${wish}.`)
+    : '';
+  const cascadeSource = (cascade && typeof cascade === 'object') ? cascade : {};
+  const cascadeNormalized = {
+    level: cascadeSource.level !== undefined ? cascadeSource.level : (articleHints.level ?? null),
+    parentUrl: cascadeSource.parentUrl !== undefined ? cascadeSource.parentUrl : (articleHints.parentUrl || null),
+    parentContext: cascadeSource.parentContext !== undefined ? cascadeSource.parentContext : (articleHints.parentContext || null),
+    ancestorTrail: Array.isArray(cascadeSource.ancestorTrail)
+      ? cascadeSource.ancestorTrail
+      : (Array.isArray(articleHints.ancestorTrail) ? articleHints.ancestorTrail : []),
+  };
+  const cascadeInfo = buildCascadeGuidance(cascadeNormalized, pageLang);
   const insightLabel = isRu ? 'Ключевые идеи родительской статьи' : 'Key ideas from the parent article';
   const insightBullet = isRu ? '•' : '-';
   const insightBlock = Array.isArray(cascadeInfo.detailSnippets) && cascadeInfo.detailSnippets.length
@@ -247,7 +332,6 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
   const avoidGeneric = isRu
     ? 'Не используй шаблонные фразы вроде «разбор кейса», «быстрый обзор», «пошаговый гайд» без конкретики. Излагай факты и контекст из исходной темы.'
     : 'Avoid generic phrases like “case study breakdown”, “quick overview”, or “step-by-step guide” without concrete detail. Ground every section in the original topic context.';
-
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = {
     provider,
@@ -255,6 +339,18 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     model: process.env.OPENAI_MODEL || undefined,
     temperature: 0.2,
   };
+  const toInt = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  };
+  const inferredLevel = toInt(articleHints.level) ?? toInt(cascadeNormalized.level);
+  const lengthHints = buildLevelPromptHints({
+    level: inferredLevel,
+    isRu,
+    minLength: articleHints.minLength,
+    maxLength: articleHints.maxLength,
+  });
+  const isTest = !!testMode;
 
   if (isTest) {
     const preset = buildDiagnosticArticle(pageUrl, anchorText);
@@ -285,28 +381,74 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     return article;
   }
 
+  const baseTopic = topicTitle || anchorText;
+  const topicLine = topicDesc ? `${baseTopic} — ${topicDesc}` : baseTopic;
+  const contentLines = [];
+  if (isRu) {
+    contentLines.push(`Напиши статью на ${pageLang} по теме: ${topicLine}.`);
+  } else {
+    contentLines.push(`Write an article in ${pageLang} about: ${topicLine}.`);
+  }
+  if (region) {
+    contentLines.push(isRu ? `Регион публикации: ${region}.` : `Geographic focus: ${region}.`);
+  }
+  if (wishLine) {
+    contentLines.push(wishLine);
+  }
+  if (lengthHints.lengthSentence) {
+    contentLines.push(lengthHints.lengthSentence);
+  }
+  if (cascadeInfo.intro) {
+    contentLines.push(cascadeInfo.intro);
+    if (cascadeInfo.bullets && cascadeInfo.bullets.length) {
+      contentLines.push(cascadeInfo.bullets.join('\n'));
+    }
+  }
+  if (insightBlock) {
+    contentLines.push(insightBlock.trim());
+  }
+  if (cascadeInfo.reminder) {
+    contentLines.push(cascadeInfo.reminder);
+  }
+  if (keywordReminder) {
+    contentLines.push(keywordReminder);
+  }
+  if (Array.isArray(lengthHints.toneLines) && lengthHints.toneLines.length) {
+    lengthHints.toneLines.forEach((line) => {
+      if (line) {
+        contentLines.push(line);
+      }
+    });
+  }
+  contentLines.push(avoidGeneric);
+
+  const requirementLines = [
+    lengthHints.requirementLine,
+    `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):`,
+    `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.`,
+    `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").`,
+    `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en).`,
+  ];
+  if (Array.isArray(lengthHints.extraRequirementLines) && lengthHints.extraRequirementLines.length) {
+    requirementLines.push(...lengthHints.extraRequirementLines);
+  }
+  requirementLines.push(
+    `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.`,
+    `- 3–5 смысловых секций и короткое заключение.`,
+    `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.`
+  );
+  const requirementsBlock = ['Требования:', ...requirementLines, 'Ответь только телом статьи.'].join('\n');
+  contentLines.push(requirementsBlock);
+
+  const contentPrompt = contentLines.filter(Boolean).join('\n');
+
   const prompts = {
     title:
-      `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}. Укажи фокус: ${anchorText}.\n` +
+      `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicLine}. Укажи фокус: ${anchorText}.\n` +
       `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.` +
       (keywordReminder ? `\n${keywordReminder}` : '') +
       (cascadeInfo.titleReminder ? `\n${cascadeInfo.titleReminder}` : ''),
-    content:
-      `Напиши статью на ${pageLang} (>=3000 знаков) по теме: ${topicTitle || anchorText}${topicDesc ? ' — ' + topicDesc : ''}.${region ? ' Регион: ' + region + '.' : ''}${extraNote}\n` +
-      (cascadeInfo.intro ? `${cascadeInfo.intro}\n${cascadeInfo.bullets.join('\n')}\n` : '') +
-      insightBlock +
-      (cascadeInfo.reminder ? `${cascadeInfo.reminder}\n` : '') +
-      (keywordReminder ? `${keywordReminder}\n` : '') +
-      `${avoidGeneric}\n` +
-      `Требования:\n` +
-      `- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):\n` +
-      `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.\n` +
-      `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").\n` +
-      `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en).\n` +
-      `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.\n` +
-      `- 3–5 смысловых секций и короткое заключение.\n` +
-      `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.\n` +
-      `Ответь только телом статьи.`,
+    content: contentPrompt,
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -340,8 +482,8 @@ async function generateArticle({ pageUrl, anchorText, language, openaiApiKey, ai
     const firstPIndex = content.indexOf('<p>');
     if (firstPIndex !== -1) {
       const insertPos = content.indexOf('</p>', firstPIndex) + 4;
-      const imageMarkdown = `![Image description](${imageUrl})\n\n`;
-      content = content.slice(0, insertPos) + imageMarkdown + content.slice(insertPos);
+      const imageHtml = `<figure><img src="${imageUrl}" alt="Article illustration" loading="lazy" /></figure>\n`;
+      content = content.slice(0, insertPos) + '\n' + imageHtml + content.slice(insertPos);
     }
   }
 

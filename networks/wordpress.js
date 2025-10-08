@@ -53,15 +53,18 @@ async function publish(pageUrl, anchorText, language, openaiApiKey, aiProvider, 
   };
 
   // Prepare content
+  const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
   const job = {
+    ...jobOptions,
     pageUrl,
     anchorText,
     language: jobOptions.language || language || 'ru',
     openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
     aiProvider: (jobOptions.aiProvider || aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase(),
     wish: jobOptions.wish || wish,
-    meta: jobOptions.page_meta || jobOptions.meta || pageMeta,
-    testMode: !!jobOptions.testMode
+    testMode: !!jobOptions.testMode,
+    meta,
+    page_meta: meta,
   };
   logLine('Start', { pageUrl, anchorText, language: job.language, provider: job.aiProvider, testMode: job.testMode });
 

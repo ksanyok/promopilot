@@ -186,15 +186,18 @@ async function publishToDpaste(pageUrl, anchorText, language, openaiApiKey, aiPr
   const { LOG_FILE, logLine, logDebug } = createLogger('dpaste');
   logLine('Publish start', { pageUrl, anchorText, language, provider, testMode: !!jobOptions.testMode });
 
+  const meta = jobOptions.page_meta || jobOptions.meta || pageMeta;
   const articleJob = {
+    ...jobOptions,
     pageUrl,
     anchorText,
-    language,
-    openaiApiKey,
+    language: jobOptions.language || language,
+    openaiApiKey: jobOptions.openaiApiKey || openaiApiKey,
     aiProvider: provider,
-    wish,
-    meta: pageMeta,
-    testMode: !!jobOptions.testMode
+    wish: jobOptions.wish || wish,
+    testMode: !!jobOptions.testMode,
+    meta,
+    page_meta: meta,
   };
 
   const article = (jobOptions.preparedArticle && jobOptions.preparedArticle.htmlContent)
