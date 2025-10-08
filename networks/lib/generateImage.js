@@ -4,9 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
+const sharp = require('sharp');
 
 const SPACE_URL = 'https://stabilityai-stable-diffusion.hf.space';
 const API = 'infer';
+const TARGET_WIDTH = Number(process.env.PP_IMAGE_WIDTH || 1280);
+const TARGET_HEIGHT = Number(process.env.PP_IMAGE_HEIGHT || 720);
+const fsp = fs.promises;
 
 function ensureDirSync(dirPath) {
     try {
@@ -57,6 +61,28 @@ function writeFileAsync(filePath, buffer) {
             }
         });
     });
+}
+
+async function enforceAspectRatio(filePath, targetWidth = TARGET_WIDTH, targetHeight = TARGET_HEIGHT) {
+    if (!filePath) {
+        return false;
+    }
+    const width = Number(targetWidth) || 1280;
+    const height = Number(targetHeight) || 720;
+    const tmpPath = `${filePath}.tmp`;
+    try {
+        await sharp(filePath)
+            .resize(width, height, {
+                fit: 'cover',
+                position: 'centre',
+            })
+            .toFile(tmpPath);
+        await fsp.rename(tmpPath, filePath);
+        return true;
+    } catch (err) {
+        try { await fsp.unlink(tmpPath); } catch (_) {}
+        return false;
+    }
 }
 
 function buildStorageTarget(extensionHint = '.png') {
@@ -121,6 +147,7 @@ async function storeImageLocally(remoteUrl) {
     const target = buildStorageTarget(pickExtensionFromUrl(sourceUrl));
     try {
         await downloadFile(sourceUrl, target.destPath);
+        try { await enforceAspectRatio(target.destPath); } catch (_) {}
         const isRemoteSource = /^https?:\/\//i.test(sourceUrl);
         const publicUrl = target.absoluteUrl || (isRemoteSource ? sourceUrl : target.relativeUrl);
         return {
@@ -168,6 +195,7 @@ async function storeBase64Image(dataUri) {
     const target = buildStorageTarget(extension);
     try {
         await writeFileAsync(target.destPath, buffer);
+        try { await enforceAspectRatio(target.destPath); } catch (_) {}
         const publicUrl = target.absoluteUrl || target.relativeUrl;
         return {
             publicUrl,

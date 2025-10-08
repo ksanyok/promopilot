@@ -209,18 +209,78 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   // Helper to set text in editable fields (title/author) via keyboard only
   const setEditableText = async (selector, value) => {
     await page.waitForSelector(selector);
-    await page.click(selector, { clickCount: 3 }).catch(()=>{});
-    try { await page.keyboard.press('Backspace'); } catch (_) {}
-    await page.keyboard.type(String(value || ''), { delay: 10 });
+    const text = String(value || '').trim();
+    const success = await page.evaluate((sel, val) => {
+      const node = document.querySelector(sel);
+      if (!node) {
+        return false;
+      }
+      try {
+        if (typeof node.focus === 'function') {
+          node.focus();
+        }
+      } catch (_) {}
+      while (node.firstChild) {
+        node.removeChild(node.firstChild);
+      }
+      if (val) {
+        const doc = node.ownerDocument || document;
+        node.appendChild(doc.createTextNode(val));
+        if (node.classList) {
+          node.classList.remove('empty');
+        }
+      } else {
+        node.innerHTML = '<br />';
+        if (node.classList) {
+          node.classList.add('empty');
+        }
+      }
+      try {
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (_) {}
+      return true;
+    }, selector, text);
+    if (!success) {
+      throw new Error(`Unable to locate editable field ${selector}`);
+    }
+    if (text) {
+      const applied = await page.$eval(selector, (el) => (el.innerText || '').trim());
+      if (!applied) {
+        throw new Error(`Telegraph field ${selector} remained empty after update`);
+      }
+    }
   };
 
   // 2) Set title and 3) author
   logLine('Fill title');
   await setEditableText('h1[data-placeholder="Title"]', title);
+  try {
+    await page.evaluate((text) => {
+      const headerTitle = document.querySelector('header.tl_article_header h1');
+      if (headerTitle) {
+        headerTitle.textContent = text || '';
+      }
+    }, title);
+  } catch (_) {}
   await waitForTimeoutSafe(page, 80);
 
   logLine('Fill author');
   await setEditableText('address[data-placeholder="Your name"]', author);
+  try {
+    await page.evaluate((text) => {
+      const headerAddress = document.querySelector('header.tl_article_header address');
+      if (!headerAddress) {
+        return;
+      }
+      const link = headerAddress.querySelector('a[rel="author"]');
+      if (link) {
+        link.textContent = text || '';
+      } else {
+        headerAddress.textContent = text || '';
+      }
+    }, author);
+  } catch (_) {}
   await waitForTimeoutSafe(page, 80);
 
   // Diagnostic: check final DOM title
