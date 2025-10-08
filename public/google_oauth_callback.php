@@ -232,4 +232,12 @@ if ($next !== '') {
 if ($next === '') {
     $next = $role === 'admin' ? 'admin/admin.php' : 'client/client.php';
 }
+// If referral param is still present in the initial auth start URL and bubbled via session, append it once
+if (!empty($_SESSION['pp_ref_qs']) && strpos($next, '?') === false) {
+    $refQs = (string)$_SESSION['pp_ref_qs'];
+    unset($_SESSION['pp_ref_qs']);
+    if ($refQs !== '' && preg_match('~^(ref=[A-Za-z0-9_\-]+)~', $refQs)) {
+        $next .= '?' . $refQs;
+    }
+}
 redirect($next);

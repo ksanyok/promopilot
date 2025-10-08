@@ -32,5 +32,13 @@ $params = [
     'prompt' => 'consent',
 ];
 
+// If the current page was reached with a referral (?ref=...), try to carry it through OAuth
+if (!empty($_GET['ref'])) {
+    $ref = preg_replace('~[^a-zA-Z0-9_\-]~', '', (string)$_GET['ref']);
+    if ($ref !== '') {
+        $_SESSION['pp_ref_qs'] = 'ref=' . $ref;
+    }
+}
+
 $authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query($params);
 redirect($authUrl);

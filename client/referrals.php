@@ -28,6 +28,9 @@ $cookieDays = (int)get_setting('referral_cookie_days', '30');
 $defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
 $statsDaysSetting = (int)get_setting('referral_stats_days', '30');
 $periodDays = $statsDaysSetting > 0 ? max(7, min(365, $statsDaysSetting)) : 30;
+// Optional period override via query (?days=7|30|90|180|365)
+$userDays = isset($_GET['days']) ? (int)$_GET['days'] : 0;
+if ($userDays > 0) { $periodDays = max(7, min(365, $userDays)); }
 $periodCutoff = date('Y-m-d 00:00:00', strtotime('-' . ($periodDays - 1) . ' days'));
 $periodLabels = [];
 for ($i = $periodDays - 1; $i >= 0; $i--) {
@@ -43,6 +46,65 @@ $activitySeries = [
 ];
 $activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0];
 $periodTotals = $activityTotals;
+
+// Basic stats: personal percent, total referred users, total referral earnings, recent referral payout events
+try {
+    // Personal commission percent
+    if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $pp = (float)($row['referral_commission_percent'] ?? 0);
+                if ($pp > 0) { $personalPercent = $pp; }
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // Total referred users (lifetime)
+    if ($st = $conn->prepare('SELECT COUNT(*) AS c FROM users WHERE referred_by = ?')) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        $st->bind_result($c);
+        if ($st->fetch()) { $totalUsers = (int)$c; }
+        $st->close();
+    }
+
+    // Total referral earnings (sum of deltas)
+    if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS s FROM balance_history WHERE user_id = ? AND source = 'referral'")) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        $st->bind_result($s);
+        if ($st->fetch()) { $totalEarnings = (float)$s; }
+        $st->close();
+    }
+
+    // Recent referral payout events
+    $recentEvents = [];
+    if ($st = $conn->prepare("SELECT delta, meta_json, created_at FROM balance_history WHERE user_id = ? AND source = 'referral' ORDER BY created_at DESC LIMIT 10")) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $meta = [];
+                $mj = (string)($row['meta_json'] ?? '');
+                if ($mj !== '') { $dec = json_decode($mj, true); if (is_array($dec)) { $meta = $dec; } }
+                $recentEvents[] = [
+                    'created_at' => (string)$row['created_at'],
+                    'delta' => (float)$row['delta'],
+                    'percent' => isset($meta['percent']) ? (float)$meta['percent'] : 0.0,
+                    'from_user_id' => isset($meta['from_user_id']) ? (int)$meta['from_user_id'] : 0,
+                ];
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+} catch (Throwable $e) {
+    // leave defaults on failure
+}
 
 // Referred users list (last 25)
 $referredUsers = [];
@@ -69,40 +131,32 @@ try {
         $del->close();
     }
 
-    // Aggregate referral events (clicks + signups) into activity series
-    if ($st = $conn->prepare('SELECT DATE(created_at) AS d, type, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND created_at >= ? GROUP BY d, type')) {
-        $st->bind_param('is', $uid, $periodCutoff);
+    // Aggregate clicks into activity series using timestamp buckets (avoid DATE/timezone mismatch)
+    $startTs = strtotime($periodCutoff);
+    if ($st = $conn->prepare('SELECT FLOOR((UNIX_TIMESTAMP(created_at) - ?) / 86400) AS idx, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = \"click\" AND created_at >= ? GROUP BY idx')) {
+        $st->bind_param('iis', $startTs, $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['d'] ?? '');
-                $type = (string)($row['type'] ?? '');
+                $idx = isset($row['idx']) ? (int)$row['idx'] : -1;
                 $count = (int)($row['c'] ?? 0);
-                if ($count <= 0 || !isset($labelIndex[$day])) {
-                    continue;
-                }
-                $idx = $labelIndex[$day];
-                if (isset($activitySeries[$type][$idx])) {
-                    $activitySeries[$type][$idx] = $count;
-                }
+                if ($count <= 0 || $idx < 0 || $idx >= $periodDays) { continue; }
+                $activitySeries['click'][$idx] = $count;
             }
             $res->free();
         }
         $st->close();
     }
 
-    // Aggregate payout events from balance history
-    if ($st = $conn->prepare("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY d")) {
-        $st->bind_param('is', $uid, $periodCutoff);
+    // Aggregate payout events from balance history using timestamp buckets
+    if ($st = $conn->prepare("SELECT FLOOR((UNIX_TIMESTAMP(created_at) - ?) / 86400) AS idx, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY idx")) {
+        $st->bind_param('iis', $startTs, $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['d'] ?? '');
+                $idx = isset($row['idx']) ? (int)$row['idx'] : -1;
                 $count = (int)($row['c'] ?? 0);
-                if ($count <= 0 || !isset($labelIndex[$day])) {
-                    continue;
-                }
-                $idx = $labelIndex[$day];
+                if ($count <= 0 || $idx < 0 || $idx >= $periodDays) { continue; }
                 $activitySeries['payout'][$idx] = $count;
             }
             $res->free();
@@ -112,7 +166,7 @@ try {
 
     // Aggregate signups from both sources with per-day unique user de-duplication
     // We'll bucket by day index using start timestamp to avoid date-string/zone mismatches
-    $startTs = strtotime($periodCutoff);
+    // $startTs already computed above
     $signupUsersByBucket = []; // bucketIdx => [userId => true]
     if ($st = $conn->prepare('SELECT id, UNIX_TIMESTAMP(created_at) AS ts FROM users WHERE referred_by = ? AND created_at >= ?')) {
         $st->bind_param('is', $uid, $periodCutoff);
@@ -158,7 +212,16 @@ try {
         if ($idx < 0 || $idx >= $periodDays) { continue; }
         $signupSeries[$idx] = count($usersSet);
     }
-    $activitySeries['signup'] = $signupSeries;
+    // Combine with raw referral_events signup counts as a fallback to avoid showing empty series
+    // Take the maximum per day between deduped user series and pre-aggregated event counts
+    $combinedSignup = $signupSeries;
+    if (isset($activitySeries['signup']) && is_array($activitySeries['signup'])) {
+        for ($i = 0; $i < $periodDays; $i++) {
+            $existing = isset($activitySeries['signup'][$i]) ? (int)$activitySeries['signup'][$i] : 0;
+            if ($existing > $combinedSignup[$i]) { $combinedSignup[$i] = $existing; }
+        }
+    }
+    $activitySeries['signup'] = $combinedSignup;
 
     // Paginated list of recent click events within the window
     if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ?")) {
@@ -244,11 +307,6 @@ $chartPayload = [
 ];
 $chartPayloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 if ($chartPayloadJson === false) { $chartPayloadJson = '{}'; }
-
-// DEBUG: temporary output
-echo "<!-- DEBUG: periodStartLabel=$periodStartLabel, periodEndLabel=$periodEndLabel, cutoff=$periodCutoff -->";
-echo "<!-- DEBUG: signupUsersByDay=" . htmlspecialchars(json_encode(array_map('array_keys', $signupUsersByDay ?? []))) . " -->";
-echo "<!-- DEBUG: chartPayload=" . htmlspecialchars($chartPayloadJson) . " -->";
 $paginationBasePath = strtok($_SERVER['REQUEST_URI'] ?? '', '?') ?: '';
 $clicksQuery = $_GET;
 unset($clicksQuery['page']);

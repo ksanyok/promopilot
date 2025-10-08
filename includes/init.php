@@ -132,3 +132,10 @@ if (function_exists('ensure_schema')) {
 if (function_exists('pp_referral_capture_from_request')) {
     pp_referral_capture_from_request();
 }
+
+// Safety net: if user is logged in but referral wasn't assigned yet, assign it now using cookie
+if (function_exists('pp_referral_assign_user_if_needed') && is_logged_in()) {
+    try {
+        $c = @connect_db(); if ($c) { pp_referral_assign_user_if_needed($c, (int)($_SESSION['user_id'] ?? 0)); $c->close(); }
+    } catch (Throwable $e) { /* ignore */ }
+}
