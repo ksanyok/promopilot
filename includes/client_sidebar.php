@@ -91,6 +91,52 @@ if (is_logged_in() && !is_admin()) {
         </div>
     <?php endif; ?>
 
+    <?php
+    // Referral mini-widget in sidebar
+    $refEnabled = get_setting('referral_enabled', '0') === '1';
+    if ($refEnabled && is_logged_in() && !is_admin()):
+        $uid = (int)($_SESSION['user_id'] ?? 0);
+        $code = '';
+        try {
+            if (function_exists('pp_referral_get_or_create_user_code')) {
+                $conn = connect_db();
+                $code = pp_referral_get_or_create_user_code($conn, $uid);
+                $conn->close();
+            }
+        } catch (Throwable $e) { /* ignore */ }
+        $refLink = pp_url('') . '/?ref=' . rawurlencode($code);
+    ?>
+    <div class="menu-block sidebar-panel sidebar-panel--referral">
+        <div class="sidebar-panel__header">
+            <span class="sidebar-panel__icon" aria-hidden="true"><i class="bi bi-people"></i></span>
+            <div class="sidebar-panel__title"><?php echo __('Партнёрка'); ?></div>
+        </div>
+        <div class="sidebar-panel__body">
+            <div class="sidebar-panel__content">
+                <div class="small text-muted mb-2"><?php echo __('Делитесь ссылкой и зарабатывайте на активности друзей.'); ?></div>
+                <div class="input-group input-group-sm">
+                    <input type="text" class="form-control" value="<?php echo htmlspecialchars($refLink); ?>" readonly>
+                    <button class="btn btn-outline-primary" type="button" id="copyRefLinkSide"><i class="bi bi-clipboard"></i></button>
+                </div>
+                <div class="d-grid mt-2">
+                    <a href="<?php echo pp_url('client/referrals.php'); ?>" class="btn btn-sm btn-primary"><i class="bi bi-graph-up-arrow me-1"></i><?php echo __('Статистика'); ?></a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function(){
+        const btn = document.getElementById('copyRefLinkSide');
+        if (btn) {
+            btn.addEventListener('click', function(){
+                const inp = btn.closest('.input-group')?.querySelector('input');
+                if (inp) { inp.select(); document.execCommand('copy'); btn.innerHTML = '<i class="bi bi-check2"></i>'; setTimeout(()=>{ btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200); }
+            });
+        }
+    });
+    </script>
+    <?php endif; ?>
+
     <?php if ($currentProject && !empty($currentProject['id'])): ?>
     <?php
         $currentProjectRaw = $currentProject['name'] ?? ('ID ' . (int)$currentProject['id']);

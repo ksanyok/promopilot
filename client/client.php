@@ -229,14 +229,63 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
             </div>
             <div class="dashboard-hero-card__balance text-start text-md-end position-relative">
                 <a href="<?php echo pp_url('client/balance.php'); ?>" class="stretched-link" aria-label="<?php echo __('Открыть финансовый дашборд'); ?>"></a>
-                <div class="dashboard-balance-label text-uppercase small fw-semibold text-muted"><?php echo __('Ваш баланс'); ?></div>
-                <div class="dashboard-balance-value"><?php echo htmlspecialchars(format_currency($balance)); ?></div>
-                <div class="text-muted small"><i class="bi bi-lightning-charge me-1"></i><?php echo __('Баланс используется для запуска и масштабирования публикационных каскадов.'); ?></div>
+                <div class="dashboard-balance-label text-uppercase small fw-semibold text-muted d-flex align-items-center gap-2">
+                    <span><?php echo __('Ваш баланс'); ?></span>
+                    <span class="badge bg-success-subtle text-success d-inline-flex align-items-center gap-1 topup-hint"><i class="bi bi-plus-circle"></i><span><?php echo __('пополнить'); ?></span></span>
+                </div>
+                <div class="dashboard-balance-value with-cta">
+                    <i class="bi bi-lightning-charge me-2 text-warning"></i>
+                    <span><?php echo htmlspecialchars(format_currency($balance)); ?></span>
+                </div>
+                <div class="text-muted small"><i class="bi bi-wallet2 me-1"></i><?php echo __('Нажмите, чтобы открыть пополнение и историю операций.'); ?></div>
             </div>
             <div class="dashboard-hero-card__actions">
                 <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient"><i class="bi bi-plus-lg me-1"></i><?php echo __('Новый проект'); ?></a>
             </div>
         </div>
+        <?php
+            // Referral strip inside hero-card to promote affiliate program
+            $refEnabled = get_setting('referral_enabled', '0') === '1';
+            if ($refEnabled) {
+                $uid = (int)$_SESSION['user_id'];
+                $conn2 = connect_db();
+                $userCode = '';
+                try {
+                    if (function_exists('pp_referral_get_or_create_user_code')) {
+                        $userCode = pp_referral_get_or_create_user_code($conn2, $uid);
+                    }
+                } catch (Throwable $e) {}
+                $conn2->close();
+                $refLink = pp_url('') . '/?ref=' . rawurlencode($userCode);
+        ?>
+        <div class="hero-referral-strip">
+            <div class="hero-referral-strip__content">
+                <div class="hero-referral-strip__icon" aria-hidden="true"><i class="bi bi-people"></i></div>
+                <div class="hero-referral-strip__text">
+                    <div class="hero-referral-strip__title"><?php echo __('Партнёрская программа'); ?></div>
+                    <div class="hero-referral-strip__desc small text-muted"><?php echo __('Делитесь ссылкой и получайте бонусы за активность приглашённых.'); ?></div>
+                </div>
+                <div class="hero-referral-strip__actions">
+                    <div class="input-group input-group-sm ref-link-input">
+                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($refLink); ?>" readonly>
+                        <button class="btn btn-outline-primary" type="button" id="copyRefLinkTop"><i class="bi bi-clipboard"></i></button>
+                        <a class="btn btn-primary" href="<?php echo pp_url('client/referrals.php'); ?>"><i class="bi bi-graph-up-arrow me-1"></i><?php echo __('Рефералы'); ?></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function(){
+            const btn = document.getElementById('copyRefLinkTop');
+            if (btn) {
+                btn.addEventListener('click', function(){
+                    const inp = btn.closest('.ref-link-input')?.querySelector('input');
+                    if (inp) { inp.select(); document.execCommand('copy'); btn.innerHTML = '<i class="bi bi-check2"></i>'; setTimeout(()=>{ btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200); }
+                });
+            }
+        });
+        </script>
+        <?php } ?>
     </div>
 
     <div class="row g-3 dashboard-stat-row mb-4">

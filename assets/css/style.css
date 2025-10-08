@@ -227,6 +227,21 @@ a.nav-balance-chip:hover { text-decoration: none; color: rgba(255,255,255,.98); 
 .dropdown-item { color: var(--text); }
 .dropdown-item:hover, .dropdown-item:focus { background: var(--surface-2); color: var(--text); }
 
+/* Stronger, darker dropdown specifically in the navbar to avoid blending with the glass background */
+.navbar .dropdown-menu {
+  background: linear-gradient(180deg, rgba(15,23,42,.95), rgba(15,23,42,.9)) !important; /* much darker */
+  border: 1px solid rgba(255,255,255,.12) !important;
+  box-shadow: 0 18px 42px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.04) !important;
+  backdrop-filter: blur(14px) saturate(140%);
+}
+.navbar .dropdown-item { color: rgba(241,245,249,.98); }
+.navbar .dropdown-item i { color: rgba(203,213,225,.95); }
+.navbar .dropdown-item:hover,
+.navbar .dropdown-item:focus { background: rgba(255,255,255,.08); color: #fff; }
+.navbar .dropdown-divider { border-top-color: rgba(255,255,255,.14); }
+.navbar .dropdown-menu .btn.btn-link { color: rgba(241,245,249,.96); }
+.navbar .dropdown-menu .btn.btn-link:hover { color: #fff; text-decoration: underline; }
+
 .spinner-border-lg {
   width: 3.75rem;
   height: 3.75rem;
@@ -430,6 +445,13 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .sidebar-panel--menu { background: rgba(15,23,42,.82); }
 .sidebar-panel--current { background: rgba(15,29,45,.82); border-color: rgba(45,212,191,.25); }
 .sidebar-panel--current .sidebar-panel__icon { background: rgba(56,189,248,.22); border-color: rgba(56,189,248,.35); }
+
+/* Referral sidebar widget */
+.sidebar-panel--referral { background: rgba(17,24,39,.82); border-color: rgba(59,130,246,.22); }
+.sidebar-panel--referral .sidebar-panel__icon { background: rgba(59,130,246,.2); border-color: rgba(96,165,250,.32); color: rgba(191,219,254,.96); }
+.sidebar-panel--referral .input-group .form-control { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.16); color: var(--text); }
+.sidebar-panel--referral .btn-outline-primary { border-color: rgba(96,165,250,.5); color: rgba(191,219,254,.95); }
+.sidebar-panel--referral .btn-outline-primary:hover { background: rgba(59,130,246,.18); color: #fff; }
 
 .menu-title { font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; padding: 10px 8px; }
 .menu-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -1341,6 +1363,33 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .dashboard-balance-label { letter-spacing: .08em; }
 .dashboard-hero-card__balance .text-muted { color: var(--muted) !important; }
 .dashboard-hero-card__actions .btn { min-width: 170px; }
+
+/* Balance CTA polish */
+.dashboard-balance-value.with-cta {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .35rem .7rem; border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.05));
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 10px 20px -14px rgba(0,0,0,.35);
+}
+.dashboard-balance-value.with-cta:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 14px 26px -14px rgba(0,0,0,.45); }
+.dashboard-hero-card__balance .topup-hint { border: 1px solid rgba(16,185,129,.35); background: rgba(16,185,129,.12) !important; }
+
+/* Referral strip in hero */
+.hero-referral-strip { border-top: 1px solid rgba(255,255,255,.08); padding: 12px 16px; background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); }
+.hero-referral-strip__content { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.hero-referral-strip__icon { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: rgba(59,130,246,.16); color: rgba(191,219,254,.95); border: 1px solid rgba(96,165,250,.28); }
+.hero-referral-strip__text { display: flex; flex-direction: column; gap: 2px; min-width: 240px; }
+.hero-referral-strip__title { font-weight: 700; letter-spacing: .02em; }
+.hero-referral-strip__actions { min-width: 320px; flex: 1 1 auto; display: flex; justify-content: flex-end; }
+.hero-referral-strip .ref-link-input input { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.16); color: var(--text); }
+.hero-referral-strip .ref-link-input .btn-outline-primary { border-color: rgba(96,165,250,.5); color: rgba(191,219,254,.95); }
+.hero-referral-strip .ref-link-input .btn-outline-primary:hover { background: rgba(59,130,246,.18); color: #fff; }
+
+@media (max-width: 768px) {
+  .hero-referral-strip__actions { width: 100%; justify-content: stretch; }
+  .hero-referral-strip .ref-link-input { width: 100%; }
+}
 
 .btn-gradient {
   color: #0b1220;

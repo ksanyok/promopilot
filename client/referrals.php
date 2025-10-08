@@ -27,13 +27,14 @@ $totalUsers = 0; $totalEarnings = 0.0; $personalPercent = 0.0;
 $cookieDays = (int)get_setting('referral_cookie_days', '30');
 $defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
 $statsDaysSetting = (int)get_setting('referral_stats_days', '30');
-$periodDays = $statsDaysSetting > 0 ? max(7, min(90, $statsDaysSetting)) : 30;
+$periodDays = $statsDaysSetting > 0 ? max(7, min(365, $statsDaysSetting)) : 30;
 $periodCutoff = date('Y-m-d 00:00:00', strtotime('-' . ($periodDays - 1) . ' days'));
 $periodLabels = [];
 for ($i = $periodDays - 1; $i >= 0; $i--) {
     $periodLabels[] = date('Y-m-d', strtotime('-' . $i . ' days'));
 }
 $labelIndex = array_flip($periodLabels);
+// Prepare activity structures
 $activitySeries = [
     'labels' => $periodLabels,
     'click' => array_fill(0, $periodDays, 0),
@@ -41,43 +42,7 @@ $activitySeries = [
     'payout' => array_fill(0, $periodDays, 0),
 ];
 $activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0];
-// personal override percent
-try { if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) { $st->bind_param('i', $uid); $st->execute(); if ($res = $st->get_result()) { $row = $res->fetch_assoc(); $personalPercent = (float)($row['referral_commission_percent'] ?? 0); $res->free(); } $st->close(); } } catch (Throwable $e) { }
-try {
-    // Count referrals
-    if ($st = $conn->prepare('SELECT COUNT(*) AS c FROM users WHERE referred_by = ?')) {
-        $st->bind_param('i', $uid);
-        $st->execute();
-        if ($res = $st->get_result()) { $totalUsers = (int)($res->fetch_assoc()['c'] ?? 0); }
-        $st->close();
-    }
-    // Sum earnings from referral events
-    if ($st = $conn->prepare("SELECT SUM(delta) AS s FROM balance_history WHERE user_id = ? AND source = 'referral'")) {
-        $st->bind_param('i', $uid);
-        $st->execute();
-        if ($res = $st->get_result()) { $totalEarnings = (float)($res->fetch_assoc()['s'] ?? 0); }
-        $st->close();
-    }
-} catch (Throwable $e) { /* ignore */ }
-
-// Recent referral transactions (earnings)
-$recentEvents = [];
-if ($st = $conn->prepare("SELECT id, delta, meta_json, created_at FROM balance_history WHERE user_id = ? AND source = 'referral' ORDER BY id DESC LIMIT 25")) {
-    $st->bind_param('i', $uid);
-    $st->execute();
-    if ($res = $st->get_result()) {
-        while ($row = $res->fetch_assoc()) {
-            $row['delta'] = (float)$row['delta'];
-            $meta = json_decode((string)($row['meta_json'] ?? '{}'), true) ?: [];
-            $row['from_user_id'] = (int)($meta['from_user_id'] ?? 0);
-            $row['percent'] = (float)($meta['percent'] ?? 0);
-            $row['transaction_id'] = (int)($meta['transaction_id'] ?? 0);
-            $recentEvents[] = $row;
-        }
-        $res->free();
-    }
-    $st->close();
-}
+$periodTotals = $activityTotals;
 
 // Referred users list (last 25)
 $referredUsers = [];
@@ -119,7 +84,6 @@ try {
                 $idx = $labelIndex[$day];
                 if (isset($activitySeries[$type][$idx])) {
                     $activitySeries[$type][$idx] = $count;
-                    $activityTotals[$type] += $count;
                 }
             }
             $res->free();
@@ -140,12 +104,61 @@ try {
                 }
                 $idx = $labelIndex[$day];
                 $activitySeries['payout'][$idx] = $count;
-                $activityTotals['payout'] += $count;
             }
             $res->free();
         }
         $st->close();
     }
+
+    // Aggregate signups from both sources with per-day unique user de-duplication
+    // We'll bucket by day index using start timestamp to avoid date-string/zone mismatches
+    $startTs = strtotime($periodCutoff);
+    $signupUsersByBucket = []; // bucketIdx => [userId => true]
+    if ($st = $conn->prepare('SELECT id, UNIX_TIMESTAMP(created_at) AS ts FROM users WHERE referred_by = ? AND created_at >= ?')) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $ts = isset($row['ts']) ? (int)$row['ts'] : 0;
+                $userId = (int)($row['id'] ?? 0);
+                if ($ts <= 0 || $userId <= 0) { continue; }
+                $idx = (int)floor(($ts - $startTs) / 86400);
+                if ($idx < 0 || $idx >= $periodDays) { continue; }
+                if (!isset($signupUsersByBucket[$idx])) { $signupUsersByBucket[$idx] = []; }
+                $signupUsersByBucket[$idx][$userId] = true;
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // 2) Also collect from referral_events signup events (covers cases where assignment happened on event level)
+    if ($st = $conn->prepare("SELECT user_id, UNIX_TIMESTAMP(created_at) AS ts FROM referral_events WHERE referrer_user_id = ? AND type = 'signup' AND created_at >= ?")) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $ts = isset($row['ts']) ? (int)$row['ts'] : 0;
+                $userId = (int)($row['user_id'] ?? 0);
+                if ($ts <= 0 || $userId <= 0) { continue; }
+                $idx = (int)floor(($ts - $startTs) / 86400);
+                if ($idx < 0 || $idx >= $periodDays) { continue; }
+                if (!isset($signupUsersByBucket[$idx])) { $signupUsersByBucket[$idx] = []; }
+                $signupUsersByBucket[$idx][$userId] = true; // de-dupe across sources
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // 3) Build signup series as counts of unique users per day
+    $signupSeries = array_fill(0, $periodDays, 0);
+    foreach ($signupUsersByBucket as $idx => $usersSet) {
+        $idx = (int)$idx;
+        if ($idx < 0 || $idx >= $periodDays) { continue; }
+        $signupSeries[$idx] = count($usersSet);
+    }
+    $activitySeries['signup'] = $signupSeries;
 
     // Paginated list of recent click events within the window
     if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ?")) {
@@ -206,9 +219,17 @@ try {
             $st->close();
         }
     }
+
+    $activityTotals = [
+        'click' => array_sum($activitySeries['click']),
+        'signup' => array_sum($activitySeries['signup']),
+        'payout' => array_sum($activitySeries['payout']),
+    ];
+    $periodTotals = $activityTotals;
 } catch (Throwable $e) {
     // leave defaults on failure
 }
+
 
 $conn->close();
 $refEnabled = get_setting('referral_enabled', '0') === '1';
@@ -223,7 +244,11 @@ $chartPayload = [
 ];
 $chartPayloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 if ($chartPayloadJson === false) { $chartPayloadJson = '{}'; }
-$periodTotals = $activityTotals;
+
+// DEBUG: temporary output
+echo "<!-- DEBUG: periodStartLabel=$periodStartLabel, periodEndLabel=$periodEndLabel, cutoff=$periodCutoff -->";
+echo "<!-- DEBUG: signupUsersByDay=" . htmlspecialchars(json_encode(array_map('array_keys', $signupUsersByDay ?? []))) . " -->";
+echo "<!-- DEBUG: chartPayload=" . htmlspecialchars($chartPayloadJson) . " -->";
 $paginationBasePath = strtok($_SERVER['REQUEST_URI'] ?? '', '?') ?: '';
 $clicksQuery = $_GET;
 unset($clicksQuery['page']);
@@ -239,8 +264,13 @@ $buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery
 };
 ?>
 
-<?php include '../includes/header.php'; ?>
-<div class="main-content fade-in">
+<?php
+$pp_container = false;
+$GLOBALS['pp_layout_has_sidebar'] = true;
+include '../includes/header.php';
+include __DIR__ . '/../includes/client_sidebar.php';
+?>
+<div class="main-content fade-in referral-dashboard">
     <div class="card shadow-sm border-0 mb-4">
         <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div>
@@ -294,12 +324,12 @@ $buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery
                 <div class="card-body">
                     <div class="d-flex align-items-start justify-content-between">
                         <div>
-                            <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Регистрации за период'); ?></p>
-                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$periodTotals['signup'], 0, '.', ' '); ?></div>
+                            <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Всего регистраций'); ?></p>
+                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$totalUsers, 0, '.', ' '); ?></div>
                         </div>
                         <div class="ref-metric-icon"><i class="bi bi-person-check"></i></div>
                     </div>
-                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?></p>
+                    <p class="small mt-3 mb-0 opacity-75"><?php echo __('общее количество'); ?></p>
                 </div>
             </div>
         </div>
@@ -520,13 +550,50 @@ $buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery
     </div>
 </div>
 <style>
+.referral-dashboard {
+    color: #e2e8f0;
+}
+.referral-dashboard .text-muted {
+    color: rgba(148, 163, 184, 0.85) !important;
+}
+.referral-dashboard .card:not(.ref-metric-card) {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    color: #e2e8f0;
+}
+.referral-dashboard .card:not(.ref-metric-card) .card-header {
+    border-color: rgba(148, 163, 184, 0.12);
+    color: rgba(226, 232, 240, 0.9);
+}
+.referral-dashboard .card.ref-link-card,
+.referral-dashboard .card.ref-stats-card,
+.referral-dashboard .ref-click-table {
+    backdrop-filter: blur(4px);
+}
+.referral-dashboard .form-control {
+    background-color: rgba(15, 23, 42, 0.65);
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #f8fafc;
+}
+.referral-dashboard .form-control:focus {
+    background-color: rgba(15, 23, 42, 0.8);
+    border-color: rgba(96, 165, 250, 0.6);
+    color: #f8fafc;
+    box-shadow: 0 0 0 0.2rem rgba(59, 130, 246, 0.25);
+}
+.referral-dashboard .btn-primary {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    border: none;
+    box-shadow: 0 0.75rem 1.8rem rgba(37, 99, 235, 0.25);
+}
 .ref-chart-wrapper {
     position: relative;
     min-height: 320px;
 }
 .ref-chart-card {
     border-radius: 1rem;
-    background: linear-gradient(135deg, rgba(13, 110, 253, 0.06), rgba(32, 201, 151, 0.05));
+    background: linear-gradient(135deg, rgba(13, 110, 253, 0.12), rgba(32, 201, 151, 0.1)), rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(96, 165, 250, 0.35);
 }
 .ref-metric-card {
     border: 0;
@@ -556,23 +623,23 @@ $buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery
     border-radius: 1rem;
     box-shadow: var(--bs-box-shadow-sm, 0 0.5rem 1.5rem rgba(0,0,0,0.05));
 }
-.ref-stats-card .stat-tile {
-    background: #f8f9fa;
-}
 .stat-tile {
     border-radius: 0.75rem;
     padding: 1rem 1.25rem;
+    background-color: rgba(148, 163, 184, 0.16);
+    color: #f8fafc;
 }
 .stat-label {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #6c757d;
+    color: rgba(148, 163, 184, 0.85);
     margin-bottom: 0.35rem;
 }
 .stat-value {
     font-size: 1.5rem;
     font-weight: 600;
+    color: #f8fafc;
 }
 .ref-click-table .ua-cell {
     max-width: 260px;
@@ -580,6 +647,29 @@ $buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery
 }
 .ref-click-table .table thead th {
     white-space: nowrap;
+    color: rgba(226, 232, 240, 0.85);
+}
+.ref-click-table .table {
+    color: #e2e8f0;
+}
+.ref-click-table .table tbody tr {
+    border-color: rgba(148, 163, 184, 0.12);
+}
+.ref-click-table .table a {
+    color: #93c5fd;
+}
+.referral-dashboard .pagination .page-link {
+    background-color: rgba(15, 23, 42, 0.65);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: #e2e8f0;
+}
+.referral-dashboard .pagination .page-item.active .page-link {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+}
+.referral-dashboard .pagination .page-item.disabled .page-link {
+    opacity: 0.45;
 }
 @media (max-width: 767.98px) {
     .ref-chart-wrapper {
@@ -597,6 +687,7 @@ document.addEventListener('DOMContentLoaded', function(){
         const clickData = chartPayload.click ?? [];
         const signupData = chartPayload.signup ?? [];
         const payoutData = chartPayload.payout ?? [];
+        console.log('Chart data:', {labels, clickData, signupData, payoutData});
         const ctx = chartElement.getContext('2d');
         new Chart(ctx, {
             type: 'line',
@@ -642,9 +733,16 @@ document.addEventListener('DOMContentLoaded', function(){
                 plugins: {
                     legend: {
                         display: true,
-                        position: 'bottom'
+                        position: 'bottom',
+                        labels: {
+                            color: '#e2e8f0',
+                            usePointStyle: true,
+                        }
                     },
                     tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        titleColor: '#f8fafc',
+                        bodyColor: '#f8fafc',
                         callbacks: {
                             label: function(context) {
                                 const label = context.dataset.label || '';
@@ -657,14 +755,21 @@ document.addEventListener('DOMContentLoaded', function(){
                 scales: {
                     x: {
                         grid: {
-                            display: false
+                            color: 'rgba(148, 163, 184, 0.15)'
+                        },
+                        ticks: {
+                            color: '#cbd5f5'
                         }
                     },
                     y: {
                         beginAtZero: true,
                         ticks: {
                             precision: 0,
-                            stepSize: 1
+                            stepSize: 1,
+                            color: '#cbd5f5'
+                        },
+                        grid: {
+                            color: 'rgba(148, 163, 184, 0.18)'
                         }
                     }
                 }
