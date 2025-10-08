@@ -201,6 +201,21 @@ if ($picture !== '' && $uid !== null) {
     }
 }
 
+// Assign referral relationships if user arrived via referral link
+if ($uid !== null) {
+    try {
+        $userIdInt = (int)$uid;
+        if (function_exists('pp_referral_assign_user_if_needed')) {
+            pp_referral_assign_user_if_needed($conn, $userIdInt);
+        }
+        if (function_exists('pp_referral_get_or_create_user_code')) {
+            pp_referral_get_or_create_user_code($conn, $userIdInt);
+        }
+    } catch (Throwable $e) {
+        // ignore referral assignment errors
+    }
+}
+
 $conn->close();
 
 // Log user in

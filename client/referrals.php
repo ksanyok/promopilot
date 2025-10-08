@@ -26,6 +26,21 @@ $refLink = pp_url('') . '/?ref=' . rawurlencode($code);
 $totalUsers = 0; $totalEarnings = 0.0; $personalPercent = 0.0;
 $cookieDays = (int)get_setting('referral_cookie_days', '30');
 $defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
+$statsDaysSetting = (int)get_setting('referral_stats_days', '30');
+$periodDays = $statsDaysSetting > 0 ? max(7, min(90, $statsDaysSetting)) : 30;
+$periodCutoff = date('Y-m-d 00:00:00', strtotime('-' . ($periodDays - 1) . ' days'));
+$periodLabels = [];
+for ($i = $periodDays - 1; $i >= 0; $i--) {
+    $periodLabels[] = date('Y-m-d', strtotime('-' . $i . ' days'));
+}
+$labelIndex = array_flip($periodLabels);
+$activitySeries = [
+    'labels' => $periodLabels,
+    'click' => array_fill(0, $periodDays, 0),
+    'signup' => array_fill(0, $periodDays, 0),
+    'payout' => array_fill(0, $periodDays, 0),
+];
+$activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0];
 // personal override percent
 try { if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) { $st->bind_param('i', $uid); $st->execute(); if ($res = $st->get_result()) { $row = $res->fetch_assoc(); $personalPercent = (float)($row['referral_commission_percent'] ?? 0); $res->free(); } $st->close(); } } catch (Throwable $e) { }
 try {
@@ -76,31 +91,158 @@ if ($st = $conn->prepare('SELECT id, username, created_at FROM users WHERE refer
     $st->close();
 }
 
+$clicksPerPage = 20;
+$clickPage = max(1, (int)($_GET['clicks_page'] ?? $_GET['page'] ?? 1));
+$clickEvents = [];
+$clickPagination = ['page' => $clickPage, 'pages' => 1, 'total' => 0];
+
+try {
+    // Trim old click events beyond the analytics window
+    if ($del = $conn->prepare("DELETE FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at < ?")) {
+        $del->bind_param('is', $uid, $periodCutoff);
+        $del->execute();
+        $del->close();
+    }
+
+    // Aggregate referral events (clicks + signups) into activity series
+    if ($st = $conn->prepare('SELECT DATE(created_at) AS d, type, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND created_at >= ? GROUP BY d, type')) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $day = (string)($row['d'] ?? '');
+                $type = (string)($row['type'] ?? '');
+                $count = (int)($row['c'] ?? 0);
+                if ($count <= 0 || !isset($labelIndex[$day])) {
+                    continue;
+                }
+                $idx = $labelIndex[$day];
+                if (isset($activitySeries[$type][$idx])) {
+                    $activitySeries[$type][$idx] = $count;
+                    $activityTotals[$type] += $count;
+                }
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // Aggregate payout events from balance history
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY d")) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $day = (string)($row['d'] ?? '');
+                $count = (int)($row['c'] ?? 0);
+                if ($count <= 0 || !isset($labelIndex[$day])) {
+                    continue;
+                }
+                $idx = $labelIndex[$day];
+                $activitySeries['payout'][$idx] = $count;
+                $activityTotals['payout'] += $count;
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // Paginated list of recent click events within the window
+    if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ?")) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        $st->bind_result($totalClicks);
+        if ($st->fetch()) {
+            $totalClicks = (int)$totalClicks;
+            $clickPagination['total'] = $totalClicks;
+            $clickPagination['pages'] = max(1, (int)ceil($totalClicks / $clicksPerPage));
+            if ($clickPage > $clickPagination['pages']) {
+                $clickPage = $clickPagination['pages'];
+                $clickPagination['page'] = $clickPage;
+            }
+        }
+        $st->close();
+    }
+
+    $offset = ($clickPage - 1) * $clicksPerPage;
+    if ($clickPagination['total'] > 0) {
+        if ($st = $conn->prepare("SELECT id, code, meta_json, created_at FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ? ORDER BY created_at DESC LIMIT ? OFFSET ?")) {
+            $st->bind_param('isii', $uid, $periodCutoff, $clicksPerPage, $offset);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                while ($row = $res->fetch_assoc()) {
+                    $meta = json_decode((string)($row['meta_json'] ?? '{}'), true) ?: [];
+                    $row['ip'] = (string)($meta['ip'] ?? '');
+                    $uaFull = (string)($meta['ua'] ?? '');
+                    $row['ua'] = $uaFull;
+                    if ($uaFull !== '') {
+                        if (function_exists('mb_strimwidth')) {
+                            $row['ua_short'] = mb_strimwidth($uaFull, 0, 78, '…', 'UTF-8');
+                        } else {
+                            $row['ua_short'] = strlen($uaFull) > 78 ? substr($uaFull, 0, 75) . '...' : $uaFull;
+                        }
+                    } else {
+                        $row['ua_short'] = '';
+                    }
+                    $refererFull = (string)($meta['referer'] ?? '');
+                    $row['referer'] = $refererFull;
+                    if ($refererFull !== '') {
+                        $row['referer_short'] = $refererFull;
+                        if (function_exists('mb_strimwidth')) {
+                            $row['referer_short'] = mb_strimwidth($refererFull, 0, 78, '…', 'UTF-8');
+                        } else {
+                            $row['referer_short'] = strlen($refererFull) > 78 ? substr($refererFull, 0, 75) . '...' : $refererFull;
+                        }
+                        $parsed = @parse_url($refererFull);
+                        $row['referer_host'] = isset($parsed['host']) ? (string)$parsed['host'] : '';
+                    } else {
+                        $row['referer_short'] = '';
+                        $row['referer_host'] = '';
+                    }
+                    $clickEvents[] = $row;
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+    }
+} catch (Throwable $e) {
+    // leave defaults on failure
+}
+
 $conn->close();
 $refEnabled = get_setting('referral_enabled', '0') === '1';
 $accrualBasis = get_setting('referral_accrual_basis', 'spend');
-// activity data (last 14 days clicks/signups)
-$activitySeries = [];
-try {
-    $conn2 = connect_db();
-    $since = date('Y-m-d 00:00:00', strtotime('-13 days'));
-    $series = [
-        'click' => array_fill(0, 14, 0),
-        'signup' => array_fill(0, 14, 0),
-    ];
-    $labels = [];
-    for ($i = 13; $i >= 0; $i--) { $labels[] = date('Y-m-d', strtotime("-$i days")); }
-    $st = $conn2->prepare('SELECT DATE(created_at) AS d, type, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND created_at >= ? GROUP BY d, type');
-    if ($st) { $st->bind_param('is', $uid, $since); $st->execute(); $res = $st->get_result(); while ($row = $res->fetch_assoc()) { $d = (string)$row['d']; $t = (string)$row['type']; $idx = array_search($d, $labels, true); if ($idx !== false && isset($series[$t])) { $series[$t][$idx] = (int)$row['c']; } } if ($res) $res->free(); $st->close(); }
-    $conn2->close();
-    $activitySeries = ['labels' => $labels, 'click' => $series['click'], 'signup' => $series['signup']];
-} catch (Throwable $e) { $activitySeries = ['labels' => [], 'click' => [], 'signup' => []]; }
+$periodStartLabel = $activitySeries['labels'][0] ?? date('Y-m-d');
+$periodEndLabel = $activitySeries['labels'] ? $activitySeries['labels'][count($activitySeries['labels']) - 1] : $periodStartLabel;
+$chartPayload = [
+    'labels' => $activitySeries['labels'],
+    'click' => $activitySeries['click'],
+    'signup' => $activitySeries['signup'],
+    'payout' => $activitySeries['payout'],
+];
+$chartPayloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+if ($chartPayloadJson === false) { $chartPayloadJson = '{}'; }
+$periodTotals = $activityTotals;
+$paginationBasePath = strtok($_SERVER['REQUEST_URI'] ?? '', '?') ?: '';
+$clicksQuery = $_GET;
+unset($clicksQuery['page']);
+$buildClicksPageUrl = function(int $page) use ($paginationBasePath, $clicksQuery): string {
+    $query = $clicksQuery;
+    if ($page > 1) {
+        $query['clicks_page'] = $page;
+    } else {
+        unset($query['clicks_page']);
+    }
+    $qs = $query ? ('?' . http_build_query($query)) : '';
+    return htmlspecialchars($paginationBasePath . $qs, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+};
 ?>
 
 <?php include '../includes/header.php'; ?>
 <div class="main-content fade-in">
-    <div class="card shadow-sm mb-4">
-        <div class="card-body d-flex justify-content-between align-items-center">
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div>
                 <h1 class="h4 mb-1"><?php echo __('Партнёрская программа'); ?></h1>
                 <p class="text-muted mb-0 small">
@@ -115,41 +257,121 @@ try {
         </div>
     </div>
 
+    <div class="card shadow-sm border-0 ref-chart-card mb-4">
+        <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
+                <div>
+                    <h2 class="h5 mb-1"><?php echo __('Диаграмма активности'); ?></h2>
+                    <p class="text-muted small mb-0"><?php echo sprintf(__('Количество переходов, регистраций и начислений за последние %d дней.'), $periodDays); ?></p>
+                </div>
+                <div class="text-muted small">
+                    <?php echo sprintf(__('Период: %s — %s'), htmlspecialchars(date('d.m.Y', strtotime($periodStartLabel))), htmlspecialchars(date('d.m.Y', strtotime($periodEndLabel)))); ?>
+                </div>
+            </div>
+            <div class="ref-chart-wrapper mt-3">
+                <canvas id="referralActivityChart"></canvas>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-3 mb-4">
-        <div class="col-md-6">
-            <div class="card">
+        <div class="col-xl-4 col-md-6">
+            <div class="card ref-metric-card ref-metric-click h-100 text-white">
                 <div class="card-body">
-                    <h2 class="h6 mb-2"><?php echo __('Ваша реферальная ссылка'); ?></h2>
-                    <div class="input-group">
-                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($refLink); ?>" id="refLink" readonly>
-                        <button class="btn btn-outline-primary" type="button" id="copyRefLink"><i class="bi bi-clipboard"></i> <?php echo __('Копировать'); ?></button>
+                    <div class="d-flex align-items-start justify-content-between">
+                        <div>
+                            <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Переходы за период'); ?></p>
+                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$periodTotals['click'], 0, '.', ' '); ?></div>
+                        </div>
+                        <div class="ref-metric-icon"><i class="bi bi-graph-up"></i></div>
                     </div>
-                    <div class="form-text mt-2">
-                        <?php echo sprintf(__('Срок действия метки: %d дней. Базовый процент: %s%%.'), $cookieDays, number_format($defaultPercent, 2)); ?>
-                        <?php if ($personalPercent > 0 && abs($personalPercent - $defaultPercent) > 0.001): ?>
-                            <span class="badge bg-success ms-1"><?php echo __('Ваша ставка'); ?>: <?php echo number_format($personalPercent, 2); ?>%</span>
-                        <?php endif; ?>
-                        <div class="small text-muted mt-1"><?php echo $accrualBasis === 'spend' ? __('Начисления считаются от трат рефералов в сервисе.') : __('Начисления считаются от пополнений рефералов.'); ?></div>
-                    </div>
+                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?></p>
                 </div>
             </div>
         </div>
-        <div class="col-md-6">
-            <div class="card">
+        <div class="col-xl-4 col-md-6">
+            <div class="card ref-metric-card ref-metric-signup h-100 text-white">
                 <div class="card-body">
-                    <h2 class="h6 mb-2"><?php echo __('Статистика'); ?></h2>
-                    <div class="d-flex gap-4 flex-wrap">
+                    <div class="d-flex align-items-start justify-content-between">
                         <div>
-                            <div class="text-muted small"><?php echo __('Привлечено пользователей'); ?></div>
-                            <div class="fs-4 fw-semibold"><?php echo (int)$totalUsers; ?></div>
+                            <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Регистрации за период'); ?></p>
+                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$periodTotals['signup'], 0, '.', ' '); ?></div>
                         </div>
+                        <div class="ref-metric-icon"><i class="bi bi-person-check"></i></div>
+                    </div>
+                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?></p>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4 col-md-6">
+            <div class="card ref-metric-card ref-metric-payout h-100 text-white">
+                <div class="card-body">
+                    <div class="d-flex align-items-start justify-content-between">
                         <div>
-                            <div class="text-muted small"><?php echo __('Заработано'); ?></div>
-                            <div class="fs-4 fw-semibold"><?php echo htmlspecialchars(format_currency($totalEarnings)); ?></div>
+                            <p class="text-uppercase small fw-semibold mb-1 opacity-75"><?php echo __('Начисления за период'); ?></p>
+                            <div class="display-6 fw-bold mb-0"><?php echo number_format((int)$periodTotals['payout'], 0, '.', ' '); ?></div>
                         </div>
+                        <div class="ref-metric-icon"><i class="bi bi-cash-stack"></i></div>
+                    </div>
+                    <p class="small mt-3 mb-0 opacity-75"><?php echo sprintf(__('за последние %d дней'), $periodDays); ?></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="card ref-link-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
                         <div>
-                            <div class="text-muted small"><?php echo __('Ваша ставка'); ?></div>
-                            <div class="fs-4 fw-semibold"><?php echo number_format(($personalPercent > 0 ? $personalPercent : $defaultPercent), 2); ?>%</div>
+                            <h2 class="h6 text-uppercase fw-semibold mb-2"><?php echo __('Ваша реферальная ссылка'); ?></h2>
+                            <p class="text-muted small mb-0"><?php echo __('Делитесь ссылкой, чтобы получать вознаграждение за каждую активность приглашённых пользователей.'); ?></p>
+                        </div>
+                        <span class="badge bg-primary-subtle text-primary"><?php echo sprintf(__('Cookie %d дней'), $cookieDays); ?></span>
+                    </div>
+                    <div class="input-group shadow-sm">
+                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($refLink); ?>" id="refLink" readonly>
+                        <button class="btn btn-primary" type="button" id="copyRefLink"><i class="bi bi-clipboard"></i> <?php echo __('Копировать'); ?></button>
+                    </div>
+                    <ul class="list-unstyled small text-muted mt-3 mb-0">
+                        <li><i class="bi bi-check-circle me-2 text-success"></i><?php echo sprintf(__('Базовая ставка: %s%%'), number_format($defaultPercent, 2)); ?></li>
+                        <li><i class="bi bi-check-circle me-2 text-success"></i><?php echo $accrualBasis === 'spend' ? __('Начисления рассчитываются от трат рефералов.') : __('Начисления рассчитываются от пополнений рефералов.'); ?></li>
+                        <?php if ($personalPercent > 0 && abs($personalPercent - $defaultPercent) > 0.001): ?>
+                            <li><i class="bi bi-star-fill me-2 text-warning"></i><?php echo __('Ваша индивидуальная ставка'); ?>: <strong><?php echo number_format($personalPercent, 2); ?>%</strong></li>
+                        <?php endif; ?>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card ref-stats-card h-100">
+                <div class="card-body">
+                    <h2 class="h6 text-uppercase fw-semibold mb-3"><?php echo __('Итоги программы'); ?></h2>
+                    <div class="row g-3">
+                        <div class="col-sm-6">
+                            <div class="stat-tile shadow-sm">
+                                <div class="stat-label"><?php echo __('Привлечено пользователей'); ?></div>
+                                <div class="stat-value"><?php echo number_format((int)$totalUsers, 0, '.', ' '); ?></div>
+                            </div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="stat-tile shadow-sm">
+                                <div class="stat-label"><?php echo __('Заработано всего'); ?></div>
+                                <div class="stat-value"><?php echo htmlspecialchars(format_currency($totalEarnings)); ?></div>
+                            </div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="stat-tile shadow-sm">
+                                <div class="stat-label"><?php echo __('Текущая ставка'); ?></div>
+                                <div class="stat-value"><?php echo number_format(($personalPercent > 0 ? $personalPercent : $defaultPercent), 2); ?>%</div>
+                            </div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="stat-tile shadow-sm">
+                                <div class="stat-label"><?php echo __('Начислений за период'); ?></div>
+                                <div class="stat-value"><?php echo number_format((int)$periodTotals['payout'], 0, '.', ' '); ?></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -159,125 +381,304 @@ try {
 
     <div class="row g-3">
         <div class="col-lg-6">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h2 class="h6 mb-0"><?php echo __('Недавние начисления'); ?></h2>
+            <div class="card shadow-sm border-0 h-100">
+                <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0"><i class="bi bi-cash-stack me-2 text-success"></i><?php echo __('Недавние начисления'); ?></h2>
                 </div>
                 <div class="card-body">
                     <?php if (empty($recentEvents)): ?>
                         <p class="text-muted mb-0"><?php echo __('Пока нет начислений.'); ?></p>
                     <?php else: ?>
                         <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                            <thead>
-                                <tr>
-                                    <th><?php echo __('Дата'); ?></th>
-                                    <th class="text-end"><?php echo __('Сумма'); ?></th>
-                                    <th class="text-end"><?php echo __('Процент'); ?></th>
-                                    <th class="text-end"><?php echo __('Пользователь'); ?></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($recentEvents as $e): ?>
+                            <table class="table table-sm align-middle">
+                                <thead>
                                     <tr>
-                                        <td class="text-muted"><?php echo htmlspecialchars(date('Y-m-d H:i', strtotime((string)$e['created_at']))); ?></td>
-                                        <td class="text-end text-success"><?php echo htmlspecialchars(format_currency($e['delta'])); ?></td>
-                                        <td class="text-end"><?php echo number_format($e['percent'], 2); ?>%</td>
-                                        <td class="text-end">#<?php echo (int)$e['from_user_id']; ?></td>
+                                        <th><?php echo __('Дата'); ?></th>
+                                        <th class="text-end"><?php echo __('Сумма'); ?></th>
+                                        <th class="text-end"><?php echo __('Процент'); ?></th>
+                                        <th class="text-end"><?php echo __('Пользователь'); ?></th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($recentEvents as $e): ?>
+                                        <tr>
+                                            <td class="text-muted"><?php echo htmlspecialchars(date('Y-m-d H:i', strtotime((string)$e['created_at']))); ?></td>
+                                            <td class="text-end text-success"><?php echo htmlspecialchars(format_currency($e['delta'])); ?></td>
+                                            <td class="text-end"><?php echo number_format($e['percent'], 2); ?>%</td>
+                                            <td class="text-end">#<?php echo (int)$e['from_user_id']; ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
                         </div>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
         <div class="col-lg-6">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h2 class="h6 mb-0"><?php echo __('Активность за 14 дней'); ?></h2>
+            <div class="card shadow-sm border-0 h-100">
+                <div class="card-header bg-transparent border-0 d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0"><i class="bi bi-people me-2 text-primary"></i><?php echo __('Новые рефералы'); ?></h2>
                 </div>
                 <div class="card-body">
-                    <?php
-                        $labels = $activitySeries['labels'] ?? [];
-                        $clicks = $activitySeries['click'] ?? [];
-                        $signups = $activitySeries['signup'] ?? [];
-                        $maxV = max(1, (int)max(array_merge([0], $clicks, $signups)));
-                        $w = 420; $h = 160; $pad = 30; $n = max(1, count($labels));
-                        $sx = ($w - 2*$pad) / max(1, $n-1); $sy = ($h - 2*$pad) / $maxV;
-                        $buildPath = function($data) use ($pad, $h, $sx, $sy) {
-                            $p = '';
-                            foreach ($data as $i => $v) { $x = $pad + $i*$sx; $y = $h - $pad - ($v*$sy); $p .= ($i===0? 'M':'L') . $x . ' ' . $y . ' '; }
-                            return trim($p);
-                        };
-                        $pathClicks = $buildPath($clicks);
-                        $pathSignups = $buildPath($signups);
-                    ?>
-                    <svg width="100%" viewBox="0 0 <?php echo $w; ?> <?php echo $h; ?>">
-                        <rect x="0" y="0" width="<?php echo $w; ?>" height="<?php echo $h; ?>" fill="none" />
-                        <g stroke="#6c757d" stroke-width="1" opacity="0.3">
-                            <line x1="<?php echo $pad; ?>" y1="<?php echo $h-$pad; ?>" x2="<?php echo $w-$pad; ?>" y2="<?php echo $h-$pad; ?>" />
-                            <line x1="<?php echo $pad; ?>" y1="<?php echo $pad; ?>" x2="<?php echo $w-$pad; ?>" y2="<?php echo $pad; ?>" />
-                        </g>
-                        <path d="<?php echo $pathClicks; ?>" fill="none" stroke="#0d6efd" stroke-width="2" />
-                        <path d="<?php echo $pathSignups; ?>" fill="none" stroke="#20c997" stroke-width="2" />
-                        <g font-size="9" fill="#6c757d">
-                            <?php foreach (($labels ?? []) as $i => $d): $x = $pad + $i*$sx; ?>
-                                <text x="<?php echo $x; ?>" y="<?php echo $h-10; ?>" text-anchor="middle"><?php echo htmlspecialchars(substr($d, 5)); ?></text>
-                            <?php endforeach; ?>
-                        </g>
-                        <g font-size="10">
-                            <text x="<?php echo $pad; ?>" y="12" fill="#0d6efd"><?php echo __('Клики'); ?></text>
-                            <text x="<?php echo $pad+60; ?>" y="12" fill="#20c997"><?php echo __('Регистрации'); ?></text>
-                        </g>
-                    </svg>
+                    <?php if (empty($referredUsers)): ?>
+                        <p class="text-muted mb-0"><?php echo __('Пока нет рефералов.'); ?></p>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th><?php echo __('ID'); ?></th>
+                                        <th><?php echo __('Логин'); ?></th>
+                                        <th><?php echo __('Дата'); ?></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($referredUsers as $ru): ?>
+                                        <tr>
+                                            <td>#<?php echo (int)$ru['id']; ?></td>
+                                            <td><?php echo htmlspecialchars($ru['username']); ?></td>
+                                            <td class="text-muted"><?php echo htmlspecialchars(date('Y-m-d', strtotime((string)$ru['created_at']))); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card mt-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h2 class="h6 mb-0"><?php echo __('Новые рефералы'); ?></h2>
+    <div class="card shadow-sm border-0 mt-4 ref-click-table">
+        <div class="card-header bg-transparent border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h2 class="h6 mb-0"><i class="bi bi-mouse me-2 text-info"></i><?php echo __('Переходы по реферальной ссылке'); ?></h2>
+            <span class="text-muted small"><?php echo sprintf(__('Всего за период: %d'), (int)$clickPagination['total']); ?></span>
         </div>
         <div class="card-body">
-            <?php if (empty($referredUsers)): ?>
-                <p class="text-muted mb-0"><?php echo __('Пока нет рефералов.'); ?></p>
+            <?php if (empty($clickEvents)): ?>
+                <p class="text-muted mb-0"><?php echo __('Пока нет переходов за выбранный период.'); ?></p>
             <?php else: ?>
                 <div class="table-responsive">
-                <table class="table table-sm align-middle">
-                    <thead>
-                        <tr>
-                            <th><?php echo __('ID'); ?></th>
-                            <th><?php echo __('Логин'); ?></th>
-                            <th><?php echo __('Дата'); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($referredUsers as $ru): ?>
+                    <table class="table table-sm align-middle">
+                        <thead>
                             <tr>
-                                <td>#<?php echo (int)$ru['id']; ?></td>
-                                <td><?php echo htmlspecialchars($ru['username']); ?></td>
-                                <td class="text-muted"><?php echo htmlspecialchars(date('Y-m-d', strtotime((string)$ru['created_at']))); ?></td>
+                                <th><?php echo __('Дата'); ?></th>
+                                <th><?php echo __('IP'); ?></th>
+                                <th><?php echo __('Источник'); ?></th>
+                                <th><?php echo __('User-Agent'); ?></th>
                             </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($clickEvents as $click): ?>
+                                <tr>
+                                    <td class="text-muted"><?php echo htmlspecialchars(date('Y-m-d H:i', strtotime((string)$click['created_at']))); ?></td>
+                                    <td><span class="badge bg-light text-dark border"><?php echo htmlspecialchars($click['ip'] ?: __('Неизвестно')); ?></span></td>
+                                    <td>
+                                        <?php if (!empty($click['referer'])): ?>
+                                            <a href="<?php echo htmlspecialchars($click['referer']); ?>" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <?php echo htmlspecialchars($click['referer_host'] ?: $click['referer_short']); ?>
+                                            </a>
+                                        <?php else: ?>
+                                            <span class="text-muted">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="ua-cell text-muted" title="<?php echo htmlspecialchars($click['ua']); ?>"><?php echo htmlspecialchars($click['ua_short']); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
+                <?php if ($clickPagination['pages'] > 1): ?>
+                    <?php
+                        $currentPage = (int)$clickPagination['page'];
+                        $totalPages = (int)$clickPagination['pages'];
+                        $rangeStart = max(1, $currentPage - 2);
+                        $rangeEnd = min($totalPages, $currentPage + 2);
+                    ?>
+                    <div class="d-flex flex-wrap justify-content-between align-items-center pt-2">
+                        <span class="text-muted small"><?php echo sprintf(__('Страница %d из %d'), $currentPage, $totalPages); ?></span>
+                        <nav aria-label="<?php echo __('Навигация по страницам'); ?>">
+                            <ul class="pagination pagination-sm mb-0">
+                                <li class="page-item <?php echo $currentPage <= 1 ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="<?php echo $currentPage <= 1 ? '#' : $buildClicksPageUrl($currentPage - 1); ?>" aria-label="<?php echo __('Назад'); ?>" tabindex="<?php echo $currentPage <= 1 ? '-1' : '0'; ?>">&laquo;</a>
+                                </li>
+                                <?php for ($p = $rangeStart; $p <= $rangeEnd; $p++): ?>
+                                    <li class="page-item <?php echo $p === $currentPage ? 'active' : ''; ?>">
+                                        <a class="page-link" href="<?php echo $p === $currentPage ? '#' : $buildClicksPageUrl($p); ?>"><?php echo $p; ?></a>
+                                    </li>
+                                <?php endfor; ?>
+                                <li class="page-item <?php echo $currentPage >= $totalPages ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="<?php echo $currentPage >= $totalPages ? '#' : $buildClicksPageUrl($currentPage + 1); ?>" aria-label="<?php echo __('Вперёд'); ?>" tabindex="<?php echo $currentPage >= $totalPages ? '-1' : '0'; ?>">&raquo;</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
     </div>
 </div>
+<style>
+.ref-chart-wrapper {
+    position: relative;
+    min-height: 320px;
+}
+.ref-chart-card {
+    border-radius: 1rem;
+    background: linear-gradient(135deg, rgba(13, 110, 253, 0.06), rgba(32, 201, 151, 0.05));
+}
+.ref-metric-card {
+    border: 0;
+    border-radius: 1rem;
+    box-shadow: var(--bs-box-shadow, 0 1rem 3rem rgba(0,0,0,0.08));
+}
+.ref-metric-icon {
+    font-size: 2.5rem;
+    line-height: 1;
+}
+.ref-metric-click {
+    background: linear-gradient(135deg, #2563eb, #38bdf8);
+}
+.ref-metric-signup {
+    background: linear-gradient(135deg, #22c55e, #4ade80);
+}
+.ref-metric-payout {
+    background: linear-gradient(135deg, #9333ea, #c084fc);
+}
+.badge.bg-primary-subtle {
+    background-color: rgba(13, 110, 253, 0.12);
+    color: #0d6efd;
+}
+.ref-link-card,
+.ref-stats-card {
+    border: 0;
+    border-radius: 1rem;
+    box-shadow: var(--bs-box-shadow-sm, 0 0.5rem 1.5rem rgba(0,0,0,0.05));
+}
+.ref-stats-card .stat-tile {
+    background: #f8f9fa;
+}
+.stat-tile {
+    border-radius: 0.75rem;
+    padding: 1rem 1.25rem;
+}
+.stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6c757d;
+    margin-bottom: 0.35rem;
+}
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+.ref-click-table .ua-cell {
+    max-width: 260px;
+    word-break: break-word;
+}
+.ref-click-table .table thead th {
+    white-space: nowrap;
+}
+@media (max-width: 767.98px) {
+    .ref-chart-wrapper {
+        min-height: 260px;
+    }
+}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function(){
+    const chartElement = document.getElementById('referralActivityChart');
+    const chartPayload = <?php echo $chartPayloadJson; ?> || {};
+    if (chartElement && window.Chart && Array.isArray(chartPayload.labels)) {
+        const labels = chartPayload.labels ?? [];
+        const clickData = chartPayload.click ?? [];
+        const signupData = chartPayload.signup ?? [];
+        const payoutData = chartPayload.payout ?? [];
+        const ctx = chartElement.getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: '<?php echo __('Переходы'); ?>',
+                        data: clickData,
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13, 110, 253, 0.15)',
+                        pointBackgroundColor: '#0d6efd',
+                        tension: 0.35,
+                        fill: true,
+                    },
+                    {
+                        label: '<?php echo __('Регистрации'); ?>',
+                        data: signupData,
+                        borderColor: '#20c997',
+                        backgroundColor: 'rgba(32, 201, 151, 0.15)',
+                        pointBackgroundColor: '#20c997',
+                        tension: 0.35,
+                        fill: true,
+                    },
+                    {
+                        label: '<?php echo __('Начисления'); ?>',
+                        data: payoutData,
+                        borderColor: '#6f42c1',
+                        backgroundColor: 'rgba(111, 66, 193, 0.15)',
+                        pointBackgroundColor: '#6f42c1',
+                        tension: 0.35,
+                        fill: true,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'bottom'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = Number(context.raw || 0);
+                                return `${label}: ${value}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0,
+                            stepSize: 1
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     const btn = document.getElementById('copyRefLink');
     const input = document.getElementById('refLink');
     if (btn && input) {
         btn.addEventListener('click', async function(){
             input.select();
             input.setSelectionRange(0, 99999);
-            try { await navigator.clipboard.writeText(input.value); } catch(e) {}
+            try { await navigator.clipboard.writeText(input.value); } catch (e) { /* ignore */ }
         });
     }
 });
