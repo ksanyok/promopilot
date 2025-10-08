@@ -36,6 +36,7 @@ if (!verify_csrf()) {
 
 $projectId = (int)($_POST['project_id'] ?? 0);
 $url = trim((string)($_POST['url'] ?? ''));
+$linkId = (int)($_POST['link_id'] ?? 0);
 if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
     echo json_encode(['ok' => false, 'error' => 'BAD_INPUT']);
     exit;
@@ -74,24 +75,50 @@ if (!is_admin() && (int)$projectRow['user_id'] !== (int)$_SESSION['user_id']) {
     exit;
 }
 
-// Check link belongs to project
+// Check link belongs to project and capture link ID
 $urlBelongs = false;
-if ($chk = $conn->prepare('SELECT id FROM project_links WHERE project_id = ? AND url = ? LIMIT 1')) {
-    $chk->bind_param('is', $projectId, $url);
-    if ($chk->execute()) {
-        $urlBelongs = $chk->get_result()->num_rows > 0;
+$linkRow = null;
+if ($linkId > 0) {
+    if ($chk = $conn->prepare('SELECT id, url FROM project_links WHERE project_id = ? AND id = ? LIMIT 1')) {
+        $chk->bind_param('ii', $projectId, $linkId);
+        if ($chk->execute()) {
+            $row = $chk->get_result()->fetch_assoc();
+            if ($row) {
+                $urlBelongs = true;
+                $linkRow = $row;
+            }
+        }
+        $chk->close();
     }
-    $chk->close();
+}
+if (!$urlBelongs) {
+    if ($chk = $conn->prepare('SELECT id, url FROM project_links WHERE project_id = ? AND url = ? ORDER BY id DESC LIMIT 1')) {
+        $chk->bind_param('is', $projectId, $url);
+        if ($chk->execute()) {
+            $row = $chk->get_result()->fetch_assoc();
+            if ($row) {
+                $urlBelongs = true;
+                $linkRow = $row;
+            }
+        }
+        $chk->close();
+    }
 }
 $conn->close();
 if (!$urlBelongs) {
     echo json_encode(['ok' => false, 'error' => 'URL_NOT_IN_PROJECT']);
     exit;
 }
+if ($linkRow) {
+    $linkId = (int)$linkRow['id'];
+    if (!empty($linkRow['url'])) {
+        $url = (string)$linkRow['url'];
+    }
+}
 
 if (function_exists('session_write_close')) { @session_write_close(); }
 
-$result = pp_promotion_start_run($projectId, $url, (int)$_SESSION['user_id']);
+$result = pp_promotion_start_run($projectId, $url, (int)$_SESSION['user_id'], $linkId);
 if (empty($result['ok'])) {
     $map = [
         'LEVEL1_DISABLED' => 'LEVEL1_DISABLED',
@@ -111,7 +138,7 @@ if (empty($result['ok'])) {
     exit;
 }
 
-$status = pp_promotion_get_status($projectId, $url);
+$status = pp_promotion_get_status($projectId, $url, $linkId);
 $response = [
     'ok' => true,
     'run_id' => (int)($result['run_id'] ?? ($status['run_id'] ?? 0)),
@@ -119,6 +146,7 @@ $response = [
     'stage' => $status['stage'] ?? 'pending_level1',
     'progress' => $status['progress'] ?? ['done' => 0, 'total' => 0],
     'promotion' => $status,
+    'link_id' => $linkId,
 ];
 
 if (array_key_exists('charged', $result)) {

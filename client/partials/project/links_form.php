@@ -1,5 +1,8 @@
 <?php
 /* Project links form and table extracted from client/project.php */
+$promotionStatusByLink = $promotionStatusByLink ?? [];
+$promotionStatusByUrl = $promotionStatusByUrl ?? [];
+
 $promotionLevelFlags = [
     'level1' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(1) : true,
     'level2' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(2) : false,
@@ -141,7 +144,7 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                 $postUrl = '';
                                 $networkSlug = '';
                             }
-                            $promotionInfo = $promotionStatusByUrl[$url] ?? null;
+                            $promotionInfo = $promotionStatusByLink[$linkId] ?? ($promotionStatusByUrl[$url] ?? null);
                             $promotionStatus = is_array($promotionInfo) ? (string)($promotionInfo['status'] ?? 'idle') : 'idle';
                             $promotionStage = is_array($promotionInfo) ? (string)($promotionInfo['stage'] ?? '') : '';
                             $promotionProgress = is_array($promotionInfo) ? ($promotionInfo['progress'] ?? ['done' => 0, 'total' => 0]) : ['done' => 0, 'total' => 0];

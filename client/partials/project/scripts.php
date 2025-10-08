@@ -2563,6 +2563,36 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!tr || !data) return;
         const block = tr.querySelector('.promotion-status-block');
         if (!block) return;
+        const linkIdRaw = data.link_id ?? data.linkId ?? data.id ?? null;
+        if (linkIdRaw !== null && linkIdRaw !== undefined) {
+            const linkIdNum = Number(linkIdRaw);
+            if (Number.isFinite(linkIdNum) && linkIdNum > 0) {
+                const linkIdStr = String(linkIdNum);
+                tr.setAttribute('data-id', linkIdStr);
+                tr.dataset.id = linkIdStr;
+                tr.dataset.linkId = linkIdStr;
+                tr.dataset.promotionLinkId = linkIdStr;
+                const actionsContainer = tr.querySelector('.link-actions');
+                if (actionsContainer) {
+                    const promoteBtn = actionsContainer.querySelector('.action-promote');
+                    if (promoteBtn) {
+                        promoteBtn.setAttribute('data-id', linkIdStr);
+                        promoteBtn.dataset.id = linkIdStr;
+                    }
+                    const progressBtn = actionsContainer.querySelector('.action-promotion-progress');
+                    if (progressBtn) {
+                        progressBtn.dataset.linkId = linkIdStr;
+                    }
+                    const reportBtn = actionsContainer.querySelector('.action-promotion-report');
+                    if (reportBtn) {
+                        reportBtn.dataset.linkId = linkIdStr;
+                    }
+                }
+            }
+        }
+        if (data.target_url) {
+            tr.dataset.promotionTargetUrl = data.target_url;
+        }
         const status = data.status || 'idle';
         tr.dataset.promotionStatus = status;
         tr.dataset.promotionStage = data.stage || '';
@@ -2876,9 +2906,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
 
     function openPromotionConfirm(btn, url) {
+        const linkId = btn?.getAttribute('data-id') || btn?.dataset?.id || btn?.closest('tr')?.getAttribute('data-id') || btn?.closest('tr')?.dataset?.id || '';
         const modalInstance = getPromotionConfirmModalInstance();
         if (!promotionConfirmModalEl || !modalInstance) {
-            startPromotion(btn, url);
+            startPromotion(btn, url, linkId);
             return;
         }
         const chargeFormatted = btn?.getAttribute('data-charge-formatted') || PROMOTION_CHARGE_AMOUNT_FORMATTED;
@@ -2887,7 +2918,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const chargeSavingsRaw = Number((btn?.getAttribute('data-charge-savings') ?? PROMOTION_CHARGE_SAVINGS) || 0);
         const discountPercentAttribute = btn?.getAttribute('data-discount-percent');
         const discountPercent = Number(discountPercentAttribute !== null ? discountPercentAttribute : (PROMOTION_DISCOUNT_PERCENT || 0));
-        promotionConfirmContext = { btn, url };
+    promotionConfirmContext = { btn, url, linkId };
         if (promotionConfirmAmountEl) {
             promotionConfirmAmountEl.textContent = chargeFormatted;
         }
@@ -2959,12 +2990,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 getPromotionConfirmModalInstance()?.hide();
                 return;
             }
-            const { btn, url } = promotionConfirmContext;
+            const { btn, url, linkId } = promotionConfirmContext;
             promotionConfirmAcceptBtn.disabled = true;
             getPromotionConfirmModalInstance()?.hide();
             promotionConfirmContext = null;
             try {
-                await startPromotion(btn, url);
+                await startPromotion(btn, url, linkId);
             } finally {
                 promotionConfirmAcceptBtn.disabled = false;
             }
@@ -3057,14 +3088,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (!linkEl) continue;
                 const url = linkEl.getAttribute('href');
                 if (!url) continue;
+                const linkIdRaw = tr.getAttribute('data-id') || tr.dataset?.id || tr.dataset?.promotionLinkId || '';
+                const linkIdVal = Number(linkIdRaw);
                 const params = new URLSearchParams();
                 params.set('project_id', String(PROJECT_ID));
                 params.set('url', url);
                 const runId = tr.dataset.promotionRunId || '';
                 if (runId) { params.set('run_id', runId); }
+                if (Number.isFinite(linkIdVal) && linkIdVal > 0) {
+                    params.set('link_id', String(linkIdVal));
+                }
                 const res = await fetch('<?php echo pp_url('public/promotion_status.php'); ?>?' + params.toString(), { credentials: 'same-origin' });
                 const data = await res.json().catch(()=>null);
                 if (!data || !data.ok) continue;
+                if (!data.link_id && Number.isFinite(linkIdVal) && linkIdVal > 0) {
+                    data.link_id = linkIdVal;
+                }
+                if (!data.target_url) {
+                    data.target_url = url;
+                }
                 updatePromotionBlock(tr, data);
                 refreshActionsCell(tr);
             }
@@ -3345,11 +3387,23 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    async function startPromotion(btn, url) {
+    async function startPromotion(btn, url, linkId = null) {
         if (!url) return false;
         let promotionTriggered = false;
         setButtonLoading(btn, true);
-        const row = btn && typeof btn.closest === 'function' ? btn.closest('tr') : null;
+        let row = btn && typeof btn.closest === 'function' ? btn.closest('tr') : null;
+        const linkIdNum = (() => {
+            const tryParse = (value) => {
+                if (value === null || value === undefined || value === '') return 0;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+            };
+            const direct = tryParse(linkId);
+            if (direct) return direct;
+            const fromBtn = tryParse(btn?.getAttribute?.('data-id') || btn?.dataset?.id);
+            if (fromBtn) return fromBtn;
+            return tryParse(row?.getAttribute?.('data-id') || row?.dataset?.id);
+        })();
         const { snapshot: previousSnapshot, applied: optimisticApplied } = applyOptimisticPromotionState(row);
         try {
             const fd = new FormData();
@@ -3357,6 +3411,9 @@ document.addEventListener('DOMContentLoaded', function() {
             fd.append('project_id', String(PROJECT_ID));
             fd.append('url', url);
             fd.append('charge_amount', String(PROMOTION_CHARGE_AMOUNT));
+            if (linkIdNum > 0) {
+                fd.append('link_id', String(linkIdNum));
+            }
             const res = await fetch('<?php echo pp_url('public/promote_link.php'); ?>', { method: 'POST', body: fd, credentials: 'same-origin' });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data) {
@@ -3400,14 +3457,33 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!promotionDataRaw.status && data.status) {
                 promotionDataRaw.status = data.status;
             }
+            if (!promotionDataRaw.link_id && data.link_id) {
+                promotionDataRaw.link_id = data.link_id;
+            }
+            if (!promotionDataRaw.target_url && data.target_url) {
+                promotionDataRaw.target_url = data.target_url;
+            }
+            if (!promotionDataRaw.link_id && linkIdNum > 0) {
+                promotionDataRaw.link_id = linkIdNum;
+            }
+            if (!promotionDataRaw.target_url) {
+                promotionDataRaw.target_url = url;
+            }
             let updated = false;
             const tbody = ensureLinksTable();
             if (tbody) {
                 const rows = tbody.querySelectorAll('tr');
                 for (const tr of rows) {
+                    const trLinkIdRaw = tr.getAttribute('data-id') || tr.dataset?.id || tr.dataset?.promotionLinkId || '';
+                    const trLinkId = Number(trLinkIdRaw);
                     const linkEl = tr.querySelector('.url-cell .view-url');
-                    if (linkEl && linkEl.getAttribute('href') === url) {
+                    const urlMatches = linkEl && linkEl.getAttribute('href') === url;
+                    const idMatches = linkIdNum > 0 && Number.isFinite(trLinkId) && trLinkId === linkIdNum;
+                    if (idMatches || urlMatches) {
                         applyPromotionPayload(tr, promotionDataRaw);
+                        if (!row) {
+                            row = tr;
+                        }
                         updated = true;
                         break;
                     }

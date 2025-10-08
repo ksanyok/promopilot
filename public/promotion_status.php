@@ -26,6 +26,7 @@ $method = $_SERVER['REQUEST_METHOD'];
 $projectId = (int)(($method === 'POST' ? ($_POST['project_id'] ?? 0) : ($_GET['project_id'] ?? 0)) ?: 0);
 $url = trim((string)($method === 'POST' ? ($_POST['url'] ?? '') : ($_GET['url'] ?? '')));
 $runId = (int)(($method === 'POST' ? ($_POST['run_id'] ?? 0) : ($_GET['run_id'] ?? 0)) ?: 0);
+$linkId = (int)(($method === 'POST' ? ($_POST['link_id'] ?? 0) : ($_GET['link_id'] ?? 0)) ?: 0);
 
 if ($projectId <= 0 && $runId <= 0) {
     echo json_encode(['ok' => false, 'error' => 'BAD_INPUT']);
@@ -44,7 +45,7 @@ if (!$conn) {
 }
 
 if ($runId > 0) {
-    $stmt = $conn->prepare('SELECT id, project_id, target_url FROM promotion_runs WHERE id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT id, project_id, link_id, target_url FROM promotion_runs WHERE id = ? LIMIT 1');
     if (!$stmt) {
         $conn->close();
         echo json_encode(['ok' => false, 'error' => 'DB']);
@@ -60,6 +61,9 @@ if ($runId > 0) {
         exit;
     }
     $projectId = (int)$row['project_id'];
+    if ($linkId <= 0 && isset($row['link_id'])) {
+        $linkId = (int)$row['link_id'];
+    }
     if ($url === '') {
         $url = (string)$row['target_url'];
     }
@@ -91,7 +95,7 @@ if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
     exit;
 }
 
-$status = pp_promotion_get_status($projectId, $url);
+$status = pp_promotion_get_status($projectId, $url, $linkId > 0 ? $linkId : null);
 if (empty($status['ok'])) {
     echo json_encode(['ok' => false, 'error' => $status['error'] ?? 'UNKNOWN']);
     exit;
@@ -100,6 +104,9 @@ if (empty($status['ok'])) {
 $status['ok'] = true;
 $status['project_id'] = $projectId;
 $status['link_url'] = $url;
+if ($linkId > 0) {
+    $status['link_id'] = $linkId;
+}
 
 echo json_encode($status, JSON_UNESCAPED_UNICODE);
 exit;

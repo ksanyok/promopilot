@@ -392,9 +392,12 @@ if (!function_exists('pp_promotion_generate_child_anchor')) {
         } elseif (strlen($title) > 55) {
             $title = rtrim(substr($title, 0, 55)) . '…';
         }
-        $templatesRu = ['Обзор: %s', 'Разбор темы %s', 'Подборка по %s', 'Что важно о %s', 'Инсайты по %s'];
-        $templatesEn = ['Deep dive: %s', 'Insights on %s', 'Guide to %s', 'Key takeaways on %s', 'Highlights about %s'];
-        $pool = $lang === 'en' ? $templatesEn : $templatesRu;
+        $templatesByLang = [
+            'ru' => ['Аналитика %s', 'Практические выводы по %s', 'Экспертное мнение о %s', 'Рекомендации по %s', 'Гид по %s'],
+            'uk' => ['Аналітика %s', 'Практичні висновки щодо %s', 'Експертний погляд на %s', 'Поради з теми %s', 'Гід по %s'],
+            'en' => ['Insights on %s', 'Practical tips for %s', 'Expert view on %s', 'Guide to %s', 'Key takeaways on %s'],
+        ];
+        $pool = $templatesByLang[$lang] ?? ($lang === 'ru' ? $templatesByLang['ru'] : $templatesByLang['en']);
         try {
             $template = $pool[random_int(0, count($pool) - 1)];
         } catch (Throwable $e) {

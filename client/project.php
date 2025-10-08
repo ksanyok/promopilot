@@ -56,6 +56,7 @@ $links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
 $snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
 $promotionSummary = $snapshot['summary'];
 $promotionStatusByUrl = $snapshot['status_by_url'];
+$promotionStatusByLink = $snapshot['status_by_link'] ?? [];
 $canDeleteProject = $snapshot['can_delete'];
 
 if (!is_admin() && (int)$project['user_id'] !== $user_id) {
@@ -124,6 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$pp_is_ajax) {
     $snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
     $promotionSummary = $snapshot['summary'];
     $promotionStatusByUrl = $snapshot['status_by_url'];
+    $promotionStatusByLink = $snapshot['status_by_link'] ?? [];
     $canDeleteProject = $snapshot['can_delete'];
 }
 

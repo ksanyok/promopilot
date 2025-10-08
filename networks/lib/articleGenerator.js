@@ -7,6 +7,87 @@ const { generateImage } = require('./generateImage');
 
 let lastGeneratedArticle = null;
 
+const LANGUAGE_LABELS = {
+  ru: { nameEn: 'Russian', nameRuIn: 'русском языке' },
+  uk: { nameEn: 'Ukrainian', nameRuIn: 'украинском языке' },
+  ua: { nameEn: 'Ukrainian', nameRuIn: 'украинском языке' },
+  en: { nameEn: 'English', nameRuIn: 'английском языке' },
+  es: { nameEn: 'Spanish', nameRuIn: 'испанском языке' },
+  de: { nameEn: 'German', nameRuIn: 'немецком языке' },
+  fr: { nameEn: 'French', nameRuIn: 'французском языке' },
+  it: { nameEn: 'Italian', nameRuIn: 'итальянском языке' },
+  pt: { nameEn: 'Portuguese', nameRuIn: 'португальском языке' },
+  pl: { nameEn: 'Polish', nameRuIn: 'польском языке' },
+  tr: { nameEn: 'Turkish', nameRuIn: 'турецком языке' },
+  cs: { nameEn: 'Czech', nameRuIn: 'чешском языке' },
+  sk: { nameEn: 'Slovak', nameRuIn: 'словацком языке' },
+  sl: { nameEn: 'Slovenian', nameRuIn: 'словенском языке' },
+  hr: { nameEn: 'Croatian', nameRuIn: 'хорватском языке' },
+  sr: { nameEn: 'Serbian', nameRuIn: 'сербском языке' },
+  ro: { nameEn: 'Romanian', nameRuIn: 'румынском языке' },
+  hu: { nameEn: 'Hungarian', nameRuIn: 'венгерском языке' },
+  bg: { nameEn: 'Bulgarian', nameRuIn: 'болгарском языке' },
+  el: { nameEn: 'Greek', nameRuIn: 'греческом языке' },
+  nl: { nameEn: 'Dutch', nameRuIn: 'нидерландском языке' },
+  sv: { nameEn: 'Swedish', nameRuIn: 'шведском языке' },
+  fi: { nameEn: 'Finnish', nameRuIn: 'финском языке' },
+  da: { nameEn: 'Danish', nameRuIn: 'датском языке' },
+  no: { nameEn: 'Norwegian', nameRuIn: 'норвежском языке' },
+  et: { nameEn: 'Estonian', nameRuIn: 'эстонском языке' },
+  lv: { nameEn: 'Latvian', nameRuIn: 'латышском языке' },
+  lt: { nameEn: 'Lithuanian', nameRuIn: 'литовском языке' },
+  be: { nameEn: 'Belarusian', nameRuIn: 'белорусском языке' },
+  kk: { nameEn: 'Kazakh', nameRuIn: 'казахском языке' },
+  uz: { nameEn: 'Uzbek', nameRuIn: 'узбекском языке' },
+  az: { nameEn: 'Azerbaijani', nameRuIn: 'азербайджанском языке' },
+  ka: { nameEn: 'Georgian', nameRuIn: 'грузинском языке' },
+  hy: { nameEn: 'Armenian', nameRuIn: 'армянском языке' },
+  zh: { nameEn: 'Chinese', nameRuIn: 'китайском языке' },
+  ja: { nameEn: 'Japanese', nameRuIn: 'японском языке' },
+  ko: { nameEn: 'Korean', nameRuIn: 'корейском языке' },
+  th: { nameEn: 'Thai', nameRuIn: 'тайском языке' },
+  vi: { nameEn: 'Vietnamese', nameRuIn: 'вьетнамском языке' },
+  id: { nameEn: 'Indonesian', nameRuIn: 'индонезийском языке' },
+  ms: { nameEn: 'Malay', nameRuIn: 'малайском языке' },
+  hi: { nameEn: 'Hindi', nameRuIn: 'языке хинди' },
+  bn: { nameEn: 'Bengali', nameRuIn: 'бенгальском языке' },
+  ur: { nameEn: 'Urdu', nameRuIn: 'языке урду' },
+  fa: { nameEn: 'Persian', nameRuIn: 'персидском языке' },
+  ar: { nameEn: 'Arabic', nameRuIn: 'арабском языке' },
+  he: { nameEn: 'Hebrew', nameRuIn: 'ивритском языке' }
+};
+
+function getLanguageMeta(language) {
+  const raw = (language || '').toString().trim();
+  if (!raw) {
+    return {
+      code: '',
+      nameEn: 'the page language',
+      nameEnWithCode: 'the page language',
+      nameRuIn: 'языке страницы',
+    };
+  }
+  const lower = raw.toLowerCase();
+  const base = lower.split(/[-_]/)[0] || lower;
+  const preset = LANGUAGE_LABELS[base] || null;
+  if (preset) {
+    return {
+      code: base,
+      nameEn: preset.nameEn,
+      nameEnWithCode: preset.nameEnWithCode || `${preset.nameEn} (${base})`,
+      nameRuIn: preset.nameRuIn,
+    };
+  }
+  const codeLabel = base || raw.toLowerCase();
+  const fallbackEn = codeLabel ? `the page language (${codeLabel})` : 'the page language';
+  return {
+    code: codeLabel,
+    nameEn: fallbackEn,
+    nameEnWithCode: fallbackEn,
+    nameRuIn: 'языке страницы',
+  };
+}
+
 function normalizeContextArray(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -136,42 +217,30 @@ function cleanupGeneratedHtml(html) {
   s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
   s = s.replace(/\s*\$+\s*$/g, '');
   return s.trim();
-      const titlePromptLines = isRu
-        ? [
-            `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicLine}.`,
-            isHigherLevel
-              ? `Передай связь с целевой страницей, но не повторяй дословно фразу "${anchorText}".`
-              : `Укажи фокус: ${anchorText}.`,
-            'Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.'
-          ]
-        : [
-            `Write a clear, specific headline in ${pageLang} for: ${topicLine}.`,
-            isHigherLevel
-              ? `Show the connection to the target page without repeating the exact phrase "${anchorText}".`
-              : `Highlight the key phrase "${anchorText}".`,
-            'Requirements: no quotes or emoji, no URLs, 6–12 words. Return only the headline.'
-          ];
-      let titlePrompt = titlePromptLines.join('\n');
-      if (keywordReminder) {
-        titlePrompt += `\n${keywordReminder}`;
-      }
-      if (cascadeInfo.titleReminder) {
-        titlePrompt += `\n${cascadeInfo.titleReminder}`;
-      }
+}
 
-      const prompts = {
-        title: titlePrompt,
-        content: contentPrompt,
-      };
-  const headingMatches = [...source.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
+function extractPlainText(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildFallbackListItems(source, options = {}) {
+  const { isRu = false } = options;
+  const raw = String(source || '');
+  const listCandidates = [];
+
+  const headingMatches = [...raw.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
   headingMatches.forEach((match) => {
     const text = extractPlainText(match[1]);
     if (text) {
       listCandidates.push(text);
     }
   });
+
   if (listCandidates.length < 3) {
-    const paragraphMatches = [...source.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
+    const paragraphMatches = [...raw.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
     paragraphMatches.forEach((match) => {
       const sentences = extractPlainText(match[1])
         .split(/(?<=[.!?])\s+/)
@@ -180,9 +249,11 @@ function cleanupGeneratedHtml(html) {
       listCandidates.push(...sentences);
     });
   }
-  listCandidates = [...new Set(listCandidates)].filter(Boolean).slice(0, 4);
-  if (listCandidates.length < 2) {
-    listCandidates = isRu
+
+  let items = [...new Set(listCandidates)].filter(Boolean).slice(0, 4);
+
+  if (items.length < 2) {
+    items = isRu
       ? [
           'Главные премьеры сезона и их ключевые особенности',
           'Независимые проекты, о которых стоит рассказать аудитории',
@@ -194,7 +265,8 @@ function cleanupGeneratedHtml(html) {
           'Emerging creators and trends shaping the 2025 market',
         ];
   }
-  return listCandidates;
+
+  return items;
 }
 
 function buildFallbackListHtml(html, options = {}) {
@@ -323,6 +395,54 @@ function buildLevelPromptHints({ level, isRu, minLength, maxLength }) {
   };
 }
 
+
+function buildTitlePrompt({
+  isRu,
+  languageMeta,
+  topicLine,
+  anchorText,
+  isHigherLevel,
+  keywordReminder,
+  cascadeInfo,
+}) {
+  const lines = isRu
+    ? [
+        `На ${languageMeta.nameRuIn} сформулируй чёткий конкретный заголовок по теме: ${topicLine}.`,
+        isHigherLevel
+          ? 'Передай связь с целевой страницей и подчеркни основную выгоду, не цитируя точные формулировки анкоров.'
+          : `Укажи фокус: ${anchorText}.`,
+        `Заголовок держи на ${languageMeta.nameRuIn}; без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
+      ]
+    : [
+        `Write a clear, specific headline in ${languageMeta.nameEn} for: ${topicLine}.`,
+        isHigherLevel
+          ? 'Highlight the connection to the target page and reinforce the key benefit without quoting any anchor phrases.'
+          : `Emphasize the key phrase "${anchorText}".`,
+        `Keep the entire headline in ${languageMeta.nameEnWithCode}; no quotes, emoji, or URLs. Limit it to 6–12 words and return only the headline.`,
+      ];
+
+  if (keywordReminder) {
+    lines.push(keywordReminder);
+  }
+  if (cascadeInfo && cascadeInfo.titleReminder) {
+    lines.push(cascadeInfo.titleReminder);
+  }
+  return lines.filter(Boolean).join('\n');
+}
+
+function buildSystemPrompts({ isRu, languageMeta }) {
+  if (isRu) {
+    return {
+      title: `Только финальный заголовок на ${languageMeta.nameRuIn}. Без кавычек и пояснений.`,
+      content: `Только тело статьи в HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). Весь текст держи на ${languageMeta.nameRuIn}. Без посторонних комментариев.`,
+    };
+  }
+  return {
+    title: `Return only the final headline. It must be written in ${languageMeta.nameEnWithCode}. No quotes or explanations.`,
+    content: `Return only the article body in HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). All visible text must be in ${languageMeta.nameEnWithCode}; do not switch languages or add commentary.`,
+  };
+}
+
 function analyzeLinks(html, url, anchor) {
   try {
     const str = String(html || '');
@@ -443,6 +563,7 @@ async function generateArticle({
   const region = (pageMeta.region || '').toString().trim();
   const articleHints = (articleConfig && typeof articleConfig === 'object') ? articleConfig : {};
   const isRu = String(pageLang || '').toLowerCase().startsWith('ru');
+  const languageMeta = getLanguageMeta(pageLang);
   const wishLine = wish
     ? (isRu ? `Учитывай пожелание клиента: ${wish}.` : `Consider this client note: ${wish}.`)
     : '';
@@ -489,11 +610,6 @@ async function generateArticle({
   });
   const levelNumber = Number.isFinite(inferredLevel) ? inferredLevel : 1;
   const isHigherLevel = levelNumber >= 2;
-  const anchorUsageInstruction = isHigherLevel
-    ? (isRu
-        ? `Анкоры ссылок подбирай из смысловых фраз текста (2–5 слов), не повторяй подзаголовки и не используй точное выражение "${anchorText}".`
-        : `Choose 2–5 word anchor phrases that grow naturally from the sentences; do not reuse headings or the exact phrase "${anchorText}".`)
-    : '';
   const isTest = !!testMode;
 
   if (isTest) {
@@ -529,9 +645,11 @@ async function generateArticle({
   const topicLine = topicDesc ? `${baseTopic} — ${topicDesc}` : baseTopic;
   const contentLines = [];
   if (isRu) {
-    contentLines.push(`Напиши статью на ${pageLang} по теме: ${topicLine}.`);
+    contentLines.push(`Напиши статью на ${languageMeta.nameRuIn} по теме: ${topicLine}.`);
+    contentLines.push(`Все заголовки, абзацы и анкоры держи на ${languageMeta.nameRuIn}; не переключайся на другие языки.`);
   } else {
-    contentLines.push(`Write an article in ${pageLang} about: ${topicLine}.`);
+    contentLines.push(`Write an article in ${languageMeta.nameEn} about: ${topicLine}.`);
+    contentLines.push(`Keep every heading, paragraph, and anchor strictly in ${languageMeta.nameEnWithCode}. Do not switch languages.`);
   }
   if (region) {
     contentLines.push(isRu ? `Регион публикации: ${region}.` : `Geographic focus: ${region}.`);
@@ -564,10 +682,26 @@ async function generateArticle({
       }
     });
   }
-  if (anchorUsageInstruction) {
-    contentLines.push(anchorUsageInstruction);
+  if (isHigherLevel) {
+    contentLines.push(isRu
+      ? `Ссылки на ${pageUrl} вставляй только там, где они усиливают мысль абзаца. Анкоры формируй из слов предложения (2–4 слова) на ${languageMeta.nameRuIn}, без кавычек и слов вроде «тут»/«здесь».`
+      : `Place links to ${pageUrl} only where they reinforce the paragraph. Derive each anchor from the sentence itself (2–4 words) in ${languageMeta.nameEnWithCode}, no quotes and no fillers like "here".`
+    );
+    contentLines.push(isRu
+      ? 'Следи, чтобы анкоры различались и выглядели естественно внутри текста.'
+      : 'Make sure each anchor text is distinct and feels natural in-line with the prose.'
+    );
+  } else {
+    contentLines.push(isRu
+      ? `Каждую ссылку на ${pageUrl} подавай с естественным анкором на ${languageMeta.nameRuIn}, отражающим выгоду для читателя.`
+      : `When linking to ${pageUrl}, use a natural ${languageMeta.nameEnWithCode} anchor that explains the benefit for the reader.`
+    );
   }
   contentLines.push(avoidGeneric);
+  contentLines.push(isRu
+    ? `Проверь, что весь текст остаётся на ${languageMeta.nameRuIn}; если встречается другой язык, перепиши фрагмент на ${languageMeta.nameRuIn}.`
+    : `Double-check that the entire article stays in ${languageMeta.nameEnWithCode}; rewrite any sentence that slips into another language back into ${languageMeta.nameEnWithCode}.`
+  );
 
   const requirementLines = [];
   if (lengthHints.requirementLine) {
@@ -576,23 +710,32 @@ async function generateArticle({
   if (isHigherLevel) {
     requirementLines.push(
       isRu
-        ? '- Всего три активные ссылки (формат <a href="...">...</a>) и ни одной лишней.'
-        : '- Use exactly three active links (format <a href="...">...</a>) and nothing else.'
+        ? '- Ровно три активные ссылки (формат <a href="...">...</a>) и ни одной лишней.'
+        : '- Use exactly three active links (format <a href="...">...</a>) and nothing extra.'
     );
     requirementLines.push(
       isRu
-        ? `  • Две ссылки ведут на ${pageUrl} с разными органичными анкорами (2–5 слов), отличными от подзаголовков и без фразы "${anchorText}".`
-        : `  • Two links must point to ${pageUrl} with distinct natural 2–5 word anchors that differ from headings and avoid the exact phrase "${anchorText}".`
+        ? `  • Две ссылки ведут на ${pageUrl}; подбирай для них естественные анкоры на ${languageMeta.nameRuIn} (2–4 слова) без кавычек и слов вроде «тут»/«здесь».`
+        : `  • Two links must point to ${pageUrl}; craft natural ${languageMeta.nameEnWithCode} anchors (2–4 words) with no quotes and no fillers like “here”.`
     );
     requirementLines.push(
       isRu
-        ? '  • Первую ссылку размести в первой половине статьи, вторую — ближе к заключению; обе внутри абзацев, а не списков или заголовков.'
-        : '  • Place the first internal link in the first half of the article and the second near the conclusion; both must live inside paragraphs, not lists or headings.'
+        ? '  • Анкоры должны различаться и располагаться внутри абзацев, а не в списках или заголовках.'
+        : '  • Anchors must be different from each other and stay inside body paragraphs, not lists or headings.'
     );
     requirementLines.push(
       isRu
-        ? `  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на языке ${pageLang} или en; URL действительный.`
-        : `  • The third link points to a reputable external source (Wikipedia, official reports, industry research) in ${pageLang} or English with a valid URL.`
+        ? '  • Первую ссылку поставь в первой половине статьи, вторую — ближе к завершению.'
+        : '  • Put the first link within the first half of the article and the second closer to the conclusion.'
+    );
+    requirementLines.push(
+      isRu
+        ? (languageMeta.code === 'en'
+            ? '  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на английском языке; URL действительный.'
+            : `  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на ${languageMeta.nameRuIn} или английском языке; URL действительный.`)
+        : (languageMeta.code === 'en'
+            ? '  • The third link must point to a reputable external source (Wikipedia, official reports, industry research) in English with a valid URL.'
+            : `  • The third link must point to a reputable external source (Wikipedia, official reports, industry research) in ${languageMeta.nameEn} or English with a valid URL.`)
     );
   } else {
     requirementLines.push(
@@ -602,18 +745,22 @@ async function generateArticle({
     );
     requirementLines.push(
       isRu
-        ? `  1) Ссылка на наш URL с точным анкором "${anchorText}": <a href="${pageUrl}">${anchorText}</a> — естественно в первой половине текста.`
-        : `  1) Link to our URL with the exact anchor "${anchorText}": <a href="${pageUrl}">${anchorText}</a>, placed naturally in the first half of the article.`
+        ? `  1) В первой половине статьи вставь ссылку на ${pageUrl} с естественным анкором (2–4 слова) на ${languageMeta.nameRuIn}, который помогает понять пользу.`
+        : `  1) Within the first half of the article add a link to ${pageUrl} with a natural ${languageMeta.nameEnWithCode} anchor (2–4 words) that highlights the benefit.`
     );
     requirementLines.push(
       isRu
-        ? `  2) Вторая ссылка на наш же URL, но с другим органичным анкором (не "${anchorText}").`
-        : `  2) A second link to the same URL with a different organic anchor (not "${anchorText}").`
+        ? `  2) Во второй половине размести ещё одну ссылку на ${pageUrl} с другим органичным анкором; не повторяй первый.`
+        : `  2) In the latter half place another link to ${pageUrl} with a different organic anchor; do not repeat the first one.`
     );
     requirementLines.push(
       isRu
-        ? `  3) Одна ссылка на авторитетный внешний источник (например, Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым/фиктивным; язык предпочтительно ${pageLang} (или en).`
-        : `  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; the URL must be valid and ideally in ${pageLang} or English.`
+        ? (languageMeta.code === 'en'
+            ? '  3) Одна ссылка на авторитетный внешний источник (Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым; язык предпочтительно английский.'
+            : `  3) Одна ссылка на авторитетный внешний источник (Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым; язык предпочтительно ${languageMeta.nameRuIn} (или английский).`)
+        : (languageMeta.code === 'en'
+            ? '  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; ensure the URL is valid and preferably in English.'
+            : `  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; ensure the URL is valid and preferably in ${languageMeta.nameEn} (or English).`)
     );
   }
   if (Array.isArray(lengthHints.extraRequirementLines) && lengthHints.extraRequirementLines.length) {
@@ -636,21 +783,26 @@ async function generateArticle({
   contentLines.push(requirementsBlock);
 
   const contentPrompt = contentLines.filter(Boolean).join('\n');
-
+  const titlePrompt = buildTitlePrompt({
+    isRu,
+    languageMeta,
+    topicLine,
+    anchorText,
+    isHigherLevel,
+    keywordReminder,
+    cascadeInfo,
+  });
   const prompts = {
-    title:
-      `На ${pageLang} сформулируй чёткий конкретный заголовок по теме: ${topicLine}. Укажи фокус: ${anchorText}.\n` +
-      `Требования: без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.` +
-      (keywordReminder ? `\n${keywordReminder}` : '') +
-      (cascadeInfo.titleReminder ? `\n${cascadeInfo.titleReminder}` : ''),
+    title: titlePrompt,
     content: contentPrompt,
   };
+  const systemPrompts = buildSystemPrompts({ isRu, languageMeta });
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const rawTitle = await generateText(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек и пояснений.', keepRaw: true });
+  const rawTitle = await generateText(prompts.title, { ...aiOpts, systemPrompt: systemPrompts.title, keepRaw: true });
   await sleep(500);
-  const rawContent = await generateText(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). Без markdown и пояснений.', keepRaw: true });
+  const rawContent = await generateText(prompts.content, { ...aiOpts, systemPrompt: systemPrompts.content, keepRaw: true });
 
   const titleClean = cleanLLMOutput(rawTitle).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
   let content = cleanLLMOutput(rawContent);
@@ -801,10 +953,13 @@ async function generateArticle({
   ensureKeyTakeawaysList();
   const wantTotal = 3;
   let stat = analyzeLinks(content, pageUrl, anchorText);
-
   if (!(stat.ourLinkCount >= wantOur && stat.externalCount >= wantExternal && stat.totalLinks === wantTotal)) {
-    const stricter = prompts.content + `\nСТРОГО: включи ровно ${wantTotal} ссылки: две на ${pageUrl} (одна с анкором "${anchorText}", вторая с другим анкором) и одну на внешний авторитетный источник. Другие ссылки не добавляй.`;
-    const retry = await generateText(stricter, { ...aiOpts, systemPrompt: 'Соблюдай требования ссылок строго. Только HTML тело.', keepRaw: true });
+    const strictInstruction = isRu
+      ? `СТРОГО: оставь ровно ${wantTotal} ссылки. Две ссылки ведут на ${pageUrl} с разными органичными анкорами на ${languageMeta.nameRuIn} (2–4 слова, без слов «тут»/«здесь»), третья — на авторитетный внешний источник. Другие ссылки не добавляй.`
+      : `STRICT: keep exactly ${wantTotal} links. Two links must point to ${pageUrl} with distinct natural ${languageMeta.nameEnWithCode} anchors (2–4 words, no fillers like “here”), and the third link must go to a reputable external source. Do not add any other links.`;
+    const stricter = `${prompts.content}
+${strictInstruction}`;
+    const retry = await generateText(stricter, { ...aiOpts, systemPrompt: systemPrompts.content, keepRaw: true });
     const retryClean = cleanLLMOutput(retry);
     const retryStat = analyzeLinks(retryClean, pageUrl, anchorText);
     if ((retryStat.ourLinkCount >= stat.ourLinkCount && retryStat.externalCount >= stat.externalCount) || retryStat.totalLinks === wantTotal) {

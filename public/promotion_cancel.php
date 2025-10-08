@@ -36,6 +36,7 @@ if (!verify_csrf()) {
 
 $projectId = (int)($_POST['project_id'] ?? 0);
 $url = trim((string)($_POST['url'] ?? ''));
+$linkId = (int)($_POST['link_id'] ?? 0);
 if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
     echo json_encode(['ok' => false, 'error' => 'BAD_INPUT']);
     exit;
@@ -73,17 +74,18 @@ if (!is_admin() && (int)$projectRow['user_id'] !== (int)$_SESSION['user_id']) {
     exit;
 }
 
-$result = pp_promotion_cancel_run($projectId, $url, (int)$_SESSION['user_id']);
+$result = pp_promotion_cancel_run($projectId, $url, (int)$_SESSION['user_id'], $linkId);
 if (empty($result['ok'])) {
     echo json_encode(['ok' => false, 'error' => $result['error'] ?? 'UNKNOWN']);
     exit;
 }
 
-$status = pp_promotion_get_status($projectId, $url);
+$status = pp_promotion_get_status($projectId, $url, $linkId > 0 ? $linkId : null);
 $response = [
     'ok' => true,
     'status' => $result['status'] ?? 'cancelled',
     'promotion' => $status,
+    'link_id' => $linkId,
 ];
 
 echo json_encode($response, JSON_UNESCAPED_UNICODE);

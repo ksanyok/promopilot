@@ -613,7 +613,8 @@ if (!function_exists('pp_project_promotion_snapshot')) {
             'idle' => 0,
             'issues' => 0,
         ];
-        $statusByUrl = [];
+    $statusByUrl = [];
+    $statusByLink = [];
 
         if ($summary['total'] === 0 || !function_exists('pp_promotion_get_status')) {
             $summary['idle'] = $summary['total'];
@@ -629,15 +630,19 @@ if (!function_exists('pp_project_promotion_snapshot')) {
 
         foreach ($links as $link) {
             $linkUrl = (string)($link['url'] ?? '');
+            $linkId = isset($link['id']) ? (int)$link['id'] : 0;
             if ($linkUrl === '') {
                 $summary['idle']++;
                 continue;
             }
 
             $status = 'idle';
-            $payload = pp_promotion_get_status($projectId, $linkUrl);
+            $payload = pp_promotion_get_status($projectId, $linkUrl, $linkId > 0 ? $linkId : null);
             if (is_array($payload) && !empty($payload['ok'])) {
                 $statusByUrl[$linkUrl] = $payload;
+                if ($linkId > 0) {
+                    $statusByLink[$linkId] = $payload;
+                }
                 $status = (string)($payload['status'] ?? 'idle');
             }
 
@@ -657,6 +662,7 @@ if (!function_exists('pp_project_promotion_snapshot')) {
         return [
             'summary' => $summary,
             'status_by_url' => $statusByUrl,
+            'status_by_link' => $statusByLink,
             'can_delete' => $canDelete,
         ];
     }

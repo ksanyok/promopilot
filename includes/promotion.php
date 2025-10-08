@@ -1081,17 +1081,49 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
 }
 
 if (!function_exists('pp_promotion_get_status')) {
-    function pp_promotion_get_status(int $projectId, string $url): array {
+    function pp_promotion_get_status(int $projectId, string $url, ?int $linkId = null): array {
+        $projectId = (int)$projectId;
+        $linkId = $linkId !== null ? (int)$linkId : null;
+        $url = trim($url);
+
         try { $conn = @connect_db(); } catch (Throwable $e) { return ['ok' => false, 'error' => 'DB']; }
         if (!$conn) { return ['ok' => false, 'error' => 'DB']; }
-        $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? ORDER BY id DESC LIMIT 1');
-        if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB']; }
-        $stmt->bind_param('is', $projectId, $url);
-        if (!$stmt->execute()) { $stmt->close(); $conn->close(); return ['ok' => false, 'error' => 'DB']; }
-        $run = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-        if (!$run) { $conn->close(); return ['ok' => true, 'status' => 'idle']; }
+
+        $run = null;
+        if ($linkId !== null && $linkId > 0) {
+            $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND link_id = ? ORDER BY id DESC LIMIT 1');
+            if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB']; }
+            $stmt->bind_param('ii', $projectId, $linkId);
+            if ($stmt->execute()) {
+                $run = $stmt->get_result()->fetch_assoc();
+            }
+            $stmt->close();
+        }
+
+        if (!$run) {
+            $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? ORDER BY id DESC LIMIT 1');
+            if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB']; }
+            $stmt->bind_param('is', $projectId, $url);
+            if ($stmt->execute()) {
+                $run = $stmt->get_result()->fetch_assoc();
+            }
+            $stmt->close();
+        }
+
+        if (!$run) {
+            $conn->close();
+            return [
+                'ok' => true,
+                'status' => 'idle',
+                'link_id' => $linkId ? (int)$linkId : 0,
+            ];
+        }
+
         $runId = (int)$run['id'];
+        $linkIdResolved = isset($run['link_id']) ? (int)$run['link_id'] : ($linkId ?? 0);
+        if (!empty($run['target_url']) && $url === '') {
+            $url = (string)$run['target_url'];
+        }
 
         $settingsSnapshot = [];
         if (!empty($run['settings_snapshot'])) {
@@ -1338,6 +1370,8 @@ if (!function_exists('pp_promotion_get_status')) {
             'levels' => $levels,
             'crowd' => $crowdStats,
             'run_id' => $runId,
+            'link_id' => $linkIdResolved,
+            'target_url' => $url,
             'report_ready' => !empty($run['report_json']) || $run['status'] === 'completed',
             'charge' => [
                 'amount' => (float)$run['charged_amount'],
@@ -1350,7 +1384,7 @@ if (!function_exists('pp_promotion_get_status')) {
 }
 
 if (!function_exists('pp_promotion_start_run')) {
-    function pp_promotion_start_run(int $projectId, string $url, int $initiatedBy = 0): array {
+    function pp_promotion_start_run(int $projectId, string $url, int $initiatedBy = 0, ?int $linkIdOverride = null): array {
         $projectId = (int)$projectId;
         $url = trim($url);
         if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
@@ -1367,7 +1401,7 @@ if (!function_exists('pp_promotion_start_run')) {
         $result = ['ok' => false, 'error' => 'DB'];
         $balanceEvent = null;
         $runId = 0;
-        $linkId = 0;
+    $linkId = $linkIdOverride !== null ? max(0, (int)$linkIdOverride) : 0;
         $ownerId = 0;
         $balanceAfter = 0.0;
         $balanceBefore = 0.0;
@@ -1389,9 +1423,15 @@ if (!function_exists('pp_promotion_start_run')) {
             }
 
             do {
-                $linkStmt = $conn->prepare('SELECT l.id AS link_id, p.user_id FROM project_links l JOIN projects p ON p.id = l.project_id WHERE p.id = ? AND l.url = ? LIMIT 1 FOR UPDATE');
-                if (!$linkStmt) { break; }
-                $linkStmt->bind_param('is', $projectId, $url);
+                if ($linkId > 0) {
+                    $linkStmt = $conn->prepare('SELECT l.id AS link_id, l.url, p.user_id FROM project_links l JOIN projects p ON p.id = l.project_id WHERE p.id = ? AND l.id = ? LIMIT 1 FOR UPDATE');
+                    if (!$linkStmt) { break; }
+                    $linkStmt->bind_param('ii', $projectId, $linkId);
+                } else {
+                    $linkStmt = $conn->prepare('SELECT l.id AS link_id, l.url, p.user_id FROM project_links l JOIN projects p ON p.id = l.project_id WHERE p.id = ? AND l.url = ? ORDER BY l.id DESC LIMIT 1 FOR UPDATE');
+                    if (!$linkStmt) { break; }
+                    $linkStmt->bind_param('is', $projectId, $url);
+                }
                 if (!$linkStmt->execute()) { $linkStmt->close(); break; }
                 $linkRes = $linkStmt->get_result();
                 $linkRow = $linkRes ? $linkRes->fetch_assoc() : null;
@@ -1402,6 +1442,9 @@ if (!function_exists('pp_promotion_start_run')) {
                     break;
                 }
                 $linkId = (int)($linkRow['link_id'] ?? 0);
+                if (!empty($linkRow['url'])) {
+                    $url = (string)$linkRow['url'];
+                }
                 $ownerId = (int)($linkRow['user_id'] ?? 0);
                 if ($linkId <= 0 || $ownerId <= 0) {
                     $result = ['ok' => false, 'error' => 'URL_NOT_FOUND'];
@@ -1556,6 +1599,7 @@ if (!function_exists('pp_promotion_start_run')) {
                     'ok' => true,
                     'run_id' => $runId,
                     'status' => $status,
+                    'link_id' => $linkId,
                     'charged' => $chargedAmount,
                     'discount' => $discountPercent,
                     'balance_after' => $balanceAfter,
@@ -1603,12 +1647,13 @@ if (!function_exists('pp_promotion_start_run')) {
 }
 
 if (!function_exists('pp_promotion_cancel_run')) {
-    function pp_promotion_cancel_run(int $projectId, string $url, int $initiatedBy = 0): array {
+    function pp_promotion_cancel_run(int $projectId, string $url, int $initiatedBy = 0, ?int $linkId = null): array {
         $projectId = (int)$projectId;
         $url = trim($url);
         if ($projectId <= 0 || $url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
             return ['ok' => false, 'error' => 'BAD_INPUT'];
         }
+        $linkId = $linkId !== null ? (int)$linkId : null;
         try { $conn = connect_db(); } catch (Throwable $e) { return ['ok' => false, 'error' => 'DB']; }
         if (!$conn) { return ['ok' => false, 'error' => 'DB']; }
 
@@ -1630,9 +1675,15 @@ if (!function_exists('pp_promotion_cancel_run')) {
             }
 
             do {
-                $runStmt = $conn->prepare('SELECT pr.id, pr.status, pr.stage, pr.link_id, pr.target_url FROM promotion_runs pr JOIN project_links l ON l.id = pr.link_id WHERE pr.project_id = ? AND l.url = ? ORDER BY pr.id DESC LIMIT 1 FOR UPDATE');
-                if (!$runStmt) { break; }
-                $runStmt->bind_param('is', $projectId, $url);
+                if ($linkId !== null && $linkId > 0) {
+                    $runStmt = $conn->prepare('SELECT pr.id, pr.status, pr.stage, pr.link_id, pr.target_url FROM promotion_runs pr WHERE pr.project_id = ? AND pr.link_id = ? ORDER BY pr.id DESC LIMIT 1 FOR UPDATE');
+                    if (!$runStmt) { break; }
+                    $runStmt->bind_param('ii', $projectId, $linkId);
+                } else {
+                    $runStmt = $conn->prepare('SELECT pr.id, pr.status, pr.stage, pr.link_id, pr.target_url FROM promotion_runs pr JOIN project_links l ON l.id = pr.link_id WHERE pr.project_id = ? AND l.url = ? ORDER BY pr.id DESC LIMIT 1 FOR UPDATE');
+                    if (!$runStmt) { break; }
+                    $runStmt->bind_param('is', $projectId, $url);
+                }
                 if (!$runStmt->execute()) { $runStmt->close(); break; }
                 $runRes = $runStmt->get_result();
                 $runRow = $runRes ? $runRes->fetch_assoc() : null;
@@ -1643,6 +1694,12 @@ if (!function_exists('pp_promotion_cancel_run')) {
                     break;
                 }
                 $runId = (int)($runRow['id'] ?? 0);
+                if (!empty($runRow['link_id'])) {
+                    $linkId = (int)$runRow['link_id'];
+                }
+                if (!empty($runRow['target_url'])) {
+                    $url = (string)$runRow['target_url'];
+                }
                 $statusCurrent = (string)($runRow['status'] ?? '');
                 $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
                 if (!in_array($statusCurrent, $activeStatuses, true)) {
@@ -1678,7 +1735,7 @@ if (!function_exists('pp_promotion_cancel_run')) {
 
                 pp_promotion_update_progress($conn, $runId);
                 $shouldCommit = true;
-                $result = ['ok' => true, 'status' => 'cancelled', 'run_id' => $runId];
+                $result = ['ok' => true, 'status' => 'cancelled', 'run_id' => $runId, 'link_id' => $linkId ?? 0];
             } while (false);
         } catch (Throwable $e) {
             pp_promotion_log('promotion.run_cancel_exception', [
@@ -1703,6 +1760,7 @@ if (!function_exists('pp_promotion_cancel_run')) {
                 'project_id' => $projectId,
                 'run_id' => $runId,
                 'target_url' => $url,
+                'link_id' => $linkId ?? null,
                 'initiated_by' => $initiatedBy > 0 ? $initiatedBy : null,
             ]);
         }
