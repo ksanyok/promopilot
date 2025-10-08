@@ -46,6 +46,7 @@ $activitySeries = [
 ];
 $activityTotals = ['click' => 0, 'signup' => 0, 'payout' => 0.0];
 $periodTotals = $activityTotals;
+$lifetimeClicks = 0;
 
 // Basic stats: personal percent, total referred users, total referral earnings, recent referral payout events
 try {
@@ -78,6 +79,15 @@ try {
         $st->execute();
         $st->bind_result($s);
         if ($st->fetch()) { $totalEarnings = (float)$s; }
+        $st->close();
+    }
+
+    // Lifetime referral clicks
+    if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click'")) {
+        $st->bind_param('i', $uid);
+        $st->execute();
+        $st->bind_result($c);
+        if ($st->fetch()) { $lifetimeClicks = (int)$c; }
         $st->close();
     }
 
@@ -132,80 +142,100 @@ try {
         $del->close();
     }
 
-    // Aggregate timeline metrics grouped by calendar day
-    $dateIndex = $labelIndex;
-    if (!is_array($dateIndex)) { $dateIndex = []; }
+    // Aggregate timeline metrics using SQL (aligns with admin overview approach)
+    $dateIndex = is_array($labelIndex) ? $labelIndex : [];
+    $chartDayMap = [];
+    foreach ($periodLabels as $labelDay) {
+        $chartDayMap[$labelDay] = ['click' => 0, 'signup' => 0, 'payout' => 0.0];
+    }
 
-    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ? GROUP BY day")) {
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(*) AS cnt FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= ? GROUP BY day ORDER BY day")) {
         $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['day'] ?? '');
-                $count = (int)($row['c'] ?? 0);
-                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
-                $idx = (int)$dateIndex[$day];
-                if ($idx < 0 || $idx >= $periodDays) { continue; }
-                $activitySeries['click'][$idx] = $count;
+                $day = isset($row['day']) ? (string)$row['day'] : '';
+                if ($day === '' || !isset($chartDayMap[$day])) { continue; }
+                $chartDayMap[$day]['click'] += (int)($row['cnt'] ?? 0);
             }
             $res->free();
         }
         $st->close();
     }
 
-    if ($st = $conn->prepare('SELECT DATE(created_at) AS day, COUNT(*) AS c FROM users WHERE referred_by = ? AND created_at >= ? GROUP BY day')) {
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(*) AS cnt FROM users WHERE referred_by = ? AND created_at >= ? GROUP BY day ORDER BY day")) {
         $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['day'] ?? '');
-                $count = (int)($row['c'] ?? 0);
-                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
-                $idx = (int)$dateIndex[$day];
-                if ($idx < 0 || $idx >= $periodDays) { continue; }
-                $activitySeries['signup'][$idx] = $count;
+                $day = isset($row['day']) ? (string)$row['day'] : '';
+                if ($day === '' || !isset($chartDayMap[$day])) { continue; }
+                $chartDayMap[$day]['signup'] += (int)($row['cnt'] ?? 0);
             }
             $res->free();
         }
         $st->close();
     }
 
-    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(DISTINCT user_id) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'signup' AND created_at >= ? GROUP BY day")) {
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, COUNT(*) AS cnt FROM referral_events WHERE referrer_user_id = ? AND type = 'signup' AND created_at >= ? GROUP BY day ORDER BY day")) {
         $st->bind_param('is', $uid, $periodCutoff);
         $st->execute();
         if ($res = $st->get_result()) {
             while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['day'] ?? '');
-                $count = (int)($row['c'] ?? 0);
-                if ($day === '' || $count <= 0 || !isset($dateIndex[$day])) { continue; }
-                $idx = (int)$dateIndex[$day];
-                if ($idx < 0 || $idx >= $periodDays) { continue; }
-                if ($count > $activitySeries['signup'][$idx]) {
-                    $activitySeries['signup'][$idx] = $count;
+                $day = isset($row['day']) ? (string)$row['day'] : '';
+                if ($day === '' || !isset($chartDayMap[$day])) { continue; }
+                $chartDayMap[$day]['signup'] = max($chartDayMap[$day]['signup'], (int)($row['cnt'] ?? 0));
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    // Fallback to ensure daily signup timeline uses raw rows when aggregation yields nothing (e.g., due to SQL mode quirks)
+    if (array_sum(array_column($chartDayMap, 'signup')) === 0) {
+        if ($st = $conn->prepare("SELECT created_at FROM users WHERE referred_by = ? AND created_at >= ?")) {
+            $st->bind_param('is', $uid, $periodCutoff);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                while ($row = $res->fetch_assoc()) {
+                    $created = isset($row['created_at']) ? (string)$row['created_at'] : '';
+                    if ($created === '') { continue; }
+                    $ts = strtotime($created);
+                    if ($ts === false) { continue; }
+                    $day = date('Y-m-d', $ts);
+                    if (!isset($chartDayMap[$day])) { continue; }
+                    $chartDayMap[$day]['signup']++;
                 }
+                $res->free();
+            }
+            $st->close();
+        }
+    }
+
+    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) AS amount, SUM(CASE WHEN delta > 0 THEN 1 ELSE 0 END) AS cnt FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY day ORDER BY day")) {
+        $st->bind_param('is', $uid, $periodCutoff);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            while ($row = $res->fetch_assoc()) {
+                $day = isset($row['day']) ? (string)$row['day'] : '';
+                if ($day === '' || !isset($chartDayMap[$day])) { continue; }
+                $amount = isset($row['amount']) ? (float)$row['amount'] : 0.0;
+                if ($amount <= 0) { continue; }
+                $chartDayMap[$day]['payout'] += $amount;
+                $payoutEventsCount += isset($row['cnt']) ? (int)$row['cnt'] : 0;
             }
             $res->free();
         }
         $st->close();
     }
 
-    if ($st = $conn->prepare("SELECT DATE(created_at) AS day, SUM(delta) AS s, COUNT(*) AS c FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= ? GROUP BY day")) {
-        $st->bind_param('is', $uid, $periodCutoff);
-        $st->execute();
-        if ($res = $st->get_result()) {
-            while ($row = $res->fetch_assoc()) {
-                $day = (string)($row['day'] ?? '');
-                $sum = isset($row['s']) ? (float)$row['s'] : 0.0;
-                $count = (int)($row['c'] ?? 0);
-                if ($day === '' || ($sum <= 0 && $count <= 0) || !isset($dateIndex[$day])) { continue; }
-                $idx = (int)$dateIndex[$day];
-                if ($idx < 0 || $idx >= $periodDays) { continue; }
-                $activitySeries['payout'][$idx] = round($sum, 2);
-                $payoutEventsCount += $count;
-            }
-            $res->free();
-        }
-        $st->close();
+    foreach ($chartDayMap as $day => $series) {
+        if (!isset($dateIndex[$day])) { continue; }
+        $idx = (int)$dateIndex[$day];
+        if ($idx < 0 || $idx >= $periodDays) { continue; }
+        $activitySeries['click'][$idx] = (int)$series['click'];
+        $activitySeries['signup'][$idx] = (int)$series['signup'];
+        $activitySeries['payout'][$idx] = round((float)$series['payout'], 2);
     }
 
 
@@ -286,15 +316,6 @@ $accrualBasis = get_setting('referral_accrual_basis', 'spend');
 $currencyCode = get_currency_code();
 $periodStartLabel = $activitySeries['labels'][0] ?? date('Y-m-d');
 $periodEndLabel = $activitySeries['labels'] ? $activitySeries['labels'][count($activitySeries['labels']) - 1] : $periodStartLabel;
-$chartPayload = [
-    'labels' => $activitySeries['labels'],
-    'click' => $activitySeries['click'],
-    'signup' => $activitySeries['signup'],
-    'payout' => $activitySeries['payout'],
-    'currency' => $currencyCode,
-];
-$chartPayloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
-if ($chartPayloadJson === false) { $chartPayloadJson = '{}'; }
 $paginationBasePath = strtok($_SERVER['REQUEST_URI'] ?? '', '?') ?: '';
 $clicksQuery = $_GET;
 unset($clicksQuery['page']);
@@ -332,24 +353,6 @@ include __DIR__ . '/../includes/client_sidebar.php';
             <?php endif; ?>
         </div>
     </div>
-
-    <div class="card shadow-sm border-0 ref-chart-card mb-4">
-        <div class="card-body">
-            <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-                <div>
-                    <h2 class="h5 mb-1"><?php echo __('Диаграмма активности'); ?></h2>
-                    <p class="text-muted small mb-0"><?php echo sprintf(__('Количество переходов, регистраций и начислений за последние %d дней.'), $periodDays); ?></p>
-                </div>
-                <div class="text-muted small">
-                    <?php echo sprintf(__('Период: %s — %s'), htmlspecialchars(date('d.m.Y', strtotime($periodStartLabel))), htmlspecialchars(date('d.m.Y', strtotime($periodEndLabel)))); ?>
-                </div>
-            </div>
-            <div class="ref-chart-wrapper mt-3">
-                <canvas id="referralActivityChart"></canvas>
-            </div>
-        </div>
-    </div>
-
     <div class="row g-3 mb-4">
         <div class="col-xl-4 col-md-6">
             <div class="card ref-metric-card ref-metric-click h-100 text-white">
@@ -633,15 +636,6 @@ include __DIR__ . '/../includes/client_sidebar.php';
     border: none;
     box-shadow: 0 0.75rem 1.8rem rgba(37, 99, 235, 0.25);
 }
-.ref-chart-wrapper {
-    position: relative;
-    min-height: 320px;
-}
-.ref-chart-card {
-    border-radius: 1rem;
-    background: linear-gradient(135deg, rgba(13, 110, 253, 0.12), rgba(32, 201, 151, 0.1)), rgba(15, 23, 42, 0.92);
-    border: 1px solid rgba(96, 165, 250, 0.35);
-}
 .ref-metric-card {
     border: 0;
     border-radius: 1rem;
@@ -718,130 +712,20 @@ include __DIR__ . '/../includes/client_sidebar.php';
 .referral-dashboard .pagination .page-item.disabled .page-link {
     opacity: 0.45;
 }
-@media (max-width: 767.98px) {
-    .ref-chart-wrapper {
-        min-height: 260px;
-    }
+.referral-dashboard a,
+.referral-dashboard button,
+.referral-dashboard .btn,
+.referral-dashboard [role="button"] {
+    cursor: pointer;
+}
+.referral-dashboard input,
+.referral-dashboard textarea,
+.referral-dashboard .form-control {
+    cursor: text;
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-    const chartElement = document.getElementById('referralActivityChart');
-    const chartPayload = <?php echo $chartPayloadJson; ?> || {};
-    if (chartElement && window.Chart && Array.isArray(chartPayload.labels)) {
-        const labels = chartPayload.labels ?? [];
-        const clickData = chartPayload.click ?? [];
-        const signupData = chartPayload.signup ?? [];
-        const payoutData = chartPayload.payout ?? [];
-        const currency = typeof chartPayload.currency === 'string' ? chartPayload.currency : '';
-        const payoutLabel = '<?php echo __('Начисления'); ?>';
-        const formatNumber = (value, decimals = 0) => {
-            const num = Number(value);
-            if (!Number.isFinite(num)) { return '0'; }
-            return num.toLocaleString(undefined, {
-                minimumFractionDigits: decimals,
-                maximumFractionDigits: decimals
-            });
-        };
-        console.log('Chart data:', {labels, clickData, signupData, payoutData, currency});
-        const ctx = chartElement.getContext('2d');
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: '<?php echo __('Переходы'); ?>',
-                        data: clickData,
-                        borderColor: '#0d6efd',
-                        backgroundColor: 'rgba(13, 110, 253, 0.15)',
-                        pointBackgroundColor: '#0d6efd',
-                        tension: 0.35,
-                        fill: true,
-                    },
-                    {
-                        label: '<?php echo __('Регистрации'); ?>',
-                        data: signupData,
-                        borderColor: '#20c997',
-                        backgroundColor: 'rgba(32, 201, 151, 0.15)',
-                        pointBackgroundColor: '#20c997',
-                        tension: 0.35,
-                        fill: true,
-                    },
-                    {
-                        label: payoutLabel,
-                        data: payoutData,
-                        borderColor: '#6f42c1',
-                        backgroundColor: 'rgba(111, 66, 193, 0.15)',
-                        pointBackgroundColor: '#6f42c1',
-                        tension: 0.35,
-                        fill: true,
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false
-                },
-                plugins: {
-                    legend: {
-                        display: true,
-                        position: 'bottom',
-                        labels: {
-                            color: '#e2e8f0',
-                            usePointStyle: true,
-                        }
-                    },
-                    tooltip: {
-                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
-                        titleColor: '#f8fafc',
-                        bodyColor: '#f8fafc',
-                        callbacks: {
-                            label: function(context) {
-                                const label = context.dataset.label || '';
-                                const value = Number(context.raw || 0);
-                                if (label === payoutLabel) {
-                                    const formatted = formatNumber(value, 2);
-                                    return currency ? `${label}: ${formatted} ${currency}` : `${label}: ${formatted}`;
-                                }
-                                return `${label}: ${formatNumber(value)}`;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: {
-                            color: 'rgba(148, 163, 184, 0.15)'
-                        },
-                        ticks: {
-                            color: '#cbd5f5'
-                        }
-                    },
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            color: '#cbd5f5',
-                            callback: function(value) {
-                                const num = Number(value);
-                                if (!Number.isFinite(num)) { return value; }
-                                const decimals = Number.isInteger(num) ? 0 : 2;
-                                return formatNumber(num, decimals);
-                            }
-                        },
-                        grid: {
-                            color: 'rgba(148, 163, 184, 0.18)'
-                        }
-                    }
-                }
-            }
-        });
-    }
-
     const btn = document.getElementById('copyRefLink');
     const input = document.getElementById('refLink');
     if (btn && input) {
