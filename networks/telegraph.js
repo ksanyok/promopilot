@@ -26,12 +26,29 @@ function logLine(msg, data){
 }
 function normalizeContent(html) {
   let s = String(html || '').trim();
-  s = s.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '<h2>$1</h2>');
-  s = s.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, inner) => `<p>— ${inner.trim()}</p>`);
-  s = s.replace(/<\/(?:ul|ol)>/gi, '').replace(/<(?:ul|ol)[^>]*>/gi, '');
-  s = s.replace(/<p([^>]*)>\s*[-–—•∙·]\s+(.*?)<\/p>/gi, '<p$1>— $2</p>');
+  if (!s) {
+    return '';
+  }
+  const sanitizeLinkText = (text) => {
+    return String(text || '').replace(/\s+/g, ' ').trim().replace(/[<>"']/g, '') || 'Изображение';
+  };
+  // Flatten figures and convert images to plain links (Telegraph better handles pasted URLs)
+  s = s.replace(/<figure[^>]*>\s*([\s\S]*?)\s*<\/figure>/gi, '$1');
+  s = s.replace(/<img[^>]*src=["']([^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*>/gi, (_match, src, alt) => {
+    const safeLabel = sanitizeLinkText(alt);
+    return `<p><a href="${src}">${safeLabel}</a></p>`;
+  });
+  s = s.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (_match, src) => `<p><a href="${src}">Изображение</a></p>`);
+  // Remove the article title (Telegraph handles title separately)
+  s = s.replace(/<h1[^>]*>[\s\S]*?<\/h1>/gi, '');
+  // Convert secondary headings to h3 (Telegraph prefers h3 inside body)
+  s = s.replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '</h3>');
+  // Clean empty headings and paragraphs
+  s = s.replace(/<h3[^>]*>\s*<\/h3>/gi, '');
   s = s.replace(/<p[^>]*>(?:\s|<br[^>]*>)*<\/p>/gi, '');
-  return s;
+  s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
+  s = s.replace(/\s*\$+\s*$/g, '');
+  return s.trim();
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {

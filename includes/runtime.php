@@ -289,6 +289,7 @@ if (!function_exists('pp_run_node_script')) {
             'PP_LOG_DIR' => $logDir,
             'PP_LOG_FILE' => $logDir . '/network-' . basename($script, '.js') . '-' . date('Ymd-His') . '-' . getmypid() . '.log',
             'HOME' => $homeDir,
+            'PP_BASE_URL' => defined('PP_BASE_URL') ? PP_BASE_URL : '',
         ]);
         if ($puppeteerExec !== '') {
             $env['PUPPETEER_EXECUTABLE_PATH'] = $puppeteerExec;

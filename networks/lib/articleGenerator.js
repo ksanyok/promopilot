@@ -124,6 +124,80 @@ function buildCascadeGuidance(cascade, language) {
   };
 }
 
+function cleanupGeneratedHtml(html) {
+  let s = String(html || '');
+  if (!s) {
+    return '';
+  }
+  s = s.replace(/&nbsp;/gi, ' ');
+  s = s.replace(/<br[^>]*>/gi, '');
+  s = s.replace(/<p[^>]*>\s*<\/p>/gi, '');
+  s = s.replace(/<blockquote[^>]*>\s*<\/blockquote>/gi, '');
+  s = s.replace(/<p>\s*\$\s*<\/p>/gi, '');
+  s = s.replace(/\s*\$+\s*$/g, '');
+  return s.trim();
+}
+
+function extractPlainText(fragment) {
+  return String(fragment || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function injectFallbackList(html, { isRu } = {}) {
+  let listCandidates = [];
+  const headingMatches = [...String(html || '').matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
+  headingMatches.forEach((match) => {
+    const text = extractPlainText(match[1]);
+    if (text) {
+      listCandidates.push(text);
+    }
+  });
+  if (listCandidates.length < 3) {
+    const paragraphMatches = [...String(html || '').matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
+    paragraphMatches.forEach((match) => {
+      const sentences = extractPlainText(match[1])
+        .split(/(?<=[.!?])\s+/)
+        .map((item) => item.trim())
+        .filter((item) => item && item.length > 30);
+      listCandidates.push(...sentences);
+    });
+  }
+  listCandidates = [...new Set(listCandidates)].filter(Boolean).slice(0, 4);
+  if (listCandidates.length < 2) {
+    listCandidates = isRu
+      ? [
+          'Главные премьеры сезона и их ключевые особенности',
+          'Независимые проекты, о которых стоит рассказать аудитории',
+          'Новые авторы и тенденции, формирующие рынок 2025 года',
+        ]
+      : [
+          'Headline releases that will dominate the 2025 schedule',
+          'Independent projects worth sharing with engaged audiences',
+          'Emerging creators and trends shaping the 2025 market',
+        ];
+  }
+  const listHtml = `<ul>${listCandidates.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+  if (/<h3/i.test(html)) {
+    return html.replace(/<h3/i, `${listHtml}\n<h3`);
+  }
+  const firstParagraphEnd = html.indexOf('</p>');
+  if (firstParagraphEnd !== -1) {
+    return `${html.slice(0, firstParagraphEnd + 4)}\n${listHtml}\n${html.slice(firstParagraphEnd + 4)}`;
+  }
+  return `${html}\n${listHtml}`;
+}
+
+function injectFallbackQuote(html, { isRu, anchorText }) {
+  const quoteText = isRu
+    ? `«${anchorText}» — надежный ориентир для читателей, которые следят за ключевыми тенденциями 2025 года. Эксперты PromoPilot рекомендуют регулярно обращаться к аналитическим материалам, чтобы не упустить важные возможности.`
+    : `"${anchorText}" is a trusted reference point for readers who follow the defining trends of 2025. PromoPilot analysts recommend revisiting the analytical coverage regularly to stay ahead of new opportunities.`;
+  const quoteHtml = `<blockquote>${quoteText}</blockquote>`;
+  const firstParagraphEnd = html.indexOf('</p>');
+  if (firstParagraphEnd !== -1) {
+    return `${html.slice(0, firstParagraphEnd + 4)}\n${quoteHtml}\n${html.slice(firstParagraphEnd + 4)}`;
+  }
+  return `${quoteHtml}\n${html}`;
+}
+
 function normalizeLengthHint(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -297,14 +371,14 @@ async function generateArticle({
   meta,
   testMode,
   cascade,
-  article
+  article: articleConfig
 }, logLine) {
   const pageMeta = meta || {};
   const pageLang = language || pageMeta.lang || 'ru';
   const topicTitle = (pageMeta.title || '').toString().trim();
   const topicDesc = (pageMeta.description || '').toString().trim();
   const region = (pageMeta.region || '').toString().trim();
-  const articleHints = (article && typeof article === 'object') ? article : {};
+  const articleHints = (articleConfig && typeof articleConfig === 'object') ? articleConfig : {};
   const isRu = String(pageLang || '').toLowerCase().startsWith('ru');
   const wishLine = wish
     ? (isRu ? `Учитывай пожелание клиента: ${wish}.` : `Consider this client note: ${wish}.`)
@@ -358,7 +432,7 @@ async function generateArticle({
     if (typeof logLine === 'function') {
       logLine('Diagnostic article prepared', { links: stats, length: preset.html.length, author: preset.author });
     }
-    let article = {
+    let generatedArticle = {
       title: preset.title,
       htmlContent: preset.html,
       language: pageLang,
@@ -367,18 +441,18 @@ async function generateArticle({
     };
 
     // Add H1 and image for test
-    article.htmlContent = `<h1>${article.title}</h1>\n${article.htmlContent}`;
+    generatedArticle.htmlContent = `<h1>${generatedArticle.title}</h1>\n${generatedArticle.htmlContent}`;
 
     // For test, add fake image
-    const firstPIndex = article.htmlContent.indexOf('<p>');
+    const firstPIndex = generatedArticle.htmlContent.indexOf('<p>');
     if (firstPIndex !== -1) {
-      const insertPos = article.htmlContent.indexOf('</p>', firstPIndex) + 4;
+      const insertPos = generatedArticle.htmlContent.indexOf('</p>', firstPIndex) + 4;
       const imageMarkdown = `![Image description](https://i.snap.as/D1yn3zC.png)\n\n`;
-      article.htmlContent = article.htmlContent.slice(0, insertPos) + imageMarkdown + article.htmlContent.slice(insertPos);
+      generatedArticle.htmlContent = generatedArticle.htmlContent.slice(0, insertPos) + imageMarkdown + generatedArticle.htmlContent.slice(insertPos);
     }
 
-    lastGeneratedArticle = { ...article };
-    return article;
+    lastGeneratedArticle = { ...generatedArticle };
+    return generatedArticle;
   }
 
   const baseTopic = topicTitle || anchorText;
@@ -433,7 +507,7 @@ async function generateArticle({
     requirementLines.push(...lengthHints.extraRequirementLines);
   }
   requirementLines.push(
-    `- Только простой HTML: <p> абзацы и <h2> подзаголовки. Без markdown и кода.`,
+    `- Используй только простой HTML: абзацы <p>, подзаголовки <h3>, списки (<ul>/<ol>) и цитаты <blockquote>. Без markdown и кода.`,
     `- 3–5 смысловых секций и короткое заключение.`,
     `- Кроме указанных трёх ссылок — никаких иных ссылок или URL.`
   );
@@ -455,7 +529,7 @@ async function generateArticle({
 
   const rawTitle = await generateText(prompts.title, { ...aiOpts, systemPrompt: 'Только финальный заголовок. Без кавычек и пояснений.', keepRaw: true });
   await sleep(500);
-  const rawContent = await generateText(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в HTML (<p>, <h2>). Без markdown и пояснений.', keepRaw: true });
+  const rawContent = await generateText(prompts.content, { ...aiOpts, systemPrompt: 'Только тело статьи в HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). Без markdown и пояснений.', keepRaw: true });
 
   const titleClean = cleanLLMOutput(rawTitle).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
   let content = cleanLLMOutput(rawContent);
@@ -487,6 +561,71 @@ async function generateArticle({
     }
   }
 
+  content = content.replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '</h3>');
+  content = cleanupGeneratedHtml(content);
+
+  const enforceStructure = async () => {
+    const maxAttempts = 2;
+    let attempt = 0;
+    while (attempt < maxAttempts) {
+      const hasList = /<(ul|ol)\b/i.test(content);
+      const hasQuote = /<blockquote\b/i.test(content);
+      if (hasList && hasQuote) {
+        break;
+      }
+      const requirements = [];
+      if (!hasList) {
+        requirements.push(isRu
+          ? '- Добавь структурированный список (<ul>/<ol> с <li>), который подытоживает ключевые выводы.'
+          : '- Add a structured list (<ul>/<ol> with <li>) that summarizes the key takeaways.');
+      }
+      if (!hasQuote) {
+        requirements.push(isRu
+          ? '- Вставь содержательный блок <blockquote> с аналитической мыслью или фактом по теме.'
+          : '- Insert an informative <blockquote> that highlights an analytical insight or fact.');
+      }
+      const adjustPrompt =
+        `Отредактируй HTML статьи, сохранив структуру, заголовок <h1>, все подзаголовки <h3> и ссылки.\n` +
+        `${requirements.join('\n')}\n` +
+        (isRu
+          ? 'Не добавляй новые URL, не удаляй существующие <a href> и их текст. Можно расширить существующие абзацы.'
+          : 'Do not add new URLs, keep existing <a href> blocks and their text intact. You may expand existing paragraphs.') +
+        `\nВерни только готовый HTML.\n\nСТАТЬЯ:\n${content}`;
+      try {
+        await sleep(300);
+        const adjusted = await generateText(adjustPrompt, { ...aiOpts, systemPrompt: 'Верни только HTML статьи.', keepRaw: true });
+        const adjustedClean = cleanupGeneratedHtml(cleanLLMOutput(adjusted).replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '</h3>'));
+        if (adjustedClean) {
+          content = adjustedClean;
+        }
+      } catch (_) {
+        // ignore
+      }
+      attempt++;
+    }
+  };
+  const ensureStructureWithFallback = async () => {
+    content = content.replace(/<h2/gi, '<h3').replace(/<\/h2>/gi, '</h3>');
+    content = cleanupGeneratedHtml(content);
+    await enforceStructure();
+    if (!/<blockquote\b/i.test(content)) {
+      content = cleanupGeneratedHtml(injectFallbackQuote(content, { isRu, anchorText }));
+    } else {
+      content = cleanupGeneratedHtml(content);
+    }
+    if (!/<(ul|ol)\b/i.test(content)) {
+      content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
+    }
+    if (!/<blockquote\b/i.test(content)) {
+      content = cleanupGeneratedHtml(injectFallbackQuote(content, { isRu, anchorText }));
+    }
+    if (!/<(ul|ol)\b/i.test(content)) {
+      content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
+    }
+    content = cleanupGeneratedHtml(content);
+  };
+  await ensureStructureWithFallback();
+
   const wantOur = 2;
   const wantExternal = 1;
   const wantTotal = 3;
@@ -502,6 +641,7 @@ async function generateArticle({
       stat = retryStat;
     }
   }
+  await ensureStructureWithFallback();
 
   const authorFromMeta = (pageMeta.author || '').toString().trim();
   const author = authorFromMeta || pickAuthorName(pageLang, `${pageUrl}|${anchorText}|${topicTitle}|${topicDesc}|${region}`);
@@ -519,7 +659,7 @@ async function generateArticle({
   const plainText = htmlToPlainText(htmlContent);
   const verificationSample = prepareTextSample([plainText]);
 
-  const article = {
+  const generatedArticle = {
     title: titleClean || topicTitle || anchorText,
     htmlContent,
     language: pageLang,
@@ -528,8 +668,8 @@ async function generateArticle({
     plainText,
     verificationSample,
   };
-  lastGeneratedArticle = { ...article };
-  return article;
+  lastGeneratedArticle = { ...generatedArticle };
+  return generatedArticle;
 }
 
 function getLastGeneratedArticle() {

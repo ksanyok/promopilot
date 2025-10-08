@@ -1,4 +1,12 @@
-<?php /* Project links form and table extracted from client/project.php */ ?>
+<?php
+/* Project links form and table extracted from client/project.php */
+$promotionLevelFlags = [
+    'level1' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(1) : true,
+    'level2' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(2) : false,
+    'level3' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(3) : false,
+];
+$promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_promotion_is_crowd_enabled() : false;
+?>
 <form method="post" id="project-form" class="mb-4">
     <?php echo csrf_field(); ?>
     <input type="hidden" name="update_project" value="1" />
@@ -330,11 +338,15 @@
                                      data-crowd-completed="<?php echo $crowdCompleted; ?>"
                                      data-crowd-running="<?php echo $crowdRunning; ?>"
                                      data-crowd-queued="<?php echo $crowdQueued; ?>"
-                                     data-crowd-failed="<?php echo $crowdFailed; ?>">
-                                    <div class="promotion-status-top">
+                                     data-crowd-failed="<?php echo $crowdFailed; ?>"
+                                     data-level1-enabled="<?php echo $promotionLevelFlags['level1'] ? '1' : '0'; ?>"
+                                     data-level2-enabled="<?php echo $promotionLevelFlags['level2'] ? '1' : '0'; ?>"
+                                     data-level3-enabled="<?php echo $promotionLevelFlags['level3'] ? '1' : '0'; ?>"
+                                     data-crowd-enabled="<?php echo $promotionCrowdEnabled ? '1' : '0'; ?>">
+                                    <div class="promotion-status-top <?php echo $promotionStatus === 'completed' ? 'd-none' : ''; ?>">
                                         <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                                         <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
-                                        <span class="promotion-progress-count ms-1 <?php echo $promotionTarget > 0 ? '' : 'd-none'; ?>"><?php echo $promotionTarget > 0 ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
+                                        <span class="promotion-progress-count ms-1 <?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '' : 'd-none'; ?>"><?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
                                     </div>
                                     <div class="promotion-progress-visual mt-2 <?php echo $promotionActive ? '' : 'd-none'; ?>">
                                         <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
@@ -374,7 +386,8 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="promotion-progress-details text-muted <?php echo ($promotionStatus === 'completed' || empty($promotionDetails)) ? 'd-none' : ''; ?>">
+                                    <?php $showPromotionDetails = !in_array($promotionStatus, ['completed', 'failed', 'cancelled', 'idle'], true) && !empty($promotionDetails); ?>
+                                    <div class="promotion-progress-details text-muted <?php echo $showPromotionDetails ? '' : 'd-none'; ?>">
                                         <?php foreach ($promotionDetails as $detail): ?>
                                             <div><?php echo htmlspecialchars($detail); ?></div>
                                         <?php endforeach; ?>

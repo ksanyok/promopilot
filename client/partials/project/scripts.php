@@ -1371,6 +1371,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const PROJECT_LANGUAGE = '<?php echo htmlspecialchars(strtolower(trim((string)($project['language'] ?? 'ru'))), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
     const PROJECT_NAME = <?php echo json_encode((string)($project['name'] ?? '')); ?>;
     const ANCHOR_PRESETS = <?php echo json_encode(pp_project_anchor_presets(), JSON_UNESCAPED_UNICODE); ?>;
+    const PROMOTION_LEVELS_ENABLED = <?php echo json_encode([
+        'level1' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(1) : true,
+        'level2' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(2) : false,
+        'level3' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(3) : false,
+        'crowd' => function_exists('pp_promotion_is_crowd_enabled') ? pp_promotion_is_crowd_enabled() : false,
+    ]); ?>;
     const PROMOTION_CHARGE_AMOUNT = <?php echo json_encode($promotionChargeAmount); ?>;
     const PROMOTION_CHARGE_AMOUNT_FORMATTED = '<?php echo htmlspecialchars($promotionChargeFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>';
     const PROMOTION_CHARGE_BASE = <?php echo json_encode($promotionBasePrice); ?>;
@@ -2198,7 +2204,11 @@ document.addEventListener('DOMContentLoaded', function() {
                      data-crowd-completed="0"
                      data-crowd-running="0"
                      data-crowd-queued="0"
-                     data-crowd-failed="0">
+                     data-crowd-failed="0"
+                     data-level1-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level1 === false ? '0' : '1'}"
+                     data-level2-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level2 ? '1' : '0'}"
+                     data-level3-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level3 ? '1' : '0'}"
+                     data-crowd-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.crowd ? '1' : '0'}">
                     <div class="promotion-status-top">
                         <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                         <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
@@ -2300,10 +2310,38 @@ document.addEventListener('DOMContentLoaded', function() {
         block.dataset.runId = tr.dataset.promotionRunId;
         block.dataset.reportReady = tr.dataset.promotionReportReady;
 
+        const topEl = block.querySelector('.promotion-status-top');
         const labelEl = block.querySelector('.promotion-status-label');
         const countEl = block.querySelector('.promotion-progress-count');
+        const resolveLevelEnabled = (lvl) => {
+            const datasetKey = `level${lvl}Enabled`;
+            if (datasetKey in block.dataset) {
+                return block.dataset[datasetKey] !== '0';
+            }
+            const fallback = PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, `level${lvl}`)
+                ? PROMOTION_LEVELS_ENABLED[`level${lvl}`]
+                : undefined;
+            if (typeof fallback === 'boolean') {
+                return fallback;
+            }
+            return lvl === 1;
+        };
+        const resolveCrowdEnabled = () => {
+            if ('crowdEnabled' in block.dataset) {
+                return block.dataset.crowdEnabled !== '0';
+            }
+            const fallback = PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, 'crowd')
+                ? PROMOTION_LEVELS_ENABLED.crowd
+                : undefined;
+            return typeof fallback === 'boolean' ? fallback : false;
+        };
+        const showStatusTop = status !== 'completed';
+        if (topEl) {
+            topEl.classList.toggle('d-none', !showStatusTop);
+        }
         if (countEl) {
-            if (data.target) {
+            const shouldShowCount = showStatusTop && data.target;
+            if (shouldShowCount) {
                 countEl.classList.remove('d-none');
                 countEl.textContent = `(${data.done || 0} / ${data.target})`;
             } else {
@@ -2342,6 +2380,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 const levelBlock = block.querySelector(`.promotion-progress-level[data-level="${idx + 1}"]`);
                 const levelData = data.levels?.[idx + 1] || {};
                 if (!levelBlock) return;
+                if (!resolveLevelEnabled(idx + 1)) {
+                    levelBlock.classList.add('d-none');
+                    const valueFallback = levelBlock.querySelector('.promotion-progress-value');
+                    const barFallback = levelBlock.querySelector('.promotion-progress-bar');
+                    if (valueFallback) {
+                        valueFallback.textContent = '0 / 0';
+                    }
+                    if (barFallback) {
+                        barFallback.style.width = '0%';
+                    }
+                    return;
+                }
                 const total = levelData.required || levelData.total || 0;
                 const done = levelData.success || 0;
                 const valueEl = levelBlock.querySelector('.promotion-progress-value');
@@ -2356,17 +2406,29 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             const crowdBlock = block.querySelector('.promotion-progress-crowd');
             if (crowdBlock) {
-                const crowd = data.crowd || {};
-                const total = crowd.total || crowd.planned || 0;
-                const done = crowd.completed || 0;
-                const valueEl = crowdBlock.querySelector('.promotion-progress-value');
-                const barEl = crowdBlock.querySelector('.promotion-progress-bar');
-                if (total > 0) {
-                    crowdBlock.classList.remove('d-none');
-                    if (valueEl) valueEl.textContent = `${done} / ${total}`;
-                    if (barEl) barEl.style.width = Math.min(100, Math.round((done / total) * 100)) + '%';
-                } else {
+                if (!resolveCrowdEnabled()) {
                     crowdBlock.classList.add('d-none');
+                    const valueReset = crowdBlock.querySelector('.promotion-progress-value');
+                    const barReset = crowdBlock.querySelector('.promotion-progress-bar');
+                    if (valueReset) {
+                        valueReset.textContent = '0 / 0';
+                    }
+                    if (barReset) {
+                        barReset.style.width = '0%';
+                    }
+                } else {
+                    const crowd = data.crowd || {};
+                    const total = crowd.total || crowd.planned || 0;
+                    const done = crowd.completed || 0;
+                    const valueEl = crowdBlock.querySelector('.promotion-progress-value');
+                    const barEl = crowdBlock.querySelector('.promotion-progress-bar');
+                    if (total > 0) {
+                        crowdBlock.classList.remove('d-none');
+                        if (valueEl) valueEl.textContent = `${done} / ${total}`;
+                        if (barEl) barEl.style.width = Math.min(100, Math.round((done / total) * 100)) + '%';
+                    } else {
+                        crowdBlock.classList.add('d-none');
+                    }
                 }
             }
         }
@@ -2374,6 +2436,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const completeBlock = block.querySelector('.promotion-status-complete');
         if (completeBlock) {
             completeBlock.classList.toggle('d-none', status !== 'completed');
+        }
+        const detailsBlock = block.querySelector('.promotion-progress-details');
+        if (detailsBlock) {
+            const hasDetails = detailsBlock.children && detailsBlock.children.length > 0;
+            const shouldShowDetails = hasDetails && isPromotionActiveStatus(status);
+            detailsBlock.classList.toggle('d-none', !shouldShowDetails);
         }
     }
 
