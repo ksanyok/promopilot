@@ -1,5 +1,7 @@
 <?php
 require_once __DIR__ . '/../promotion_helpers.php';
+require_once __DIR__ . '/../notifications.php';
+require_once __DIR__ . '/../mailer.php';
 require_once __DIR__ . '/settings.php';
 
 if (!function_exists('pp_promotion_launch_worker')) {
@@ -107,7 +109,7 @@ if (!function_exists('pp_promotion_launch_worker')) {
 
 if (!function_exists('pp_promotion_fetch_project')) {
     function pp_promotion_fetch_project(mysqli $conn, int $projectId): ?array {
-        $stmt = $conn->prepare('SELECT id, name, language, wishes, region, topic FROM projects WHERE id = ? LIMIT 1');
+        $stmt = $conn->prepare('SELECT id, user_id, name, language, wishes, region, topic FROM projects WHERE id = ? LIMIT 1');
         if (!$stmt) { return null; }
         $stmt->bind_param('i', $projectId);
         if (!$stmt->execute()) {
@@ -117,6 +119,215 @@ if (!function_exists('pp_promotion_fetch_project')) {
         $row = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         return $row ?: null;
+    }
+}
+
+if (!function_exists('pp_promotion_send_completion_notification')) {
+    function pp_promotion_send_completion_notification(mysqli $conn, array $run, array $project, array $linkRow, array $report = []): void {
+        $userId = isset($project['user_id']) ? (int)$project['user_id'] : 0;
+        if ($userId <= 0) {
+            return;
+        }
+
+        if (!function_exists('pp_notification_user_allows') || !pp_notification_user_allows($userId, 'promotion_completed')) {
+            pp_promotion_log('promotion.notify.skipped_pref', [
+                'run_id' => $run['id'] ?? null,
+                'user_id' => $userId,
+            ]);
+            return;
+        }
+
+        $userStmt = $conn->prepare('SELECT id, email, full_name, username FROM users WHERE id = ? LIMIT 1');
+        if (!$userStmt) {
+            pp_promotion_log('promotion.notify.skipped_user_stmt', [
+                'run_id' => $run['id'] ?? null,
+                'user_id' => $userId,
+                'error' => $conn->error,
+            ]);
+            return;
+        }
+        $userStmt->bind_param('i', $userId);
+        if (!$userStmt->execute()) {
+            pp_promotion_log('promotion.notify.skipped_user_exec', [
+                'run_id' => $run['id'] ?? null,
+                'user_id' => $userId,
+                'error' => $userStmt->error,
+            ]);
+            $userStmt->close();
+            return;
+        }
+        $userRow = $userStmt->get_result()->fetch_assoc();
+        $userStmt->close();
+        if (!$userRow) {
+            pp_promotion_log('promotion.notify.skipped_user_missing', [
+                'run_id' => $run['id'] ?? null,
+                'user_id' => $userId,
+            ]);
+            return;
+        }
+
+        $email = trim((string)($userRow['email'] ?? ''));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            pp_promotion_log('promotion.notify.skipped_invalid_email', [
+                'run_id' => $run['id'] ?? null,
+                'user_id' => $userId,
+                'email' => $userRow['email'] ?? null,
+            ]);
+            return;
+        }
+
+        $name = trim((string)($userRow['full_name'] ?? ''));
+        if ($name === '') {
+            $name = trim((string)($userRow['username'] ?? ''));
+        }
+        if ($name === '') {
+            $name = __('клиент');
+        }
+
+        $projectName = trim((string)($project['name'] ?? ''));
+        if ($projectName === '') {
+            $projectName = __('Ваш проект');
+        }
+        $projectNameSafe = htmlspecialchars($projectName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $linkUrl = trim((string)($run['target_url'] ?? ($linkRow['url'] ?? '')));
+        $linkDisplay = $linkUrl !== '' ? $linkUrl : __('ссылка не указана');
+        $linkDisplaySafe = htmlspecialchars($linkDisplay, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $linkAnchor = trim((string)($linkRow['anchor'] ?? ''));
+        $linkAnchorSafe = htmlspecialchars($linkAnchor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $projectId = isset($project['id']) ? (int)$project['id'] : 0;
+        $runId = isset($run['id']) ? (int)$run['id'] : 0;
+        $linkId = isset($run['link_id']) ? (int)$run['link_id'] : (isset($linkRow['id']) ? (int)$linkRow['id'] : 0);
+
+        $projectUrl = pp_url('client/project.php?id=' . $projectId);
+        $reportUrl = $projectUrl;
+        if ($linkId > 0) {
+            $reportUrl .= '#link-' . $linkId;
+        }
+        $reportUrlSafe = htmlspecialchars($reportUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $notificationsUrl = pp_url('client/settings.php#notifications-settings');
+        $notificationsUrlSafe = htmlspecialchars($notificationsUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $supportEmail = trim((string)get_setting('support_email', 'support@' . pp_mail_default_domain()));
+        if (!filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) {
+            $supportEmail = 'support@' . pp_mail_default_domain();
+        }
+        $supportEmailSafe = htmlspecialchars($supportEmail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $greeting = sprintf(__('Здравствуйте, %s!'), htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+
+        $levelSummaries = [];
+        $reportLevels = [
+            1 => __('Уровень 1'),
+            2 => __('Уровень 2'),
+            3 => __('Уровень 3'),
+        ];
+        foreach ($reportLevels as $level => $label) {
+            $items = $report['level' . $level] ?? [];
+            if (!is_array($items)) { $items = []; }
+            $count = count($items);
+            if ($count > 0) {
+                $levelSummaries[] = htmlspecialchars(sprintf('%s — %d', $label, $count), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            }
+        }
+        $crowdCount = 0;
+        if (isset($report['crowd']) && is_array($report['crowd'])) {
+            $crowdCount = count($report['crowd']);
+            if ($crowdCount > 0) {
+                $levelSummaries[] = htmlspecialchars(sprintf(__('Крауд-задачи — %d'), $crowdCount), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            }
+        }
+        if (empty($levelSummaries)) {
+            $levelSummaries[] = htmlspecialchars(__('Задачи: успешно завершены.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        }
+
+        $summaryList = '<ul style="margin:16px 0 0;padding-left:20px;color:#0f172a;font-size:14px;line-height:1.6;">'
+            . '<li>' . htmlspecialchars(__('Проект:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' <strong>' . $projectNameSafe . '</strong></li>';
+        if ($linkUrl !== '') {
+            $summaryList .= '<li>' . htmlspecialchars(__('Ссылка:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' <a href="' . htmlspecialchars($linkUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="color:#2563eb;">' . $linkDisplaySafe . '</a></li>';
+        } else {
+            $summaryList .= '<li>' . htmlspecialchars(__('Ссылка:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' ' . $linkDisplaySafe . '</li>';
+        }
+        if ($linkAnchor !== '') {
+            $summaryList .= '<li>' . htmlspecialchars(__('Анкор:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' <strong>' . $linkAnchorSafe . '</strong></li>';
+        }
+        foreach ($levelSummaries as $entry) {
+            $summaryList .= '<li>' . $entry . '</li>';
+        }
+        $summaryList .= '</ul>';
+
+        $logoSrc = pp_url('assets/img/logo.svg');
+        $logoPath = defined('PP_ROOT_PATH') ? PP_ROOT_PATH . '/assets/img/logo.svg' : null;
+        if ($logoPath && is_readable($logoPath)) {
+            $logoContent = @file_get_contents($logoPath);
+            if ($logoContent !== false && $logoContent !== '') {
+                $encodedLogo = base64_encode($logoContent);
+                if ($encodedLogo !== '') {
+                    $logoSrc = 'data:image/svg+xml;base64,' . $encodedLogo;
+                }
+            }
+        }
+        $logoSrcSafe = htmlspecialchars($logoSrc, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $intro = __('Все уровни задач успешно выполнены. Отчет готов — можете просмотреть размещения и крауд-задачи.');
+        $introSafe = htmlspecialchars($intro, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $subject = '🚀 ' . sprintf(__('Продвижение завершено — %s'), $projectName);
+
+        $html = '<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>'
+            . htmlspecialchars($subject, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</title></head><body style="margin:0;padding:0;background:#f1f5f9;font-family:\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+            . '<div style="padding:32px 0;">'
+            . '<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 12px 36px rgba(15,23,42,0.12);">'
+            . '<tr><td style="padding:28px 32px;background:#0f172a;">'
+            . '<div style="display:flex;align-items:center;gap:16px;">'
+            . '<img src="' . $logoSrcSafe . '" alt="PromoPilot" style="height:36px;">'
+            . '<div style="color:#e2e8f0;font-size:18px;font-weight:600;">PromoPilot</div>'
+            . '</div>'
+            . '<div style="margin-top:24px;color:#cbd5f5;font-size:14px;line-height:1.6;">'
+            . htmlspecialchars(__('Продвижение завершено успешно.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</div>'
+            . '</td></tr>'
+            . '<tr><td style="padding:32px 36px;">'
+            . '<p style="margin:0 0 16px;color:#0f172a;font-size:16px;font-weight:600;">' . $greeting . '</p>'
+            . '<p style="margin:0 0 24px;color:#1f2937;font-size:15px;line-height:1.7;">' . $introSafe . '</p>'
+            . $summaryList
+            . '<div style="margin-top:28px;text-align:center;">'
+            . '<a href="' . $reportUrlSafe . '" style="display:inline-block;padding:14px 28px;background:#2563eb;color:#ffffff;font-weight:600;font-size:14px;border-radius:12px;text-decoration:none;">'
+            . htmlspecialchars(__('Открыть отчет'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</a>'
+            . '</div>'
+            . '<p style="margin:32px 0 0;color:#475569;font-size:13px;line-height:1.6;">'
+            . htmlspecialchars(__('Не хотите получать такие письма?'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . ' <a href="' . $notificationsUrlSafe . '" style="color:#2563eb;font-weight:600;text-decoration:none;">'
+            . htmlspecialchars(__('Настроить уведомления'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</a></p>'
+            . '<p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.6;">'
+            . htmlspecialchars(__('Вопросы? Напишите нам:'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . ' <a href="mailto:' . $supportEmailSafe . '" style="color:#2563eb;font-weight:600;text-decoration:none;">'
+            . $supportEmailSafe . '</a></p>'
+            . '<p style="margin:24px 0 0;color:#111827;font-size:13px;font-weight:600;">'
+            . htmlspecialchars(__('Команда PromoPilot ✈️'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</p>'
+            . '</td></tr>'
+            . '</table></div></body></html>';
+
+        try {
+            $sent = pp_mail_send($email, $subject, $html, null, ['user_id' => $userId]);
+            pp_promotion_log($sent ? 'promotion.notify.sent' : 'promotion.notify.failed', [
+                'run_id' => $runId,
+                'user_id' => $userId,
+                'email' => $email,
+            ]);
+        } catch (Throwable $e) {
+            pp_promotion_log('promotion.notify.exception', [
+                'run_id' => $runId,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
 

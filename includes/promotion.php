@@ -952,7 +952,22 @@ if (!function_exists('pp_promotion_process_run')) {
             $report = pp_promotion_build_report($conn, $runId);
             $reportJson = json_encode($report, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
             if ($reportJson === false) { $reportJson = '{}'; }
-            @$conn->query("UPDATE promotion_runs SET status='completed', stage='completed', report_json='" . $conn->real_escape_string($reportJson) . "', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+            $updateSql = "UPDATE promotion_runs SET status='completed', stage='completed', report_json='" . $conn->real_escape_string($reportJson) . "', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1";
+            $updated = @$conn->query($updateSql);
+            if ($updated && $conn->affected_rows > 0 && function_exists('pp_promotion_send_completion_notification')) {
+                $runForNotify = $run;
+                $runForNotify['status'] = 'completed';
+                $runForNotify['stage'] = 'completed';
+                $runForNotify['report_json'] = $reportJson;
+                try {
+                    pp_promotion_send_completion_notification($conn, $runForNotify, $project, $linkRow, $report);
+                } catch (Throwable $notifyError) {
+                    pp_promotion_log('promotion.notify_exception', [
+                        'run_id' => $runId,
+                        'error' => $notifyError->getMessage(),
+                    ]);
+                }
+            }
             return;
         }
     }
@@ -1101,13 +1116,26 @@ if (!function_exists('pp_promotion_get_status')) {
         }
 
         if (!$run) {
-            $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? ORDER BY id DESC LIMIT 1');
+            $shouldFallbackByUrl = ($linkId === null || $linkId <= 0);
+            if (!$shouldFallbackByUrl) {
+                $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? AND (link_id IS NULL OR link_id = 0) ORDER BY id DESC LIMIT 1');
+            } else {
+                $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE project_id = ? AND target_url = ? ORDER BY id DESC LIMIT 1');
+            }
             if (!$stmt) { $conn->close(); return ['ok' => false, 'error' => 'DB']; }
             $stmt->bind_param('is', $projectId, $url);
             if ($stmt->execute()) {
                 $run = $stmt->get_result()->fetch_assoc();
             }
             $stmt->close();
+            if (!$run && !$shouldFallbackByUrl) {
+                $conn->close();
+                return [
+                    'ok' => true,
+                    'status' => 'idle',
+                    'link_id' => (int)$linkId,
+                ];
+            }
         }
 
         if (!$run) {

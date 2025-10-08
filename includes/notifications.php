@@ -22,12 +22,19 @@ if (!function_exists('pp_notification_event_catalog')) {
                 'default_enabled' => true,
                 'sort' => 20,
             ],
+            'promotion_completed' => [
+                'label' => __('Продвижение завершено'),
+                'description' => __('Письмо, когда продвижение по ссылке успешно завершается.'),
+                'category' => 'promotion',
+                'default_enabled' => true,
+                'sort' => 30,
+            ],
             'promotion_task_completed' => [
                 'label' => __('Выполненные задачи продвижения'),
                 'description' => __('Сообщение, когда задача по продвижению успешно завершена.'),
                 'category' => 'promotion',
                 'default_enabled' => true,
-                'sort' => 30,
+                'sort' => 35,
             ],
             'balance_manual_adjustment' => [
                 'label' => __('Изменения администратором'),
