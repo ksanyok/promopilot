@@ -548,15 +548,39 @@ async function generateArticle({
   content = `<h1>${titleClean}</h1>\n${content}`;
 
   // Generate image prompt
-  const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Ответь только промтом.`;
+  const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Обязательно подчеркни, что это реалистичная профессиональная фотография в формате 16:9 без текста, логотипов и водяных знаков, с натуральным светом и живой композицией. Ответь только промтом.`;
   const imagePrompt = await generateText(imagePromptText, { ...aiOpts, systemPrompt: 'Только промт для изображения.', keepRaw: true });
   await sleep(500);
   const cleanImagePrompt = cleanLLMOutput(imagePrompt).trim();
+  let finalImagePrompt = cleanImagePrompt;
+
+  if (finalImagePrompt) {
+    finalImagePrompt = finalImagePrompt.replace(/\b(illustration|cartoon|drawing|render|digital painting|concept art)\b/gi, 'photograph');
+    const enforcedPhrases = [
+      'photorealistic',
+      'professional photograph',
+      'natural lighting',
+      'ultra-detailed',
+      '16:9 aspect ratio',
+      'no text',
+      'no watermark',
+      'no logo',
+      'no captions'
+    ];
+    enforcedPhrases.forEach((phrase) => {
+      const phraseRegex = new RegExp(phrase.replace(/\s+/g, '\\s+'), 'i');
+      if (!phraseRegex.test(finalImagePrompt)) {
+        finalImagePrompt += `, ${phrase}`;
+      }
+    });
+  }
 
   // Generate image
   let imageUrl = null;
   try {
-    imageUrl = await generateImage(cleanImagePrompt);
+    if (finalImagePrompt) {
+      imageUrl = await generateImage(finalImagePrompt);
+    }
   } catch (e) {
     // Ignore image generation errors for now
   }

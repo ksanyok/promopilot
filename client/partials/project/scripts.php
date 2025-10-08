@@ -2158,6 +2158,61 @@ document.addEventListener('DOMContentLoaded', function() {
         const promotionChargeBase = escapeHtml(String(PROMOTION_CHARGE_BASE ?? ''));
         const promotionChargeSavings = escapeHtml(String(PROMOTION_CHARGE_SAVINGS ?? ''));
 
+        const isLevel1Enabled = !(PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level1 === false);
+        const isLevel2Enabled = Boolean(PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level2);
+        const isLevel3Enabled = Boolean(PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level3);
+        const isCrowdEnabled = Boolean(PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.crowd);
+        const progressLevelSections = [];
+        if (isLevel1Enabled) {
+            progressLevelSections.push(`
+                        <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 1'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>`);
+        }
+        if (isLevel2Enabled) {
+            progressLevelSections.push(`
+                        <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 2'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>`);
+        }
+        if (isLevel3Enabled) {
+            progressLevelSections.push(`
+                        <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Уровень 3'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>`);
+        }
+        if (isCrowdEnabled) {
+            progressLevelSections.push(`
+                        <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
+                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
+                                <span><?php echo __('Крауд'); ?></span>
+                                <span class="promotion-progress-value">0 / 0</span>
+                            </div>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
+                            </div>
+                        </div>`);
+        }
+        const progressLevelsMarkup = progressLevelSections.join('');
+
         tr.innerHTML = `
             <td data-label="#"></td>
             <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
@@ -2215,42 +2270,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <span class="promotion-progress-count ms-1 d-none"></span>
                     </div>
                     <div class="promotion-progress-visual mt-2 d-none">
-                        <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
-                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                <span><?php echo __('Уровень 1'); ?></span>
-                                <span class="promotion-progress-value">0 / 0</span>
-                            </div>
-                            <div class="progress progress-thin">
-                                <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                            </div>
-                        </div>
-                        <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
-                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                <span><?php echo __('Уровень 2'); ?></span>
-                                <span class="promotion-progress-value">0 / 0</span>
-                            </div>
-                            <div class="progress progress-thin">
-                                <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                            </div>
-                        </div>
-                        <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
-                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                <span><?php echo __('Уровень 3'); ?></span>
-                                <span class="promotion-progress-value">0 / 0</span>
-                            </div>
-                            <div class="progress progress-thin">
-                                <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                            </div>
-                        </div>
-                        <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
-                            <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
-                                <span><?php echo __('Крауд'); ?></span>
-                                <span class="promotion-progress-value">0 / 0</span>
-                            </div>
-                            <div class="progress progress-thin">
-                                <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
-                            </div>
-                        </div>
+                        ${progressLevelsMarkup}
                     </div>
                     <div class="promotion-progress-details text-muted d-none"></div>
                     <div class="promotion-status-complete mt-2 d-none" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
@@ -2316,24 +2336,41 @@ document.addEventListener('DOMContentLoaded', function() {
         const resolveLevelEnabled = (lvl) => {
             const datasetKey = `level${lvl}Enabled`;
             if (datasetKey in block.dataset) {
-                return block.dataset[datasetKey] !== '0';
+                const raw = (block.dataset[datasetKey] || '').trim().toLowerCase();
+                if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
+                    return false;
+                }
+                if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') {
+                    return true;
+                }
+                if (raw === '') {
+                    return false;
+                }
+                return Boolean(raw);
             }
-            const fallback = PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, `level${lvl}`)
-                ? PROMOTION_LEVELS_ENABLED[`level${lvl}`]
-                : undefined;
-            if (typeof fallback === 'boolean') {
-                return fallback;
+            if (PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, `level${lvl}`)) {
+                return Boolean(PROMOTION_LEVELS_ENABLED[`level${lvl}`]);
             }
-            return lvl === 1;
+            return false;
         };
         const resolveCrowdEnabled = () => {
             if ('crowdEnabled' in block.dataset) {
-                return block.dataset.crowdEnabled !== '0';
+                const raw = (block.dataset.crowdEnabled || '').trim().toLowerCase();
+                if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
+                    return false;
+                }
+                if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') {
+                    return true;
+                }
+                if (raw === '') {
+                    return false;
+                }
+                return Boolean(raw);
             }
-            const fallback = PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, 'crowd')
-                ? PROMOTION_LEVELS_ENABLED.crowd
-                : undefined;
-            return typeof fallback === 'boolean' ? fallback : false;
+            if (PROMOTION_LEVELS_ENABLED && Object.prototype.hasOwnProperty.call(PROMOTION_LEVELS_ENABLED, 'crowd')) {
+                return Boolean(PROMOTION_LEVELS_ENABLED.crowd);
+            }
+            return false;
         };
         const showStatusTop = status !== 'completed';
         if (topEl) {

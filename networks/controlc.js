@@ -4,6 +4,7 @@
 const { createGenericPastePublisher, runCli } = require('./lib/genericPaste');
 const { waitForTimeoutSafe, clickSubmit } = require('./lib/puppeteerUtils');
 const { solveIfCaptcha, detectCaptcha } = require('./captcha');
+const { stripTags } = require('./lib/contentFormats');
 
 const CONTROL_C_URL_REGEX = /^https?:\/\/controlc\.com\/(?:index\.php\?id=)?[a-z0-9]+$/i;
 const RESULT_POLL_INTERVAL = 1500;
@@ -22,6 +23,122 @@ const CONTROL_C_NAV_PATHS = new Set([
 
 function isValidControlCUrl(url) {
   return CONTROL_C_URL_REGEX.test(String(url || '').trim());
+}
+
+function decodeBasicEntities(text) {
+  return String(text || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#8211;/gi, '–')
+    .replace(/&#8212;/gi, '—')
+    .replace(/&#8230;/gi, '…')
+    .replace(/&#160;/gi, ' ');
+}
+
+function wrapAnchorForControlC(match, href, inner) {
+  const cleanText = decodeBasicEntities(stripTags(inner)) || href;
+  const cleanHref = decodeBasicEntities(href).trim();
+  if (!cleanHref) {
+    return cleanText;
+  }
+  if (!cleanText || cleanText === cleanHref) {
+    return cleanHref;
+  }
+  return `[url=${cleanHref}]${cleanText}[/url]`;
+}
+
+function extractAttribute(fragment, name) {
+  const regex = new RegExp(`${name}=["']([^"']+)["']`, 'i');
+  const match = regex.exec(fragment || '');
+  return match ? decodeBasicEntities(match[1]) : '';
+}
+
+function convertFigureToControlC(fragment) {
+  const src = extractAttribute(fragment, 'src');
+  if (!src) {
+    return '';
+  }
+  const alt = extractAttribute(fragment, 'alt');
+  let caption = '';
+  const captionMatch = /<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i.exec(fragment || '');
+  if (captionMatch && captionMatch[1]) {
+    caption = decodeBasicEntities(stripTags(captionMatch[1]));
+  }
+  const description = decodeBasicEntities(alt || caption).trim();
+  return `\n[img]${src.trim()}[/img]${description ? `\n${description}` : ''}\n`;
+}
+
+function formatHeading(inner, size) {
+  const text = decodeBasicEntities(stripTags(inner));
+  if (!text) {
+    return '';
+  }
+  return `\n[tpsize=${size}]${text}[/tpsize]\n`;
+}
+
+function convertHtmlToControlCMarkup(html) {
+  let out = String(html || '');
+  if (!out.trim()) {
+    return '';
+  }
+
+  out = out.replace(/<figure[^>]*>[\s\S]*?<img[\s\S]*?>[\s\S]*?<\/figure>/gi, (match) => convertFigureToControlC(match));
+  out = out.replace(/<img[^>]*>/gi, (match) => convertFigureToControlC(match));
+  out = out.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, wrapAnchorForControlC);
+
+  out = out.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_, inner) => formatHeading(inner, 7));
+  out = out.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_, inner) => formatHeading(inner, 6));
+  out = out.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_, inner) => formatHeading(inner, 5));
+  out = out.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_, inner) => formatHeading(inner, 4));
+  out = out.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, (_, inner) => formatHeading(inner, 3));
+  out = out.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, (_, inner) => formatHeading(inner, 2));
+
+  out = out.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
+    const text = decodeBasicEntities(stripTags(inner));
+    return text ? `\n[quote]${text}[/quote]\n` : '';
+  });
+
+  out = out.replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, (_, inner) => {
+    const text = decodeBasicEntities(stripTags(inner));
+    return text ? `[b]${text}[/b]` : '';
+  });
+
+  out = out.replace(/<(?:em|i)[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, (_, inner) => {
+    const text = decodeBasicEntities(stripTags(inner));
+    return text ? `[i]${text}[/i]` : '';
+  });
+
+  out = out.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, inner) => {
+    const text = decodeBasicEntities(stripTags(inner));
+    return text ? `\n- ${text}` : '';
+  });
+  out = out.replace(/<\/(?:ul|ol)>/gi, '\n');
+  out = out.replace(/<(?:ul|ol)[^>]*>/gi, '\n');
+
+  out = out.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, (_, inner) => {
+    const text = decodeBasicEntities(stripTags(inner));
+    return text ? `\n${text}\n` : '\n';
+  });
+
+  out = out.replace(/<br\s*\/?>/gi, '\n');
+  out = out.replace(/<div[^>]*>/gi, '\n');
+  out = out.replace(/<\/(?:div|span)>/gi, '\n');
+  out = out.replace(/<span[^>]*>/gi, '');
+  out = out.replace(/<[^>]+>/g, ' ');
+
+  out = decodeBasicEntities(out);
+  out = out.replace(/[ \t]+/g, ' ');
+  out = out.replace(/ *(\n) */g, '$1');
+  out = out.replace(/\n{3,}/g, '\n\n');
+  out = out.replace(/\s+\[img\]/g, '\n[img]');
+  out = out.replace(/\[img\]\s+/g, '[img]');
+  out = out.replace(/\n-\s*\n/g, '\n');
+
+  return out.trim();
 }
 
 function pickBestControlCUrl(urls) {
@@ -281,6 +398,7 @@ const config = {
       logLine('ControlC preFill error', { error: String(e && e.message || e) });
     }
   },
+  prepareBody: async ({ variants }) => convertHtmlToControlCMarkup(variants.html),
   beforeSubmit: async ({ page, logLine }) => {
     try {
       const solved = await ensureRecaptchaSolved(page, logLine, { attempts: 3, label: 'beforeSubmit' });

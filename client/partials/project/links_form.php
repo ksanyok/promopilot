@@ -349,6 +349,7 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                         <span class="promotion-progress-count ms-1 <?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '' : 'd-none'; ?>"><?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
                                     </div>
                                     <div class="promotion-progress-visual mt-2 <?php echo $promotionActive ? '' : 'd-none'; ?>">
+                                        <?php if ($promotionLevelFlags['level1']): ?>
                                         <div class="promotion-progress-level promotion-progress-level1 d-none" data-level="1">
                                             <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                                 <span><?php echo __('Уровень 1'); ?></span>
@@ -358,6 +359,8 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                                 <div class="progress-bar promotion-progress-bar bg-primary" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                             </div>
                                         </div>
+                                        <?php endif; ?>
+                                        <?php if ($promotionLevelFlags['level2']): ?>
                                         <div class="promotion-progress-level promotion-progress-level2 d-none" data-level="2">
                                             <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                                 <span><?php echo __('Уровень 2'); ?></span>
@@ -367,6 +370,8 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                                 <div class="progress-bar promotion-progress-bar bg-info" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                             </div>
                                         </div>
+                                        <?php endif; ?>
+                                        <?php if ($promotionLevelFlags['level3']): ?>
                                         <div class="promotion-progress-level promotion-progress-level3 d-none" data-level="3">
                                             <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                                 <span><?php echo __('Уровень 3'); ?></span>
@@ -376,6 +381,8 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                                 <div class="progress-bar promotion-progress-bar bg-warning" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                             </div>
                                         </div>
+                                        <?php endif; ?>
+                                        <?php if ($promotionCrowdEnabled): ?>
                                         <div class="promotion-progress-level promotion-progress-crowd d-none" data-level="crowd">
                                             <div class="promotion-progress-meta d-flex justify-content-between small text-muted mb-1">
                                                 <span><?php echo __('Крауд'); ?></span>
@@ -385,6 +392,7 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                                 <div class="progress-bar promotion-progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" style="width:0%"></div>
                                             </div>
                                         </div>
+                                        <?php endif; ?>
                                     </div>
                                     <?php $showPromotionDetails = !in_array($promotionStatus, ['completed', 'failed', 'cancelled', 'idle'], true) && !empty($promotionDetails); ?>
                                     <div class="promotion-progress-details text-muted <?php echo $showPromotionDetails ? '' : 'd-none'; ?>">
