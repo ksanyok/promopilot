@@ -178,16 +178,16 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             $crowdTarget = max($crowdTarget, $crowdPlanned);
                             if ($crowdTarget === 0 && $crowdCompleted > 0) { $crowdTarget = $crowdCompleted; }
                             $promotionDetails = [];
-                            if ($level1Success > 0 || $level1Required > 0) {
+                            if ($promotionLevelFlags['level1'] && ($level1Success > 0 || $level1Required > 0)) {
                                 $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 1'), $level1Success, $level1Required > 0 ? ' / ' . $level1Required : '');
                             }
-                            if ($level2Success > 0 || $level2Required > 0) {
+                            if ($promotionLevelFlags['level2'] && ($level2Success > 0 || $level2Required > 0)) {
                                 $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 2'), $level2Success, $level2Required > 0 ? ' / ' . $level2Required : '');
                             }
-                            if ($level3Success > 0 || $level3Required > 0) {
+                            if ($promotionLevelFlags['level3'] && ($level3Success > 0 || $level3Required > 0)) {
                                 $promotionDetails[] = sprintf('%s: %d%s', __('Уровень 3'), $level3Success, $level3Required > 0 ? ' / ' . $level3Required : '');
                             }
-                            if ($crowdTarget > 0 || $crowdCompleted > 0) {
+                            if ($promotionCrowdEnabled && ($crowdTarget > 0 || $crowdCompleted > 0)) {
                                 $crowdDetail = sprintf(__('Крауд: %1$d / %2$d'), $crowdCompleted, $crowdTarget);
                                 $crowdExtras = [];
                                 $crowdInProgress = $crowdRunning + $crowdQueued;
@@ -207,7 +207,7 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                     $crowdDetail .= ' (' . implode(', ', $crowdExtras) . ')';
                                 }
                                 $promotionDetails[] = $crowdDetail;
-                            } elseif ($crowdPlanned > 0) {
+                            } elseif ($promotionCrowdEnabled && $crowdPlanned > 0) {
                                 $promotionDetails[] = sprintf(__('Крауд задач запланировано: %d'), $crowdPlanned);
                             }
                             $promotionStatusLabel = '';
