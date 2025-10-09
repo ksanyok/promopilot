@@ -6,24 +6,28 @@ require_once __DIR__ . '/utils.php';
 
 if (!function_exists('pp_promotion_crowd_normalize_language')) {
     function pp_promotion_crowd_normalize_language(?string $language): string {
-        $code = strtolower(trim((string)$language));
-        if ($code === '' || $code === 'auto') { return 'ru'; }
-        if (strpos($code, '-') !== false) {
-            $code = substr($code, 0, 2);
+        $normalized = pp_promotion_normalize_language_code($language, 'ru');
+        $supported = ['ru', 'en', 'uk'];
+        if (!in_array($normalized, $supported, true)) {
+            return 'ru';
         }
-        switch ($code) {
-            case 'en':
-            case 'ru':
-                return $code;
-            default:
-                return 'ru';
-        }
+        return $normalized;
     }
 }
 
 if (!function_exists('pp_promotion_crowd_texts')) {
     function pp_promotion_crowd_texts(string $language): array {
         switch ($language) {
+            case 'uk':
+                return [
+                    'subject_prefix' => 'Коментар',
+                    'subject_default' => 'Коментар до статті',
+                    'lead_with_anchor' => 'Колеги, ділюся корисним матеріалом «%s».',
+                    'lead_without_anchor' => 'Колеги, ділюся корисним матеріалом.',
+                    'link_prompt' => 'Перегляньте, будь ласка, посилання:',
+                    'feedback' => 'Будемо вдячні за вашу думку!',
+                    'author_default' => 'PromoPilot Автор',
+                ];
             case 'en':
                 return [
                     'subject_prefix' => 'Comment',

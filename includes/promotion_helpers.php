@@ -438,7 +438,14 @@ if (!function_exists('pp_promotion_prepare_child_article')) {
         }
         $title = trim((string)($parentArticle['title'] ?? ''));
         if ($title !== '') {
-            $suffix = (stripos($language, 'en') === 0) ? ' — repost' : ' — обзор';
+            $langPrefix = strtolower(substr($language, 0, 2));
+            if ($langPrefix === 'en') {
+                $suffix = ' — repost';
+            } elseif ($langPrefix === 'uk') {
+                $suffix = ' — огляд';
+            } else {
+                $suffix = ' — обзор';
+            }
             if (function_exists('mb_stripos')) {
                 if (mb_stripos($title, trim($suffix, ' —'), 0, 'UTF-8') === false) {
                     $title .= $suffix;

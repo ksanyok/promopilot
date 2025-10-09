@@ -32,6 +32,7 @@ if (!function_exists('pp_promotion_process_run')) {
             @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='LINK_MISSING', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
             return;
         }
+        $runLanguage = pp_promotion_resolve_language($linkRow, $project);
         if ($stage === 'pending_level1') {
             $req = $requirements[1];
             $count = (int)$req['count'];
@@ -85,7 +86,12 @@ if (!function_exists('pp_promotion_process_run')) {
                     $node['initiated_by'] = $run['initiated_by'];
                     $node['level'] = 1;
                     $node['target_url'] = $run['target_url'];
-                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[1]['min_len'], 'max_len' => $requirements[1]['max_len'], 'level' => 1]);
+                    pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                        'min_len' => $requirements[1]['min_len'],
+                        'max_len' => $requirements[1]['max_len'],
+                        'level' => 1,
+                        'prepared_language' => $runLanguage,
+                    ]);
                 }
                 $res->free();
             }
@@ -163,7 +169,12 @@ if (!function_exists('pp_promotion_process_run')) {
                                 $node['initiated_by'] = $run['initiated_by'];
                                 $node['level'] = 1;
                                 $node['target_url'] = $run['target_url'];
-                                pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, ['min_len' => $requirements[1]['min_len'], 'max_len' => $requirements[1]['max_len'], 'level' => 1]);
+                                pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, [
+                                    'min_len' => $requirements[1]['min_len'],
+                                    'max_len' => $requirements[1]['max_len'],
+                                    'level' => 1,
+                                    'prepared_language' => $runLanguage,
+                                ]);
                             }
                             $resNew->free();
                         }
@@ -263,12 +274,17 @@ if (!function_exists('pp_promotion_process_run')) {
                     $trail = [];
                     if ($parentCtx) { $trail[] = $parentCtx; }
                     $preparedArticle = null;
-                    $preparedLanguage = null;
                     $articleMeta = [];
+                    $preparedLanguage = pp_promotion_normalize_language_code($runLanguage, 'ru');
                     $cachedParent = $cachedArticlesL1[$parentNodeId] ?? null;
+                    $canReuseParent = false;
                     if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
-                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? '')));
-                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
+                        $cachedLanguage = pp_promotion_normalize_language_code($cachedParent['language'] ?? null, '');
+                        if ($cachedLanguage === '' || $cachedLanguage === $preparedLanguage) {
+                            $canReuseParent = true;
+                        }
+                    }
+                    if ($canReuseParent) {
                         $fallbackAnchor = (string)($node['anchor_text'] ?? '');
                         $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $fallbackAnchor);
                         if ($childAnchor !== '') {
@@ -316,6 +332,7 @@ if (!function_exists('pp_promotion_process_run')) {
                             ]);
                         } else {
                             $preparedArticle = null;
+                            $articleMeta = [];
                         }
                     }
                     $requirementsPayload = [
@@ -326,9 +343,9 @@ if (!function_exists('pp_promotion_process_run')) {
                         'parent_context' => $parentCtx,
                         'ancestor_trail' => $trail,
                     ];
+                    $requirementsPayload['prepared_language'] = $preparedLanguage;
                     if ($preparedArticle) {
                         $requirementsPayload['prepared_article'] = $preparedArticle;
-                        $requirementsPayload['prepared_language'] = $preparedLanguage;
                         if (!empty($articleMeta)) {
                             $requirementsPayload['article_meta'] = $articleMeta;
                         }
@@ -418,38 +435,39 @@ if (!function_exists('pp_promotion_process_run')) {
                     $anchorBase = pp_promotion_generate_contextual_anchor($parentContext, (string)$linkRow['anchor']);
                     $parentTargetUrl = (string)($parentInfo[$parentId]['target_url'] ?? '');
                     if ($parentTargetUrl === '') { $parentTargetUrl = (string)$run['target_url']; }
-                    $preparedLanguage = null;
+                    $preparedLanguage = pp_promotion_normalize_language_code($runLanguage, 'ru');
                     $preparedArticle = null;
                     $articleMeta = [];
                     $anchorFinal = $anchorBase;
                     if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
-                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? 'ru')));
-                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
-                        $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $anchorBase);
-                        if ($childAnchor !== '') { $anchorFinal = $childAnchor; }
-                        $preparedArticleCandidate = pp_promotion_prepare_child_article(
-                            $cachedParent,
-                            $parentResultUrl,
-                            $parentTargetUrl,
-                            $preparedLanguage,
-                            $anchorFinal
-                        );
-                        if (is_array($preparedArticleCandidate) && !empty($preparedArticleCandidate['htmlContent'])) {
-                            if (empty($preparedArticleCandidate['language'])) { $preparedArticleCandidate['language'] = $preparedLanguage; }
-                            if (empty($preparedArticleCandidate['plainText'])) {
-                                $plainCandidate = trim(strip_tags((string)$preparedArticleCandidate['htmlContent']));
-                                if ($plainCandidate !== '') { $preparedArticleCandidate['plainText'] = $plainCandidate; }
+                        $cachedLanguage = pp_promotion_normalize_language_code($cachedParent['language'] ?? null, '');
+                        if ($cachedLanguage === '' || $cachedLanguage === $preparedLanguage) {
+                            $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $anchorBase);
+                            if ($childAnchor !== '') { $anchorFinal = $childAnchor; }
+                            $preparedArticleCandidate = pp_promotion_prepare_child_article(
+                                $cachedParent,
+                                $parentResultUrl,
+                                $parentTargetUrl,
+                                $preparedLanguage,
+                                $anchorFinal
+                            );
+                            if (is_array($preparedArticleCandidate) && !empty($preparedArticleCandidate['htmlContent'])) {
+                                if (empty($preparedArticleCandidate['language'])) { $preparedArticleCandidate['language'] = $preparedLanguage; }
+                                if (empty($preparedArticleCandidate['plainText'])) {
+                                    $plainCandidate = trim(strip_tags((string)$preparedArticleCandidate['htmlContent']));
+                                    if ($plainCandidate !== '') { $preparedArticleCandidate['plainText'] = $plainCandidate; }
+                                }
+                                $preparedArticleCandidate['sourceUrl'] = $parentTargetUrl;
+                                $preparedArticleCandidate['sourceNodeId'] = $parentId;
+                                $preparedArticle = $preparedArticleCandidate;
+                                $articleMeta = [
+                                    'source_node_id' => $parentId,
+                                    'source_target_url' => $parentTargetUrl,
+                                    'source_level' => (int)($parentInfo[$parentId]['level'] ?? 1),
+                                    'parent_result_url' => $parentResultUrl,
+                                    'reuse_mode' => 'cached_parent',
+                                ];
                             }
-                            $preparedArticleCandidate['sourceUrl'] = $parentTargetUrl;
-                            $preparedArticleCandidate['sourceNodeId'] = $parentId;
-                            $preparedArticle = $preparedArticleCandidate;
-                            $articleMeta = [
-                                'source_node_id' => $parentId,
-                                'source_target_url' => $parentTargetUrl,
-                                'source_level' => (int)($parentInfo[$parentId]['level'] ?? 1),
-                                'parent_result_url' => $parentResultUrl,
-                                'reuse_mode' => 'cached_parent',
-                            ];
                         }
                     }
 
@@ -495,9 +513,9 @@ if (!function_exists('pp_promotion_process_run')) {
                                 'parent_context' => $parentContext,
                                 'ancestor_trail' => $trail,
                             ];
+                            $requirementsPayload['prepared_language'] = $preparedLanguage;
                             if ($preparedArticle) {
                                 $requirementsPayload['prepared_article'] = $preparedArticle;
-                                $requirementsPayload['prepared_language'] = $preparedLanguage;
                                 if (!empty($articleMeta)) {
                                     $requirementsPayload['article_meta'] = $articleMeta;
                                 }
@@ -629,61 +647,63 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                     if ($parentCtx) { $trail[] = $parentCtx; }
                     $preparedArticle = null;
-                    $preparedLanguage = null;
                     $articleMeta = [];
+                    $preparedLanguage = pp_promotion_normalize_language_code($runLanguage, 'ru');
                     $cachedParent = $cachedArticlesL2[$parentId] ?? null;
                     if (is_array($cachedParent) && !empty($cachedParent['htmlContent'])) {
-                        $preparedLanguage = (string)($cachedParent['language'] ?? ($linkRow['language'] ?? ($project['language'] ?? '')));
-                        if ($preparedLanguage === '') { $preparedLanguage = 'ru'; }
-                        $fallbackAnchor = (string)($node['anchor_text'] ?? '');
-                        $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $fallbackAnchor);
-                        if ($childAnchor !== '') {
-                            if ($childAnchor !== $fallbackAnchor && $nodeId > 0) {
-                                $updateAnchor = $conn->prepare('UPDATE promotion_nodes SET anchor_text=? WHERE id=? LIMIT 1');
-                                if ($updateAnchor) {
-                                    $updateAnchor->bind_param('si', $childAnchor, $nodeId);
-                                    $updateAnchor->execute();
-                                    $updateAnchor->close();
+                        $cachedLanguage = pp_promotion_normalize_language_code($cachedParent['language'] ?? null, '');
+                        if ($cachedLanguage === '' || $cachedLanguage === $preparedLanguage) {
+                            $fallbackAnchor = (string)($node['anchor_text'] ?? '');
+                            $childAnchor = pp_promotion_generate_child_anchor($cachedParent, $preparedLanguage, $fallbackAnchor);
+                            if ($childAnchor !== '') {
+                                if ($childAnchor !== $fallbackAnchor && $nodeId > 0) {
+                                    $updateAnchor = $conn->prepare('UPDATE promotion_nodes SET anchor_text=? WHERE id=? LIMIT 1');
+                                    if ($updateAnchor) {
+                                        $updateAnchor->bind_param('si', $childAnchor, $nodeId);
+                                        $updateAnchor->execute();
+                                        $updateAnchor->close();
+                                    }
                                 }
+                                $node['anchor_text'] = $childAnchor;
                             }
-                            $node['anchor_text'] = $childAnchor;
-                        }
-                        $parentTargetUrl = (string)($node['parent_target_url'] ?? '');
-                        if ($parentTargetUrl === '') { $parentTargetUrl = (string)$node['parent_url']; }
-                        $preparedArticle = pp_promotion_prepare_child_article(
-                            $cachedParent,
-                            (string)$node['target_url'],
-                            $parentTargetUrl,
-                            $preparedLanguage,
-                            (string)$node['anchor_text']
-                        );
-                        if (is_array($preparedArticle) && !empty($preparedArticle['htmlContent'])) {
-                            if (empty($preparedArticle['language'])) { $preparedArticle['language'] = $preparedLanguage; }
-                            if (empty($preparedArticle['plainText'])) {
-                                $plain = trim(strip_tags((string)$preparedArticle['htmlContent']));
-                                if ($plain !== '') { $preparedArticle['plainText'] = $plain; }
+                            $parentTargetUrl = (string)($node['parent_target_url'] ?? '');
+                            if ($parentTargetUrl === '') { $parentTargetUrl = (string)$node['parent_url']; }
+                            $preparedArticle = pp_promotion_prepare_child_article(
+                                $cachedParent,
+                                (string)$node['target_url'],
+                                $parentTargetUrl,
+                                $preparedLanguage,
+                                (string)$node['anchor_text']
+                            );
+                            if (is_array($preparedArticle) && !empty($preparedArticle['htmlContent'])) {
+                                if (empty($preparedArticle['language'])) { $preparedArticle['language'] = $preparedLanguage; }
+                                if (empty($preparedArticle['plainText'])) {
+                                    $plain = trim(strip_tags((string)$preparedArticle['htmlContent']));
+                                    if ($plain !== '') { $preparedArticle['plainText'] = $plain; }
+                                }
+                                $preparedArticle['sourceUrl'] = $parentTargetUrl;
+                                $preparedArticle['sourceNodeId'] = $parentId;
+                                $articleMeta = [
+                                    'source_node_id' => $parentId,
+                                    'source_target_url' => $parentTargetUrl,
+                                    'source_level' => (int)($node['parent_level'] ?? 2),
+                                    'parent_result_url' => (string)($node['parent_url'] ?? ''),
+                                    'ancestor_source_node_id' => $level1ParentId,
+                                    'reuse_mode' => 'cached_parent',
+                                ];
+                                pp_promotion_log('promotion.level3.article_reuse', [
+                                    'run_id' => $runId,
+                                    'node_id' => $nodeId,
+                                    'parent_node_id' => $parentId,
+                                    'prepared_language' => $preparedLanguage,
+                                    'target_url' => (string)$node['target_url'],
+                                    'parent_target_url' => $parentTargetUrl,
+                                    'level1_parent_id' => $level1ParentId,
+                                ]);
+                            } else {
+                                $preparedArticle = null;
+                                $articleMeta = [];
                             }
-                            $preparedArticle['sourceUrl'] = $parentTargetUrl;
-                            $preparedArticle['sourceNodeId'] = $parentId;
-                            $articleMeta = [
-                                'source_node_id' => $parentId,
-                                'source_target_url' => $parentTargetUrl,
-                                'source_level' => (int)($node['parent_level'] ?? 2),
-                                'parent_result_url' => (string)($node['parent_url'] ?? ''),
-                                'ancestor_source_node_id' => $level1ParentId,
-                                'reuse_mode' => 'cached_parent',
-                            ];
-                            pp_promotion_log('promotion.level3.article_reuse', [
-                                'run_id' => $runId,
-                                'node_id' => $nodeId,
-                                'parent_node_id' => $parentId,
-                                'prepared_language' => $preparedLanguage,
-                                'target_url' => (string)$node['target_url'],
-                                'parent_target_url' => $parentTargetUrl,
-                                'level1_parent_id' => $level1ParentId,
-                            ]);
-                        } else {
-                            $preparedArticle = null;
                         }
                     }
                     $requirementsPayload = [
@@ -694,9 +714,9 @@ if (!function_exists('pp_promotion_process_run')) {
                         'parent_context' => $parentCtx,
                         'ancestor_trail' => $trail,
                     ];
+                    $requirementsPayload['prepared_language'] = $preparedLanguage;
                     if ($preparedArticle) {
                         $requirementsPayload['prepared_article'] = $preparedArticle;
-                        $requirementsPayload['prepared_language'] = $preparedLanguage;
                         if (!empty($articleMeta)) {
                             $requirementsPayload['article_meta'] = $articleMeta;
                         }

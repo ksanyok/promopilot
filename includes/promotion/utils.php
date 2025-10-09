@@ -4,6 +4,45 @@ require_once __DIR__ . '/../notifications.php';
 require_once __DIR__ . '/../mailer.php';
 require_once __DIR__ . '/settings.php';
 
+if (!function_exists('pp_promotion_normalize_language_code')) {
+    function pp_promotion_normalize_language_code(?string $code, string $fallback = 'ru'): string {
+        $fallback = strtolower(trim($fallback));
+        if ($fallback === '' || $fallback === 'auto') { $fallback = 'ru'; }
+
+        $normalized = strtolower(trim((string)$code));
+        if ($normalized === '' || $normalized === 'auto') {
+            return $fallback;
+        }
+
+        $normalized = str_replace('_', '-', $normalized);
+        if (strpos($normalized, '-') !== false) {
+            $normalized = strtok($normalized, '-');
+        }
+
+        $normalized = preg_replace('~[^a-z]~', '', $normalized ?? '') ?? '';
+        if ($normalized === '') {
+            return $fallback;
+        }
+
+        if (strlen($normalized) < 2 || strlen($normalized) > 3) {
+            $normalized = substr($normalized, 0, 3);
+        }
+
+        if ($normalized === '') {
+            return $fallback;
+        }
+
+        return $normalized;
+    }
+}
+
+if (!function_exists('pp_promotion_resolve_language')) {
+    function pp_promotion_resolve_language(array $linkRow, array $project, string $fallback = 'ru'): string {
+        $projectLang = pp_promotion_normalize_language_code($project['language'] ?? null, $fallback);
+        return pp_promotion_normalize_language_code($linkRow['language'] ?? null, $projectLang);
+    }
+}
+
 if (!function_exists('pp_promotion_launch_worker')) {
     function pp_promotion_launch_worker(?int $runId = null, bool $allowFallback = true): bool {
         $script = PP_ROOT_PATH . '/scripts/promotion_worker.php';
@@ -474,7 +513,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         $targetUrl = (string)$node['target_url'];
         $networkSlug = (string)$node['network_slug'];
         $anchor = (string)$node['anchor_text'];
-        $language = (string)($linkRow['language'] ?? $project['language'] ?? 'ru');
+        $language = pp_promotion_resolve_language($linkRow, $project);
         $wish = (string)($linkRow['wish'] ?? $project['wishes'] ?? '');
         $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
         $jobPayload = [
@@ -495,7 +534,8 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
                 'id' => $projectId,
                 'region' => $project['region'] ?? null,
                 'topic' => $project['topic'] ?? null,
-                'language' => $project['language'] ?? null,
+                'language' => pp_promotion_normalize_language_code($project['language'] ?? null, $language),
+                'resolvedLanguage' => $language,
             ],
             'network' => [
                 'slug' => $networkSlug,
@@ -535,7 +575,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             }
         }
         if (!empty($requirements['prepared_language'])) {
-            $preparedLanguage = (string)$requirements['prepared_language'];
+            $preparedLanguage = pp_promotion_normalize_language_code($requirements['prepared_language'], $language);
             if ($preparedLanguage !== '') {
                 $jobPayload['target']['language'] = $preparedLanguage;
                 if (empty($jobPayload['article']['language'])) {

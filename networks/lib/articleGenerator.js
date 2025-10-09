@@ -8,10 +8,36 @@ const { generateImage } = require('./generateImage');
 let lastGeneratedArticle = null;
 
 const LANGUAGE_LABELS = {
-  ru: { nameEn: 'Russian', nameRuIn: 'русском языке' },
-  uk: { nameEn: 'Ukrainian', nameRuIn: 'украинском языке' },
-  ua: { nameEn: 'Ukrainian', nameRuIn: 'украинском языке' },
-  en: { nameEn: 'English', nameRuIn: 'английском языке' },
+  ru: {
+    nameEn: 'Russian',
+    nameEnWithCode: 'Russian',
+    nameRuIn: 'русском языке',
+    iso: 'ru',
+  },
+  uk: {
+    nameEn: 'Ukrainian',
+    nameEnWithCode: 'Ukrainian language (ISO code: uk)',
+    nameRuIn: 'украинском языке',
+    nativeIn: 'українською мовою',
+    nativeContentReminder: 'Увесь текст пиши українською мовою. Не переходь на англійську чи російську.',
+    nativeTitleReminder: 'Заголовок сформулюй українською мовою без англійських або російських слів.',
+    iso: 'uk',
+  },
+  ua: {
+    nameEn: 'Ukrainian',
+    nameEnWithCode: 'Ukrainian language (ISO code: uk)',
+    nameRuIn: 'украинском языке',
+    nativeIn: 'українською мовою',
+    nativeContentReminder: 'Увесь текст пиши українською мовою. Не переходь на англійську чи російську.',
+    nativeTitleReminder: 'Заголовок сформулюй українською мовою без англійських або російських слів.',
+    iso: 'uk',
+  },
+  en: {
+    nameEn: 'English',
+    nameEnWithCode: 'English',
+    nameRuIn: 'английском языке',
+    iso: 'en',
+  },
   es: { nameEn: 'Spanish', nameRuIn: 'испанском языке' },
   de: { nameEn: 'German', nameRuIn: 'немецком языке' },
   fr: { nameEn: 'French', nameRuIn: 'французском языке' },
@@ -65,17 +91,27 @@ function getLanguageMeta(language) {
       nameEn: 'the page language',
       nameEnWithCode: 'the page language',
       nameRuIn: 'языке страницы',
+      nativeIn: '',
+      nativeContentReminder: '',
+      nativeTitleReminder: '',
+      iso: '',
     };
   }
   const lower = raw.toLowerCase();
   const base = lower.split(/[-_]/)[0] || lower;
   const preset = LANGUAGE_LABELS[base] || null;
   if (preset) {
+    const iso = (preset.iso || base || '').trim();
+    const nameEnWithCode = preset.nameEnWithCode || `${preset.nameEn} language${iso ? ` (ISO code: ${iso})` : ''}`;
     return {
       code: base,
       nameEn: preset.nameEn,
-      nameEnWithCode: preset.nameEnWithCode || `${preset.nameEn} (${base})`,
+      nameEnWithCode,
       nameRuIn: preset.nameRuIn,
+      nativeIn: preset.nativeIn || '',
+      nativeContentReminder: preset.nativeContentReminder || '',
+      nativeTitleReminder: preset.nativeTitleReminder || '',
+      iso,
     };
   }
   const codeLabel = base || raw.toLowerCase();
@@ -85,6 +121,10 @@ function getLanguageMeta(language) {
     nameEn: fallbackEn,
     nameEnWithCode: fallbackEn,
     nameRuIn: 'языке страницы',
+    nativeIn: '',
+    nativeContentReminder: '',
+    nativeTitleReminder: '',
+    iso: codeLabel,
   };
 }
 
@@ -421,6 +461,15 @@ function buildTitlePrompt({
         `Keep the entire headline in ${languageMeta.nameEnWithCode}; no quotes, emoji, or URLs. Limit it to 6–12 words and return only the headline.`,
       ];
 
+  if (!isRu) {
+    if (languageMeta.nativeTitleReminder) {
+      lines.push(languageMeta.nativeTitleReminder);
+    } else if (languageMeta.nativeIn) {
+      lines.push(`Заголовок має бути ${languageMeta.nativeIn}; не переходь на інші мови.`);
+    }
+    lines.push(`IMPORTANT: Keep the headline strictly in ${languageMeta.nameEn}; do not switch to English, Russian, or any other language.`);
+  }
+
   if (keywordReminder) {
     lines.push(keywordReminder);
   }
@@ -438,8 +487,8 @@ function buildSystemPrompts({ isRu, languageMeta }) {
     };
   }
   return {
-    title: `Return only the final headline. It must be written in ${languageMeta.nameEnWithCode}. No quotes or explanations.`,
-    content: `Return only the article body in HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). All visible text must be in ${languageMeta.nameEnWithCode}; do not switch languages or add commentary.`,
+    title: `Return only the final headline. It must be written in ${languageMeta.nameEnWithCode}. No quotes or explanations. Do not use English words.`,
+    content: `Return only the article body in HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). All visible text must stay in ${languageMeta.nameEnWithCode}; do not switch languages or add commentary. Avoid English or Russian sentences unless they are unavoidable proper nouns.`,
   };
 }
 
@@ -650,6 +699,12 @@ async function generateArticle({
   } else {
     contentLines.push(`Write an article in ${languageMeta.nameEn} about: ${topicLine}.`);
     contentLines.push(`Keep every heading, paragraph, and anchor strictly in ${languageMeta.nameEnWithCode}. Do not switch languages.`);
+    if (languageMeta.nativeContentReminder) {
+      contentLines.push(languageMeta.nativeContentReminder);
+    } else if (languageMeta.nativeIn) {
+      contentLines.push(`Увесь текст тримай ${languageMeta.nativeIn}; не переходь на інші мови.`);
+    }
+    contentLines.push(`IMPORTANT: The entire article must be in ${languageMeta.nameEn}. Do not include English, Russian, or other languages except unavoidable proper nouns.`);
   }
   if (region) {
     contentLines.push(isRu ? `Регион публикации: ${region}.` : `Geographic focus: ${region}.`);
