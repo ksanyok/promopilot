@@ -218,6 +218,7 @@ function setup_database(string $host, string $user, string $pass, string $db, st
         network VARCHAR(100) NULL,
         published_by VARCHAR(100) NULL,
         post_url TEXT NULL,
+        job_payload LONGTEXT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         INDEX (project_id),
         CONSTRAINT fk_publications_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE

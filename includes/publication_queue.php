@@ -98,6 +98,13 @@ if (!function_exists('pp_process_publication_job')) {
                 if ($normalized !== '') { $payloadLanguage = $normalized; break; }
             }
         }
+        $pageMetaLanguage = '';
+        if (is_array($pageMeta) && !empty($pageMeta)) {
+            $pageMetaLanguage = $normalizeLanguage($pageMeta['lang'] ?? '');
+        }
+        if ($payloadLanguage === '' && $pageMetaLanguage !== '') {
+            $payloadLanguage = $pageMetaLanguage;
+        }
         if ($payloadLanguage !== '') { $linkLanguage = $payloadLanguage; }
 
         $jobBase = [
@@ -158,6 +165,7 @@ if (!function_exists('pp_process_publication_job')) {
             $prepLang = $normalizeLanguage($job['preparedArticle']['language'] ?? '');
             $job['preparedArticle']['language'] = $prepLang !== '' ? $prepLang : $jobLanguage;
         }
+        $jobPayloadPresent = !empty($jobPayload);
         if (function_exists('pp_promotion_log')) {
             $logPayload = [
                 'pub_id' => $pubId,
@@ -169,12 +177,15 @@ if (!function_exists('pp_process_publication_job')) {
                 'project_language_norm' => $projectLanguageNorm,
                 'link_language_initial' => $linkLanguageInitial,
                 'payload_language' => $payloadLanguage ?: null,
+                'page_meta_language' => $pageMetaLanguage ?: null,
                 'job_language' => $jobLanguage,
                 'target_language' => $job['target']['language'] ?? null,
                 'article_language' => $job['article']['language'] ?? null,
                 'project_language' => $job['project']['language'] ?? null,
                 'project_resolved_language' => $job['project']['resolvedLanguage'] ?? null,
                 'prepared_article_language' => $job['preparedArticle']['language'] ?? null,
+                'job_payload_column' => $hasJobPayloadColumn,
+                'job_payload_present' => $jobPayloadPresent,
             ];
             pp_promotion_log('promotion.publication_job_language', $logPayload);
         }

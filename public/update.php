@@ -253,6 +253,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 `network` VARCHAR(100) NULL,
                 `published_by` VARCHAR(100) NULL,
                 `post_url` TEXT NULL,
+                `job_payload` LONGTEXT NULL,
                 `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 INDEX (`project_id`),
                 CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
@@ -263,6 +264,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (!$columnExists('publications','network'))      { $apply("ALTER TABLE `publications` ADD COLUMN `network` VARCHAR(100) NULL"); }
             if (!$columnExists('publications','published_by')) { $apply("ALTER TABLE `publications` ADD COLUMN `published_by` VARCHAR(100) NULL"); }
             if (!$columnExists('publications','post_url'))     { $apply("ALTER TABLE `publications` ADD COLUMN `post_url` TEXT NULL"); }
+            if (!$columnExists('publications','job_payload'))  { $apply("ALTER TABLE `publications` ADD COLUMN `job_payload` LONGTEXT NULL"); }
             if (!$columnExists('publications','created_at'))   { $apply("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); }
         }
 

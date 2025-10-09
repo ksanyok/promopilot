@@ -195,6 +195,7 @@ function pp_run_schema_bootstrap(): void {
             `verification_details` TEXT NULL,
             `cancel_requested` TINYINT(1) NOT NULL DEFAULT 0,
             `pid` INT NULL DEFAULT NULL,
+            `job_payload` LONGTEXT NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (`project_id`),
             INDEX `idx_publications_status` (`status`),
@@ -249,6 +250,9 @@ function pp_run_schema_bootstrap(): void {
         }
         if (!isset($pubCols['pid'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `pid` INT NULL DEFAULT NULL AFTER `cancel_requested`");
+        }
+        if (!isset($pubCols['job_payload'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `job_payload` LONGTEXT NULL AFTER `pid`");
         }
         if (!isset($pubCols['created_at'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");

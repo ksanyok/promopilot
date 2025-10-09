@@ -670,6 +670,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             'anchor' => $anchor,
             'language' => $language,
             'language_detail' => $languageDetail,
+            'job_payload_column' => $hasJobPayloadColumn,
             'requirements' => [
                 'min_length' => $requirements['min_len'] ?? null,
                 'max_length' => $requirements['max_len'] ?? null,
