@@ -50,11 +50,29 @@ if (!function_exists('pp_process_publication_job')) {
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $pubId); $stmt->execute(); $row = $stmt->get_result()->fetch_assoc(); $stmt->close(); if (!$row) { $conn->close(); return; }
         if (!in_array($row['status'], ['queued','running'], true)) { $conn->close(); return; }
+        $normalizeLanguage = static function($value) {
+            $candidate = trim((string)$value);
+            if ($candidate === '') { return ''; }
+            if (function_exists('pp_promotion_normalize_language_code')) {
+                return pp_promotion_normalize_language_code($candidate, $candidate);
+            }
+            $candidate = strtolower(str_replace('_', '-', $candidate));
+            if (strpos($candidate, '-') !== false) { $candidate = strtok($candidate, '-'); }
+            $candidate = preg_replace('~[^a-z]~', '', $candidate) ?: $candidate;
+            if (strlen($candidate) > 3) { $candidate = substr($candidate, 0, 3); }
+            return $candidate;
+        };
+
         $projectId = (int)$row['project_id']; $url = (string)$row['page_url']; $anchor = trim((string)$row['anchor'] ?? ''); $networkSlug = trim((string)$row['network'] ?? '');
-        $projectLanguage = trim((string)($row['project_language'] ?? 'ru')) ?: 'ru'; $projectWish = trim((string)($row['project_wish'] ?? '')); $projectName = trim((string)($row['project_name'] ?? ''));
-        $linkLanguage = $projectLanguage; $linkWish = $projectWish;
+        $projectLanguageRaw = (string)($row['project_language'] ?? 'ru');
+        $projectLanguageNorm = $normalizeLanguage($projectLanguageRaw);
+        if ($projectLanguageNorm === '') { $projectLanguageNorm = 'ru'; }
+        $projectWish = trim((string)($row['project_wish'] ?? '')); $projectName = trim((string)($row['project_name'] ?? ''));
+        $linkLanguage = $projectLanguageNorm; $linkWish = $projectWish;
         if ($pl = $conn->prepare('SELECT anchor, language, wish FROM project_links WHERE project_id = ? AND url = ? LIMIT 1')) {
-            $pl->bind_param('is', $projectId, $url); if ($pl->execute()) { $r = $pl->get_result()->fetch_assoc(); if ($r) { $a = trim((string)($r['anchor'] ?? '')); $l = trim((string)($r['language'] ?? '')); $w = trim((string)($r['wish'] ?? '')); if ($a !== '') { $anchor = $anchor !== '' ? $anchor : $a; } if ($l !== '') { $linkLanguage = $l; } if ($w !== '') { $linkWish = $w; } } } $pl->close(); }
+            $pl->bind_param('is', $projectId, $url); if ($pl->execute()) { $r = $pl->get_result()->fetch_assoc(); if ($r) { $a = trim((string)($r['anchor'] ?? '')); $l = trim((string)($r['language'] ?? '')); $w = trim((string)($r['wish'] ?? '')); if ($a !== '') { $anchor = $anchor !== '' ? $anchor : $a; } if ($l !== '') { $linkLanguage = $normalizeLanguage($l); } if ($w !== '') { $linkWish = $w; } } } $pl->close(); }
+        if ($linkLanguage === '') { $linkLanguage = $projectLanguageNorm; }
+        if ($linkLanguage === '') { $linkLanguage = 'ru'; }
         $network = $networkSlug !== '' ? pp_get_network($networkSlug) : pp_pick_network(); if (!$network) { $err = 'NO_ENABLED_NETWORKS'; $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1"); if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); } $conn->close(); return; }
         $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
         $openaiKey = trim((string)get_setting('openai_api_key', '')); $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
@@ -65,6 +83,21 @@ if (!function_exists('pp_process_publication_job')) {
             $decodedPayload = json_decode((string)$row['job_payload'], true);
             if (is_array($decodedPayload)) { $jobPayload = $decodedPayload; }
         }
+
+        $payloadLanguage = '';
+        if (is_array($jobPayload) && !empty($jobPayload)) {
+            $languageSources = [];
+            if (isset($jobPayload['target']['language'])) { $languageSources[] = $jobPayload['target']['language']; }
+            if (isset($jobPayload['language'])) { $languageSources[] = $jobPayload['language']; }
+            if (isset($jobPayload['project']['resolvedLanguage'])) { $languageSources[] = $jobPayload['project']['resolvedLanguage']; }
+            if (isset($jobPayload['project']['language'])) { $languageSources[] = $jobPayload['project']['language']; }
+            if (isset($jobPayload['article']['language'])) { $languageSources[] = $jobPayload['article']['language']; }
+            foreach ($languageSources as $sourceLang) {
+                $normalized = $normalizeLanguage($sourceLang);
+                if ($normalized !== '') { $payloadLanguage = $normalized; break; }
+            }
+        }
+        if ($payloadLanguage !== '') { $linkLanguage = $payloadLanguage; }
 
         $jobBase = [
             'url' => $url,
@@ -90,10 +123,40 @@ if (!function_exists('pp_process_publication_job')) {
         ];
 
         $job = is_array($jobPayload) ? $jobPayload : [];
-        $job = array_replace_recursive($job, $jobBase);
+        $job = array_replace_recursive($jobBase, $job);
         if (!isset($job['page_meta']) || empty($job['page_meta'])) { $job['page_meta'] = $pageMeta; }
         if (!isset($job['meta']) || empty($job['meta'])) { $job['meta'] = $pageMeta; }
-        if (!isset($job['language']) || $job['language'] === '') { $job['language'] = $linkLanguage; }
+
+        $jobLanguage = $normalizeLanguage($job['language'] ?? '');
+        if ($jobLanguage === '') { $jobLanguage = $linkLanguage; }
+        if ($jobLanguage === '') { $jobLanguage = 'ru'; }
+        $job['language'] = $jobLanguage;
+
+        if (isset($job['page_meta']) && is_array($job['page_meta'])) {
+            $job['page_meta']['lang'] = $jobLanguage;
+        }
+        if (isset($job['meta']) && is_array($job['meta'])) {
+            $job['meta']['lang'] = $jobLanguage;
+        }
+
+        if (isset($job['target']) && is_array($job['target'])) {
+            $targetLang = $normalizeLanguage($job['target']['language'] ?? '');
+            $job['target']['language'] = $targetLang !== '' ? $targetLang : $jobLanguage;
+        }
+        if (isset($job['project']) && is_array($job['project'])) {
+            $projLang = $normalizeLanguage($job['project']['language'] ?? '');
+            $job['project']['language'] = $projLang !== '' ? $projLang : $jobLanguage;
+            $resolvedLang = $normalizeLanguage($job['project']['resolvedLanguage'] ?? '');
+            $job['project']['resolvedLanguage'] = $resolvedLang !== '' ? $resolvedLang : $jobLanguage;
+        }
+        if (isset($job['article']) && is_array($job['article'])) {
+            $articleLang = $normalizeLanguage($job['article']['language'] ?? '');
+            $job['article']['language'] = $articleLang !== '' ? $articleLang : $jobLanguage;
+        }
+        if (isset($job['preparedArticle']) && is_array($job['preparedArticle']) && !empty($job['preparedArticle'])) {
+            $prepLang = $normalizeLanguage($job['preparedArticle']['language'] ?? '');
+            $job['preparedArticle']['language'] = $prepLang !== '' ? $prepLang : $jobLanguage;
+        }
         $result = pp_publish_via_network($network, $job, 480);
         if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
             $errText = 'NETWORK_ERROR'; $details = ''; if (is_array($result)) { $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? ''))); }
