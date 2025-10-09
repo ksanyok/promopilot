@@ -695,6 +695,20 @@ async function generateArticle({
   const levelNumber = Number.isFinite(inferredLevel) ? inferredLevel : 1;
   const isHigherLevel = levelNumber >= 2;
   const isTest = !!testMode;
+  if (typeof logLine === 'function') {
+    logLine('article.job.language_snapshot', {
+      pageLang,
+      requestedLanguage: language || null,
+      articleConfigLanguage: articleHints.language || null,
+      pageMetaLang: pageMeta.lang || null,
+      metaLang: meta && typeof meta === 'object' ? (meta.lang || null) : null,
+      inferredLevel,
+      levelNumber,
+      isHigherLevel,
+      cascadeLevel: cascadeNormalized.level ?? null,
+      cascadeTrail: Array.isArray(cascadeNormalized.ancestorTrail) ? cascadeNormalized.ancestorTrail.length : 0,
+    });
+  }
 
   if (isTest) {
     const preset = buildDiagnosticArticle(pageUrl, anchorText);

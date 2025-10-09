@@ -74,6 +74,15 @@ function createHttpPublisher(config) {
       article: rawArticle,
     };
     logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
+    logLine('job.language.snapshot', {
+      jobLanguage: job.language || null,
+      articleLanguage: rawArticle && typeof rawArticle === 'object' ? (rawArticle.language || null) : null,
+      targetLanguage: job.target && typeof job.target === 'object' ? (job.target.language || null) : null,
+      projectLanguage: job.project && typeof job.project === 'object' ? (job.project.language || null) : null,
+      projectResolvedLanguage: job.project && typeof job.project === 'object' ? (job.project.resolvedLanguage || null) : null,
+      preparedArticleLanguage: jobOptions.preparedArticle && typeof jobOptions.preparedArticle === 'object' ? (jobOptions.preparedArticle.language || null) : null,
+      networkLevel: job.network && typeof job.network === 'object' ? (job.network.level || null) : null,
+    });
 
     const { article, variants } = await composeArticle(job, logLine, jobOptions.preparedArticle);
     let body = pickVariant(config.contentFormat || 'markdown', variants);
@@ -160,6 +169,15 @@ function createTcpPublisher(config) {
       testMode: !!jobOptions.testMode
     };
     logLine('Publish start', { pageUrl, anchorText, provider, testMode: job.testMode });
+    logLine('job.language.snapshot', {
+      jobLanguage: job.language || null,
+      articleLanguage: jobOptions.article && typeof jobOptions.article === 'object' ? (jobOptions.article.language || null) : null,
+      targetLanguage: jobOptions.target && typeof jobOptions.target === 'object' ? (jobOptions.target.language || null) : null,
+      projectLanguage: jobOptions.project && typeof jobOptions.project === 'object' ? (jobOptions.project.language || null) : null,
+      projectResolvedLanguage: jobOptions.project && typeof jobOptions.project === 'object' ? (jobOptions.project.resolvedLanguage || null) : null,
+      preparedArticleLanguage: jobOptions.preparedArticle && typeof jobOptions.preparedArticle === 'object' ? (jobOptions.preparedArticle.language || null) : null,
+      networkLevel: jobOptions.network && typeof jobOptions.network === 'object' ? (jobOptions.network.level || null) : null,
+    });
 
     const { article, variants } = await composeArticle(job, logLine, jobOptions.preparedArticle);
     const body = await (config.prepareBody ? config.prepareBody({ job, article, variants, logLine }) : null) || pickVariant(config.contentFormat || 'text', variants);

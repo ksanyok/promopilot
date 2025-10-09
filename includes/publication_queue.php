@@ -73,6 +73,7 @@ if (!function_exists('pp_process_publication_job')) {
             $pl->bind_param('is', $projectId, $url); if ($pl->execute()) { $r = $pl->get_result()->fetch_assoc(); if ($r) { $a = trim((string)($r['anchor'] ?? '')); $l = trim((string)($r['language'] ?? '')); $w = trim((string)($r['wish'] ?? '')); if ($a !== '') { $anchor = $anchor !== '' ? $anchor : $a; } if ($l !== '') { $linkLanguage = $normalizeLanguage($l); } if ($w !== '') { $linkWish = $w; } } } $pl->close(); }
         if ($linkLanguage === '') { $linkLanguage = $projectLanguageNorm; }
         if ($linkLanguage === '') { $linkLanguage = 'ru'; }
+        $linkLanguageInitial = $linkLanguage;
         $network = $networkSlug !== '' ? pp_get_network($networkSlug) : pp_pick_network(); if (!$network) { $err = 'NO_ENABLED_NETWORKS'; $up = $conn->prepare("UPDATE publications SET status='failed', finished_at=CURRENT_TIMESTAMP, error=? WHERE id = ? LIMIT 1"); if ($up) { $up->bind_param('si', $err, $pubId); $up->execute(); $up->close(); } $conn->close(); return; }
         $aiProvider = strtolower((string)get_setting('ai_provider', 'openai')) === 'byoa' ? 'byoa' : 'openai';
         $openaiKey = trim((string)get_setting('openai_api_key', '')); $openaiModel = trim((string)get_setting('openai_model', 'gpt-3.5-turbo')) ?: 'gpt-3.5-turbo';
@@ -156,6 +157,26 @@ if (!function_exists('pp_process_publication_job')) {
         if (isset($job['preparedArticle']) && is_array($job['preparedArticle']) && !empty($job['preparedArticle'])) {
             $prepLang = $normalizeLanguage($job['preparedArticle']['language'] ?? '');
             $job['preparedArticle']['language'] = $prepLang !== '' ? $prepLang : $jobLanguage;
+        }
+        if (function_exists('pp_promotion_log')) {
+            $logPayload = [
+                'pub_id' => $pubId,
+                'project_id' => $projectId,
+                'page_url' => $url,
+                'network_slug' => $networkSlug,
+                'network_level' => isset($job['network']['level']) ? (int)$job['network']['level'] : null,
+                'project_language_raw' => $projectLanguageRaw,
+                'project_language_norm' => $projectLanguageNorm,
+                'link_language_initial' => $linkLanguageInitial,
+                'payload_language' => $payloadLanguage ?: null,
+                'job_language' => $jobLanguage,
+                'target_language' => $job['target']['language'] ?? null,
+                'article_language' => $job['article']['language'] ?? null,
+                'project_language' => $job['project']['language'] ?? null,
+                'project_resolved_language' => $job['project']['resolvedLanguage'] ?? null,
+                'prepared_article_language' => $job['preparedArticle']['language'] ?? null,
+            ];
+            pp_promotion_log('promotion.publication_job_language', $logPayload);
         }
         $result = pp_publish_via_network($network, $job, 480);
         if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {

@@ -640,6 +640,25 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             $update->execute();
             $update->close();
         }
+        $preparedArticleLanguage = null;
+        if (!empty($requirements['prepared_article']) && is_array($requirements['prepared_article'])) {
+            if (isset($requirements['prepared_article']['language']) && $requirements['prepared_article']['language'] !== '') {
+                $preparedArticleLanguage = (string)$requirements['prepared_article']['language'];
+            }
+        } elseif (!empty($jobPayload['preparedArticle']) && is_array($jobPayload['preparedArticle'])) {
+            if (!empty($jobPayload['preparedArticle']['language'])) {
+                $preparedArticleLanguage = (string)$jobPayload['preparedArticle']['language'];
+            }
+        }
+        $languageDetail = [
+            'resolved' => $language,
+            'target' => $jobPayload['target']['language'] ?? null,
+            'article' => $jobPayload['article']['language'] ?? null,
+            'project' => $jobPayload['project']['language'] ?? null,
+            'project_resolved' => $jobPayload['project']['resolvedLanguage'] ?? null,
+            'prepared_language' => $requirements['prepared_language'] ?? null,
+            'prepared_article_language' => $preparedArticleLanguage,
+        ];
         pp_promotion_log('promotion.publication_queued', [
             'run_id' => $runId,
             'project_id' => $projectId,
@@ -650,6 +669,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             'target_url' => $targetUrl,
             'anchor' => $anchor,
             'language' => $language,
+            'language_detail' => $languageDetail,
             'requirements' => [
                 'min_length' => $requirements['min_len'] ?? null,
                 'max_length' => $requirements['max_len'] ?? null,

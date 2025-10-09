@@ -398,6 +398,21 @@ if (require.main === module) {
         console.log(JSON.stringify(payload));
         process.exit(1);
       }
+      const articleLanguage = job.article && typeof job.article === 'object' ? (job.article.language || null) : null;
+      const targetLanguage = job.target && typeof job.target === 'object' ? (job.target.language || null) : null;
+      const projectLanguage = job.project && typeof job.project === 'object' ? (job.project.language || null) : null;
+      const projectResolvedLanguage = job.project && typeof job.project === 'object' ? (job.project.resolvedLanguage || null) : null;
+      const preparedArticleLanguage = job.preparedArticle && typeof job.preparedArticle === 'object' ? (job.preparedArticle.language || null) : null;
+      const networkLevel = job.network && typeof job.network === 'object' ? (job.network.level || null) : null;
+      logLine('job.language.snapshot', {
+        jobLanguage: job.language || null,
+        articleLanguage,
+        targetLanguage,
+        projectLanguage,
+        projectResolvedLanguage,
+        preparedArticleLanguage,
+        networkLevel,
+      });
 
   let res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
   res = attachArticleToResult(res, job);
