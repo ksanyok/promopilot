@@ -380,38 +380,47 @@ if (!function_exists('pp_promotion_load_cached_article')) {
 
 if (!function_exists('pp_promotion_generate_child_anchor')) {
     function pp_promotion_generate_child_anchor(?array $article, string $language, string $fallback = ''): string {
+        $fallback = trim((string)$fallback);
+        if ($fallback !== '') {
+            return $fallback;
+        }
+        return pp_promotion_pick_generic_anchor($language);
+    }
+}
+
+if (!function_exists('pp_promotion_pick_generic_anchor')) {
+    function pp_promotion_pick_generic_anchor(string $language, array $avoidAnchors = []): string {
         $lang = strtolower(substr(trim($language), 0, 2));
-        $title = trim((string)($article['title'] ?? ''));
-        if ($title === '') {
-            $title = trim($fallback) !== '' ? trim($fallback) : __('Материал');
-        }
-        if (function_exists('mb_strlen')) {
-            if (mb_strlen($title, 'UTF-8') > 55) {
-                $title = rtrim(mb_substr($title, 0, 55, 'UTF-8')) . '…';
-            }
-        } elseif (strlen($title) > 55) {
-            $title = rtrim(substr($title, 0, 55)) . '…';
-        }
-        $templatesByLang = [
-            'ru' => ['Аналитика %s', 'Практические выводы по %s', 'Экспертное мнение о %s', 'Рекомендации по %s', 'Гид по %s'],
-            'uk' => ['Аналітика %s', 'Практичні висновки щодо %s', 'Експертний погляд на %s', 'Поради з теми %s', 'Гід по %s'],
-            'en' => ['Insights on %s', 'Practical tips for %s', 'Expert view on %s', 'Guide to %s', 'Key takeaways on %s'],
+        $pool = [
+            'uk' => ['Докладніше', 'На сайті', 'Переглянути', 'Детальніше', 'Повна версія', 'Джерело', 'Читати далі', 'Дізнатись більше'],
+            'ru' => ['Подробнее', 'На сайте', 'Перейти', 'Читать дальше', 'Источник', 'Полный материал', 'Узнать больше', 'Весь текст'],
+            'en' => ['Read more', 'View source', 'See details', 'Full article', 'Explore more', 'Visit page', 'Learn more', 'Open link'],
         ];
-        $pool = $templatesByLang[$lang] ?? ($lang === 'ru' ? $templatesByLang['ru'] : $templatesByLang['en']);
-        try {
-            $template = $pool[random_int(0, count($pool) - 1)];
-        } catch (Throwable $e) {
-            $template = $pool[0];
+        $defaultPool = $pool['en'];
+        $options = $pool[$lang] ?? $defaultPool;
+
+        $normalize = static function($value) {
+            $value = trim((string)$value);
+            return $value === '' ? '' : (function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value));
+        };
+        $avoidNormalized = array_filter(array_map($normalize, $avoidAnchors), static fn($v) => $v !== '');
+
+        $filtered = array_values(array_filter($options, static function($candidate) use ($normalize, $avoidNormalized) {
+            return !in_array($normalize($candidate), $avoidNormalized, true);
+        }));
+
+        if (!empty($filtered)) {
+            $choice = $filtered[random_int(0, count($filtered) - 1)];
+            return $choice !== '' ? $choice : ($options[0] ?? $defaultPool[0]);
         }
-        $anchor = sprintf($template, $title);
-        if (function_exists('mb_strlen')) {
-            if (mb_strlen($anchor, 'UTF-8') > 64) {
-                $anchor = rtrim(mb_substr($anchor, 0, 64, 'UTF-8')) . '…';
-            }
-        } elseif (strlen($anchor) > 64) {
-            $anchor = rtrim(substr($anchor, 0, 64)) . '…';
-        }
-        return $anchor !== '' ? $anchor : ($fallback !== '' ? $fallback : __('Подробнее'));
+
+        $base = $options[0] ?? $defaultPool[0];
+        $suffix = 2;
+        do {
+            $candidate = $base . ' ' . $suffix;
+            $suffix++;
+        } while (in_array($normalize($candidate), $avoidNormalized, true));
+        return $candidate;
     }
 }
 

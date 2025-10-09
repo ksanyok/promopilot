@@ -513,7 +513,28 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         $targetUrl = (string)$node['target_url'];
         $networkSlug = (string)$node['network_slug'];
         $anchor = (string)$node['anchor_text'];
+        $level = isset($node['level']) ? (int)$node['level'] : 1;
         $language = pp_promotion_resolve_language($linkRow, $project);
+        if ($level >= 2) {
+            static $genericAnchorUsage = [];
+            $usageKey = $projectId . '|' . $targetUrl;
+            $avoidAnchors = $genericAnchorUsage[$usageKey] ?? [];
+            if ($anchor !== '') { $avoidAnchors[] = $anchor; }
+            $genericAnchor = pp_promotion_pick_generic_anchor($language, $avoidAnchors);
+            if ($genericAnchor !== '') {
+                $anchor = $genericAnchor;
+                $genericAnchorUsage[$usageKey][] = $genericAnchor;
+                if (!empty($node['id'])) {
+                    $updateAnchorStmt = $conn->prepare('UPDATE promotion_nodes SET anchor_text=? WHERE id=? LIMIT 1');
+                    if ($updateAnchorStmt) {
+                        $nodeIdUpdate = (int)$node['id'];
+                        $updateAnchorStmt->bind_param('si', $anchor, $nodeIdUpdate);
+                        $updateAnchorStmt->execute();
+                        $updateAnchorStmt->close();
+                    }
+                }
+            }
+        }
         $wish = (string)($linkRow['wish'] ?? $project['wishes'] ?? '');
         $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
         $jobPayload = [
@@ -708,84 +729,97 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
 
 if (!function_exists('pp_promotion_generate_contextual_anchor')) {
     function pp_promotion_generate_contextual_anchor(?array $context, string $fallbackAnchor): string {
+        $prepareCandidate = static function($text, int $maxWords = 4): string {
+            $clean = trim((string)$text);
+            if ($clean === '') { return ''; }
+            $clean = strip_tags($clean);
+            $clean = preg_replace('~[«»“”„"‹›<>]+~u', '', $clean ?? '');
+            $clean = preg_replace('~\s+~u', ' ', $clean ?? '');
+            $clean = trim((string)$clean, " \t\n\r\0\x0B-–—:,.;!?");
+            if ($clean === '') { return ''; }
+            $wordsRaw = preg_split('~\s+~u', $clean, -1, PREG_SPLIT_NO_EMPTY);
+            if (!is_array($wordsRaw) || empty($wordsRaw)) { return ''; }
+            $words = [];
+            foreach ($wordsRaw as $word) {
+                $trimmed = preg_replace('~^[\p{P}\p{S}]+|[\p{P}\p{S}]+$~u', '', (string)$word);
+                if ($trimmed === '') { continue; }
+                $words[] = $trimmed;
+            }
+            if (!is_array($words) || empty($words)) { return ''; }
+            $limit = max(1, min($maxWords, count($words)));
+            if ($limit < 2 && count($words) >= 2) {
+                $limit = min(2, count($words));
+            }
+            $slice = array_slice($words, 0, $limit);
+            $candidate = implode(' ', $slice);
+            if ($candidate === '') { return ''; }
+            if (function_exists('mb_strlen')) {
+                if (mb_strlen($candidate, 'UTF-8') > 64) {
+                    $candidate = rtrim(mb_substr($candidate, 0, 64, 'UTF-8')) . '…';
+                }
+            } elseif (strlen($candidate) > 64) {
+                $candidate = rtrim(substr($candidate, 0, 64)) . '…';
+            }
+            return $candidate;
+        };
+
         $candidates = [];
         if (is_array($context)) {
-            $headings = $context['headings'] ?? [];
-            if (is_array($headings)) {
-                foreach ($headings as $heading) {
-                    $title = trim((string)$heading);
-                    if ($title === '') { continue; }
-                    if (function_exists('mb_substr') && mb_strlen($title, 'UTF-8') > 55) {
-                        $title = rtrim(mb_substr($title, 0, 55, 'UTF-8')) . '…';
-                    } elseif (strlen($title) > 55) {
-                        $title = rtrim(substr($title, 0, 55)) . '…';
-                    }
-                    if ($title !== '') { $candidates[] = $title; }
+            if (!empty($context['title'])) {
+                $candidate = $prepareCandidate($context['title'], 4);
+                if ($candidate !== '') { $candidates[] = $candidate; }
+            }
+            if (!empty($context['headings']) && is_array($context['headings'])) {
+                foreach ($context['headings'] as $heading) {
+                    $candidate = $prepareCandidate($heading, 4);
+                    if ($candidate !== '') { $candidates[] = $candidate; }
                 }
             }
-            $keywords = $context['keywords'] ?? [];
-            if (is_array($keywords)) {
-                foreach (array_slice($keywords, 0, 6) as $keyword) {
-                    $kw = trim((string)$keyword);
-                    if ($kw === '') { continue; }
-                    if (function_exists('mb_strlen')) {
-                        if (mb_strlen($kw, 'UTF-8') <= 18) {
-                            if (function_exists('mb_convert_case')) {
-                                $candidates[] = mb_convert_case($kw, MB_CASE_TITLE, 'UTF-8');
-                            } else {
-                                $candidates[] = strtoupper(substr($kw, 0, 1)) . substr($kw, 1);
-                            }
-                            $candidates[] = __('Разбор') . ' ' . $kw;
-                        } else {
-                            $candidates[] = __('Тема') . ': ' . $kw;
-                        }
-                    } else {
-                        $candidates[] = strtoupper(substr($kw, 0, 1)) . substr($kw, 1);
-                    }
+            if (!empty($context['keywords']) && is_array($context['keywords'])) {
+                $keywordChunk = $prepareCandidate(implode(' ', array_slice(array_map('strval', $context['keywords']), 0, 3)), 3);
+                if ($keywordChunk !== '') { $candidates[] = $keywordChunk; }
+                foreach (array_slice($context['keywords'], 0, 4) as $keyword) {
+                    $candidate = $prepareCandidate($keyword, 3);
+                    if ($candidate !== '') { $candidates[] = $candidate; }
                 }
             }
-            $summary = trim((string)($context['summary'] ?? ''));
-            if ($summary !== '') {
-                $sentences = preg_split('~(?<=[.!?])\s+~u', $summary, -1, PREG_SPLIT_NO_EMPTY);
+            if (!empty($context['summary'])) {
+                $sentences = preg_split('~(?<=[.!?])\s+~u', (string)$context['summary'], -1, PREG_SPLIT_NO_EMPTY);
                 if (is_array($sentences)) {
                     foreach ($sentences as $sentence) {
-                        $sent = trim($sentence);
-                        if ($sent === '') { continue; }
-                        if (function_exists('mb_substr') && mb_strlen($sent, 'UTF-8') > 60) {
-                            $sent = rtrim(mb_substr($sent, 0, 60, 'UTF-8')) . '…';
-                        } elseif (strlen($sent) > 60) {
-                            $sent = rtrim(substr($sent, 0, 60)) . '…';
+                        $candidate = $prepareCandidate($sentence, 4);
+                        if ($candidate !== '') {
+                            $candidates[] = $candidate;
+                            break;
                         }
-                        if ($sent !== '') { $candidates[] = $sent; }
                     }
                 }
             }
-            $excerpt = trim((string)($context['excerpt'] ?? ''));
-            if ($excerpt !== '') {
-                $phrases = pp_promotion_extract_theme_phrases($excerpt, 6);
-                foreach ($phrases as $phrase) {
-                    $cleanPhrase = trim($phrase);
-                    if ($cleanPhrase === '') { continue; }
-                    $candidates[] = $cleanPhrase;
-                }
+            if (!empty($context['excerpt'])) {
+                $candidate = $prepareCandidate($context['excerpt'], 4);
+                if ($candidate !== '') { $candidates[] = $candidate; }
             }
         }
 
         $fallbackAnchor = trim($fallbackAnchor);
-        if ($fallbackAnchor !== '') { $candidates[] = $fallbackAnchor; }
+        if ($fallbackAnchor !== '') {
+            $fallbackCandidate = $prepareCandidate($fallbackAnchor, 3);
+            $candidates[] = $fallbackCandidate !== '' ? $fallbackCandidate : $fallbackAnchor;
+        }
 
-        $candidates = array_values(array_unique(array_filter(array_map('trim', $candidates))));
+        $candidates = array_values(array_unique(array_filter($candidates)));
         if (empty($candidates)) {
             return __('Подробнее');
         }
-        $choice = pp_promotion_random_choice($candidates, __('Подробнее'));
-        if (function_exists('mb_strlen')) {
-            if (mb_strlen($choice, 'UTF-8') > 60) {
-                $choice = rtrim(mb_substr($choice, 0, 60, 'UTF-8')) . '…';
+
+        foreach ($candidates as $candidate) {
+            $wordCount = count(preg_split('~\s+~u', $candidate, -1, PREG_SPLIT_NO_EMPTY));
+            if ($wordCount >= 2 && $wordCount <= 5) {
+                return $candidate;
             }
-        } elseif (strlen($choice) > 60) {
-            $choice = rtrim(substr($choice, 0, 60)) . '…';
         }
+
+        $choice = pp_promotion_random_choice($candidates, $candidates[0]);
         return $choice !== '' ? $choice : __('Подробнее');
     }
 }
