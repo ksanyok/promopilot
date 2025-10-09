@@ -1389,6 +1389,10 @@ if (!function_exists('pp_promotion_get_status')) {
             ],
             'charged_amount' => (float)$run['charged_amount'],
             'discount_percent' => (float)$run['discount_percent'],
+            'created_at' => isset($run['created_at']) ? (string)$run['created_at'] : null,
+            'updated_at' => isset($run['updated_at']) ? (string)$run['updated_at'] : null,
+            'started_at' => isset($run['started_at']) ? (string)$run['started_at'] : null,
+            'finished_at' => isset($run['finished_at']) ? (string)$run['finished_at'] : null,
         ];
     }
 }

@@ -51,7 +51,7 @@ if (!function_exists('pp_project_fetch_links')) {
         $links = [];
         $fallbackLanguage = $fallbackLanguage ?: 'ru';
 
-        if ($stmt = $conn->prepare('SELECT id, url, anchor, language, wish FROM project_links WHERE project_id = ? ORDER BY id ASC')) {
+        if ($stmt = $conn->prepare('SELECT id, url, anchor, language, wish, created_at, updated_at FROM project_links WHERE project_id = ? ORDER BY created_at DESC, id DESC')) {
             $stmt->bind_param('i', $projectId);
             if ($stmt->execute()) {
                 $res = $stmt->get_result();
@@ -63,6 +63,8 @@ if (!function_exists('pp_project_fetch_links')) {
                             'anchor' => (string)($row['anchor'] ?? ''),
                             'language' => (string)($row['language'] ?? $fallbackLanguage),
                             'wish' => (string)($row['wish'] ?? ''),
+                            'created_at' => isset($row['created_at']) ? (string)$row['created_at'] : null,
+                            'updated_at' => isset($row['updated_at']) ? (string)$row['updated_at'] : null,
                         ];
                     }
                     $res->free();
@@ -71,9 +73,69 @@ if (!function_exists('pp_project_fetch_links')) {
             $stmt->close();
         }
 
+        if (!empty($links)) {
+            $duplicateCounts = [];
+            foreach ($links as $entry) {
+                $urlKey = pp_project_normalize_link_key($entry['url'] ?? '');
+                if ($urlKey === '') {
+                    continue;
+                }
+                if (!isset($duplicateCounts[$urlKey])) {
+                    $duplicateCounts[$urlKey] = 0;
+                }
+                $duplicateCounts[$urlKey]++;
+            }
+
+            foreach ($links as $idx => $entry) {
+                $urlKey = pp_project_normalize_link_key($entry['url'] ?? '');
+                $duplicates = ($urlKey !== '' && isset($duplicateCounts[$urlKey])) ? (int)$duplicateCounts[$urlKey] : 1;
+                $links[$idx]['duplicate_key'] = $urlKey;
+                $links[$idx]['duplicates'] = max(1, $duplicates);
+            }
+        }
+
         $conn->close();
 
         return $links;
+    }
+}
+
+if (!function_exists('pp_project_normalize_link_key')) {
+    /**
+     * Нормализует URL для подсчета дубликатов.
+     */
+    function pp_project_normalize_link_key(?string $url): string
+    {
+        $url = trim((string)$url);
+        if ($url === '') {
+            return '';
+        }
+        $parts = @parse_url($url);
+        if (!is_array($parts)) {
+            return strtolower($url);
+        }
+
+        $host = isset($parts['host']) ? pp_normalize_host($parts['host']) : '';
+        $path = isset($parts['path']) ? trim((string)$parts['path']) : '';
+        if ($path === '') {
+            $path = '/';
+        }
+        $query = isset($parts['query']) ? trim((string)$parts['query']) : '';
+        $fragment = isset($parts['fragment']) ? trim((string)$parts['fragment']) : '';
+
+        $key = strtolower($host . $path);
+        if ($query !== '') {
+            $key .= '?' . strtolower($query);
+        }
+        if ($fragment !== '') {
+            $key .= '#' . strtolower($fragment);
+        }
+
+        if ($key === '' && isset($parts['path'])) {
+            $key = strtolower(trim((string)$parts['path']));
+        }
+
+        return $key !== '' ? $key : strtolower($url);
     }
 }
 

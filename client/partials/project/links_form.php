@@ -2,6 +2,8 @@
 /* Project links form and table extracted from client/project.php */
 $promotionStatusByLink = $promotionStatusByLink ?? [];
 $promotionStatusByUrl = $promotionStatusByUrl ?? [];
+$linkLanguageOptions = isset($linkLanguageOptions) && is_array($linkLanguageOptions) ? $linkLanguageOptions : [];
+$linksHaveEntries = !empty($links);
 
 $promotionLevelFlags = [
     'level1' => function_exists('pp_promotion_is_level_enabled') ? pp_promotion_is_level_enabled(1) : true,
@@ -114,9 +116,49 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
             </div>
         </div>
         <div class="card-body">
-            <?php if (!empty($links)): ?>
-            <div class="table-responsive">
-                <table class="table table-striped table-hover table-sm align-middle table-links">
+            <div class="link-filters d-flex flex-wrap align-items-center gap-2 mb-3 <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-filters>
+                <div class="flex-grow-1 flex-md-grow-0" style="min-width:220px;">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                        <input type="search" class="form-control" placeholder="<?php echo __('Поиск по ссылкам, анкорам, пожеланиям'); ?>" data-link-filter-search>
+                    </div>
+                </div>
+                <div>
+                    <select class="form-select form-select-sm" data-link-filter-status>
+                        <option value="all"><?php echo __('Все статусы'); ?></option>
+                        <option value="active"><?php echo __('В работе'); ?></option>
+                        <option value="completed"><?php echo __('Завершено'); ?></option>
+                        <option value="idle"><?php echo __('Не запускалось'); ?></option>
+                        <option value="issues"><?php echo __('Ошибки / отменено'); ?></option>
+                        <option value="report_ready"><?php echo __('Отчет готов'); ?></option>
+                    </select>
+                </div>
+                <div>
+                    <select class="form-select form-select-sm" data-link-filter-history>
+                        <option value="all"><?php echo __('Все продвижения'); ?></option>
+                        <option value="with"><?php echo __('С промо-историей'); ?></option>
+                        <option value="without"><?php echo __('Без продвижения'); ?></option>
+                    </select>
+                </div>
+                <div>
+                    <select class="form-select form-select-sm" data-link-filter-duplicates>
+                        <option value="all"><?php echo __('Все ссылки'); ?></option>
+                        <option value="duplicates"><?php echo __('Только дубли'); ?></option>
+                        <option value="unique"><?php echo __('Без дублей'); ?></option>
+                    </select>
+                </div>
+                <div>
+                    <select class="form-select form-select-sm" data-link-filter-language>
+                        <option value="all"><?php echo __('Любой язык'); ?></option>
+                        <?php foreach ($linkLanguageOptions as $langOption): ?>
+                            <?php $langOption = strtolower((string)$langOption); ?>
+                            <option value="<?php echo htmlspecialchars($langOption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo strtoupper(htmlspecialchars($langOption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+            <div class="table-responsive <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-table-wrapper>
+                <table class="table table-striped table-hover table-sm align-middle table-links" data-page-size="<?php echo (int)($linkPageSize ?? 15); ?>">
                     <thead>
                         <tr>
                             <th style="width:44px;">#</th>
@@ -129,11 +171,24 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                         </tr>
                     </thead>
                     <tbody>
+                        <?php if ($linksHaveEntries): ?>
                         <?php foreach ($links as $index => $item):
-                            $linkId = (int)$item['id'];
-                            $url = $item['url'];
-                            $anchor = $item['anchor'];
-                            $lang = $item['language'];
+                            $linkId = (int)($item['id'] ?? 0);
+                            $url = (string)($item['url'] ?? '');
+                            $anchor = (string)($item['anchor'] ?? '');
+                            $lang = (string)($item['language'] ?? '');
+                            $fullWish = (string)($item['wish'] ?? '');
+                            $createdAtRaw = isset($item['created_at']) ? (string)$item['created_at'] : '';
+                            $createdAtTs = $createdAtRaw ? strtotime($createdAtRaw) : 0;
+                            $createdAtHuman = $createdAtTs ? date('d.m.Y H:i', $createdAtTs) : '';
+                            $duplicateCount = max(1, (int)($item['duplicates'] ?? 1));
+                            $duplicateKey = (string)($item['duplicate_key'] ?? '');
+                            $searchIndexSource = $url . ' ' . $anchor . ' ' . $fullWish;
+                            if (function_exists('mb_strtolower')) {
+                                $searchIndex = mb_strtolower($searchIndexSource, 'UTF-8');
+                            } else {
+                                $searchIndex = strtolower($searchIndexSource);
+                            }
                             $pubInfo = $pubStatusByUrl[$url] ?? null;
                             if (is_array($pubInfo)) {
                                 $status = $pubInfo['status'] ?? 'not_published';
@@ -178,6 +233,21 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             $crowdQueued = (int)($crowdData['queued'] ?? 0);
                             $crowdFailed = (int)($crowdData['failed'] ?? 0);
                             $crowdManual = (int)($crowdData['manual_fallback'] ?? 0);
+                            $promotionCreatedRaw = is_array($promotionInfo) ? (string)($promotionInfo['created_at'] ?? '') : '';
+                            $promotionStartedRaw = is_array($promotionInfo) ? (string)($promotionInfo['started_at'] ?? '') : '';
+                            $promotionUpdatedRaw = is_array($promotionInfo) ? (string)($promotionInfo['updated_at'] ?? '') : '';
+                            $promotionFinishedRaw = is_array($promotionInfo) ? (string)($promotionInfo['finished_at'] ?? '') : '';
+                            $promotionCreatedTs = $promotionCreatedRaw ? strtotime($promotionCreatedRaw) : 0;
+                            $promotionStartedTs = $promotionStartedRaw ? strtotime($promotionStartedRaw) : 0;
+                            $promotionUpdatedTs = $promotionUpdatedRaw ? strtotime($promotionUpdatedRaw) : 0;
+                            $promotionFinishedTs = $promotionFinishedRaw ? strtotime($promotionFinishedRaw) : 0;
+                            $promotionCreatedHuman = $promotionCreatedTs ? date('d.m.Y H:i', $promotionCreatedTs) : '';
+                            $promotionStartedHuman = $promotionStartedTs ? date('d.m.Y H:i', $promotionStartedTs) : '';
+                            $promotionUpdatedHuman = $promotionUpdatedTs ? date('d.m.Y H:i', $promotionUpdatedTs) : '';
+                            $promotionFinishedHuman = $promotionFinishedTs ? date('d.m.Y H:i', $promotionFinishedTs) : '';
+                            $promotionLastTs = $promotionUpdatedTs ?: $promotionStartedTs ?: $promotionCreatedTs;
+                            $promotionLastHuman = $promotionLastTs ? date('d.m.Y H:i', $promotionLastTs) : '';
+                            $hasPromotionHistory = $promotionLastTs > 0;
                             $crowdTarget = max($crowdTarget, $crowdPlanned);
                             if ($crowdTarget === 0 && $crowdCompleted > 0) { $crowdTarget = $crowdCompleted; }
                             $promotionDetails = [];
@@ -292,11 +362,29 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             data-crowd-running="<?php echo $crowdRunning; ?>"
                             data-crowd-queued="<?php echo $crowdQueued; ?>"
                             data-crowd-failed="<?php echo $crowdFailed; ?>"
-                            data-crowd-manual="<?php echo $crowdManual; ?>">
+                            data-crowd-manual="<?php echo $crowdManual; ?>"
+                            data-created-at="<?php echo $createdAtTs ?: ''; ?>"
+                            data-created-at-raw="<?php echo htmlspecialchars($createdAtRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                            data-created-at-human="<?php echo htmlspecialchars($createdAtHuman, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                            data-duplicate-count="<?php echo $duplicateCount; ?>"
+                            data-duplicate-key="<?php echo htmlspecialchars($duplicateKey, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                            data-language="<?php echo htmlspecialchars(strtolower($lang), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                            data-search-index="<?php echo htmlspecialchars($searchIndex, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                            data-has-promotion="<?php echo $hasPromotionHistory ? '1' : '0'; ?>"
+                            data-promotion-created="<?php echo $promotionCreatedTs ?: ''; ?>"
+                            data-promotion-started="<?php echo $promotionStartedTs ?: ''; ?>"
+                            data-promotion-updated="<?php echo $promotionUpdatedTs ?: ''; ?>"
+                            data-promotion-finished="<?php echo $promotionFinishedTs ?: ''; ?>">
                             <td data-label="#"><?php echo $index + 1; ?></td>
                             <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                                 <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
                                 <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url text-truncate-path" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
+                                <div class="link-meta small text-muted mt-2 d-flex flex-wrap align-items-center gap-2">
+                                    <?php if ($createdAtHuman): ?>
+                                        <span class="link-meta__created" data-created-label><i class="bi bi-calendar3 me-1"></i><?php echo sprintf(__('Добавлена %s'), htmlspecialchars($createdAtHuman)); ?></span>
+                                    <?php endif; ?>
+                                    <span class="badge bg-warning-subtle text-warning-emphasis <?php echo $duplicateCount > 1 ? '' : 'd-none'; ?>" data-duplicate-badge><?php echo sprintf(__('Дубликатов: %d'), $duplicateCount); ?></span>
+                                </div>
                                 <input type="url" class="form-control d-none edit-url" name="edited_links[<?php echo (int)$linkId; ?>][url]" value="<?php echo htmlspecialchars($url); ?>" <?php echo $canEdit ? '' : 'disabled'; ?> />
                             </td>
                             <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
@@ -312,7 +400,6 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                 </select>
                             </td>
                             <td class="wish-cell" data-label="<?php echo __('Пожелание'); ?>">
-                                <?php $fullWish = (string)($item['wish'] ?? ''); ?>
                                 <button type="button" class="icon-btn action-show-wish" data-wish="<?php echo htmlspecialchars($fullWish); ?>" title="<?php echo __('Показать пожелание'); ?>" data-bs-toggle="tooltip"><i class="bi bi-journal-text"></i></button>
                                 <div class="view-wish d-none"><?php echo htmlspecialchars($fullWish); ?></div>
                                 <textarea class="form-control d-none edit-wish" rows="2" name="edited_links[<?php echo (int)$linkId; ?>][wish]" <?php echo $canEdit ? '' : 'disabled'; ?>><?php echo htmlspecialchars($fullWish); ?></textarea>
@@ -403,6 +490,14 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                             <div><?php echo htmlspecialchars($detail); ?></div>
                                         <?php endforeach; ?>
                                     </div>
+                                    <div class="promotion-status-dates small text-muted mt-2 <?php echo $hasPromotionHistory ? '' : 'd-none'; ?>" data-promotion-dates>
+                                        <i class="bi bi-clock-history me-1"></i>
+                                        <span data-promotion-last><?php echo htmlspecialchars(sprintf(__('Последний запуск: %s'), $promotionLastHuman)); ?></span>
+                                        <?php if ($promotionFinishedHuman): ?>
+                                            <span class="dot">•</span>
+                                            <span data-promotion-finished><?php echo htmlspecialchars(sprintf(__('Завершено: %s'), $promotionFinishedHuman)); ?></span>
+                                        <?php endif; ?>
+                                    </div>
                                     <div class="promotion-status-complete mt-2 <?php echo $promotionStatus === 'completed' ? '' : 'd-none'; ?>" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
                                         <i class="bi bi-patch-check-fill text-success"></i>
                                         <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
@@ -456,12 +551,17 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             </td>
                         </tr>
                         <?php endforeach; ?>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
-            <?php else: ?>
-                <div class="empty-state"><?php echo __('Ссылок нет.'); ?> <span class="d-inline-block ms-1" data-bs-toggle="tooltip" title="<?php echo __('Добавьте первую целевую ссылку выше.'); ?>"><i class="bi bi-info-circle"></i></span></div>
-            <?php endif; ?>
+            <div class="link-pagination d-flex flex-wrap justify-content-between align-items-center mt-3 d-none <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-pagination-wrapper>
+                <div class="small text-muted" data-link-pagination-summary></div>
+                <nav>
+                    <ul class="pagination pagination-sm mb-0" data-link-pagination></ul>
+                </nav>
+            </div>
+            <div class="empty-state <?php echo $linksHaveEntries ? 'd-none' : ''; ?>" data-link-empty><?php echo __('Ссылок нет.'); ?> <span class="d-inline-block ms-1" data-bs-toggle="tooltip" title="<?php echo __('Добавьте первую целевую ссылку выше.'); ?>"><i class="bi bi-info-circle"></i></span></div>
         </div>
     </div>
 </form>

@@ -52,6 +52,17 @@ $promotionActiveStates = [
 ];
 
 $links = pp_project_fetch_links($id, $project['language'] ?? 'ru');
+$linkPageSize = 15;
+$linkLanguageOptions = [];
+foreach ($links as $linkRow) {
+    $langKey = strtolower(trim((string)($linkRow['language'] ?? '')));
+    if ($langKey === '') {
+        continue;
+    }
+    $linkLanguageOptions[$langKey] = true;
+}
+ksort($linkLanguageOptions);
+$linkLanguageOptions = array_keys($linkLanguageOptions);
 
 $snapshot = pp_project_promotion_snapshot((int)$project['id'], $links);
 $promotionSummary = $snapshot['summary'];

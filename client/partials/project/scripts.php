@@ -1342,6 +1342,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let addIndex = 0;
     let activeAnchorPreset = null;
     let anchorUpdateLock = false;
+    let linkTableManager = null;
 
     const insufficientAmountEl = insufficientFundsModalEl?.querySelector('[data-insufficient-amount]');
     const insufficientRequiredEl = insufficientFundsModalEl?.querySelector('[data-insufficient-required]');
@@ -1430,6 +1431,13 @@ document.addEventListener('DOMContentLoaded', function() {
         'failed': 'bg-danger-subtle text-danger-emphasis'
     };
     const LANG_CODES = <?php echo json_encode(array_merge(['auto'], $pp_lang_codes)); ?>;
+    const DUPLICATE_LABEL_TEMPLATE = <?php echo json_encode(__('Дубликатов: %d')); ?>;
+    const CREATED_LABEL_TEMPLATE = <?php echo json_encode(__('Добавлена %s')); ?>;
+    const PROMOTION_LAST_LABEL_TEMPLATE = <?php echo json_encode(__('Последний запуск: %s')); ?>;
+    const PROMOTION_FINISHED_LABEL_TEMPLATE = <?php echo json_encode(__('Завершено: %s')); ?>;
+    const NO_MATCHES_LABEL = <?php echo json_encode(__('Совпадений нет')); ?>;
+    const PAGINATION_SUMMARY_TEMPLATE = <?php echo json_encode(__('Показаны %1$s–%2$s из %3$s')); ?>;
+    const PAGINATION_SINGLE_TEMPLATE = <?php echo json_encode(__('Найдено %s ссылок')); ?>;
 
     const navBalanceValueEl = document.querySelector('[data-balance-target]');
     const navBalanceLocale = navBalanceValueEl?.dataset.balanceLocale || document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
@@ -1876,11 +1884,26 @@ document.addEventListener('DOMContentLoaded', function() {
         const cardBody = document.querySelector('#links-card .card-body');
         if (!cardBody) { return null; }
         const emptyState = cardBody.querySelector('.empty-state');
-        if (emptyState) { emptyState.remove(); }
+        if (emptyState && emptyState.dataset && emptyState.dataset.linkEmpty !== undefined) {
+            emptyState.classList.add('d-none');
+        } else if (emptyState) {
+            emptyState.remove();
+        }
+        const filtersBlock = cardBody.querySelector('[data-link-filters]');
+        if (filtersBlock) {
+            filtersBlock.classList.remove('d-none');
+        }
+        const tableWrapperExisting = cardBody.querySelector('[data-link-table-wrapper]');
+        if (tableWrapperExisting) {
+            tableWrapperExisting.classList.remove('d-none');
+            tbody = tableWrapperExisting.querySelector('table.table-links tbody');
+            if (tbody) { return tbody; }
+        }
         const wrapper = document.createElement('div');
         wrapper.className = 'table-responsive';
+        wrapper.setAttribute('data-link-table-wrapper', '');
         wrapper.innerHTML = `
-            <table class="table table-striped table-hover table-sm align-middle table-links">
+            <table class="table table-striped table-hover table-sm align-middle table-links" data-page-size="15">
                 <thead>
                     <tr>
                         <th style="width:44px;">#</th>
@@ -1898,6 +1921,10 @@ document.addEventListener('DOMContentLoaded', function() {
         cardBody.appendChild(wrapper);
         initTooltips(wrapper);
         tbody = wrapper.querySelector('tbody');
+        const paginationWrapper = cardBody.querySelector('[data-link-pagination-wrapper]');
+        if (paginationWrapper) {
+            paginationWrapper.classList.add('d-none');
+        }
         return tbody;
     }
 
@@ -2011,6 +2038,13 @@ document.addEventListener('DOMContentLoaded', function() {
         row.remove();
         refreshRowNumbers();
         recalcPromotionStats();
+        if (linkTableManager) {
+            try {
+                linkTableManager.sync();
+            } catch (e) {
+                console.error('Link table manager sync failed', e);
+            }
+        }
     }
 
     function refreshTooltip(el) {
@@ -2281,6 +2315,75 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    function normalizeLinkKey(url) {
+        if (typeof url !== 'string' || url.trim() === '') {
+            return '';
+        }
+        try {
+            const parsed = new URL(url);
+            const host = (parsed.hostname || '').toLowerCase().replace(/^www\./, '');
+            let path = parsed.pathname || '/';
+            if (path !== '/' && path.endsWith('/')) {
+                path = path.slice(0, -1);
+            }
+            let key = host + path;
+            if (parsed.search) {
+                key += parsed.search.toLowerCase();
+            }
+            if (parsed.hash) {
+                key += parsed.hash.toLowerCase();
+            }
+            return key.trim();
+        } catch (e) {
+            return url.trim().toLowerCase();
+        }
+    }
+
+    function formatDateTimeShort(timestampSeconds) {
+        if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0) {
+            return '';
+        }
+        const lang = document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
+        try {
+            const formatter = new Intl.DateTimeFormat(lang, {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            return formatter.format(new Date(timestampSeconds * 1000));
+        } catch (e) {
+            const date = new Date(timestampSeconds * 1000);
+            return date.toISOString().replace('T', ' ').slice(0, 16);
+        }
+    }
+
+    function parseTimestampToSeconds(value) {
+        if (value === null || value === undefined) {
+            return 0;
+        }
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value)) { return 0; }
+            if (value > 1e12) {
+                return Math.floor(value / 1000);
+            }
+            return Math.floor(value);
+        }
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (trimmed === '') { return 0; }
+            const parsed = Date.parse(trimmed);
+            if (Number.isNaN(parsed)) { return 0; }
+            return Math.floor(parsed / 1000);
+        }
+        if (value instanceof Date) {
+            const time = value.getTime();
+            return Number.isFinite(time) ? Math.floor(time / 1000) : 0;
+        }
+        return 0;
+    }
+
     function escapeHtml(str) {
         return (str || '').replace(/[&<>"]+/g, s => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[s] || s));
     }
@@ -2303,6 +2406,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let total = 0, active = 0, completed = 0, idle = 0, issues = 0;
         rows.forEach(tr => {
             if (tr.dataset.placeholder === '1') { return; }
+            if (tr.dataset.filterHidden === '1' || tr.dataset.pageHidden === '1') { return; }
             total++;
             const status = tr.dataset.promotionStatus || 'idle';
             if (status === 'completed') {
@@ -2327,6 +2431,357 @@ document.addEventListener('DOMContentLoaded', function() {
         if (issuesEl) issuesEl.textContent = issues.toString();
     }
 
+    function createLinkTableManager() {
+        const state = {
+            search: '',
+            status: 'all',
+            history: 'all',
+            duplicates: 'all',
+            language: 'all',
+            page: 1,
+            perPage: 15,
+            rows: []
+        };
+
+        const dom = {
+            filters: null,
+            tableWrapper: null,
+            table: null,
+            paginationWrapper: null,
+            pagination: null,
+            summary: null,
+            empty: null,
+            searchInput: null,
+            statusSelect: null,
+            historySelect: null,
+            duplicatesSelect: null,
+            languageSelect: null
+        };
+
+        let searchTimer = null;
+        let bound = false;
+
+        function cacheDom() {
+            dom.filters = document.querySelector('[data-link-filters]');
+            dom.tableWrapper = document.querySelector('[data-link-table-wrapper]');
+            dom.table = dom.tableWrapper ? dom.tableWrapper.querySelector('table.table-links') : document.querySelector('table.table-links');
+            dom.paginationWrapper = document.querySelector('[data-link-pagination-wrapper]');
+            dom.pagination = dom.paginationWrapper ? dom.paginationWrapper.querySelector('[data-link-pagination]') : null;
+            dom.summary = dom.paginationWrapper ? dom.paginationWrapper.querySelector('[data-link-pagination-summary]') : document.querySelector('[data-link-pagination-summary]');
+            dom.empty = document.querySelector('[data-link-empty]');
+            dom.searchInput = document.querySelector('[data-link-filter-search]');
+            dom.statusSelect = document.querySelector('[data-link-filter-status]');
+            dom.historySelect = document.querySelector('[data-link-filter-history]');
+            dom.duplicatesSelect = document.querySelector('[data-link-filter-duplicates]');
+            dom.languageSelect = document.querySelector('[data-link-filter-language]');
+            if (dom.table && dom.table.dataset && dom.table.dataset.pageSize) {
+                const parsed = Number(dom.table.dataset.pageSize);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                    state.perPage = parsed;
+                }
+            }
+        }
+
+        function collectRows() {
+            if (!dom.table) {
+                state.rows = [];
+                return;
+            }
+            const rawRows = Array.from(dom.table.querySelectorAll('tbody tr'));
+            state.rows = rawRows.filter(tr => tr.dataset.placeholder !== '1');
+        }
+
+        function updateLayoutVisibility() {
+            const hasRows = state.rows.length > 0;
+            if (dom.filters) {
+                dom.filters.classList.toggle('d-none', !hasRows);
+            }
+            if (dom.tableWrapper) {
+                dom.tableWrapper.classList.toggle('d-none', !hasRows);
+            }
+            if (dom.empty) {
+                dom.empty.classList.toggle('d-none', hasRows);
+            }
+        }
+
+        function updateCreatedLabels() {
+            state.rows.forEach(row => {
+                const labelEl = row.querySelector('[data-created-label]');
+                if (!labelEl) { return; }
+                let timestamp = Number(row.dataset.createdAt || '0');
+                if (!Number.isFinite(timestamp) || timestamp <= 0) {
+                    const raw = row.dataset.createdAtRaw || '';
+                    if (raw) {
+                        const parsed = Date.parse(raw);
+                        if (!Number.isNaN(parsed)) {
+                            timestamp = Math.floor(parsed / 1000);
+                            row.dataset.createdAt = String(timestamp);
+                        }
+                    }
+                }
+                if (!Number.isFinite(timestamp) || timestamp <= 0) {
+                    timestamp = Math.floor(Date.now() / 1000);
+                    row.dataset.createdAt = String(timestamp);
+                }
+                const formatted = formatDateTimeShort(timestamp);
+                if (formatted) {
+                    const text = CREATED_LABEL_TEMPLATE.replace('%s', formatted);
+                    labelEl.innerHTML = `<i class="bi bi-calendar3 me-1"></i>${escapeHtml(text)}`;
+                    labelEl.classList.remove('d-none');
+                } else {
+                    labelEl.classList.add('d-none');
+                }
+            });
+        }
+
+        function updateDuplicateBadges() {
+            const counters = {};
+            state.rows.forEach(row => {
+                const viewUrl = row.querySelector('.view-url');
+                const rawUrl = viewUrl ? (viewUrl.getAttribute('href') || '') : '';
+                let key = (row.dataset.duplicateKey || '').trim();
+                if (!key) {
+                    key = normalizeLinkKey(rawUrl);
+                    if (key) {
+                        row.dataset.duplicateKey = key;
+                    }
+                }
+                if (!key) { return; }
+                counters[key] = (counters[key] || 0) + 1;
+            });
+            state.rows.forEach(row => {
+                const key = (row.dataset.duplicateKey || '').trim();
+                const badgeEl = row.querySelector('[data-duplicate-badge]');
+                const count = key && counters[key] ? counters[key] : 1;
+                row.dataset.duplicateCount = String(count);
+                if (!badgeEl) { return; }
+                if (count > 1) {
+                    badgeEl.textContent = DUPLICATE_LABEL_TEMPLATE.replace('%d', count);
+                    badgeEl.classList.remove('d-none');
+                } else {
+                    badgeEl.classList.add('d-none');
+                }
+            });
+        }
+
+        function updateMetadata() {
+            updateDuplicateBadges();
+            updateCreatedLabels();
+        }
+
+        function formatNumber(value) {
+            const lang = document.documentElement.getAttribute('lang') || navigator.language || 'ru-RU';
+            try {
+                return new Intl.NumberFormat(lang, { maximumFractionDigits: 0 }).format(value);
+            } catch (e) {
+                return String(value);
+            }
+        }
+
+        function rowMatches(row) {
+            const searchIndex = (row.dataset.searchIndex || '').toLowerCase();
+            if (state.search && searchIndex.indexOf(state.search) === -1) {
+                return false;
+            }
+            const status = row.dataset.promotionStatus || 'idle';
+            if (state.status === 'active' && !PROMOTION_ACTIVE_STATUSES.includes(status)) {
+                return false;
+            }
+            if (state.status === 'completed' && status !== 'completed') {
+                return false;
+            }
+            if (state.status === 'idle' && status !== 'idle') {
+                return false;
+            }
+            if (state.status === 'issues' && !(status === 'failed' || status === 'cancelled')) {
+                return false;
+            }
+            if (state.status === 'report_ready' && row.dataset.promotionReportReady !== '1') {
+                return false;
+            }
+            const hasHistory = row.dataset.hasPromotion === '1'
+                || Number(row.dataset.promotionCreated || 0) > 0
+                || Number(row.dataset.promotionStarted || 0) > 0
+                || Number(row.dataset.promotionUpdated || 0) > 0
+                || PROMOTION_ACTIVE_STATUSES.includes(status)
+                || status === 'completed';
+            if (state.history === 'with' && !hasHistory) {
+                return false;
+            }
+            if (state.history === 'without' && hasHistory) {
+                return false;
+            }
+            const duplicateCount = Number(row.dataset.duplicateCount || '1');
+            if (state.duplicates === 'duplicates' && duplicateCount < 2) {
+                return false;
+            }
+            if (state.duplicates === 'unique' && duplicateCount > 1) {
+                return false;
+            }
+            const language = (row.dataset.language || '').toLowerCase();
+            if (state.language !== 'all' && language !== state.language) {
+                return false;
+            }
+            return true;
+        }
+
+        function updateSummary(total, pages, startIndex, endIndex) {
+            if (!dom.summary) { return; }
+            if (total === 0) {
+                dom.summary.textContent = NO_MATCHES_LABEL;
+                return;
+            }
+            if (total <= state.perPage) {
+                dom.summary.textContent = PAGINATION_SINGLE_TEMPLATE.replace('%s', formatNumber(total));
+                return;
+            }
+            const text = PAGINATION_SUMMARY_TEMPLATE
+                .replace('%1$s', formatNumber(startIndex))
+                .replace('%2$s', formatNumber(endIndex))
+                .replace('%3$s', formatNumber(total));
+            dom.summary.textContent = text;
+        }
+
+        function renderPagination(pages) {
+            if (!dom.paginationWrapper || !dom.pagination) { return; }
+            dom.pagination.innerHTML = '';
+            if (pages <= 1) {
+                dom.paginationWrapper.classList.add('d-none');
+                return;
+            }
+            dom.paginationWrapper.classList.remove('d-none');
+            for (let i = 1; i <= pages; i++) {
+                const li = document.createElement('li');
+                li.className = 'page-item' + (i === state.page ? ' active' : '');
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'page-link';
+                btn.textContent = String(i);
+                btn.dataset.page = String(i);
+                btn.addEventListener('click', () => {
+                    if (state.page === i) { return; }
+                    state.page = i;
+                    applyFilters();
+                });
+                li.appendChild(btn);
+                dom.pagination.appendChild(li);
+            }
+        }
+
+        function applyFilters() {
+            if (!dom.table) {
+                if (dom.summary) { dom.summary.textContent = NO_MATCHES_LABEL; }
+                if (dom.paginationWrapper) { dom.paginationWrapper.classList.add('d-none'); }
+                recalcPromotionStats();
+                return;
+            }
+            const filteredRows = [];
+            state.rows.forEach(row => {
+                const matches = rowMatches(row);
+                row.dataset.filterHidden = matches ? '0' : '1';
+                if (matches) {
+                    filteredRows.push(row);
+                }
+            });
+
+            const total = filteredRows.length;
+            const totalPages = total > 0 ? Math.ceil(total / state.perPage) : 1;
+            if (state.page > totalPages) {
+                state.page = totalPages;
+            }
+            const pageStartIndex = total === 0 ? 0 : (state.page - 1) * state.perPage;
+            const pageEndIndex = total === 0 ? 0 : Math.min(total, pageStartIndex + state.perPage);
+
+            state.rows.forEach(row => {
+                row.dataset.pageHidden = '1';
+                if (row.dataset.filterHidden === '1') {
+                    row.classList.add('d-none');
+                }
+            });
+
+            filteredRows.forEach((row, index) => {
+                const onPage = index >= pageStartIndex && index < pageStartIndex + state.perPage;
+                row.dataset.pageHidden = onPage ? '0' : '1';
+                row.classList.toggle('d-none', !onPage);
+            });
+
+            updateSummary(total, totalPages, total === 0 ? 0 : pageStartIndex + 1, pageEndIndex);
+            renderPagination(totalPages);
+            recalcPromotionStats();
+        }
+
+        function bind() {
+            if (bound) { return; }
+            bound = true;
+            if (dom.searchInput) {
+                dom.searchInput.addEventListener('input', (event) => {
+                    const value = (event.target.value || '').toLowerCase();
+                    if (searchTimer) { clearTimeout(searchTimer); }
+                    searchTimer = setTimeout(() => {
+                        state.search = value.trim();
+                        state.page = 1;
+                        applyFilters();
+                    }, 180);
+                });
+            }
+            if (dom.statusSelect) {
+                dom.statusSelect.addEventListener('change', () => {
+                    state.status = (dom.statusSelect.value || 'all');
+                    state.page = 1;
+                    applyFilters();
+                });
+            }
+            if (dom.historySelect) {
+                dom.historySelect.addEventListener('change', () => {
+                    state.history = (dom.historySelect.value || 'all');
+                    state.page = 1;
+                    applyFilters();
+                });
+            }
+            if (dom.duplicatesSelect) {
+                dom.duplicatesSelect.addEventListener('change', () => {
+                    state.duplicates = (dom.duplicatesSelect.value || 'all');
+                    state.page = 1;
+                    applyFilters();
+                });
+            }
+            if (dom.languageSelect) {
+                dom.languageSelect.addEventListener('change', () => {
+                    state.language = (dom.languageSelect.value || 'all');
+                    state.page = 1;
+                    applyFilters();
+                });
+            }
+        }
+
+        function sync() {
+            cacheDom();
+            collectRows();
+            updateLayoutVisibility();
+            if (state.rows.length === 0) {
+                if (dom.summary) { dom.summary.textContent = NO_MATCHES_LABEL; }
+                if (dom.paginationWrapper) { dom.paginationWrapper.classList.add('d-none'); }
+                recalcPromotionStats();
+                return;
+            }
+            updateMetadata();
+            applyFilters();
+        }
+
+        function init() {
+            cacheDom();
+            bind();
+            collectRows();
+            updateLayoutVisibility();
+            if (state.rows.length > 0) {
+                updateMetadata();
+            }
+            applyFilters();
+        }
+
+        return { init, sync, apply: applyFilters };
+    }
+
     function createLinkPlaceholderRow(url) {
         const tr = document.createElement('tr');
         tr.dataset.placeholder = '1';
@@ -2344,6 +2799,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function removePlaceholderRow(row) {
         if (row && row.parentNode) {
             row.remove();
+        }
+        if (linkTableManager) {
+            try { linkTableManager.sync(); } catch (e) { console.error('Link table manager sync failed', e); }
         }
     }
 
@@ -2387,17 +2845,44 @@ document.addEventListener('DOMContentLoaded', function() {
         tr.dataset.level3Success = String(payload?.level3_success || 0);
         tr.dataset.level3Required = String(payload?.level3_required || 0);
         tr.dataset.crowdPlanned = String(payload?.crowd_planned || 0);
-    const crowdTarget = Number(payload?.crowd_target ?? payload?.crowd_total ?? 0) || 0;
-    const crowdAttemptedRaw = payload?.crowd_attempted ?? payload?.crowd_attempted_total ?? payload?.crowd_total_attempted ?? 0;
-    const crowdAttempted = Number(crowdAttemptedRaw || 0) || 0;
-    tr.dataset.crowdTotal = String(crowdTarget);
-    tr.dataset.crowdTarget = String(crowdTarget);
-    tr.dataset.crowdAttempted = String(crowdAttempted);
-    tr.dataset.crowdCompleted = String(payload?.crowd_completed || 0);
-    tr.dataset.crowdRunning = String(payload?.crowd_running || 0);
-    tr.dataset.crowdQueued = String(payload?.crowd_queued || 0);
-    tr.dataset.crowdFailed = String(payload?.crowd_failed || 0);
-    tr.dataset.crowdManual = String(payload?.crowd_manual ?? payload?.crowd_manual_fallback ?? 0);
+        const crowdTargetRaw = payload?.crowd_target ?? payload?.crowd_total ?? 0;
+        const crowdTarget = Number(crowdTargetRaw || 0) || 0;
+        const crowdAttemptedRaw = payload?.crowd_attempted ?? payload?.crowd_attempted_total ?? payload?.crowd_total_attempted ?? 0;
+        const crowdAttempted = Number(crowdAttemptedRaw || 0) || 0;
+        tr.dataset.crowdTotal = String(crowdTarget);
+        tr.dataset.crowdTarget = String(crowdTarget);
+        tr.dataset.crowdAttempted = String(crowdAttempted);
+        tr.dataset.crowdCompleted = String(payload?.crowd_completed || 0);
+        tr.dataset.crowdRunning = String(payload?.crowd_running || 0);
+        tr.dataset.crowdQueued = String(payload?.crowd_queued || 0);
+        tr.dataset.crowdFailed = String(payload?.crowd_failed || 0);
+        tr.dataset.crowdManual = String(payload?.crowd_manual ?? payload?.crowd_manual_fallback ?? 0);
+
+        const createdRaw = payload?.created_at || payload?.createdAt || '';
+        let createdTimestamp = 0;
+        if (createdRaw) {
+            const parsed = Date.parse(createdRaw);
+            if (!Number.isNaN(parsed)) {
+                createdTimestamp = Math.floor(parsed / 1000);
+            }
+        }
+        if (!Number.isFinite(createdTimestamp) || createdTimestamp <= 0) {
+            createdTimestamp = Math.floor(Date.now() / 1000);
+        }
+        const createdIso = createdRaw || new Date(createdTimestamp * 1000).toISOString();
+        tr.dataset.createdAt = String(createdTimestamp);
+        tr.dataset.createdAtRaw = createdIso;
+        tr.dataset.createdAtHuman = formatDateTimeShort(createdTimestamp);
+        const duplicateKey = normalizeLinkKey(urlVal);
+        tr.dataset.duplicateKey = duplicateKey;
+        tr.dataset.duplicateCount = '1';
+        tr.dataset.language = languageValue.toLowerCase();
+        tr.dataset.searchIndex = `${urlVal} ${anchorVal} ${wishVal}`.toLowerCase();
+        tr.dataset.hasPromotion = '0';
+        tr.dataset.promotionCreated = '0';
+        tr.dataset.promotionStarted = '0';
+        tr.dataset.promotionUpdated = '0';
+        tr.dataset.promotionFinished = '0';
 
         const promotionChargeAmount = escapeHtml(String(PROMOTION_CHARGE_AMOUNT ?? ''));
         const promotionChargeBase = escapeHtml(String(PROMOTION_CHARGE_BASE ?? ''));
@@ -2463,6 +2948,10 @@ document.addEventListener('DOMContentLoaded', function() {
             <td class="url-cell" data-label="<?php echo __('Ссылка'); ?>">
                 <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
                 <a href="${escapeHtml(urlVal)}" target="_blank" class="view-url text-truncate-path" title="${escapeHtml(urlVal)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
+                <div class="link-meta small text-muted mt-2 d-flex flex-wrap align-items-center gap-2">
+                    <span class="link-meta__created d-none" data-created-label></span>
+                    <span class="badge bg-warning-subtle text-warning-emphasis d-none" data-duplicate-badge></span>
+                </div>
                 <input type="url" class="form-control d-none edit-url" name="edited_links[${newId}][url]" value="${escapeAttribute(urlVal)}" disabled />
             </td>
             <td class="anchor-cell" data-label="<?php echo __('Анкор'); ?>">
@@ -2518,6 +3007,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         ${progressLevelsMarkup}
                     </div>
                     <div class="promotion-progress-details text-muted d-none"></div>
+                    <div class="promotion-status-dates small text-muted mt-2 d-none" data-promotion-dates>
+                        <i class="bi bi-clock-history me-1"></i>
+                        <span data-promotion-last></span>
+                        <span class="dot">•</span>
+                        <span data-promotion-finished></span>
+                    </div>
                     <div class="promotion-status-complete mt-2 d-none" data-bs-toggle="tooltip" data-bs-placement="top" title="<?php echo __('Передача ссылочного веса займет 2-3 месяца, мы продолжаем мониторинг.'); ?>">
                         <i class="bi bi-patch-check-fill text-success"></i>
                         <span class="promotion-status-complete-text"><?php echo __('Продвижение завершено'); ?></span>
@@ -2684,6 +3179,37 @@ document.addEventListener('DOMContentLoaded', function() {
             tr.dataset.crowdQueued = String(crowd.queued ?? 0);
             tr.dataset.crowdFailed = String(crowd.failed ?? 0);
             tr.dataset.crowdManual = String(crowd.manual_fallback ?? 0);
+        }
+
+        const createdTs = parseTimestampToSeconds(data.created_at ?? data.createdAt ?? data.createdAtSeconds ?? 0);
+        const startedTs = parseTimestampToSeconds(data.started_at ?? data.startedAt ?? data.startedAtSeconds ?? 0);
+        const updatedTs = parseTimestampToSeconds(data.updated_at ?? data.updatedAt ?? data.updatedAtSeconds ?? 0);
+        const finishedTs = parseTimestampToSeconds(data.finished_at ?? data.finishedAt ?? data.finishedAtSeconds ?? 0);
+        tr.dataset.promotionCreated = String(createdTs || 0);
+        tr.dataset.promotionStarted = String(startedTs || 0);
+        tr.dataset.promotionUpdated = String(updatedTs || 0);
+        tr.dataset.promotionFinished = String(finishedTs || 0);
+        const hasHistory = createdTs > 0 || startedTs > 0 || updatedTs > 0 || finishedTs > 0 || isPromotionActiveStatus(status) || status === 'completed';
+        tr.dataset.hasPromotion = hasHistory ? '1' : '0';
+
+        const datesBlock = block.querySelector('[data-promotion-dates]');
+        if (datesBlock) {
+            const lastSpan = datesBlock.querySelector('[data-promotion-last]');
+            const finishedSpan = datesBlock.querySelector('[data-promotion-finished]');
+            const dotEl = datesBlock.querySelector('.dot');
+            const lastTs = updatedTs || startedTs || createdTs;
+            const showLast = lastTs > 0;
+            const showFinished = finishedTs > 0;
+            if (lastSpan) {
+                lastSpan.textContent = showLast ? PROMOTION_LAST_LABEL_TEMPLATE.replace('%s', formatDateTimeShort(lastTs)) : '';
+            }
+            if (finishedSpan) {
+                finishedSpan.textContent = showFinished ? PROMOTION_FINISHED_LABEL_TEMPLATE.replace('%s', formatDateTimeShort(finishedTs)) : '';
+            }
+            if (dotEl) {
+                dotEl.classList.toggle('d-none', !showFinished);
+            }
+            datesBlock.classList.toggle('d-none', !showLast && !showFinished);
         }
 
         if (data.progress && typeof data.progress === 'object') {
@@ -3048,6 +3574,20 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    if (!linkTableManager) {
+        linkTableManager = createLinkTableManager();
+        try {
+            linkTableManager.init();
+        } catch (e) {
+            console.error('Link table manager init failed', e);
+        }
+    } else {
+        try {
+            linkTableManager.sync();
+        } catch (e) {
+            console.error('Link table manager sync failed', e);
+        }
+    }
     bindDynamicRowActions();
     recalcPromotionStats();
 
@@ -3353,6 +3893,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     initTooltips(tr);
                     recalcPromotionStats();
                     refreshActionsCell(tr);
+                    if (linkTableManager) {
+                        try {
+                            linkTableManager.sync();
+                        } catch (e) {
+                            console.error('Link table manager sync failed', e);
+                        }
+                    }
                 }
 
                 if (window.bootstrap) {
