@@ -23,7 +23,7 @@ function ensureAnchorInMarkdown(markdown, pageUrl, anchorText) {
 	const safeAnchor = anchor.replace(/\]\(/g, ')').replace(/\[/g, '').trim();
 	const linkLine = `[${safeAnchor || url}](${url})`;
 	body = body ? `${body}\n\n${linkLine}\n` : `${linkLine}\n`;
-	return body.trim();
+	return body.replace(/\s+$/, '');
 }
 
 function buildWriteAsUrlFromResponse(responseJson, origin = 'https://write.as') {

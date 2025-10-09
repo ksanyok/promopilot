@@ -17,6 +17,11 @@ if ($selectedGatewayCode === '' || !isset($paymentGateways[$selectedGatewayCode]
 $messages = ['success' => [], 'error' => []];
 $createdPayment = null;
 $requestedTransactionId = isset($_GET['txn']) ? (int)$_GET['txn'] : 0;
+$invoiceCurrencyOptions = ['UAH', 'USD', 'EUR'];
+$invoiceCurrencySelection = strtoupper((string)($_POST['invoice_currency'] ?? 'UAH'));
+if (!in_array($invoiceCurrencySelection, $invoiceCurrencyOptions, true)) {
+    $invoiceCurrencySelection = 'UAH';
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_topup'])) {
     if (!verify_csrf()) {
@@ -32,7 +37,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_topup'])) {
         } elseif (!isset($paymentGateways[$gatewayCode])) {
             $messages['error'][] = __('Выберите платёжную систему.');
         } else {
-            $result = pp_payment_transaction_create($userId, $gatewayCode, $amount);
+            $options = [];
+            if ($gatewayCode === 'invoice') {
+                $options['invoice_currency'] = $invoiceCurrencySelection;
+            }
+            $result = pp_payment_transaction_create($userId, $gatewayCode, $amount, $options);
             if (!empty($result['ok'])) {
                 $createdPayment = $result;
                 $selectedGatewayCode = $gatewayCode;
@@ -185,13 +194,24 @@ function pp_client_tx_status_badge(string $status): string {
                                 </div>
                                 <div class="col-md-6">
                                     <label for="topup-gateway" class="form-label"><?php echo __('Платёжная система'); ?></label>
-                                    <select class="form-select" id="topup-gateway" name="gateway" required onchange="this.form.submit();">
+                                    <select class="form-select" id="topup-gateway" name="gateway" required>
                                         <?php foreach ($paymentGateways as $code => $gateway): ?>
                                             <option value="<?php echo htmlspecialchars($code); ?>" <?php echo $selectedGatewayCode === $code ? 'selected' : ''; ?>><?php echo htmlspecialchars($gateway['title']); ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                     <div class="form-text"><?php echo __('Выбор изменит валюту и инструкцию.'); ?></div>
                                 </div>
+                                <?php if ($selectedGatewayCode === 'invoice'): ?>
+                                    <div class="col-md-6">
+                                        <label for="invoice-currency" class="form-label"><?php echo __('Валюта інвойсу'); ?></label>
+                                        <select class="form-select" id="invoice-currency" name="invoice_currency" required>
+                                            <?php foreach ($invoiceCurrencyOptions as $currencyCode): ?>
+                                                <option value="<?php echo htmlspecialchars($currencyCode); ?>" <?php echo $invoiceCurrencySelection === $currencyCode ? 'selected' : ''; ?>><?php echo htmlspecialchars($currencyCode); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <div class="form-text"><?php echo __('Рахунок буде виписаний у вибраній валюті. Сума до оплати перерахується автоматично.'); ?></div>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="mt-4 d-flex gap-2 flex-wrap">
                                 <button type="submit" class="btn btn-gradient"><i class="bi bi-lightning-charge me-1"></i><?php echo __('Создать платёж'); ?></button>
@@ -220,6 +240,8 @@ function pp_client_tx_status_badge(string $status): string {
                                                 <div class="small mb-0"><?php echo nl2br(htmlspecialchars($selectedGateway['instructions'])); ?></div>
                                             <?php elseif ($selectedGatewayCode === 'monobank'): ?>
                                                 <div class="small mb-0"><?php echo __('Оплата происходит на странице Monobank. После успешного перевода и возврата сюда мы проверим счёт и зачислим средства автоматически.'); ?></div>
+                                            <?php elseif ($selectedGatewayCode === 'invoice'): ?>
+                                                <div class="small mb-0"><?php echo __('Скачайте рахунок-фактуру, оплатіть через банк або онлайн-банк. Після підтвердження платежу сервіс автоматично зачислить кошти на баланс.'); ?></div>
                                             <?php else: ?>
                                                 <div class="text-muted small mb-0"><?php echo __('Инструкция не заполнена администратором. Используйте данные провайдера для оплаты.'); ?></div>
                                             <?php endif; ?>
@@ -239,14 +261,38 @@ function pp_client_tx_status_badge(string $status): string {
                         <?php endif; ?>
 
                         <?php if ($createdPayment && !empty($createdPayment['customer_payload'])): ?>
-                            <?php $payload = $createdPayment['customer_payload']; ?>
+                            <?php
+                                $payload = $createdPayment['customer_payload'];
+                                $transactionId = (int)($createdPayment['transaction']['id'] ?? 0);
+                                $txGatewayCode = strtolower((string)($createdPayment['transaction']['gateway_code'] ?? ''));
+                                $isInvoicePayment = $txGatewayCode === 'invoice';
+                                $invoiceDownloadToken = $isInvoicePayment ? (string)($payload['invoice_download_token'] ?? '') : '';
+                                $invoiceDownloadUrl = ($isInvoicePayment && $transactionId > 0 && $invoiceDownloadToken !== '')
+                                    ? pp_url('client/invoice_download.php?txn=' . urlencode((string)$transactionId) . '&token=' . urlencode($invoiceDownloadToken))
+                                    : '';
+                                $downloadLabel = $invoiceDownloadUrl !== '' ? (string)($payload['download_label'] ?? __('Завантажити PDF-рахунок')) : '';
+                                $downloadFileName = $isInvoicePayment ? (string)($payload['download_filename'] ?? '') : '';
+                            ?>
                             <div class="nextstep-card" role="region" aria-label="<?php echo __('Следующий шаг'); ?>">
                                 <div class="nextstep-card__ribbon" aria-hidden="true"></div>
                                 <div class="nextstep-card__body">
                                     <div class="nextstep-card__title"><span class="icon"><i class="bi bi-credit-card"></i></span><span><?php echo __('Следующий шаг'); ?></span></div>
-                                    <?php if (!empty($createdPayment['payment_url'])): ?>
+                                    <?php if (!$isInvoicePayment && !empty($createdPayment['payment_url'])): ?>
                                         <p class="mb-2 nextstep-card__meta"><?php echo __('Перейдите по ссылке ниже, чтобы завершить оплату:'); ?></p>
                                         <p class="mb-3"><a class="btn btn-primary" href="<?php echo htmlspecialchars($createdPayment['payment_url']); ?>" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Открыть страницу оплаты'); ?></a></p>
+                                    <?php elseif ($isInvoicePayment && $invoiceDownloadUrl !== ''): ?>
+                                        <p class="mb-2 nextstep-card__meta"><?php echo __('Завантажте рахунок-фактуру та оплатіть через ваш банк.'); ?></p>
+                                        <p class="mb-3">
+                                            <a class="btn btn-primary" href="<?php echo htmlspecialchars($invoiceDownloadUrl); ?>" <?php echo $downloadFileName !== '' ? 'download="' . htmlspecialchars($downloadFileName) . '"' : 'download'; ?> rel="noopener">
+                                                <i class="bi bi-file-earmark-arrow-down me-1"></i><?php echo htmlspecialchars($downloadLabel !== '' ? $downloadLabel : __('Скачать інвойс (PDF)')); ?>
+                                            </a>
+                                        </p>
+                                    <?php endif; ?>
+                                    <?php if (!empty($payload['message'])): ?>
+                                        <p class="mb-3 small text-muted"><?php echo htmlspecialchars($payload['message']); ?></p>
+                                    <?php endif; ?>
+                                    <?php if (!empty($payload['notes'])): ?>
+                                        <p class="mb-3 small text-muted"><?php echo htmlspecialchars($payload['notes']); ?></p>
                                     <?php endif; ?>
                                 <?php if (!empty($payload['qr_content'])): ?>
                                     <p class="mb-2"><?php echo __('Отсканируйте QR-код в приложении Binance Pay:'); ?></p>
@@ -254,6 +300,9 @@ function pp_client_tx_status_badge(string $status): string {
                                 <?php endif; ?>
                                 <?php if (!empty($payload['invoice_id'])): ?>
                                     <p class="mb-0 small text-muted"><?php echo __('Номер счёта'); ?>: <strong><?php echo htmlspecialchars($payload['invoice_id']); ?></strong></p>
+                                <?php endif; ?>
+                                <?php if (!empty($payload['invoice_currency'])): ?>
+                                    <p class="mb-0 small text-muted"><?php echo __('Валюта рахунку'); ?>: <strong><?php echo htmlspecialchars($payload['invoice_currency']); ?></strong></p>
                                 <?php endif; ?>
                                 <?php if (!empty($payload['prepay_id'])): ?>
                                     <p class="mb-0 small text-muted"><?php echo __('Идентификатор платежа'); ?>: <strong><?php echo htmlspecialchars($payload['prepay_id']); ?></strong></p>
@@ -366,6 +415,18 @@ function pp_client_tx_status_badge(string $status): string {
                                 <td class="small">
                                     <?php if (!empty($tx['error_message'])): ?>
                                         <span class="text-danger"><?php echo htmlspecialchars($tx['error_message']); ?></span>
+                                    <?php elseif (!empty($tx['customer_payload']['invoice_download_token'])): ?>
+                                        <?php
+                                            $historyDownloadLabel = (string)($tx['customer_payload']['download_label'] ?? __('Скачать інвойс (PDF)'));
+                                            $historyDownloadName = (string)($tx['customer_payload']['download_filename'] ?? '');
+                                            $historyToken = (string)$tx['customer_payload']['invoice_download_token'];
+                                            $historyLink = $historyToken !== '' ? pp_url('client/invoice_download.php?txn=' . urlencode((string)$tx['id']) . '&token=' . urlencode($historyToken)) : '';
+                                        ?>
+                                        <?php if ($historyLink !== ''): ?>
+                                            <a href="<?php echo htmlspecialchars($historyLink); ?>" <?php echo $historyDownloadName !== '' ? 'download="' . htmlspecialchars($historyDownloadName) . '"' : 'download'; ?> rel="noopener"><?php echo htmlspecialchars($historyDownloadLabel); ?></a>
+                                        <?php else: ?>
+                                            <span class="text-muted">—</span>
+                                        <?php endif; ?>
                                     <?php elseif (!empty($tx['customer_payload']['payment_url'])): ?>
                                         <a href="<?php echo htmlspecialchars($tx['customer_payload']['payment_url']); ?>" target="_blank" rel="noopener"><?php echo __('Ссылка на оплату'); ?></a>
                                         <?php if (!empty($tx['customer_payload']['commission_note'])): ?>
@@ -451,14 +512,67 @@ function pp_client_tx_status_badge(string $status): string {
     </div>
 </div>
 
+<?php
+$autoInvoiceDownloadUrl = '';
+$autoInvoiceDownloadName = '';
+if ($createdPayment && !empty($createdPayment['customer_payload'])) {
+    $autoPayload = $createdPayment['customer_payload'];
+    $autoGateway = strtolower((string)($createdPayment['transaction']['gateway_code'] ?? ''));
+    if ($autoGateway === 'invoice') {
+        $txnId = (int)($createdPayment['transaction']['id'] ?? 0);
+        $token = (string)($autoPayload['invoice_download_token'] ?? '');
+        if ($txnId > 0 && $token !== '') {
+            $autoInvoiceDownloadUrl = pp_url('client/invoice_download.php?txn=' . urlencode((string)$txnId) . '&token=' . urlencode($token));
+            $autoInvoiceDownloadName = (string)($autoPayload['download_filename'] ?? '');
+        }
+    }
+}
+?>
+
 <?php include '../includes/footer.php'; ?>
 
 <script>
-// Ensure the payment instruction modal sits at the <body> root to avoid z-index/stacking issues with backdrop
 document.addEventListener('DOMContentLoaded', function() {
+    // Ensure the payment instruction modal sits at the <body> root to avoid z-index/stacking issues with backdrop
     var instModalEl = document.getElementById('paymentInstructionModal');
     if (instModalEl && instModalEl.parentElement !== document.body) {
         document.body.appendChild(instModalEl);
     }
+
+    var gatewaySelect = document.getElementById('topup-gateway');
+    if (gatewaySelect && gatewaySelect.form) {
+        gatewaySelect.addEventListener('change', function() {
+            var form = gatewaySelect.form;
+            var createInput = form.querySelector('input[name="create_topup"]');
+            if (createInput) {
+                createInput.disabled = true;
+            }
+            form.submit();
+        });
+    }
+
+<?php if ($autoInvoiceDownloadUrl !== ''): ?>
+    (function triggerInvoiceDownload() {
+        var link = document.createElement('a');
+        link.href = <?php echo json_encode($autoInvoiceDownloadUrl, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+        link.rel = 'noopener';
+        link.target = '_blank';
+        <?php if ($autoInvoiceDownloadName !== ''): ?>
+        link.download = <?php echo json_encode($autoInvoiceDownloadName, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+        <?php else: ?>
+        link.download = '';
+        <?php endif; ?>
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        requestAnimationFrame(function() {
+            link.click();
+            setTimeout(function() {
+                if (link.parentNode) {
+                    link.parentNode.removeChild(link);
+                }
+            }, 1200);
+        });
+    })();
+<?php endif; ?>
 });
 </script>

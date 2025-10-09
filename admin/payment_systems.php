@@ -18,6 +18,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $config = [];
 
         switch ($gatewayCode) {
+            case 'invoice':
+                $config = [
+                    'api_base_url' => trim((string)($_POST['invoice_api_base_url'] ?? '')),
+                    'api_key' => trim((string)($_POST['invoice_api_key'] ?? '')),
+                    'service_name' => trim((string)($_POST['invoice_service_name'] ?? '')),
+                ];
+                break;
+
             case 'monobank':
                 $instructions = '';
                 $markupRaw = str_replace(',', '.', (string)($_POST['monobank_usd_markup'] ?? '5'));
@@ -123,63 +131,143 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $gateways = pp_payment_gateways(true);
-$monobank = $gateways['monobank'] ?? pp_payment_gateway_get('monobank');
-$binance = $gateways['binance'] ?? pp_payment_gateway_get('binance');
-$metamask = $gateways['metamask'] ?? pp_payment_gateway_get('metamask');
-$cryptoU = $gateways['crypto_universal'] ?? pp_payment_gateway_get('crypto_universal');
 
-$monobankConfig = $monobank['config'] ?? [];
-$binanceConfig = $binance['config'] ?? [];
-$metamaskConfig = $metamask['config'] ?? [];
-$cryptoUConfig = $cryptoU['config'] ?? [];
-$monobankMarkupValue = isset($monobankConfig['usd_markup_percent']) ? (float)$monobankConfig['usd_markup_percent'] : 5.0;
+$invoice = $gateways['invoice'] ?? ['title' => 'Інвойс (банківський переказ)', 'is_enabled' => 0, 'instructions' => '', 'config' => []];
+$invoiceConfig = is_array($invoice['config'] ?? null) ? $invoice['config'] : [];
+$invoiceDefinition = function_exists('pp_payment_gateway_invoice_definition') ? pp_payment_gateway_invoice_definition() : [];
+$invoiceDefaults = (is_array($invoiceDefinition) && isset($invoiceDefinition['config_defaults']) && is_array($invoiceDefinition['config_defaults']))
+    ? $invoiceDefinition['config_defaults']
+    : [];
+$invoiceConfig = array_merge($invoiceDefaults, $invoiceConfig);
+
+$cryptoU = $gateways['crypto_universal'] ?? ['title' => 'Crypto (USDT Multi-Network)', 'is_enabled' => 0, 'instructions' => '', 'config' => []];
+$cryptoUConfig = is_array($cryptoU['config'] ?? null) ? $cryptoU['config'] : [];
+
+$monobank = $gateways['monobank'] ?? ['title' => 'Monobank', 'is_enabled' => 0, 'instructions' => '', 'config' => []];
+$monobankConfig = is_array($monobank['config'] ?? null) ? $monobank['config'] : [];
+$monobankMarkupValue = (float)($monobankConfig['usd_markup_percent'] ?? 5.0);
 $monobankManualRateValue = (string)($monobankConfig['usd_manual_rate'] ?? '');
+
+$metamask = $gateways['metamask'] ?? ['title' => 'MetaMask / EVM (USDT)', 'is_enabled' => 0, 'instructions' => '', 'config' => []];
+$metamaskConfig = is_array($metamask['config'] ?? null) ? $metamask['config'] : [];
+
+$binance = $gateways['binance'] ?? ['title' => 'Binance (USDT TRC20)', 'is_enabled' => 0, 'instructions' => '', 'config' => []];
+$binanceConfig = is_array($binance['config'] ?? null) ? $binance['config'] : [];
 $binanceMode = strtolower((string)($binanceConfig['mode'] ?? 'merchant'));
-if (!in_array($binanceMode, ['merchant', 'wallet', 'spot'], true)) {
+if ($binanceMode === '') {
     $binanceMode = 'merchant';
 }
 
 $pp_admin_sidebar_active = 'payment_systems';
 $pp_container = false;
 $GLOBALS['pp_layout_has_sidebar'] = true;
+
 include '../includes/header.php';
 include __DIR__ . '/../includes/admin_sidebar.php';
 ?>
 
 <div class="main-content fade-in">
     <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <h1 class="h3 mb-1"><?php echo __('Платёжные системы'); ?></h1>
-            <p class="text-muted mb-0 small"><?php echo __('Управляйте подключениями к платёжным шлюзам и отслеживайте транзакции клиентов.'); ?></p>
+        <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+            <div>
+                <h1 class="h3 mb-1"><?php echo __('Платіжні системи'); ?></h1>
+                <p class="text-muted mb-0 small"><?php echo __('Керування платіжними каналами поповнення балансу клієнтів.'); ?></p>
+            </div>
+            <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="btn btn-outline-secondary">
+                <i class="bi bi-clock-history me-1"></i><?php echo __('Журнал транзакцій'); ?>
+            </a>
         </div>
     </div>
 
-    <?php foreach ($messages['success'] as $msg): ?>
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            <?php echo htmlspecialchars($msg); ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    <?php if (!empty($messages['success']) || !empty($messages['error'])): ?>
+        <div class="mb-4">
+            <?php foreach ($messages['success'] as $msg): ?>
+                <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    <?php echo htmlspecialchars($msg); ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="<?php echo __('Закрити'); ?>"></button>
+                </div>
+            <?php endforeach; ?>
+            <?php foreach ($messages['error'] as $msg): ?>
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    <?php echo htmlspecialchars($msg); ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="<?php echo __('Закрити'); ?>"></button>
+                </div>
+            <?php endforeach; ?>
         </div>
-    <?php endforeach; ?>
-    <?php foreach ($messages['error'] as $msg): ?>
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <?php echo htmlspecialchars($msg); ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-    <?php endforeach; ?>
+    <?php endif; ?>
 
-    <div class="alert alert-info d-flex align-items-start gap-3 mb-4" role="alert">
-        <i class="bi bi-lightbulb" aria-hidden="true"></i>
-        <div>
-            <h2 class="h6 mb-2"><?php echo __('Как работает пополнение баланса'); ?></h2>
-            <ul class="mb-0 small ps-3">
-                <li><?php echo __('Клиент указывает сумму в USD, система создаёт транзакцию и показывает инструкции по оплате.'); ?></li>
-                <li><?php echo __('Для Monobank счёт формируется в гривне: курс USD→UAH подтягивается автоматически и может быть скорректирован на наценку.'); ?></li>
-                <li><?php echo __('Для Binance выберите мерчант Binance Pay или простой кошелёк USDT TRC20, если мерчанта нет.'); ?></li>
-                <li><?php echo __('Monobank проверяется автоматически после возврата клиента; для других систем при необходимости подтверждайте транзакции вручную или подключайте вебхуки провайдера.'); ?></li>
-            </ul>
+    <section class="mb-5">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="h5 mb-1"><?php echo htmlspecialchars($invoice['title'] ?? 'Інвойс (банківський переказ)'); ?></h2>
+                    <p class="mb-0 text-muted small"><?php echo __('PDF-рахунки з автоматичним підтвердженням через webhook після оплати.'); ?></p>
+                </div>
+                <span class="badge bg-<?php echo !empty($invoice['is_enabled']) ? 'success' : 'secondary'; ?>">
+                    <?php echo !empty($invoice['is_enabled']) ? __('Включено') : __('Отключено'); ?>
+                </span>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="gateway_code" value="invoice">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="invoice-title"><?php echo __('Название'); ?></label>
+                            <input type="text" class="form-control" id="invoice-title" name="title" value="<?php echo htmlspecialchars($invoice['title'] ?? 'Інвойс (банківський переказ)'); ?>" placeholder="Invoice / Банківський рахунок">
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <div class="form-check form-switch ms-md-auto">
+                                <input class="form-check-input" type="checkbox" role="switch" id="invoice-enabled" name="is_enabled" <?php echo !empty($invoice['is_enabled']) ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="invoice-enabled"><?php echo __('Включить інвойси'); ?></label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="invoice-api-base"><?php echo __('Базовий URL API'); ?></label>
+                            <input type="url" class="form-control" id="invoice-api-base" name="invoice_api_base_url" value="<?php echo htmlspecialchars($invoiceConfig['api_base_url'] ?? 'https://invoice.buyreadysite.com'); ?>" placeholder="https://invoice.buyreadysite.com">
+                            <div class="form-text"><?php echo __('Викликається POST /api/create_invoice.php. Якщо залишити порожнім, використовується значення за замовчуванням.'); ?></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="invoice-api-key"><?php echo __('API ключ'); ?></label>
+                            <input type="text" class="form-control" id="invoice-api-key" name="invoice_api_key" value="<?php echo htmlspecialchars($invoiceConfig['api_key'] ?? ''); ?>" placeholder="secret_xxxxx">
+                            <div class="form-text"><?php echo __('Знайдіть ключ у панелі Invoice → «API ключі».'); ?></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="invoice-service-name"><?php echo __('Service name (технічне)'); ?></label>
+                            <input type="text" class="form-control" id="invoice-service-name" name="invoice_service_name" value="<?php echo htmlspecialchars($invoiceConfig['service_name'] ?? ''); ?>" placeholder="PromoPilot">
+                            <div class="form-text"><?php echo __('Повинно точно збігатися з назвою сервісу у розділі «API ключі» на invoice.buyreadysite.com.'); ?></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label"><?php echo __('Webhook URL'); ?></label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" value="<?php echo htmlspecialchars(pp_payment_gateway_webhook_url('invoice')); ?>" readonly>
+                                <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard?.writeText(<?php echo json_encode(pp_payment_gateway_webhook_url('invoice'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>);">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted"><?php echo __('Скопіюйте адресу та додайте її у налаштуваннях вашої інвойс-системи для автоматичного підтвердження.'); ?></small>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="invoice-instructions"><?php echo __('Інструкція для клієнтів'); ?></label>
+                            <textarea class="form-control" id="invoice-instructions" name="instructions" rows="3" placeholder="Скачайте рахунок-фактуру, оплатіть у банку та натисніть «Я оплатив»."><?php echo htmlspecialchars($invoice['instructions'] ?? ''); ?></textarea>
+                            <div class="form-text"><i class="bi bi-info-circle text-muted"></i> <?php echo __('Цей текст зʼявиться у модальному вікні на сторінці балансу.'); ?></div>
+                        </div>
+                    </div>
+                    <div class="mt-4 d-flex justify-content-end gap-2">
+                        <a href="<?php echo pp_url('admin/payment_transactions.php'); ?>" class="btn btn-outline-secondary"><i class="bi bi-clock-history me-1"></i><?php echo __('Транзакції'); ?></a>
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i><?php echo __('Сохранить'); ?></button>
+                    </div>
+                </form>
+                <div class="alert alert-secondary small mt-3" role="alert">
+                    <strong><?php echo __('Як це працює'); ?>:</strong>
+                    <ol class="mb-0 ps-3">
+                        <li><?php echo __('Клієнт вводить суму в USD та обирає валюту інвойсу (UAH / USD / EUR).'); ?></li>
+                        <li><?php echo __('Система створює PDF-рахунок із реквізитами для вибраної валюти.'); ?></li>
+                        <li><?php echo __('Після позначення оплати у вашій інвойс-системі надсилається callback, і кошти автоматично зараховуються на баланс клієнта.'); ?></li>
+                    </ol>
+                </div>
+            </div>
         </div>
-    </div>
-
     <section class="mb-5">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">

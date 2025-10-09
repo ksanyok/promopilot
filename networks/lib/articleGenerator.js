@@ -16,28 +16,12 @@ const LANGUAGE_LABELS = {
   },
   uk: {
     nameEn: 'Ukrainian',
-    nameEnWithCode: 'Ukrainian language (ISO code: uk)',
     nameRuIn: 'украинском языке',
-    nativeIn: 'українською мовою',
-    nativeContentReminder: 'Увесь текст пиши українською мовою. Не переходь на англійську чи російську.',
-    nativeTitleReminder: 'Заголовок сформулюй українською мовою без англійських або російських слів.',
-    nativeSystemTitle: 'Відповідай лише фінальним заголовком українською мовою без пояснень.',
-    nativeSystemContent: 'Поверни тільки тіло статті українською мовою в HTML-розмітці без зайвих коментарів.',
-    nativeFinalCheck: 'Переконайся, що кожне речення українською; якщо з’являється інша мова — перепиши фрагмент українською.',
-    languageCodeReminder: 'Використовуй лише українську (код мови uk). Не додавай англійські чи російські речення.',
     iso: 'uk',
   },
   ua: {
     nameEn: 'Ukrainian',
-    nameEnWithCode: 'Ukrainian language (ISO code: uk)',
     nameRuIn: 'украинском языке',
-    nativeIn: 'українською мовою',
-    nativeContentReminder: 'Увесь текст пиши українською мовою. Не переходь на англійську чи російську.',
-    nativeTitleReminder: 'Заголовок сформулюй українською мовою без англійських або російських слів.',
-    nativeSystemTitle: 'Відповідай лише фінальним заголовком українською мовою без пояснень.',
-    nativeSystemContent: 'Поверни тільки тіло статті українською мовою в HTML-розмітці без зайвих коментарів.',
-    nativeFinalCheck: 'Переконайся, що кожне речення українською; якщо з’являється інша мова — перепиши фрагмент українською.',
-    languageCodeReminder: 'Використовуй лише українську (код мови uk). Не додавай англійські чи російські речення.',
     iso: 'uk',
   },
   en: {
@@ -91,62 +75,129 @@ const LANGUAGE_LABELS = {
   he: { nameEn: 'Hebrew', nameRuIn: 'ивритском языке' }
 };
 
+const DEFAULT_LANGUAGE_META = {
+  code: '',
+  nameEn: 'the page language',
+  nameEnWithCode: 'the page language',
+  nameRuIn: 'языке страницы',
+  nativeIn: '',
+  nativeContentReminder: '',
+  nativeTitleReminder: '',
+  nativeSystemTitle: '',
+  nativeSystemContent: '',
+  nativeFinalCheck: '',
+  languageCodeReminder: '',
+  iso: '',
+};
+
+const hasIntlDisplayNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function';
+const languageDisplayByLocale = {};
+
+function getDisplayNamesInstance(locale) {
+  if (!hasIntlDisplayNames) {
+    return null;
+  }
+  if (!languageDisplayByLocale[locale]) {
+    try {
+      languageDisplayByLocale[locale] = new Intl.DisplayNames([locale], { type: 'language' });
+    } catch (_) {
+      languageDisplayByLocale[locale] = null;
+    }
+  }
+  return languageDisplayByLocale[locale];
+}
+
+function getLanguageDisplayName(locale, code) {
+  if (!code) {
+    return null;
+  }
+  const instance = getDisplayNamesInstance(locale);
+  if (!instance) {
+    return null;
+  }
+  try {
+    return instance.of(code) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function withLanguageMetaDefaults(meta = {}) {
+  return { ...DEFAULT_LANGUAGE_META, ...meta };
+}
+
+function buildFallbackLanguageMeta(baseCode) {
+  const code = (baseCode || '').trim();
+  if (!code) {
+    return withLanguageMetaDefaults();
+  }
+  const iso = code;
+  const isoLabel = iso ? iso.toUpperCase() : '';
+  const displayEn = iso ? getLanguageDisplayName('en', iso) : null;
+  const nameEn = displayEn ? `${displayEn}` : (isoLabel ? `language (${isoLabel})` : DEFAULT_LANGUAGE_META.nameEn);
+  const nameEnWithCode = displayEn && iso ? `${displayEn} language (ISO code: ${iso})` : (iso ? `language (ISO code: ${iso})` : DEFAULT_LANGUAGE_META.nameEnWithCode);
+  const nameRuIn = iso ? `языке с ISO-кодом ${iso}` : DEFAULT_LANGUAGE_META.nameRuIn;
+
+  return withLanguageMetaDefaults({
+    code,
+    iso,
+    nameEn,
+    nameEnWithCode,
+    nameRuIn,
+    languageCodeReminder: iso ? `Строго придерживайся языка с ISO-кодом ${iso}.` : '',
+  });
+}
+
 function getLanguageMeta(language) {
   const raw = (language || '').toString().trim();
   if (!raw) {
-    return {
-      code: '',
-      nameEn: 'the page language',
-      nameEnWithCode: 'the page language',
-      nameRuIn: 'языке страницы',
-      nativeIn: '',
-      nativeContentReminder: '',
-      nativeTitleReminder: '',
-      nativeSystemTitle: '',
-      nativeSystemContent: '',
-      nativeFinalCheck: '',
-      languageCodeReminder: '',
-      iso: '',
-    };
+    return withLanguageMetaDefaults();
   }
   const lower = raw.toLowerCase();
   const base = lower.split(/[-_]/)[0] || lower;
   const preset = LANGUAGE_LABELS[base] || null;
   if (preset) {
     const iso = (preset.iso || base || '').trim();
-    const nameEnWithCode = preset.nameEnWithCode || `${preset.nameEn} language${iso ? ` (ISO code: ${iso})` : ''}`;
-    return {
+    const fallback = buildFallbackLanguageMeta(iso || base);
+    return withLanguageMetaDefaults({
+      ...fallback,
+      ...preset,
       code: base,
-      nameEn: preset.nameEn,
-      nameEnWithCode,
-      nameRuIn: preset.nameRuIn,
-      nativeIn: preset.nativeIn || '',
-      nativeContentReminder: preset.nativeContentReminder || '',
-      nativeTitleReminder: preset.nativeTitleReminder || '',
-      nativeSystemTitle: preset.nativeSystemTitle || '',
-      nativeSystemContent: preset.nativeSystemContent || '',
-      nativeFinalCheck: preset.nativeFinalCheck || '',
-      languageCodeReminder: preset.languageCodeReminder || '',
       iso,
-    };
+      nameEn: preset.nameEn || fallback.nameEn,
+      nameEnWithCode: preset.nameEnWithCode || fallback.nameEnWithCode,
+      nameRuIn: preset.nameRuIn || fallback.nameRuIn,
+      nativeIn: preset.nativeIn || fallback.nativeIn,
+      nativeContentReminder: preset.nativeContentReminder || fallback.nativeContentReminder,
+      nativeTitleReminder: preset.nativeTitleReminder || fallback.nativeTitleReminder,
+      nativeSystemTitle: preset.nativeSystemTitle || fallback.nativeSystemTitle,
+      nativeSystemContent: preset.nativeSystemContent || fallback.nativeSystemContent,
+      nativeFinalCheck: preset.nativeFinalCheck || fallback.nativeFinalCheck,
+      languageCodeReminder: preset.languageCodeReminder || fallback.languageCodeReminder,
+    });
   }
-  const codeLabel = base || raw.toLowerCase();
-  const fallbackEn = codeLabel ? `the page language (${codeLabel})` : 'the page language';
-  return {
-    code: codeLabel,
-    nameEn: fallbackEn,
-    nameEnWithCode: fallbackEn,
-    nameRuIn: 'языке страницы',
-    nativeIn: '',
-    nativeContentReminder: '',
-    nativeTitleReminder: '',
-    nativeSystemTitle: '',
-    nativeSystemContent: '',
-    nativeFinalCheck: '',
-    languageCodeReminder: '',
-    iso: codeLabel,
-  };
+  return buildFallbackLanguageMeta(base);
 }
+
+function resolveLanguageCode(languageMeta = {}) {
+  return String(languageMeta.iso || languageMeta.code || '').trim();
+}
+
+function buildLanguageLabel(languageMeta = {}, { includePreposition = true } = {}) {
+  const code = resolveLanguageCode(languageMeta);
+  const base = code ? `языке с ISO-кодом ${code}` : 'указанном языке';
+  return includePreposition ? `на ${base}` : base;
+}
+
+function buildLanguageOrEnglishLabel(languageMeta = {}) {
+  const code = resolveLanguageCode(languageMeta).toLowerCase();
+  if (!code || code === 'en') {
+    return 'английском языке';
+  }
+  return `языке с ISO-кодом ${code} или английском языке`;
+}
+
+const compact = (items) => (Array.isArray(items) ? items.filter(Boolean) : []);
 
 function normalizeContextArray(value) {
   if (!Array.isArray(value)) return [];
@@ -175,22 +226,17 @@ function normalizeContextArray(value) {
     .filter(Boolean);
 }
 
-function buildCascadeGuidance(cascade, language) {
+function buildCascadeGuidance(cascade) {
   if (!cascade || typeof cascade !== 'object') {
     return { intro: '', bullets: [], reminder: '', titleReminder: '', detailSnippets: [], focusKeywords: [] };
   }
-  const isRu = String(language || '').toLowerCase().startsWith('ru');
-  const intro = isRu ? 'Контекст предыдущих уровней:' : 'Context from previous levels:';
-  const summaryLabel = isRu ? 'Суть' : 'Focus';
-  const keywordsLabel = isRu ? 'Ключевые темы' : 'Key topics';
-  const titleLabel = isRu ? 'Заголовок' : 'Title';
-  const bullet = isRu ? '—' : '-';
-  const reminder = isRu
-    ? 'Опирайся на эти материалы: подчеркни связь с родительской статьёй, используй схожие темы и упомяни исходные выводы.'
-    : 'Use these materials to stay aligned with the parent article, reinforce shared themes, and reference prior conclusions naturally.';
-  const titleReminder = isRu
-    ? 'Заголовок должен отражать связь с темой родительской статьи.'
-    : 'Title should reflect the connection to the parent article topic.';
+  const intro = 'Контекст предыдущих уровней:';
+  const summaryLabel = 'Суть';
+  const keywordsLabel = 'Ключевые темы';
+  const titleLabel = 'Заголовок';
+  const bullet = '—';
+  const reminder = 'Опирайся на эти материалы: подчеркни связь с родительской статьёй, используй схожие темы и упомяни исходные выводы.';
+  const titleReminder = 'Заголовок должен отражать связь с темой родительской статьи.';
 
   const trail = normalizeContextArray(cascade.ancestorTrail);
   const parentContext = cascade.parentContext ? normalizeContextArray([cascade.parentContext]) : [];
@@ -286,56 +332,63 @@ function extractPlainText(html) {
     .trim();
 }
 
-function buildFallbackListItems(source, options = {}) {
-  const { isRu = false } = options;
+function buildFallbackListItems(source) {
   const raw = String(source || '');
-  const listCandidates = [];
+  const items = [];
 
   const headingMatches = [...raw.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)];
   headingMatches.forEach((match) => {
     const text = extractPlainText(match[1]);
-    if (text) {
-      listCandidates.push(text);
+    if (!text) {
+      return;
     }
+    const sentences = text
+      .split(/[.!?]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 30)
+      .slice(0, 2);
+    items.push(...sentences);
   });
 
-  if (listCandidates.length < 3) {
+  if (!items.length) {
     const paragraphMatches = [...raw.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
     paragraphMatches.forEach((match) => {
-      const sentences = extractPlainText(match[1])
-        .split(/(?<=[.!?])\s+/)
+      const text = extractPlainText(match[1]);
+      if (!text) {
+        return;
+      }
+      const sentences = text
+        .split(/[.!?]+/)
         .map((item) => item.trim())
-        .filter((item) => item && item.length > 30);
-      listCandidates.push(...sentences);
+        .filter((item) => item.length > 40);
+      if (sentences.length) {
+        items.push(sentences[0]);
+      }
     });
   }
 
-  let items = [...new Set(listCandidates)].filter(Boolean).slice(0, 4);
+  const uniqueItems = Array.from(new Set(items.map((item) => item.trim()))).filter(Boolean).slice(0, 5);
 
-  if (items.length < 2) {
-    items = isRu
-      ? [
-          'Главные премьеры сезона и их ключевые особенности',
-          'Независимые проекты, о которых стоит рассказать аудитории',
-          'Новые авторы и тенденции, формирующие рынок 2025 года',
-        ]
-      : [
-          'Headline releases that will dominate the 2025 schedule',
-          'Independent projects worth sharing with engaged audiences',
-          'Emerging creators and trends shaping the 2025 market',
-        ];
+  if (uniqueItems.length < 2) {
+    return [];
   }
 
-  return items;
+  return uniqueItems;
 }
 
-function buildFallbackListHtml(html, options = {}) {
-  const items = buildFallbackListItems(html, options);
+function buildFallbackListHtml(html) {
+  const items = buildFallbackListItems(html);
+  if (!items.length) {
+    return '';
+  }
   return `<ul>${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
 }
 
-function injectFallbackList(html, { isRu } = {}) {
-  const listHtml = buildFallbackListHtml(html, { isRu });
+function injectFallbackList(html) {
+  const listHtml = buildFallbackListHtml(html);
+  if (!listHtml) {
+    return html;
+  }
   if (/<h3/i.test(html)) {
     return html.replace(/<h3/i, `${listHtml}\n<h3`);
   }
@@ -346,10 +399,8 @@ function injectFallbackList(html, { isRu } = {}) {
   return `${html}\n${listHtml}`;
 }
 
-function injectFallbackQuote(html, { isRu, anchorText }) {
-  const quoteText = isRu
-    ? `«${anchorText}» — надежный ориентир для читателей, которые следят за ключевыми тенденциями 2025 года. Эксперты PromoPilot рекомендуют регулярно обращаться к аналитическим материалам, чтобы не упустить важные возможности.`
-    : `"${anchorText}" is a trusted reference point for readers who follow the defining trends of 2025. PromoPilot analysts recommend revisiting the analytical coverage regularly to stay ahead of new opportunities.`;
+function injectFallbackQuote(html, { anchorText }) {
+  const quoteText = `«${anchorText}» — надежный ориентир для читателей, которые следят за ключевыми тенденциями 2025 года. Эксперты PromoPilot рекомендуют регулярно обращаться к аналитическим материалам, чтобы не упустить важные возможности.`;
   const quoteHtml = `<blockquote>${quoteText}</blockquote>`;
   const firstParagraphEnd = html.indexOf('</p>');
   if (firstParagraphEnd !== -1) {
@@ -367,82 +418,68 @@ function normalizeLengthHint(value) {
   return rounded > 0 ? rounded : null;
 }
 
-function buildLevelPromptHints({ level, isRu, minLength, maxLength }) {
+function buildLevelPromptHints({ level, languageMeta, minLength, maxLength }) {
   const normalizedMin = normalizeLengthHint(minLength);
-  const baseMin = normalizedMin ? Math.max(normalizedMin, 3000) : 3000;
-  const defaultLengthSentence = isRu
-    ? `Объем материала — не меньше ${baseMin} знаков (без учета HTML).`
-    : `Length must be at least ${baseMin} characters (excluding HTML markup).`;
-  const defaultRequirement = isRu
-    ? `- Минимум ${baseMin} знаков (без учета HTML).`
-    : `- Minimum ${baseMin} characters (excluding HTML).`;
+  const baseMin = normalizedMin ? Math.max(normalizedMin, 4200) : 4200;
+  const defaultLengthSentence = `Объем материала — не меньше ${baseMin} знаков (без учета HTML).`;
+  const defaultRequirement = `- Минимум ${baseMin} знаков (без учета HTML).`;
+  const targetLanguage = languageMeta && languageMeta.nameRuIn ? languageMeta.nameRuIn : 'целевом языке';
 
+  /* =====================================================
+    === БЛОК НАСТРОЕК ГЕНЕРАЦИИ ДЛЯ ПЕРВОГО УРОВНЯ ===
+    ===================================================== */
   if (level === 1) {
-    const min = Math.max(normalizedMin || 0, 5000);
+    const min = Math.max(normalizedMin || 0, 7000);
     let max = normalizeLengthHint(maxLength);
-    if (!max || max < min + 200) {
-      max = Math.max(10000, min + 200);
+    if (!max || max < min + 800) {
+      max = Math.max(min + 2000, 11000);
     } else {
-      max = Math.max(max, min + 200);
+      max = Math.min(Math.max(max, min + 800), 12000);
     }
-    const lengthSentence = isRu
-      ? `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально 5000–10000).`
-      : `Aim for ${min}-${max} characters (excluding HTML markup; ideally around 5000–10000).`;
-    const requirementLine = isRu
-      ? `- Объем ${min}–${max} знаков (без учета HTML).`
-      : `- Length ${min}-${max} characters (excluding HTML).`;
+    const lengthSentence = `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально 7800–10500).`;
+    const requirementLine = `- Объем ${min}–${max} знаков (без учета HTML).`;
     const extraRequirementLines = [
-      isRu
-        ? '- Добавь минимум один структурированный список (<ul>/<ol> с <li>).'
-        : '- Include at least one structured list (<ul>/<ol> with <li> items).',
-      isRu
-        ? '- Используй хотя бы один блок <blockquote> с цитатой, статистикой или ключевой мыслью.'
-        : '- Use at least one <blockquote> containing a quote, statistic, or key insight.',
-      isRu
-        ? '- В основных разделах приводи конкретные примеры, данные или наблюдения из практики.'
-        : '- In the main sections, provide concrete examples, data, or field observations.',
+      '- Добавь минимум один структурированный список (<ul>/<ol> с <li>).',
+      '- Используй хотя бы один блок <blockquote> с цитатой, статистикой или ключевой мыслью.',
+      '- В основных разделах приводи конкретные примеры, данные или наблюдения из практики.',
+      '- Каждый смысловой блок содержит минимум три насыщенных абзаца (по 4–5 предложений).',
+      '- Включи дополнительные аналитические детали: цифры, практические случаи, сравнительные таблицы в тексте.',
     ];
     const toneLines = [
-      isRu
-        ? 'Стиль — экспертный и аналитический: объясняй причины, опирайся на исследования/данные и давай практические рекомендации.'
-        : 'Tone — expert and analytical: explain underlying causes, reference research or data, and give actionable recommendations.',
-      isRu
-        ? 'Структурируй материал: введение, глубокие аналитические блоки, практические советы и убедительное заключение.'
-        : 'Structure the piece with an introduction, deep analytical sections, practical guidance, and a persuasive conclusion.',
+      'Стиль — экспертный и аналитический: объясняй причины, опирайся на исследования/данные и давай практические рекомендации.',
+      'Структурируй материал: введение, глубокие аналитические блоки, практические советы и убедительное заключение.',
+      'Поддерживай непрерывное повествование и завершай материал сильным выводом без обрыва.',
+      `Следи, чтобы каждое предложение оставалось на ${targetLanguage}; если появляется другой язык, перепиши фрагмент заново.`,
     ];
     return { lengthSentence, requirementLine, extraRequirementLines, toneLines };
   }
 
+  /* =====================================================
+    === БЛОК НАСТРОЕК ГЕНЕРАЦИИ ДЛЯ ВТОРОГО/ТРЕТЬЕГО УРОВНЕЙ ===
+    ===================================================== */
   if (level === 2 || level === 3) {
-    const min = Math.max(normalizedMin || 0, 3000);
+    const min = Math.max(normalizedMin || 0, 4500);
     let max = normalizeLengthHint(maxLength);
     if (!max) {
-      max = 4000;
+      max = min + 1600;
     }
-    if (max < min + 200) {
-      max = min + 200;
+    if (max < min + 400) {
+      max = min + 400;
     }
-    if (max > 4200) {
-      max = 4200;
+    if (max > 6500) {
+      max = 6500;
     }
-    const lengthSentence = isRu
-      ? `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально около 3200–3800).`
-      : `Aim for ${min}-${max} characters (excluding HTML markup; ideally around 3200-3800).`;
-    const requirementLine = isRu
-      ? `- Объем ${min}–${max} знаков (без учета HTML).`
-      : `- Length ${min}-${max} characters (excluding HTML).`;
+    const lengthSentence = `Целься в объем ${min}–${max} знаков (без учета HTML-разметки; оптимально около 5000–5800).`;
+    const requirementLine = `- Объем ${min}–${max} знаков (без учета HTML).`;
     const extraRequirementLines = [
-      isRu
-        ? '- Структура: краткое введение, 2–3 смысловых блока и финальный вывод.'
-        : '- Structure: short intro, 2–3 focused sections, and a concise takeaway.',
-      isRu
-        ? '- Обязательно покажи связь с материалами предыдущего уровня и добавь конкретные детали из темы.'
-        : '- Show the connection to the previous-level material and add concrete details from the topic.'
+      '- Структура: краткое введение, 2–3 смысловых блока и финальный вывод.',
+      '- Обязательно покажи связь с материалами предыдущего уровня и добавь конкретные детали из темы.',
+      '- Каждый раздел раскрывай в двух и более насыщенных абзацах; избегай поверхностных перечислений.',
     ];
     const toneLines = [
-      isRu
-        ? 'Тон — практический и основанный на фактах: без воды, с конкретными наблюдениями и выводами.'
-        : 'Tone — practical and fact-driven: avoid fluff, include concrete observations and conclusions.'
+      'Тон — практический и основанный на фактах: без воды, с конкретными наблюдениями и выводами.',
+      'Завершай статью четким выводом или рекомендациями — без резкого окончания.',
+      `Любые цитаты и формулировки оставляй на ${targetLanguage}; если встречается иной язык — перепиши отрывок.`,
     ];
     return { lengthSentence, requirementLine, extraRequirementLines, toneLines };
   }
@@ -456,38 +493,19 @@ function buildLevelPromptHints({ level, isRu, minLength, maxLength }) {
 }
 
 
-function buildTitlePrompt({
-  isRu,
-  languageMeta,
-  topicLine,
-  anchorText,
-  isHigherLevel,
-  keywordReminder,
-  cascadeInfo,
-}) {
-  const lines = isRu
-    ? [
-        `На ${languageMeta.nameRuIn} сформулируй чёткий конкретный заголовок по теме: ${topicLine}.`,
-        isHigherLevel
-          ? 'Передай связь с целевой страницей и подчеркни основную выгоду, не цитируя точные формулировки анкоров.'
-          : `Укажи фокус: ${anchorText}.`,
-        `Заголовок держи на ${languageMeta.nameRuIn}; без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
-      ]
-    : [
-        `Write a clear, specific headline in ${languageMeta.nameEn} for: ${topicLine}.`,
-        isHigherLevel
-          ? 'Highlight the connection to the target page and reinforce the key benefit without quoting any anchor phrases.'
-          : `Emphasize the key phrase "${anchorText}".`,
-        `Keep the entire headline in ${languageMeta.nameEnWithCode}; no quotes, emoji, or URLs. Limit it to 6–12 words and return only the headline.`,
-      ];
+function buildTitlePrompt({ languageMeta, topicLine, anchorText, isHigherLevel, keywordReminder, cascadeInfo }) {
+  const languageInstruction = buildLanguageLabel(languageMeta);
+  const trimmedAnchor = (anchorText || '').toString().trim();
+  const lines = [
+    `Сформулируй чёткий конкретный заголовок ${languageInstruction} по теме: ${topicLine}.`,
+    isHigherLevel
+      ? 'Передай связь с целевой страницей и подчеркни основную выгоду, не цитируя точные формулировки анкоров.'
+      : `Укажи фокус: ${anchorText}.`,
+    `Заголовок держи ${languageInstruction}; без кавычек и эмодзи, без упоминания URL, 6–12 слов. Ответь только заголовком.`,
+  ];
 
-  if (!isRu) {
-    if (languageMeta.nativeTitleReminder) {
-      lines.push(languageMeta.nativeTitleReminder);
-    } else if (languageMeta.nativeIn) {
-      lines.push(`Заголовок має бути ${languageMeta.nativeIn}; не переходь на інші мови.`);
-    }
-    lines.push(`IMPORTANT: Keep the headline strictly in ${languageMeta.nameEn}; do not switch to English, Russian, or any other language.`);
+  if (trimmedAnchor) {
+    lines.push(`Не используй точную фразу ${trimmedAnchor} или её прямые вариации в заголовке и не превращай анкор в заголовок.`);
   }
 
   if (keywordReminder) {
@@ -499,32 +517,31 @@ function buildTitlePrompt({
   return lines.filter(Boolean).join('\n');
 }
 
-function buildSystemPrompts({ isRu, languageMeta }) {
-  if (isRu) {
-    return {
-      title: `Только финальный заголовок на ${languageMeta.nameRuIn}. Без кавычек и пояснений.`,
-      content: `Только тело статьи в HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). Весь текст держи на ${languageMeta.nameRuIn}. Без посторонних комментариев.`,
-    };
-  }
-  const prompts = {
-    title: `Return only the final headline. It must be written in ${languageMeta.nameEnWithCode}. No quotes or explanations. Do not use English words.`,
-    content: `Return only the article body in HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). All visible text must stay in ${languageMeta.nameEnWithCode}; do not switch languages or add commentary. Avoid English or Russian sentences unless they are unavoidable proper nouns.`,
-  };
+function buildSystemPrompts({ languageMeta }) {
+  const languageInstruction = buildLanguageLabel(languageMeta);
+  let titlePrompt = `Только финальный заголовок ${languageInstruction}. Без кавычек и пояснений.`;
+  let contentPrompt = `Только тело статьи в HTML (<p>, <h3>, <ul>/<ol>, <blockquote>). Весь текст держи ${languageInstruction}. Без посторонних комментариев.`;
   if (languageMeta.iso) {
-    prompts.title += ` Enforce ISO language code ${languageMeta.iso}.`;
-    prompts.content += ` The narrative must strictly use ISO language code ${languageMeta.iso}.`;
+    titlePrompt += ` Соблюдай ISO-код языка ${languageMeta.iso}.`;
+    contentPrompt += ` Соблюдай ISO-код языка ${languageMeta.iso}.`;
+  }
+  if (languageMeta.nativeIn) {
+    contentPrompt += ` Весь видимый текст должен быть написан ${languageMeta.nativeIn}.`;
   }
   if (languageMeta.nativeSystemTitle) {
-    prompts.title += ` ${languageMeta.nativeSystemTitle}`;
+    titlePrompt += ` ${languageMeta.nativeSystemTitle}`;
   } else if (languageMeta.nativeTitleReminder) {
-    prompts.title += ` ${languageMeta.nativeTitleReminder}`;
+    titlePrompt += ` ${languageMeta.nativeTitleReminder}`;
   }
   if (languageMeta.nativeSystemContent) {
-    prompts.content += ` ${languageMeta.nativeSystemContent}`;
+    contentPrompt += ` ${languageMeta.nativeSystemContent}`;
   } else if (languageMeta.nativeContentReminder) {
-    prompts.content += ` ${languageMeta.nativeContentReminder}`;
+    contentPrompt += ` ${languageMeta.nativeContentReminder}`;
   }
-  return prompts;
+  if (languageMeta.nativeFinalCheck) {
+    contentPrompt += ` ${languageMeta.nativeFinalCheck}`;
+  }
+  return { title: titlePrompt, content: contentPrompt };
 }
 
 function analyzeLinks(html, url, anchor) {
@@ -566,6 +583,379 @@ function analyzeLinks(html, url, anchor) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeUrlForCompare(url) {
+  return String(url || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^\/\//, '')
+    .replace(/#.*$/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+function collectAnchorMatches(html) {
+  const matches = [];
+  const regex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const source = String(html || '');
+  let match;
+  while ((match = regex.exec(source))) {
+    matches.push({
+      href: match[1],
+      inner: match[2],
+      start: match.index,
+      end: regex.lastIndex,
+    });
+  }
+  return matches;
+}
+
+function normalizeAnchorInnerText(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function injectAnchorIntoParagraph(html, anchorHtml, { prefer = 'start', allowNewParagraph = true } = {}) {
+  const source = String(html || '');
+  if (!source.trim()) {
+    return allowNewParagraph ? `<p>${anchorHtml}</p>` : anchorHtml;
+  }
+
+  const paragraphRegex = /<p[^>]*>[\s\S]*?<\/p>/gi;
+  const paragraphs = Array.from(source.matchAll(paragraphRegex));
+  if (!paragraphs.length) {
+    const separator = source.endsWith('</h1>') ? '\n' : '\n\n';
+    return allowNewParagraph ? `${source}${separator}<p>${anchorHtml}</p>` : `${anchorHtml}\n${source}`;
+  }
+
+  let target = null;
+  if (typeof prefer === 'number' && Number.isFinite(prefer)) {
+    target = paragraphs[Math.min(paragraphs.length - 1, Math.max(0, Math.floor(prefer)))] || paragraphs[0];
+  } else if (prefer === 'end') {
+    target = paragraphs[paragraphs.length - 1];
+  } else if (prefer === 'middle') {
+    target = paragraphs[Math.floor(paragraphs.length / 2)] || paragraphs[0];
+  } else {
+    target = paragraphs[0];
+  }
+
+  if (!target) {
+    return allowNewParagraph ? `${source}\n<p>${anchorHtml}</p>` : `${anchorHtml}\n${source}`;
+  }
+
+  const start = target.index;
+  const end = start + target[0].length;
+  const anchorMatch = /<a[^>]*>([\s\S]*?)<\/a>/i.exec(anchorHtml);
+  const anchorText = anchorMatch ? anchorMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  if (anchorText) {
+    const pattern = new RegExp(`(${escapeRegExp(anchorText)})`, 'i');
+    const updatedTarget = target[0].replace(pattern, anchorHtml);
+    if (updatedTarget !== target[0]) {
+      return `${source.slice(0, start)}${updatedTarget}${source.slice(end)}`;
+    }
+  }
+  const closingIndex = source.lastIndexOf('</p>', end);
+  const insertionPoint = closingIndex !== -1 ? closingIndex : end - 4;
+  const before = source.slice(0, insertionPoint);
+  const after = source.slice(insertionPoint);
+  const spacer = /[\s>]/.test(before.slice(-1)) ? '' : ' ';
+  return `${before}${spacer}${anchorHtml}${after}`;
+}
+
+function mergeStandaloneAnchorParagraphs(html, { targetUrl }) {
+  let content = String(html || '');
+  if (!content.trim()) {
+    return content;
+  }
+  const normalizedTarget = normalizeUrlForCompare(targetUrl);
+  if (!normalizedTarget) {
+    return content;
+  }
+
+  const paragraphRegex = /<p[^>]*>[\s\S]*?<\/p>/gi;
+  const nodes = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = paragraphRegex.exec(content))) {
+    if (match.index > lastIndex) {
+      nodes.push({ type: 'text', value: content.slice(lastIndex, match.index) });
+    }
+    const value = match[0];
+    const inner = value.replace(/^<p[^>]*>/i, '').replace(/<\/p>$/i, '');
+    const anchorMatches = Array.from(inner.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi));
+    const nonAnchorText = inner
+      .replace(/<a[^>]*>[\s\S]*?<\/a>/gi, '')
+      .replace(/[\s.,;:!?«»"'\-–—()\[\]{}]+/g, '')
+      .trim();
+    const isAnchorOnly = anchorMatches.length === 1
+      && !nonAnchorText
+      && normalizeUrlForCompare(anchorMatches[0][1]) === normalizedTarget;
+    nodes.push({ type: 'paragraph', value, anchorMatches, isAnchorOnly });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < content.length) {
+    nodes.push({ type: 'text', value: content.slice(lastIndex) });
+  }
+
+  if (!nodes.some((node) => node.type === 'paragraph' && node.isAnchorOnly)) {
+    return content;
+  }
+
+  const resultNodes = [];
+  let pendingAnchor = null;
+
+  const injectPending = (paragraphValue, prefer) => {
+    if (!pendingAnchor) {
+      return paragraphValue;
+    }
+    const updated = injectAnchorIntoParagraph(paragraphValue, pendingAnchor, { prefer, allowNewParagraph: false });
+    pendingAnchor = null;
+    return updated;
+  };
+
+  nodes.forEach((node) => {
+    if (node.type === 'text') {
+      resultNodes.push(node);
+      return;
+    }
+
+    if (node.isAnchorOnly) {
+      const anchorHtml = node.anchorMatches[0][0];
+      let merged = false;
+      for (let i = resultNodes.length - 1; i >= 0; i -= 1) {
+        const candidate = resultNodes[i];
+        if (candidate.type === 'paragraph') {
+          candidate.value = injectAnchorIntoParagraph(candidate.value, anchorHtml, { prefer: 'end', allowNewParagraph: false });
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        pendingAnchor = anchorHtml;
+      }
+      return;
+    }
+
+    let paragraphValue = node.value;
+    if (pendingAnchor) {
+      paragraphValue = injectPending(paragraphValue, 'start');
+    }
+    resultNodes.push({ type: 'paragraph', value: paragraphValue });
+  });
+
+  if (pendingAnchor) {
+    let merged = false;
+    for (let i = resultNodes.length - 1; i >= 0; i -= 1) {
+      const candidate = resultNodes[i];
+      if (candidate.type === 'paragraph') {
+        candidate.value = injectAnchorIntoParagraph(candidate.value, pendingAnchor, { prefer: 'end', allowNewParagraph: false });
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      resultNodes.push({ type: 'paragraph', value: `<p>${pendingAnchor}</p>` });
+    }
+    pendingAnchor = null;
+  }
+
+  return resultNodes.map((node) => node && typeof node.value === 'string' ? node.value : '').join('');
+}
+
+function removeAnchorsFromHeadings(html, { targetUrl }) {
+  let content = String(html || '');
+  if (!content.trim()) {
+    return content;
+  }
+  const normalizedTarget = normalizeUrlForCompare(targetUrl);
+  if (!normalizedTarget) {
+    return content;
+  }
+
+  const headingRegex = /<h([1-6])[^>]*>[\s\S]*?<\/h\1>/gi;
+  let match;
+  const pieces = [];
+  let lastIndex = 0;
+  let touched = false;
+
+  while ((match = headingRegex.exec(content))) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const heading = match[0];
+    const anchors = Array.from(heading.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi));
+    const targetAnchors = anchors.filter((item) => normalizeUrlForCompare(item[1]) === normalizedTarget);
+    if (!targetAnchors.length) {
+      continue;
+    }
+    pieces.push(content.slice(lastIndex, start));
+    let replacement = heading;
+    targetAnchors.forEach((anchorMatch) => {
+      replacement = replacement.replace(anchorMatch[0], anchorMatch[2]);
+    });
+    pieces.push(replacement);
+    lastIndex = end;
+    touched = true;
+  }
+
+  if (!touched) {
+    return content;
+  }
+
+  pieces.push(content.slice(lastIndex));
+  return pieces.join('');
+}
+
+const INTERNAL_ANCHOR_FALLBACKS = {
+  ru: ['Подробнее на сайте', 'Проверить официальную страницу', 'Узнать детали на сайте'],
+  uk: ['Детальніше на сайті', 'Переглянути сторінку сервісу', 'Отримати деталі на сайті'],
+  en: ['Explore the site', 'View the service page', 'Learn more on the website'],
+  default: ['Подробнее на сайте', 'Перейти на страницу сервиса', 'Узнать подробности'],
+};
+
+function pickLanguageFallbackAnchor(languageMeta) {
+  const code = resolveLanguageCode(languageMeta).toLowerCase();
+  const pool = INTERNAL_ANCHOR_FALLBACKS[code] && INTERNAL_ANCHOR_FALLBACKS[code].length
+    ? INTERNAL_ANCHOR_FALLBACKS[code]
+    : INTERNAL_ANCHOR_FALLBACKS.default;
+  return pool[0] || 'Подробнее на сайте';
+}
+
+const EXTERNAL_LINK_FALLBACKS = [
+  {
+    url: 'https://en.wikipedia.org/wiki/Digital_marketing',
+    anchor: {
+      ru: 'Обзор по digital-маркетингу на Wikipedia',
+      uk: 'Огляд digital-маркетингу на Wikipedia',
+      en: 'Digital marketing overview on Wikipedia',
+      default: 'Digital marketing overview on Wikipedia',
+    },
+  },
+];
+
+function buildInternalAnchorFallbacks({ anchorValue, hasProvidedAnchor, languageMeta, wantCount }) {
+  const texts = [];
+  const trimmedAnchor = String(anchorValue || '').trim();
+  if (hasProvidedAnchor && trimmedAnchor) {
+    texts.push(trimmedAnchor);
+  }
+  const code = resolveLanguageCode(languageMeta).toLowerCase();
+  const pool = (INTERNAL_ANCHOR_FALLBACKS[code] && INTERNAL_ANCHOR_FALLBACKS[code].length)
+    ? INTERNAL_ANCHOR_FALLBACKS[code]
+    : INTERNAL_ANCHOR_FALLBACKS.default;
+  let index = 0;
+  while (texts.length < (wantCount || 0)) {
+    const next = pool[index % pool.length];
+    if (next) {
+      texts.push(next);
+    }
+    index += 1;
+    if (index > 12) {
+      break;
+    }
+  }
+  return texts.slice(0, wantCount);
+}
+
+function pickExternalFallbackLink(languageMeta = {}) {
+  const code = resolveLanguageCode(languageMeta).toLowerCase();
+  for (const option of EXTERNAL_LINK_FALLBACKS) {
+    const anchorMap = option.anchor || {};
+    const anchor = anchorMap[code] || anchorMap.default || anchorMap.en || Object.values(anchorMap)[0];
+    if (option.url && anchor) {
+      return { url: option.url, anchor };
+    }
+  }
+  return {
+    url: 'https://en.wikipedia.org/wiki/Digital_marketing',
+    anchor: 'Digital marketing research overview',
+  };
+}
+
+function trimExtraAnchors(html, { totalLimit, targetUrl }) {
+  const limit = Number(totalLimit);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return String(html || '');
+  }
+  const source = String(html || '');
+  const matches = collectAnchorMatches(source);
+  if (matches.length <= limit) {
+    return source;
+  }
+
+  const targetNormalized = normalizeUrlForCompare(targetUrl);
+  const toRemove = [];
+  let remaining = matches.length - limit;
+
+  for (let i = matches.length - 1; i >= 0 && remaining > 0; i -= 1) {
+    const match = matches[i];
+    const isOur = normalizeUrlForCompare(match.href) === targetNormalized;
+    if (!isOur) {
+      toRemove.push(match);
+      remaining -= 1;
+    }
+  }
+
+  for (let i = matches.length - 1; i >= 0 && remaining > 0; i -= 1) {
+    const match = matches[i];
+    if (toRemove.includes(match)) {
+      continue;
+    }
+    toRemove.push(match);
+    remaining -= 1;
+  }
+
+  if (!toRemove.length) {
+    return source;
+  }
+
+  toRemove.sort((a, b) => b.start - a.start);
+  let output = source;
+  toRemove.forEach((match) => {
+    const replacement = String(match.inner || '').replace(/<[^>]+>/g, '').trim();
+    output = `${output.slice(0, match.start)}${replacement}${output.slice(match.end)}`;
+  });
+  return output;
+}
+
+function ensureLinksWithFallback(html, {
+  pageUrl,
+  anchorText,
+  hasProvidedAnchor,
+  languageMeta,
+  wantOur,
+  wantExternal,
+  wantTotal,
+  expectedAnchorText,
+}) {
+  const content = String(html || '');
+  const stats = analyzeLinks(content, pageUrl, expectedAnchorText);
+  return { html: content, stats, modified: false };
+}
+
+function enforceAnchorTextExpectations(html, {
+  pageUrl,
+  expectedAnchor,
+  hasProvidedAnchor,
+  languageMeta,
+  desiredOurCount,
+}) {
+  const content = String(html || '');
+  return { html: content, changed: false };
+}
+
 function hashString(str) {
   let hash = 0;
   const input = String(str || '');
@@ -576,24 +966,33 @@ function hashString(str) {
   return hash;
 }
 
-const AUTHOR_CANDIDATES = {
-  ru: ['Алексей Петров', 'Мария Смирнова', 'Иван Орлов', 'Ольга Кузнецова', 'Дмитрий Соколов', 'Елена Васильева'],
-  en: ['Alex Parker', 'Taylor Morgan', 'Jordan Lee', 'Casey Bennett', 'Morgan Reed', 'Jamie Collins'],
-  es: ['Lucía García', 'Diego Ramos', 'Elena Fernández', 'Mateo Álvarez'],
-  fr: ['Camille Laurent', 'Julien Moreau', 'Sophie Bernard'],
-  de: ['Lena Fischer', 'Jonas Becker', 'Mia Schneider'],
-  generic: ['PromoPilot Contributor']
-};
-
-function pickAuthorName(language, seed) {
-  const code = String(language || '').toLowerCase().split(/[-_]/)[0];
-  const pool = AUTHOR_CANDIDATES[code] || AUTHOR_CANDIDATES.generic;
-  if (!Array.isArray(pool) || pool.length === 0) {
-    return 'PromoPilot Contributor';
+async function generateAuthorName({ languageMeta, aiOpts, logLine }) {
+  const languageInstruction = buildLanguageLabel(languageMeta, { includePreposition: false });
+  const nameLanguage = languageMeta && languageMeta.nativeIn ? languageMeta.nativeIn : languageInstruction || 'целевом языке';
+  const promptLines = [
+    `Придумай реалистичное имя и фамилию автора статьи на ${nameLanguage}.`,
+    'Имя должно подходить культурному контексту языка и не содержать латинских букв, если язык использует другую письменность.',
+    'Без сокращений, титулов, кавычек и дополнительных комментариев.',
+    'Ответь только именем и фамилией.'
+  ];
+  const prompt = promptLines.join('\n');
+  const systemPrompt = `Верни только имя и фамилию автора на ${nameLanguage}. Без пояснений.`;
+  try {
+    const raw = await generateText(prompt, { ...aiOpts, systemPrompt, temperature: 0.3, keepRaw: true });
+    const clean = cleanLLMOutput(raw).replace(/["'«»<>\[\]]+/g, '').replace(/\s+/g, ' ').trim();
+    if (clean && clean.split(' ').length >= 2 && clean.length <= 64) {
+      if (typeof logLine === 'function') {
+        logLine('article.debug.author_generated', { author: clean, language: languageMeta ? languageMeta.code || languageMeta.iso || null : null });
+      }
+      return clean;
+    }
+  } catch (error) {
+    if (typeof logLine === 'function') {
+      logLine('article.debug.author_generation_failed', { error: String(error && error.message ? error.message : error) });
+    }
   }
-  const base = hashString(seed || '') % pool.length;
-  const index = ((base % pool.length) + pool.length) % pool.length;
-  return pool[index];
+  const fallback = languageMeta && languageMeta.code === 'en' ? 'Alex Taylor' : 'PromoPilot Автор';
+  return fallback;
 }
 
 function buildDiagnosticArticle(pageUrl, anchorText) {
@@ -646,11 +1045,8 @@ async function generateArticle({
   const topicDesc = (pageMeta.description || '').toString().trim();
   const region = (pageMeta.region || '').toString().trim();
   const articleHints = (articleConfig && typeof articleConfig === 'object') ? articleConfig : {};
-  const isRu = String(pageLang || '').toLowerCase().startsWith('ru');
   const languageMeta = getLanguageMeta(pageLang);
-  const wishLine = wish
-    ? (isRu ? `Учитывай пожелание клиента: ${wish}.` : `Consider this client note: ${wish}.`)
-    : '';
+  const wishLine = wish ? `Учитывай пожелание клиента: ${wish}.` : '';
   const cascadeSource = (cascade && typeof cascade === 'object') ? cascade : {};
   const cascadeNormalized = {
     level: cascadeSource.level !== undefined ? cascadeSource.level : (articleHints.level ?? null),
@@ -660,20 +1056,20 @@ async function generateArticle({
       ? cascadeSource.ancestorTrail
       : (Array.isArray(articleHints.ancestorTrail) ? articleHints.ancestorTrail : []),
   };
-  const cascadeInfo = buildCascadeGuidance(cascadeNormalized, pageLang);
-  const insightLabel = isRu ? 'Ключевые идеи родительской статьи' : 'Key ideas from the parent article';
-  const insightBullet = isRu ? '•' : '-';
+  const cascadeInfo = buildCascadeGuidance(cascadeNormalized);
+  const anchorValue = (anchorText || '').toString().trim();
+  const hasProvidedAnchor = anchorValue.length > 0;
+  const anchorDisplay = hasProvidedAnchor ? `«${anchorValue}»` : 'указанный анкор';
+
+  const insightLabel = 'Ключевые идеи родительской статьи';
+  const insightBullet = '•';
   const insightBlock = Array.isArray(cascadeInfo.detailSnippets) && cascadeInfo.detailSnippets.length
     ? `${insightLabel}:\n${cascadeInfo.detailSnippets.map((line) => `${insightBullet} ${line}`).join('\n')}\n`
     : '';
   const keywordReminder = Array.isArray(cascadeInfo.focusKeywords) && cascadeInfo.focusKeywords.length
-    ? (isRu
-        ? `Сфокусируйся на темах: ${cascadeInfo.focusKeywords.join(', ')}. Упомяни каждую из них конкретно.`
-        : `Center the article around: ${cascadeInfo.focusKeywords.join(', ')}. Mention each of these topics explicitly.`)
+    ? `Сфокусируйся на темах: ${cascadeInfo.focusKeywords.join(', ')}. Упомяни каждую из них конкретно и развёрнуто.`
     : '';
-  const avoidGeneric = isRu
-    ? 'Не используй шаблонные фразы вроде «разбор кейса», «быстрый обзор», «пошаговый гайд» без конкретики. Излагай факты и контекст из исходной темы.'
-    : 'Avoid generic phrases like “case study breakdown”, “quick overview”, or “step-by-step guide” without concrete detail. Ground every section in the original topic context.';
+  const avoidGeneric = 'Не используй шаблонные фразы вроде «разбор кейса», «быстрый обзор», «пошаговый гайд» без конкретики. Излагай факты и контекст исходной темы.';
   const provider = (aiProvider || process.env.PP_AI_PROVIDER || 'openai').toLowerCase();
   const aiOpts = {
     provider,
@@ -688,12 +1084,41 @@ async function generateArticle({
   const inferredLevel = toInt(articleHints.level) ?? toInt(cascadeNormalized.level);
   const lengthHints = buildLevelPromptHints({
     level: inferredLevel,
-    isRu,
+    languageMeta,
     minLength: articleHints.minLength,
     maxLength: articleHints.maxLength,
   });
   const levelNumber = Number.isFinite(inferredLevel) ? inferredLevel : 1;
   const isHigherLevel = levelNumber >= 2;
+  if (typeof logLine === 'function') {
+    logLine('article.debug.input_context', {
+      pageLang,
+      requestedLanguage: language || null,
+      languageMeta,
+      targetUrl: pageUrl,
+      anchorText: anchorValue,
+      hasProvidedAnchor,
+      levelNumber,
+      isHigherLevel,
+      cascadeLevel: cascadeNormalized.level ?? null,
+      cascadeTrailLength: Array.isArray(cascadeNormalized.ancestorTrail) ? cascadeNormalized.ancestorTrail.length : 0,
+      linkPlan: isHigherLevel
+        ? {
+            mode: 'higher-level',
+            internalLinks: 2,
+            internalAnchorStrategy: 'organic 2–4 слова',
+            externalLinks: 1,
+            externalSourceExamples: ['Wikipedia', 'официальные исследования', 'отраслевые обзоры'],
+          }
+        : {
+            mode: 'level-1',
+            firstAnchor: hasProvidedAnchor ? anchorValue : 'органичный 2–4 слова',
+            secondAnchor: 'другой органичный 2–4 слова',
+            externalLinks: 1,
+            externalSourceExamples: ['Wikipedia', 'официальные исследования', 'отраслевые обзоры'],
+          }
+    });
+  }
   const isTest = !!testMode;
   if (typeof logLine === 'function') {
     logLine('article.job.language_snapshot', {
@@ -741,27 +1166,17 @@ async function generateArticle({
 
   const baseTopic = topicTitle || anchorText;
   const topicLine = topicDesc ? `${baseTopic} — ${topicDesc}` : baseTopic;
+  const languageInstruction = buildLanguageLabel(languageMeta);
+  const languageIn = languageMeta.nameRuIn || 'целевом языке';
   const contentLines = [];
-  if (isRu) {
-    contentLines.push(`Напиши статью на ${languageMeta.nameRuIn} по теме: ${topicLine}.`);
-    contentLines.push(`Все заголовки, абзацы и анкоры держи на ${languageMeta.nameRuIn}; не переключайся на другие языки.`);
-  } else {
-    contentLines.push(`Write an article in ${languageMeta.nameEn} about: ${topicLine}.`);
-    contentLines.push(`Keep every heading, paragraph, and anchor strictly in ${languageMeta.nameEnWithCode}. Do not switch languages.`);
-    if (languageMeta.nativeContentReminder) {
-      contentLines.push(languageMeta.nativeContentReminder);
-    } else if (languageMeta.nativeIn) {
-      contentLines.push(`Увесь текст тримай ${languageMeta.nativeIn}; не переходь на інші мови.`);
-    }
-    if (languageMeta.languageCodeReminder) {
-      contentLines.push(languageMeta.languageCodeReminder);
-    } else if (languageMeta.iso) {
-      contentLines.push(`Use only language code ${languageMeta.iso} throughout the article; remove any sentences in other languages.`);
-    }
-    contentLines.push(`IMPORTANT: The entire article must be in ${languageMeta.nameEn}. Do not include English, Russian, or other languages except unavoidable proper nouns.`);
+  contentLines.push(`Напиши статью ${languageInstruction} по теме: ${topicLine}.`);
+  contentLines.push(`Все заголовки, абзацы и анкоры держи на ${languageIn}; не переключайся на другие языки.`);
+  contentLines.push('Ссылки размещай только внутри абзацев <p>, вплетая их в предложение; не создавай отдельные параграфы, состоящие только из ссылки, и не вставляй ссылки в заголовки или списки.');
+  if (languageMeta.iso) {
+    contentLines.push(`Строго соблюдай язык с ISO-кодом ${languageMeta.iso}. Любые фрагменты на другом языке перепиши перед сдачей текста.`);
   }
   if (region) {
-    contentLines.push(isRu ? `Регион публикации: ${region}.` : `Geographic focus: ${region}.`);
+    contentLines.push(`Регион публикации: ${region}.`);
   }
   if (wishLine) {
     contentLines.push(wishLine);
@@ -791,112 +1206,88 @@ async function generateArticle({
       }
     });
   }
+  /* =====================================================
+    === БЛОК ПРОМПТОВ ДЛЯ ВТОРОГО/ТРЕТЬЕГО УРОВНЕЙ ===
+    ===================================================== */
   if (isHigherLevel) {
-    contentLines.push(isRu
-      ? `Ссылки на ${pageUrl} вставляй только там, где они усиливают мысль абзаца. Анкоры формируй из слов предложения (2–4 слова) на ${languageMeta.nameRuIn}, без кавычек и слов вроде «тут»/«здесь».`
-      : `Place links to ${pageUrl} only where they reinforce the paragraph. Derive each anchor from the sentence itself (2–4 words) in ${languageMeta.nameEnWithCode}, no quotes and no fillers like "here".`
-    );
-    contentLines.push(isRu
-      ? 'Следи, чтобы анкоры различались и выглядели естественно внутри текста.'
-      : 'Make sure each anchor text is distinct and feels natural in-line with the prose.'
-    );
+    contentLines.push(`Ссылки на ${pageUrl} вставляй только там, где они усиливают мысль абзаца. Анкоры формируй из слов предложения (2–4 слова) на ${languageIn}, без кавычек и слов вроде «тут» или «здесь».`);
+    if (hasProvidedAnchor) {
+      contentLines.push(`Первая ссылка на ${pageUrl} обязана использовать анкор ${anchorDisplay} без изменений и стоять в первой половине статьи.`);
+      contentLines.push(`Вторая ссылка на ${pageUrl} должна появиться ближе к завершению с другим органичным анкором на ${languageIn} (2–4 слова); не повторяй ${anchorDisplay}.`);
+    } else {
+      contentLines.push(`Две ссылки на ${pageUrl} размещай в разных частях статьи: первую — в первой половине, вторую — ближе к завершению, подбирая различные органичные анкоры на ${languageIn} (2–4 слова).`);
+    }
+    contentLines.push('Третью ссылку добавь на авторитетный внешний источник, когда аргумент поддерживает вывод статьи.');
+    contentLines.push('Следи, чтобы анкоры различались и выглядели естественно внутри текста; не вставляй ссылки в заголовки или списки и не выноси их отдельными абзацами.');
+    contentLines.push('Не используй заголовки статьи или длинные названия разделов в качестве анкора — бери короткие фразы из актуального абзаца.');
   } else {
-    contentLines.push(isRu
-      ? `Каждую ссылку на ${pageUrl} подавай с естественным анкором на ${languageMeta.nameRuIn}, отражающим выгоду для читателя.`
-      : `When linking to ${pageUrl}, use a natural ${languageMeta.nameEnWithCode} anchor that explains the benefit for the reader.`
-    );
+   /* =====================================================
+     === БЛОК ПРОМПТОВ ДЛЯ ПЕРВОГО УРОВНЯ ===
+     ===================================================== */
+    if (hasProvidedAnchor) {
+      contentLines.push(`Первая ссылка на ${pageUrl} должна стоять в первой половине статьи и использовать анкор ${anchorDisplay} без изменений и дополнительных слов.`);
+    } else {
+      contentLines.push(`В первой половине статьи вставь ссылку на ${pageUrl} с естественным анкором на ${languageIn}, который подчёркивает выгоду для читателя.`);
+    }
+    contentLines.push(`Во второй половине статьи размести ещё одну ссылку на ${pageUrl} с другим органичным анкором на ${languageIn}, чтобы она выглядела естественно и не повторяла первую.`);
+    contentLines.push('Третья ссылка — на авторитетный внешний источник (например, Wikipedia, отраслевые обзоры или официальные исследования); вставляй её там, где она подкрепляет выводы статьи.');
   }
   contentLines.push(avoidGeneric);
-  if (!isRu && languageMeta.nativeFinalCheck) {
-    contentLines.push(languageMeta.nativeFinalCheck);
-  }
-  contentLines.push(isRu
-    ? `Проверь, что весь текст остаётся на ${languageMeta.nameRuIn}; если встречается другой язык, перепиши фрагмент на ${languageMeta.nameRuIn}.`
-    : `Double-check that the entire article stays in ${languageMeta.nameEnWithCode}; rewrite any sentence that slips into another language back into ${languageMeta.nameEnWithCode}.`
-  );
+  contentLines.push(`Проверь, что весь текст остаётся на ${languageIn}; если появляется другой язык — сразу перепиши соответствующий фрагмент.`);
 
   const requirementLines = [];
   if (lengthHints.requirementLine) {
     requirementLines.push(lengthHints.requirementLine);
   }
+  /* =====================================================
+    === БЛОК ТРЕБОВАНИЙ ПО ССЫЛКАМ ДЛЯ ВТОРОГО/ТРЕТЬЕГО УРОВНЕЙ ===
+    ===================================================== */
   if (isHigherLevel) {
-    requirementLines.push(
-      isRu
-        ? '- Ровно три активные ссылки (формат <a href="...">...</a>) и ни одной лишней.'
-        : '- Use exactly three active links (format <a href="...">...</a>) and nothing extra.'
-    );
-    requirementLines.push(
-      isRu
-        ? `  • Две ссылки ведут на ${pageUrl}; подбирай для них естественные анкоры на ${languageMeta.nameRuIn} (2–4 слова) без кавычек и слов вроде «тут»/«здесь».`
-        : `  • Two links must point to ${pageUrl}; craft natural ${languageMeta.nameEnWithCode} anchors (2–4 words) with no quotes and no fillers like “here”.`
-    );
-    requirementLines.push(
-      isRu
-        ? '  • Анкоры должны различаться и располагаться внутри абзацев, а не в списках или заголовках.'
-        : '  • Anchors must be different from each other and stay inside body paragraphs, not lists or headings.'
-    );
-    requirementLines.push(
-      isRu
-        ? '  • Первую ссылку поставь в первой половине статьи, вторую — ближе к завершению.'
-        : '  • Put the first link within the first half of the article and the second closer to the conclusion.'
-    );
-    requirementLines.push(
-      isRu
-        ? (languageMeta.code === 'en'
-            ? '  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на английском языке; URL действительный.'
-            : `  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования) на ${languageMeta.nameRuIn} или английском языке; URL действительный.`)
-        : (languageMeta.code === 'en'
-            ? '  • The third link must point to a reputable external source (Wikipedia, official reports, industry research) in English with a valid URL.'
-            : `  • The third link must point to a reputable external source (Wikipedia, official reports, industry research) in ${languageMeta.nameEn} or English with a valid URL.`)
-    );
+    requirementLines.push('- Ровно три активные ссылки (формат <a href="...">...</a>) и ни одной лишней.');
+    requirementLines.push(`  • Две ссылки ведут на ${pageUrl}; подбирай для них естественные анкоры на ${languageIn} (2–4 слова) без кавычек и слов вроде «тут» или «здесь».`);
+    if (hasProvidedAnchor) {
+      requirementLines.push(`    ◦ Первая ссылка использует анкор ${anchorDisplay} без изменений и стоит в первой половине статьи.`);
+      requirementLines.push(`    ◦ Вторая ссылка ставится ближе к завершению с другим органичным анкором на ${languageIn}; не повторяй ${anchorDisplay}.`);
+    } else {
+      requirementLines.push('    ◦ Первую ссылку поставь в первой половине статьи, вторую — ближе к завершению; анкоры должны отличаться.');
+    }
+  requirementLines.push('  • Анкоры должны различаться и располагаться внутри абзацев, без заголовков, списков и отдельных пустых параграфов.');
+    const externalLanguage = buildLanguageOrEnglishLabel(languageMeta);
+    requirementLines.push(`  • Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные отчёты, отраслевые исследования); URL действительный, язык материала — на ${externalLanguage}.`);
   } else {
-    requirementLines.push(
-      isRu
-        ? '- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):'
-        : '- Exactly three active links in the article (format <a href="...">...</a>):'
-    );
-    requirementLines.push(
-      isRu
-        ? `  1) В первой половине статьи вставь ссылку на ${pageUrl} с естественным анкором (2–4 слова) на ${languageMeta.nameRuIn}, который помогает понять пользу.`
-        : `  1) Within the first half of the article add a link to ${pageUrl} with a natural ${languageMeta.nameEnWithCode} anchor (2–4 words) that highlights the benefit.`
-    );
-    requirementLines.push(
-      isRu
-        ? `  2) Во второй половине размести ещё одну ссылку на ${pageUrl} с другим органичным анкором; не повторяй первый.`
-        : `  2) In the latter half place another link to ${pageUrl} with a different organic anchor; do not repeat the first one.`
-    );
-    requirementLines.push(
-      isRu
-        ? (languageMeta.code === 'en'
-            ? '  3) Одна ссылка на авторитетный внешний источник (Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым; язык предпочтительно английский.'
-            : `  3) Одна ссылка на авторитетный внешний источник (Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым; язык предпочтительно ${languageMeta.nameRuIn} (или английский).`)
-        : (languageMeta.code === 'en'
-            ? '  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; ensure the URL is valid and preferably in English.'
-            : `  3) One link to a reputable external source (e.g., Wikipedia, encyclopedias, official site) relevant to the topic; ensure the URL is valid and preferably in ${languageMeta.nameEn} (or English).`)
-    );
+   /* =====================================================
+     === БЛОК ТРЕБОВАНИЙ ПО ССЫЛКАМ ДЛЯ ПЕРВОГО УРОВНЯ ===
+     ===================================================== */
+    requirementLines.push('- Ровно три активные ссылки в статье (формат строго <a href="...">...</a>):');
+    if (hasProvidedAnchor) {
+      requirementLines.push(`  1) В первой половине статьи вставь ссылку на ${pageUrl} строго с анкором ${anchorDisplay}; не добавляй к нему лишних слов.`);
+    } else {
+      requirementLines.push(`  1) В первой половине статьи вставь ссылку на ${pageUrl} с естественным анкором (2–4 слова) на ${languageIn}, который раскрывает выгоду.`);
+    }
+    const secondLinkText = hasProvidedAnchor
+      ? `  2) Во второй половине размести ещё одну ссылку на ${pageUrl} с другим органичным анкором на ${languageIn}; не повторяй первый и не используй ${anchorDisplay}.`
+      : `  2) Во второй половине размести ещё одну ссылку на ${pageUrl} с другим органичным анкором на ${languageIn}; не повторяй первый.`;
+    requirementLines.push(secondLinkText);
+    const externalLanguage = buildLanguageOrEnglishLabel(languageMeta);
+  requirementLines.push(`  3) Одна ссылка на авторитетный внешний источник (Wikipedia/энциклопедия/официальный сайт), релевантный теме; URL не должен быть битым; предпочтительный язык материала — на ${externalLanguage}.`);
+  requirementLines.push('  • Обе ссылки на целевую страницу должны стоять внутри содержательных абзацев: не размещай их в заголовках, списках или отдельных пустых параграфах.');
   }
   if (Array.isArray(lengthHints.extraRequirementLines) && lengthHints.extraRequirementLines.length) {
     requirementLines.push(...lengthHints.extraRequirementLines);
   }
   requirementLines.push(
-    isRu
-      ? '- Используй только простой HTML: абзацы <p>, подзаголовки <h3>, списки (<ul>/<ol>) и цитаты <blockquote>. Без markdown и кода.'
-      : '- Use only basic HTML: paragraphs <p>, subheadings <h3>, lists (<ul>/<ol>), and blockquotes <blockquote>. No markdown or code.',
-    isRu
-      ? '- 3–5 смысловых секций и короткое заключение.'
-      : '- Provide 3–5 meaningful sections and a short conclusion.',
-    isRu
-      ? '- Кроме указанных трёх ссылок — никаких иных ссылок или URL.'
-      : '- Do not add any links beyond the three specified above.'
+    '- Используй только простой HTML: абзацы <p>, подзаголовки <h3>, списки (<ul>/<ol>) и цитаты <blockquote>. Без markdown и кода.',
+    '- 3–5 смысловых секций и короткое заключение.',
+    '- Заверши статью полноценным выводом: последний абзац кратко подытоживает ключевые мысли без внезапного обрыва.',
+    '- Кроме указанных трёх ссылок — никаких иных ссылок или URL.'
   );
-  const requirementsHeading = isRu ? 'Требования:' : 'Requirements:';
-  const returnBodyLine = isRu ? 'Ответь только телом статьи.' : 'Return only the article body.';
+  const requirementsHeading = 'Требования:';
+  const returnBodyLine = 'Ответь только телом статьи.';
   const requirementsBlock = [requirementsHeading, ...requirementLines, returnBodyLine].join('\n');
   contentLines.push(requirementsBlock);
 
   const contentPrompt = contentLines.filter(Boolean).join('\n');
   const titlePrompt = buildTitlePrompt({
-    isRu,
     languageMeta,
     topicLine,
     anchorText,
@@ -908,7 +1299,15 @@ async function generateArticle({
     title: titlePrompt,
     content: contentPrompt,
   };
-  const systemPrompts = buildSystemPrompts({ isRu, languageMeta });
+  const systemPrompts = buildSystemPrompts({ languageMeta });
+
+  if (typeof logLine === 'function') {
+    logLine('article.debug.prompt_overview', {
+      titlePromptPreview: titlePrompt,
+      contentPromptPreview: contentPrompt,
+      systemPrompts,
+    });
+  }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -917,15 +1316,44 @@ async function generateArticle({
   const rawContent = await generateText(prompts.content, { ...aiOpts, systemPrompt: systemPrompts.content, keepRaw: true });
 
   const titleClean = cleanLLMOutput(rawTitle).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
+  let finalTitle = titleClean;
+  if (hasProvidedAnchor && anchorValue && finalTitle) {
+    const normalizedAnchor = normalizeAnchorInnerText(anchorValue);
+    const normalizedTitle = normalizeAnchorInnerText(finalTitle);
+    if (normalizedAnchor && normalizedTitle && normalizedTitle.includes(normalizedAnchor)) {
+      const rewritePrompt = [
+        `Исходный заголовок: "${finalTitle}"`,
+        `Перепиши его ${languageInstruction}, сохранив смысл и длину 6–12 слов, но полностью исключив анкор "${anchorValue}" и любые прямые цитаты URL.`,
+        'Не используй кавычки, эмодзи и точные названия ссылок. Ответь только новым заголовком.'
+      ].join('\n');
+      try {
+        await sleep(250);
+        const rewritten = await generateText(rewritePrompt, { ...aiOpts, systemPrompt: systemPrompts.title, keepRaw: true });
+        const cleanRewritten = cleanLLMOutput(rewritten).replace(/^\s*["'«»]+|["'«»]+\s*$/g, '').trim();
+        if (cleanRewritten) {
+          const normalizedRewritten = normalizeAnchorInnerText(cleanRewritten);
+          if (!normalizedAnchor || !normalizedRewritten.includes(normalizedAnchor)) {
+            finalTitle = cleanRewritten;
+          }
+        }
+      } catch (error) {
+        if (typeof logLine === 'function') {
+          logLine('article.debug.title_rewrite_failed', { error: String(error && error.message ? error.message : error) });
+        }
+      }
+    }
+  }
+
   let content = cleanLLMOutput(rawContent);
 
   // Add H1 title
-  content = `<h1>${titleClean}</h1>\n${content}`;
+  content = `<h1>${finalTitle}</h1>\n${content}`;
 
   let imageUrl = null;
   if (!disableImages) {
     // Generate image prompt
-    const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Обязательно подчеркни, что это реалистичная профессиональная фотография в формате 16:9 без текста, логотипов и водяных знаков, с натуральным светом и живой композицией. Ответь только промтом.`;
+    const uniquenessToken = Math.random().toString(36).slice(2, 10);
+    const imagePromptText = `Вот моя статья: ${htmlToPlainText(content)}\n\nСоставь промт для генерации изображения по теме этой статьи. Промт должен быть на английском языке, детальным и подходящим для Stable Diffusion. Обязательно подчеркни, что это реалистичная профессиональная фотография в формате 16:9 без текста, логотипов и водяных знаков, с натуральным светом и живой композицией. Добавь вариативность и уникальные детали, ориентируясь на код ${uniquenessToken}, но не выводи этот код текстом на изображении. Ответь только промтом.`;
     const imagePrompt = await generateText(imagePromptText, { ...aiOpts, systemPrompt: 'Только промт для изображения.', keepRaw: true });
     await sleep(500);
     const cleanImagePrompt = cleanLLMOutput(imagePrompt).trim();
@@ -950,6 +1378,7 @@ async function generateArticle({
           finalImagePrompt += `, ${phrase}`;
         }
       });
+      finalImagePrompt += `, inspired by concept ${uniquenessToken}`;
     }
 
     // Generate image
@@ -986,24 +1415,14 @@ async function generateArticle({
       }
       const requirements = [];
       if (!hasList) {
-        requirements.push(isRu
-          ? '- Добавь структурированный список (<ul>/<ol> с <li>), который подытоживает ключевые выводы.'
-          : '- Add a structured list (<ul>/<ol> with <li>) that summarizes the key takeaways.');
-        content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
+        requirements.push('- Добавь структурированный список (<ul>/<ol> с <li>), который подытоживает ключевые выводы.');
+        content = cleanupGeneratedHtml(injectFallbackList(content));
       }
       if (!hasQuote) {
-        requirements.push(isRu
-          ? '- Вставь содержательный блок <blockquote> с аналитической мыслью или фактом по теме.'
-          : '- Insert an informative <blockquote> that highlights an analytical insight or fact.');
+        requirements.push('- Вставь содержательный блок <blockquote> с аналитической мыслью или фактом по теме.');
       }
       const adjustPrompt =
-        `Отредактируй HTML статьи, сохранив структуру, заголовок <h1>, все подзаголовки <h3> и ссылки.\n` +
-
-        `${requirements.join('\n')}\n` +
-        (isRu
-          ? 'Не добавляй новые URL, не удаляй существующие <a href> и их текст. Можно расширить существующие абзацы.'
-          : 'Do not add new URLs, keep existing <a href> blocks and their text intact. You may expand existing paragraphs.') +
-        `\nВерни только готовый HTML.\n\nСТАТЬЯ:\n${content}`;
+        `Отредактируй HTML статьи, сохранив структуру, заголовок <h1>, все подзаголовки <h3> и ссылки.\n\n${requirements.join('\n')}\nНе добавляй новые URL, не удаляй существующие <a href> и их текст. Можно расширить существующие абзацы.\n\nВерни только готовый HTML.\n\nСТАТЬЯ:\n${content}`;
       try {
         await sleep(300);
         const adjusted = await generateText(adjustPrompt, { ...aiOpts, systemPrompt: 'Верни только HTML статьи.', keepRaw: true });
@@ -1022,18 +1441,18 @@ async function generateArticle({
     content = cleanupGeneratedHtml(content);
     await enforceStructure();
     if (!/<blockquote\b/i.test(content)) {
-      content = cleanupGeneratedHtml(injectFallbackQuote(content, { isRu, anchorText }));
+      content = cleanupGeneratedHtml(injectFallbackQuote(content, { anchorText }));
     } else {
       content = cleanupGeneratedHtml(content);
     }
     if (!/<(ul|ol)\b/i.test(content)) {
-      content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
+      content = cleanupGeneratedHtml(injectFallbackList(content));
     }
     if (!/<blockquote\b/i.test(content)) {
-      content = cleanupGeneratedHtml(injectFallbackQuote(content, { isRu, anchorText }));
+      content = cleanupGeneratedHtml(injectFallbackQuote(content, { anchorText }));
     }
     if (!/<(ul|ol)\b/i.test(content)) {
-      content = cleanupGeneratedHtml(injectFallbackList(content, { isRu }));
+      content = cleanupGeneratedHtml(injectFallbackList(content));
     }
     content = cleanupGeneratedHtml(content);
   };
@@ -1055,35 +1474,129 @@ async function generateArticle({
     if (/<(ul|ol)\b/i.test(sectionContent) && /<li\b/i.test(sectionContent)) {
       return;
     }
-    const listHtml = buildFallbackListHtml(content, { isRu });
+  const listHtml = buildFallbackListHtml(content);
     const cleanedSection = sectionContent.replace(/^(?:\s|<p[^>]*>(?:\s|&nbsp;|<br[^>]*>)*<\/p>)+/gi, '');
     content = `${content.slice(0, headingEnd)}\n${listHtml}\n${cleanedSection}${content.slice(sectionEnd)}`;
     content = cleanupGeneratedHtml(content);
   };
   const wantOur = 2;
   const wantExternal = 1;
+  const wantTotal = wantOur + wantExternal;
+  const meetsLinkRequirements = (linkStat) => (
+    linkStat &&
+    linkStat.ourLinkCount >= wantOur &&
+    linkStat.externalCount >= wantExternal &&
+    linkStat.totalLinks === wantTotal
+  );
+
   ensureKeyTakeawaysList();
-  const wantTotal = 3;
+  content = removeAnchorsFromHeadings(content, { targetUrl: pageUrl });
   let stat = analyzeLinks(content, pageUrl, anchorText);
-  if (!(stat.ourLinkCount >= wantOur && stat.externalCount >= wantExternal && stat.totalLinks === wantTotal)) {
-    const strictInstruction = isRu
-      ? `СТРОГО: оставь ровно ${wantTotal} ссылки. Две ссылки ведут на ${pageUrl} с разными органичными анкорами на ${languageMeta.nameRuIn} (2–4 слова, без слов «тут»/«здесь»), третья — на авторитетный внешний источник. Другие ссылки не добавляй.`
-      : `STRICT: keep exactly ${wantTotal} links. Two links must point to ${pageUrl} with distinct natural ${languageMeta.nameEnWithCode} anchors (2–4 words, no fillers like “here”), and the third link must go to a reputable external source. Do not add any other links.`;
+  if (!meetsLinkRequirements(stat)) {
+    const strictInstruction = isHigherLevel
+      ? `СТРОГО: оставь ровно ${wantTotal} ссылки. Две ссылки ведут на ${pageUrl} с разными органичными анкорами на ${languageIn} (2–4 слова, без слов «тут» или «здесь»), третья — на авторитетный внешний источник. Другие ссылки не добавляй.`
+      : (hasProvidedAnchor
+        ? `СТРОГО: оставь ровно ${wantTotal} ссылки. В первой половине статьи поставь ссылку на ${pageUrl} с анкором ${anchorDisplay} без изменений. Во второй половине размести вторую ссылку на ${pageUrl} с другим органичным анкором на ${languageIn}. Третья ссылка — на авторитетный внешний источник (Wikipedia, официальные исследования и т.п.). Другие ссылки не добавляй.`
+        : `СТРОГО: оставь ровно ${wantTotal} ссылки. Две ссылки ведут на ${pageUrl} с разными органичными анкорами на ${languageIn} (2–4 слова), третья — на авторитетный внешний источник. Другие ссылки не добавляй.`);
     const stricter = `${prompts.content}
 ${strictInstruction}`;
     const retry = await generateText(stricter, { ...aiOpts, systemPrompt: systemPrompts.content, keepRaw: true });
     const retryClean = cleanLLMOutput(retry);
     const retryStat = analyzeLinks(retryClean, pageUrl, anchorText);
-    if ((retryStat.ourLinkCount >= stat.ourLinkCount && retryStat.externalCount >= stat.externalCount) || retryStat.totalLinks === wantTotal) {
+    if (meetsLinkRequirements(retryStat) || (
+      retryStat.ourLinkCount >= stat.ourLinkCount &&
+      retryStat.externalCount >= stat.externalCount &&
+      retryStat.totalLinks >= stat.totalLinks
+    )) {
       content = retryClean;
       stat = retryStat;
     }
   }
+
   await ensureStructureWithFallback();
   ensureKeyTakeawaysList();
+  content = removeAnchorsFromHeadings(content, { targetUrl: pageUrl });
+  stat = analyzeLinks(content, pageUrl, anchorText);
+
+  let linkFallbackApplied = false;
+  let fallbackBeforeStats = null;
+  if (!meetsLinkRequirements(stat)) {
+    fallbackBeforeStats = { ...stat };
+    const enforced = ensureLinksWithFallback(content, {
+      pageUrl,
+      anchorText: anchorValue,
+      hasProvidedAnchor,
+      languageMeta,
+      wantOur,
+      wantExternal,
+      wantTotal,
+      expectedAnchorText: anchorText,
+    });
+    if (enforced.modified) {
+      linkFallbackApplied = true;
+    }
+    content = cleanupGeneratedHtml(enforced.html);
+    stat = analyzeLinks(content, pageUrl, anchorText);
+  }
+
+  if (linkFallbackApplied && typeof logLine === 'function') {
+    logLine('article.debug.link_fallback_applied', {
+      before: fallbackBeforeStats,
+      required: { wantOur, wantExternal, wantTotal },
+      finalLinkStats: stat,
+      targetUrl: pageUrl,
+    });
+  }
+
+  let anchorAdjusted = false;
+  if (hasProvidedAnchor && anchorValue) {
+    const enforcedAnchor = enforceAnchorTextExpectations(content, {
+      pageUrl,
+      expectedAnchor: anchorValue,
+      hasProvidedAnchor,
+      languageMeta,
+      desiredOurCount: wantOur,
+    });
+    if (enforcedAnchor.changed) {
+      content = cleanupGeneratedHtml(enforcedAnchor.html);
+      content = removeAnchorsFromHeadings(content, { targetUrl: pageUrl });
+      stat = analyzeLinks(content, pageUrl, anchorText);
+      anchorAdjusted = true;
+    }
+  }
+
+  content = removeAnchorsFromHeadings(content, { targetUrl: pageUrl });
+  stat = analyzeLinks(content, pageUrl, anchorText);
+  const mergedAnchorsContent = mergeStandaloneAnchorParagraphs(content, { targetUrl: pageUrl });
+  if (mergedAnchorsContent !== content) {
+    content = cleanupGeneratedHtml(mergedAnchorsContent);
+    stat = analyzeLinks(content, pageUrl, anchorText);
+  }
+
+  if (!meetsLinkRequirements(stat) && typeof logLine === 'function') {
+    logLine('article.debug.link_requirement_unmet', {
+      finalLinkStats: stat,
+      required: { wantOur, wantExternal, wantTotal },
+      targetUrl: pageUrl,
+      anchorAdjusted,
+    });
+  }
+
+  if (typeof logLine === 'function') {
+    logLine('article.debug.output_links', {
+      finalLinkStats: stat,
+      hasProvidedAnchor,
+      anchorUsed: hasProvidedAnchor ? anchorValue : null,
+      isHigherLevel,
+      targetUrl: pageUrl,
+    });
+  }
 
   const authorFromMeta = (pageMeta.author || '').toString().trim();
-  const author = authorFromMeta || pickAuthorName(pageLang, `${pageUrl}|${anchorText}|${topicTitle}|${topicDesc}|${region}`);
+  let author = authorFromMeta;
+  if (!author) {
+    author = await generateAuthorName({ languageMeta, aiOpts, logLine });
+  }
 
   if (typeof logLine === 'function') {
     logLine('Article generated', {
@@ -1099,7 +1612,7 @@ ${strictInstruction}`;
   const verificationSample = prepareTextSample([plainText]);
 
   const generatedArticle = {
-    title: titleClean || topicTitle || anchorText,
+    title: finalTitle || topicTitle || anchorText,
     htmlContent,
     language: pageLang,
     linkStats: stat,

@@ -679,6 +679,11 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
                                 $manualAdmin = $isManual ? trim((string)($tx['manual_admin_username'] ?? $tx['manual_admin_full_name'] ?? '')) : '';
                                 $manualBalanceAfter = $isManual && isset($tx['manual_balance_after']) ? (float)$tx['manual_balance_after'] : null;
                                 $gatewayTitle = pp_payment_gateway_title($tx['gateway_code'], strtoupper($tx['gateway_code']));
+                                $isInvoiceGateway = (!$isManual && $tx['gateway_code'] === 'invoice');
+                                $invoiceDownloadToken = $isInvoiceGateway ? (string)($tx['customer_payload']['invoice_download_token'] ?? '') : '';
+                                $invoiceDownloadUrl = $invoiceDownloadToken !== ''
+                                    ? pp_url('client/invoice_download.php?txn=' . urlencode((string)$tx['primary_id']) . '&token=' . urlencode($invoiceDownloadToken))
+                                    : '';
                             ?>
                             <tr class="<?php echo $rowClass; ?>">
                                 <td class="text-center">
@@ -748,9 +753,13 @@ $formAction = pp_url($currentUrlBase . (!empty($filterQueryClean) ? '?' . http_b
                                         <div class="small text-muted">ID <?php echo (int)$tx['primary_id']; ?></div>
                                     <?php else: ?>
                                         <div class="text-break small"><?php echo htmlspecialchars($tx['provider_reference'] ?? '—'); ?></div>
-                                        <?php if (!empty($tx['customer_payload']['payment_url'])): ?>
+                                        <?php if (!empty($tx['customer_payload']['payment_url']) && !$isInvoiceGateway): ?>
                                             <a href="<?php echo htmlspecialchars($tx['customer_payload']['payment_url']); ?>" target="_blank" rel="noopener" class="small d-inline-flex align-items-center gap-1">
                                                 <i class="bi bi-box-arrow-up-right"></i><?php echo __('Ссылка на оплату'); ?>
+                                            </a>
+                                        <?php elseif ($invoiceDownloadUrl !== ''): ?>
+                                            <a href="<?php echo htmlspecialchars($invoiceDownloadUrl); ?>" target="_blank" rel="noopener" class="small d-inline-flex align-items-center gap-1">
+                                                <i class="bi bi-file-earmark-arrow-down"></i><?php echo __('Скачать счёт'); ?>
                                             </a>
                                         <?php endif; ?>
                                     <?php endif; ?>

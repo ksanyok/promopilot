@@ -98,7 +98,7 @@ function normalizeContent(html) {
     }
   }
 
-  return s.trim();
+  return s.replace(/\s+$/, '');
 }
 
 async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, aiProvider, wish, pageMeta, jobOptions = {}) {
@@ -268,54 +268,95 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await applyEditorContent(cleanedContent);
 
   // Helper to set text in editable fields (title/author) via keyboard only
-  const setEditableText = async (selector, value) => {
-    await page.waitForSelector(selector);
+  const setEditableText = async (selectors, value) => {
+    const selectorList = Array.isArray(selectors) ? selectors : [selectors];
     const text = String(value || '').trim();
-    const success = await page.evaluate((sel, val) => {
-      const node = document.querySelector(sel);
-      if (!node) {
-        return false;
-      }
+    let appliedSelector = null;
+
+    for (const selector of selectorList) {
       try {
-        if (typeof node.focus === 'function') {
-          node.focus();
-        }
-      } catch (_) {}
-      while (node.firstChild) {
-        node.removeChild(node.firstChild);
+        await page.waitForSelector(selector, { timeout: 5000 });
+      } catch (_) {
+        continue;
       }
-      if (val) {
-        const doc = node.ownerDocument || document;
-        node.appendChild(doc.createTextNode(val));
-        if (node.classList) {
-          node.classList.remove('empty');
+
+      const success = await page.evaluate((sel, val) => {
+        const node = document.querySelector(sel);
+        if (!node) {
+          return false;
         }
-      } else {
-        node.innerHTML = '<br />';
-        if (node.classList) {
-          node.classList.add('empty');
+        try {
+          if (typeof node.focus === 'function') {
+            node.focus();
+          }
+        } catch (_) {}
+
+        const normalized = String(val || '').trim();
+        if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
+          node.value = normalized;
+        } else {
+          while (node.firstChild) {
+            node.removeChild(node.firstChild);
+          }
+          if (normalized) {
+            const doc = node.ownerDocument || document;
+            node.appendChild(doc.createTextNode(normalized));
+            if (node.classList) {
+              node.classList.remove('empty');
+            }
+          } else {
+            node.innerHTML = '<br />';
+            if (node.classList) {
+              node.classList.add('empty');
+            }
+          }
         }
+
+        try {
+          node.dispatchEvent(new Event('input', { bubbles: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+          node.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (_) {}
+        return true;
+      }, selector, text);
+
+      if (success) {
+        appliedSelector = selector;
+        break;
       }
-      try {
-        node.dispatchEvent(new Event('input', { bubbles: true }));
-        node.dispatchEvent(new Event('change', { bubbles: true }));
-      } catch (_) {}
-      return true;
-    }, selector, text);
-    if (!success) {
-      throw new Error(`Unable to locate editable field ${selector}`);
     }
+
+    if (!appliedSelector) {
+      throw new Error(`Unable to locate editable field ${selectorList.join(', ')}`);
+    }
+
     if (text) {
-      const applied = await page.$eval(selector, (el) => (el.innerText || '').trim());
+      const applied = await page.$eval(appliedSelector, (el) => {
+        if (!el) {
+          return '';
+        }
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+          return (el.value || '').trim();
+        }
+        return ((el.innerText || el.textContent || '').trim());
+      });
       if (!applied) {
-        throw new Error(`Telegraph field ${selector} remained empty after update`);
+        throw new Error(`Telegraph field ${appliedSelector} remained empty after update`);
       }
     }
   };
 
   // 2) Set title and 3) author
   logLine('Fill title');
-  await setEditableText('h1[data-placeholder="Title"]', title);
+  const titleSelectors = [
+    'h1[data-placeholder="Title"]',
+    'h1[data-placeholder="Заголовок"]',
+    'h1.tl_article_title',
+    'h1[contenteditable="true"]',
+    'input[name="title"]',
+    'textarea[name="title"]'
+  ];
+  await setEditableText(titleSelectors, title);
   try {
     await page.evaluate((text) => {
       const headerTitle = document.querySelector('header.tl_article_header h1');
@@ -327,7 +368,15 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
   await waitForTimeoutSafe(page, 80);
 
   logLine('Fill author');
-  await setEditableText('address[data-placeholder="Your name"]', author);
+  const authorSelectors = [
+    'address[data-placeholder="Your name"]',
+    'address[data-placeholder="Ваше имя"]',
+    'address[contenteditable="true"]',
+    'input[name="author"]',
+    'input[placeholder="Your name"]',
+    'input[placeholder="Имя автора"]'
+  ];
+  await setEditableText(authorSelectors, author);
   try {
     await page.evaluate((text) => {
       const headerAddress = document.querySelector('header.tl_article_header address');
@@ -346,11 +395,45 @@ async function publishToTelegraph(pageUrl, anchorText, language, openaiApiKey, a
 
   // Re-apply content after title/author updates to ensure Telegraph watchers haven't trimmed blocks
   await applyEditorContent(cleanedContent);
+  await setEditableText(titleSelectors, title);
+  await setEditableText(authorSelectors, author);
 
-  // Diagnostic: check final DOM title
+  // Diagnostic: check final DOM title/author
   try {
-    const finalTitle = await page.$eval('h1[data-placeholder="Title"]', el => (el.innerText || '').trim());
+    const finalTitle = await page.evaluate((selectors) => {
+      for (const sel of selectors) {
+        const node = document.querySelector(sel);
+        if (!node) {
+          continue;
+        }
+        if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
+          const value = (node.value || '').trim();
+          if (value) return value;
+        }
+        const text = (node.innerText || node.textContent || '').trim();
+        if (text) return text;
+      }
+      return '';
+    }, titleSelectors);
     logLine('DOM title check', { finalTitle });
+  } catch (_) {}
+  try {
+    const finalAuthor = await page.evaluate((selectors) => {
+      for (const sel of selectors) {
+        const node = document.querySelector(sel);
+        if (!node) {
+          continue;
+        }
+        if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
+          const value = (node.value || '').trim();
+          if (value) return value;
+        }
+        const text = (node.innerText || node.textContent || '').trim();
+        if (text) return text;
+      }
+      return '';
+    }, authorSelectors);
+    logLine('DOM author check', { finalAuthor });
   } catch (_) {}
 
   logLine('Publish click');
@@ -414,11 +497,11 @@ if (require.main === module) {
         networkLevel,
       });
 
-  let res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
-  res = attachArticleToResult(res, job);
-  logLine('Success result', res);
-  console.log(JSON.stringify(res));
-  process.exit(res && res.ok ? 0 : 1);
+      let res = await publishToTelegraph(pageUrl, anchor, language, apiKey, provider, wish, job.page_meta || job.meta || null, job);
+      res = attachArticleToResult(res, job);
+      logLine('Success result', res);
+      console.log(JSON.stringify(res));
+      process.exit(res && res.ok ? 0 : 1);
     } catch (e) {
       const payload = { ok: false, error: String(e && e.message || e), network: 'telegraph', logFile: LOG_FILE };
       logLine('Run failed', { error: payload.error, stack: e && e.stack });

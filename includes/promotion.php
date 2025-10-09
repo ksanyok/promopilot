@@ -298,42 +298,9 @@ if (!function_exists('pp_promotion_process_run')) {
                             }
                             $node['anchor_text'] = $childAnchor;
                         }
-                        $parentTargetUrl = (string)($node['parent_target_url'] ?? '');
-                        if ($parentTargetUrl === '') { $parentTargetUrl = (string)$run['target_url']; }
-                        $preparedArticle = pp_promotion_prepare_child_article(
-                            $cachedParent,
-                            (string)$node['target_url'],
-                            $parentTargetUrl,
-                            $preparedLanguage,
-                            (string)$node['anchor_text']
-                        );
-                        if (is_array($preparedArticle) && !empty($preparedArticle['htmlContent'])) {
-                            if (empty($preparedArticle['language'])) { $preparedArticle['language'] = $preparedLanguage; }
-                            if (empty($preparedArticle['plainText'])) {
-                                $plain = trim(strip_tags((string)$preparedArticle['htmlContent']));
-                                if ($plain !== '') { $preparedArticle['plainText'] = $plain; }
-                            }
-                            $preparedArticle['sourceUrl'] = $parentTargetUrl;
-                            $preparedArticle['sourceNodeId'] = $parentNodeId;
-                            $articleMeta = [
-                                'source_node_id' => $parentNodeId,
-                                'source_target_url' => $parentTargetUrl,
-                                'source_level' => (int)($node['parent_level'] ?? 1),
-                                'parent_result_url' => (string)($node['parent_url'] ?? ''),
-                                'reuse_mode' => 'cached_parent',
-                            ];
-                            pp_promotion_log('promotion.level2.article_reuse', [
-                                'run_id' => $runId,
-                                'node_id' => $nodeId,
-                                'parent_node_id' => $parentNodeId,
-                                'prepared_language' => $preparedLanguage,
-                                'target_url' => (string)$node['target_url'],
-                                'parent_target_url' => $parentTargetUrl,
-                            ]);
-                        } else {
-                            $preparedArticle = null;
-                            $articleMeta = [];
-                        }
+                        // Откажемся от прямого переиспользования HTML, чтобы каждая статья генерировала собственное изображение
+                        $preparedArticle = null;
+                        $articleMeta = [];
                     }
                     $requirementsPayload = [
                         'min_len' => $requirements[2]['min_len'],
@@ -344,12 +311,7 @@ if (!function_exists('pp_promotion_process_run')) {
                         'ancestor_trail' => $trail,
                     ];
                     $requirementsPayload['prepared_language'] = $preparedLanguage;
-                    if ($preparedArticle) {
-                        $requirementsPayload['prepared_article'] = $preparedArticle;
-                        if (!empty($articleMeta)) {
-                            $requirementsPayload['article_meta'] = $articleMeta;
-                        }
-                    }
+                    // Не передаём подготовленные статьи — каждый узел генерирует уникальный материал с новым изображением
                     pp_promotion_enqueue_publication($conn, $node, $project, $linkRow, $requirementsPayload);
                 }
                 $res2->free();
