@@ -255,6 +255,20 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             $crowdQueued = (int)($crowdData['queued'] ?? 0);
                             $crowdFailed = (int)($crowdData['failed'] ?? 0);
                             $crowdManual = (int)($crowdData['manual_fallback'] ?? 0);
+                            $queueInfoRaw = (is_array($promotionInfo) && isset($promotionInfo['queue'])) ? $promotionInfo['queue'] : [];
+                            $queueInfo = is_array($queueInfoRaw) ? $queueInfoRaw : [];
+                            $queueOwner = (isset($queueInfo['owner']) && is_array($queueInfo['owner'])) ? $queueInfo['owner'] : [];
+                            $queueOwnerPosition = (int)($queueOwner['position'] ?? 0);
+                            $queueOwnerTotal = (int)($queueOwner['total'] ?? 0);
+                            $queueOwnerAhead = (int)($queueOwner['ahead'] ?? 0);
+                            $queueGlobal = (isset($queueInfo['global']) && is_array($queueInfo['global'])) ? $queueInfo['global'] : [];
+                            $queueGlobalPosition = (int)($queueGlobal['position'] ?? 0);
+                            $queueGlobalTotal = (int)($queueGlobal['total'] ?? 0);
+                            $queueGlobalAhead = (int)($queueGlobal['ahead'] ?? 0);
+                            $queueActive = !empty($queueInfo['status_in_queue']);
+                            $queueBadgeVisible = $queueActive && $queueOwnerTotal > 0;
+                            $queueBadgeText = $queueBadgeVisible ? ($queueOwnerPosition . ' / ' . $queueOwnerTotal) : __('Вне очереди');
+                            $queueBadgeTooltip = $queueGlobalTotal > 0 ? sprintf(__('Общая очередь: %d / %d'), $queueGlobalPosition ?: 0, $queueGlobalTotal) : '';
                             $promotionCreatedRaw = is_array($promotionInfo) ? (string)($promotionInfo['created_at'] ?? '') : '';
                             $promotionStartedRaw = is_array($promotionInfo) ? (string)($promotionInfo['started_at'] ?? '') : '';
                             $promotionUpdatedRaw = is_array($promotionInfo) ? (string)($promotionInfo['updated_at'] ?? '') : '';
@@ -385,6 +399,13 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                             data-crowd-queued="<?php echo $crowdQueued; ?>"
                             data-crowd-failed="<?php echo $crowdFailed; ?>"
                             data-crowd-manual="<?php echo $crowdManual; ?>"
+                            data-queue-active="<?php echo $queueActive ? '1' : '0'; ?>"
+                            data-queue-owner-position="<?php echo $queueOwnerPosition; ?>"
+                            data-queue-owner-total="<?php echo $queueOwnerTotal; ?>"
+                            data-queue-owner-ahead="<?php echo $queueOwnerAhead; ?>"
+                            data-queue-global-position="<?php echo $queueGlobalPosition; ?>"
+                            data-queue-global-total="<?php echo $queueGlobalTotal; ?>"
+                            data-queue-global-ahead="<?php echo $queueGlobalAhead; ?>"
                             data-created-at="<?php echo $createdAtTs ?: ''; ?>"
                             data-created-at-raw="<?php echo htmlspecialchars($createdAtRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
                             data-created-at-human="<?php echo htmlspecialchars($createdAtHuman, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
@@ -454,11 +475,24 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                      data-level1-enabled="<?php echo $promotionLevelFlags['level1'] ? '1' : '0'; ?>"
                                      data-level2-enabled="<?php echo $promotionLevelFlags['level2'] ? '1' : '0'; ?>"
                                      data-level3-enabled="<?php echo $promotionLevelFlags['level3'] ? '1' : '0'; ?>"
-                                     data-crowd-enabled="<?php echo $promotionCrowdEnabled ? '1' : '0'; ?>">
+                                     data-crowd-enabled="<?php echo $promotionCrowdEnabled ? '1' : '0'; ?>"
+                                     data-queue-active="<?php echo $queueActive ? '1' : '0'; ?>"
+                                     data-queue-owner-position="<?php echo $queueOwnerPosition; ?>"
+                                     data-queue-owner-total="<?php echo $queueOwnerTotal; ?>"
+                                     data-queue-owner-ahead="<?php echo $queueOwnerAhead; ?>"
+                                     data-queue-global-position="<?php echo $queueGlobalPosition; ?>"
+                                     data-queue-global-total="<?php echo $queueGlobalTotal; ?>"
+                                     data-queue-global-ahead="<?php echo $queueGlobalAhead; ?>">
                                     <div class="promotion-status-top <?php echo $promotionStatus === 'completed' ? 'd-none' : ''; ?>">
                                         <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                                         <span class="promotion-status-label ms-1"><?php echo htmlspecialchars($promotionStatusLabel); ?></span>
                                         <span class="promotion-progress-count ms-1 <?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '' : 'd-none'; ?>"><?php echo ($promotionTarget > 0 && $promotionStatus !== 'completed') ? '(' . $promotionDone . ' / ' . $promotionTarget . ')' : ''; ?></span>
+                                        <span class="badge bg-warning-subtle text-warning-emphasis ms-2 <?php echo $queueBadgeVisible ? '' : 'd-none'; ?>"
+                                              data-queue-badge
+                                              data-bs-toggle="tooltip"
+                                              <?php echo $queueBadgeTooltip !== '' ? 'title="' . htmlspecialchars($queueBadgeTooltip) . '"' : ''; ?>>
+                                            <?php echo htmlspecialchars($queueBadgeText); ?>
+                                        </span>
                                     </div>
                                     <div class="promotion-progress-visual mt-2 <?php echo $promotionActive ? '' : 'd-none'; ?>">
                                         <?php if ($promotionLevelFlags['level1']): ?>

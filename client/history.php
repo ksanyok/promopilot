@@ -162,15 +162,15 @@ if ($q !== '') {
 $sql .= " ORDER BY p.created_at DESC, p.id DESC";
 
 if ($stmt = $conn->prepare($sql)) {
-  $bind = [];
-  $bind[] = &$types;
-  foreach ($params as $k => $param) {
-    $bind[] = &$params[$k];
-  }
-  call_user_func_array([$stmt, 'bind_param'], $bind);
-  $stmt->execute();
-  if ($pubRes = $stmt->get_result()) {
-    while ($row = $pubRes->fetch_assoc()) { $publications[] = $row; }
+  try {
+    pp_stmt_bind_safe_array($stmt, $types, $params);
+    if ($stmt->execute()) {
+      if ($pubRes = $stmt->get_result()) {
+        while ($row = $pubRes->fetch_assoc()) { $publications[] = $row; }
+      }
+    }
+  } catch (Throwable $bindError) {
+    error_log('client/history bind failed: ' . $bindError->getMessage());
   }
   $stmt->close();
 }

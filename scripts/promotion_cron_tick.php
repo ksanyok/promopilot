@@ -87,9 +87,19 @@ foreach ($runIds as $runId) {
 
 $crowdLaunched = pp_promotion_launch_crowd_worker(null, true);
 
+// Heal stuck promotion nodes before advancing the queue.
+$recoveryStats = ['runs' => 0, 'candidates' => 0];
+try {
+    $recoveryStats = pp_promotion_recover_overdue_nodes(900, 80);
+} catch (Throwable $e) {
+    pp_promotion_log('promotion.cron.recover_error', ['error' => $e->getMessage()]);
+}
+
 // Drive publications queue in the background as part of the cron tick.
 // This ensures enqueued publications progress even without any web requests.
+$watchdogStats = ['released' => 0, 'failed' => 0, 'checked' => 0];
 try {
+    $watchdogStats = pp_release_stuck_publications();
     $batch = max(1, min(50, (pp_get_max_concurrent_jobs() * 5)));
     @pp_run_queue_worker($batch);
 } catch (Throwable $e) {
@@ -104,6 +114,11 @@ pp_promotion_log('promotion.cron.tick', [
     'max_runs' => $maxRuns,
     'pub_queued' => $pubQueued,
     'pub_running' => $pubRunning,
+    'recovery_runs' => $recoveryStats['runs'] ?? 0,
+    'recovery_candidates' => $recoveryStats['candidates'] ?? 0,
+    'pub_released' => $watchdogStats['released'] ?? 0,
+    'pub_failed' => $watchdogStats['failed'] ?? 0,
+    'pub_checked' => $watchdogStats['checked'] ?? 0,
 ]);
 
 exit(0);

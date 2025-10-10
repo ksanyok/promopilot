@@ -28,6 +28,72 @@ require_once __DIR__ . '/publication_queue.php'; // Publication queue processing
 require_once __DIR__ . '/update.php';          // Version and update checks
 require_once __DIR__ . '/schema_bootstrap.php'; // Schema migrations bootstrap
 
+if (!function_exists('pp_stmt_bind_safe_array')) {
+    /**
+     * Безопасная обёртка над mysqli_stmt::bind_param с валидацией количества аргументов.
+     *
+     * @throws InvalidArgumentException при несовпадении типов и параметров
+     * @throws RuntimeException при ошибке bind_param
+     */
+    function pp_stmt_bind_safe_array(mysqli_stmt $stmt, string $types, array &$params): void {
+        $types = (string)$types;
+        $expected = strlen($types);
+        $actual = count($params);
+
+        if ($types === '') {
+            if ($actual > 0) {
+                $message = sprintf('bind_param mismatch: empty types string, but %d params provided', $actual);
+                error_log($message);
+                throw new InvalidArgumentException($message);
+            }
+            return;
+        }
+
+        if ($expected !== $actual) {
+            $origin = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+            $location = isset($origin[1]['file'], $origin[1]['line'])
+                ? ($origin[1]['file'] . ':' . $origin[1]['line'])
+                : 'unknown';
+            $message = sprintf(
+                'bind_param mismatch: expected %d params for types "%s", got %d (at %s)',
+                $expected,
+                $types,
+                $actual,
+                $location
+            );
+            error_log($message);
+            throw new InvalidArgumentException($message);
+        }
+
+        $bindArgs = [$types];
+        foreach ($params as $idx => &$value) {
+            $bindArgs[] = &$params[$idx];
+        }
+
+        if (@call_user_func_array([$stmt, 'bind_param'], $bindArgs) === false) {
+            $error = $stmt->error;
+            $message = 'bind_param execution failed' . ($error !== '' ? (': ' . $error) : '');
+            error_log($message);
+            throw new RuntimeException($message);
+        }
+    }
+}
+
+if (!function_exists('pp_stmt_bind_safe')) {
+    /**
+     * Вариативная версия безопасной обёртки над bind_param.
+     *
+     * @throws InvalidArgumentException|RuntimeException
+     */
+    function pp_stmt_bind_safe(mysqli_stmt $stmt, string $types, ...$params): void {
+        if ($types === '' && count($params) === 0) {
+            return;
+        }
+        $args = $params;
+        pp_stmt_bind_safe_array($stmt, $types, $args);
+    }
+}
+
 // Load translations when not RU
 if ($current_lang != 'ru') {
     $langFile = PP_ROOT_PATH . '/lang/' . basename($current_lang) . '.php';

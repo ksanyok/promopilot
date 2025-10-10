@@ -43,6 +43,16 @@ if (!function_exists('pp_promotion_resolve_language')) {
     }
 }
 
+if (!function_exists('pp_promotion_get_max_active_runs_per_project')) {
+    function pp_promotion_get_max_active_runs_per_project(): int {
+        $default = 1;
+        $configured = (int)get_setting('promotion_max_active_runs_per_project', (string)$default);
+        if ($configured < 1) { $configured = 1; }
+        if ($configured > 5) { $configured = 5; }
+        return $configured;
+    }
+}
+
 if (!function_exists('pp_promotion_launch_worker')) {
     function pp_promotion_launch_worker(?int $runId = null, bool $allowFallback = true): bool {
         $script = PP_ROOT_PATH . '/scripts/promotion_worker.php';

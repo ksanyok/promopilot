@@ -111,6 +111,8 @@ $settings = [
     'promotion_level2_enabled' => '1',
     'promotion_level3_enabled' => '0',
     'promotion_crowd_enabled' => '1',
+    'promotion_max_active_runs_per_project' => '1',
+    'publication_max_jobs_per_project' => '1',
 ];
 // Defaults for new settings
 $settings += [
@@ -155,6 +157,13 @@ $settings['promotion_level1_count'] = (string)max(1, (int)($settings['promotion_
 $settings['promotion_level2_per_level1'] = (string)max(1, (int)($settings['promotion_level2_per_level1'] ?? ($promoDefaults['level2_per_level1'] ?? 10)));
 $settings['promotion_level3_per_level2'] = (string)max(1, (int)($settings['promotion_level3_per_level2'] ?? ($promoDefaults['level3_per_level2'] ?? 5)));
 $settings['promotion_crowd_per_article'] = (string)max(0, (int)($settings['promotion_crowd_per_article'] ?? ($promoDefaults['crowd_per_article'] ?? 0)));
+
+$maxConcurrentJobsSetting = pp_get_max_concurrent_jobs();
+if (!is_int($maxConcurrentJobsSetting) || $maxConcurrentJobsSetting < 1) {
+    $maxConcurrentJobsSetting = 1;
+}
+$settings['promotion_max_active_runs_per_project'] = (string)max(1, min($maxConcurrentJobsSetting, (int)($settings['promotion_max_active_runs_per_project'] ?? 1)));
+$settings['publication_max_jobs_per_project'] = (string)max(1, min($maxConcurrentJobsSetting, (int)($settings['publication_max_jobs_per_project'] ?? 1)));
 
 
 // Получить пользователей

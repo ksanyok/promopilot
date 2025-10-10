@@ -25,6 +25,16 @@ if (!function_exists('pp_get_publication_max_attempts')) {
         return $value;
     }
 }
+if (!function_exists('pp_get_publication_max_per_project')) {
+    function pp_get_publication_max_per_project(): int {
+        $global = pp_get_max_concurrent_jobs();
+        $default = max(1, min($global, 2));
+        $value = (int)get_setting('publication_max_jobs_per_project', (string)$default);
+        if ($value < 1) { $value = 1; }
+        if ($value > $global) { $value = $global; }
+        return $value;
+    }
+}
 if (!function_exists('pp_release_stuck_publications')) {
     function pp_release_stuck_publications(?mysqli $sharedConn = null): array {
         $stats = ['released' => 0, 'failed' => 0, 'checked' => 0];
@@ -127,16 +137,63 @@ if (!function_exists('pp_count_running_jobs')) {
 if (!function_exists('pp_claim_next_publication_job')) {
     function pp_claim_next_publication_job(): ?int {
         try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
-        if (!$conn) return null; $jobId = null; $id = null;
-    if ($res = @$conn->query("SELECT id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 1")) {
-            if ($row = $res->fetch_assoc()) { $id = (int) $row['id']; } $res->free();
+        if (!$conn) return null;
+        $jobId = null;
+        $selected = null;
+        $maxPerProject = max(1, pp_get_publication_max_per_project());
+        $runningCounts = [];
+        if ($res = @$conn->query("SELECT project_id, COUNT(*) AS c FROM publications WHERE status = 'running' GROUP BY project_id")) {
+            while ($row = $res->fetch_assoc()) {
+                $runningCounts[(int)($row['project_id'] ?? 0)] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
         }
-        if ($id) {
-            $stmt = $conn->prepare("UPDATE publications SET status = 'running', started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ? AND status = 'queued' LIMIT 1");
-            if ($stmt) { $stmt->bind_param('i', $id); $stmt->execute(); if ($stmt->affected_rows === 1) { $jobId = $id; } $stmt->close(); }
-            if ($jobId) { @$conn->query('UPDATE publication_queue SET status=\'running\' WHERE publication_id = ' . (int)$jobId); }
+        $queuedSql = "SELECT id, project_id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 50";
+        $skipped = [];
+        if ($res = @$conn->query($queuedSql)) {
+            while ($row = $res->fetch_assoc()) {
+                $projectId = (int)($row['project_id'] ?? 0);
+                if ($projectId > 0) {
+                    $runningForProject = $runningCounts[$projectId] ?? 0;
+                    if ($runningForProject >= $maxPerProject) {
+                        $skipped[$projectId] = $runningForProject;
+                        continue;
+                    }
+                    $runningCounts[$projectId] = $runningForProject + 1;
+                }
+                $selected = $row;
+                break;
+            }
+            $res->free();
         }
-        $conn->close(); return $jobId;
+        if (!$selected) {
+            if (!empty($skipped)) {
+                static $lastCapacityLog = 0;
+                $now = time();
+                if ($now - $lastCapacityLog > 30) {
+                    $lastCapacityLog = $now;
+                    pp_promotion_log('promotion.pubqueue.capacity_wait', [
+                        'projects' => array_keys($skipped),
+                        'max_per_project' => $maxPerProject,
+                    ]);
+                }
+            }
+            $conn->close();
+            return null;
+        }
+        $id = (int)$selected['id'];
+        $stmt = $conn->prepare("UPDATE publications SET status = 'running', started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ? AND status = 'queued' LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('i', $id);
+            $stmt->execute();
+            if ($stmt->affected_rows === 1) {
+                $jobId = $id;
+                @$conn->query('UPDATE publication_queue SET status=\'running\' WHERE publication_id = ' . (int)$jobId);
+            }
+            $stmt->close();
+        }
+        $conn->close();
+        return $jobId;
     }
 }
 
@@ -354,12 +411,81 @@ if (!function_exists('pp_process_publication_job')) {
         $verificationPayload = is_array($result['verification'] ?? null) ? $result['verification'] : [];
         $verificationResult = pp_verify_published_content($publishedUrl, $verificationPayload, $job);
         $verificationStatus = (string)($verificationResult['status'] ?? 'skipped');
+        $verificationAttempts = 1;
+        $transientReasons = ['FETCH_FAILED', 'LINK_MISSING', 'FETCH_ERROR', 'FETCH_TIMEOUT'];
+        $reasonCode = strtoupper((string)($verificationResult['reason'] ?? ''));
+        if (in_array($verificationStatus, ['failed', 'error'], true) && in_array($reasonCode, $transientReasons, true)) {
+            $verificationAttempts++;
+            if (function_exists('usleep')) { @usleep(500000); }
+            $jobRetry = $job;
+            $jobRetry['_verification_retry'] = true;
+            $retryResult = pp_verify_published_content($publishedUrl, $verificationPayload, $jobRetry);
+            if (is_array($retryResult) && !empty($retryResult)) {
+                $verificationResult = $retryResult;
+                $verificationStatus = (string)($verificationResult['status'] ?? $verificationStatus);
+                $reasonCode = strtoupper((string)($verificationResult['reason'] ?? $reasonCode));
+            }
+            if (function_exists('pp_promotion_log')) {
+                pp_promotion_log('promotion.publication_verification_retry', [
+                    'publication_id' => $pubId,
+                    'project_id' => $projectId,
+                    'attempts' => $verificationAttempts,
+                    'status' => $verificationStatus,
+                    'reason' => $reasonCode,
+                ]);
+            }
+        }
+        $transientFailure = in_array($verificationStatus, ['failed', 'error'], true) && in_array($reasonCode, $transientReasons, true);
         $expectedLink = trim((string)($verificationPayload['linkUrl'] ?? $job['url'] ?? ''));
         $expectedSampleRaw = (string)($verificationPayload['textSample'] ?? '');
         $expectedSample = $expectedSampleRaw !== '' ? (function_exists('mb_substr') ? mb_substr($expectedSampleRaw, 0, 320, 'UTF-8') : substr($expectedSampleRaw, 0, 320)) : '';
-        $verificationStore = ['result' => $verificationResult, 'expected' => ['link' => $expectedLink, 'anchor' => $verificationPayload['anchorText'] ?? $job['anchor'] ?? '', 'supports_link' => $verificationResult['supports_link'] ?? ($verificationPayload['supportsLinkCheck'] ?? true), 'supports_text' => $verificationResult['supports_text'] ?? ($verificationPayload['supportsTextCheck'] ?? ($expectedSample !== '')), 'text_sample' => $expectedSample, ], 'checked_at' => gmdate('c'), ];
+        $verificationStore = [
+            'result' => $verificationResult,
+            'expected' => [
+                'link' => $expectedLink,
+                'anchor' => $verificationPayload['anchorText'] ?? $job['anchor'] ?? '',
+                'supports_link' => $verificationResult['supports_link'] ?? ($verificationPayload['supportsLinkCheck'] ?? true),
+                'supports_text' => $verificationResult['supports_text'] ?? ($verificationPayload['supportsTextCheck'] ?? ($expectedSample !== '')),
+                'text_sample' => $expectedSample,
+            ],
+            'checked_at' => gmdate('c'),
+            'attempts' => $verificationAttempts,
+        ];
+        if ($transientFailure) {
+            $verificationStore['transient'] = true;
+            $verificationStore['reason'] = $reasonCode;
+        }
         $verificationJson = json_encode($verificationStore, JSON_UNESCAPED_UNICODE); if ($verificationJson === false) { $verificationJson = '{}'; }
-        $finalStatus = 'success'; $errorMsg = null; switch ($verificationStatus) { case 'success': $finalStatus = 'success'; break; case 'partial': $finalStatus = 'partial'; break; case 'failed': case 'error': $finalStatus = 'failed'; $reasonCode = strtoupper((string)($verificationResult['reason'] ?? 'FAILED')); $errorMsg = 'VERIFICATION_' . $reasonCode; break; case 'skipped': default: $finalStatus = 'success'; break; }
+        $finalStatus = 'success'; $errorMsg = null;
+        switch ($verificationStatus) {
+            case 'success':
+                $finalStatus = 'success';
+                break;
+            case 'partial':
+                $finalStatus = 'partial';
+                break;
+            case 'failed':
+            case 'error':
+                $finalStatus = 'failed';
+                $reasonCode = $reasonCode !== '' ? $reasonCode : 'FAILED';
+                $errorMsg = 'VERIFICATION_' . $reasonCode;
+                break;
+            case 'skipped':
+            default:
+                $finalStatus = 'success';
+                break;
+        }
+        if ($transientFailure && $finalStatus === 'failed') {
+            $finalStatus = 'partial';
+            if (function_exists('pp_promotion_log')) {
+                pp_promotion_log('promotion.publication_verification_transient', [
+                    'publication_id' => $pubId,
+                    'project_id' => $projectId,
+                    'reason' => $reasonCode,
+                    'attempts' => $verificationAttempts,
+                ]);
+            }
+        }
         $up = $conn->prepare('UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, log_file = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1');
         if ($up) {
             $statusParam = $finalStatus;

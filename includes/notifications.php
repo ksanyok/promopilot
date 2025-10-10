@@ -201,13 +201,17 @@ if (!function_exists('pp_notification_update_user_settings')) {
                 $del = $conn->prepare($sql);
                 if ($del) {
                     $types = 'i' . str_repeat('s', count($validKeys));
-                    $userIdRef = $userId;
-                    $bindParams = [$types, &$userIdRef];
-                    foreach ($validKeys as $idx => $validKey) {
-                        $bindParams[] = &$validKeys[$idx];
+                    $params = [$userId];
+                    foreach ($validKeys as $validKey) {
+                        $params[] = $validKey;
                     }
-                    call_user_func_array([$del, 'bind_param'], $bindParams);
-                    $del->execute();
+                    try {
+                        pp_stmt_bind_safe_array($del, $types, $params);
+                        $del->execute();
+                    } catch (Throwable $bindError) {
+                        error_log('notifications bind failed: ' . $bindError->getMessage());
+                        $ok = false;
+                    }
                     $del->close();
                 }
             }

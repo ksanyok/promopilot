@@ -6,15 +6,16 @@ if (!is_logged_in() || !is_admin()) {
 }
 
 if (!function_exists('pp_admin_bind_params')) {
-    function pp_admin_bind_params(mysqli_stmt $stmt, string $types, array $params): void {
-        if ($types === '' || empty($params)) {
+    function pp_admin_bind_params(mysqli_stmt $stmt, string $types, array &$params): void {
+        if ($types === '') {
+            if (!empty($params)) {
+                $message = sprintf('bind_param mismatch in pp_admin_bind_params: empty types string with %d params', count($params));
+                error_log($message);
+                throw new InvalidArgumentException($message);
+            }
             return;
         }
-        $bindParams = [$types];
-        foreach ($params as $idx => $value) {
-            $bindParams[] = &$params[$idx];
-        }
-        call_user_func_array([$stmt, 'bind_param'], $bindParams);
+        pp_stmt_bind_safe_array($stmt, $types, $params);
     }
 }
 

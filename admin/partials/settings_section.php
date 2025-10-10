@@ -64,6 +64,41 @@
                 </div>
 
                 <div class="settings-field settings-field--wide">
+                    <?php $queueCap = isset($maxConcurrentJobsSetting) ? max(1, (int)$maxConcurrentJobsSetting) : 1; ?>
+                    <label class="form-label"><?php echo __('Ограничения продвижения'); ?></label>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <label class="form-label" for="promotionMaxRunsPerProject"><?php echo __('Одновременных запусков на проект'); ?></label>
+                            <input type="number"
+                                   name="promotion_max_active_runs_per_project"
+                                   id="promotionMaxRunsPerProject"
+                                   class="form-control"
+                                   min="1"
+                                   max="<?php echo (int)$queueCap; ?>"
+                                   value="<?php echo htmlspecialchars($settings['promotion_max_active_runs_per_project']); ?>"
+                                   required>
+                            <div class="form-text">
+                                <?php echo sprintf(__('Не более %d. Ограничивает, сколько каскадов выполняются параллельно для одного клиента.'), (int)$queueCap); ?>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="publicationMaxJobsPerProject"><?php echo __('Одновременных публикаций на проект'); ?></label>
+                            <input type="number"
+                                   name="publication_max_jobs_per_project"
+                                   id="publicationMaxJobsPerProject"
+                                   class="form-control"
+                                   min="1"
+                                   max="<?php echo (int)$queueCap; ?>"
+                                   value="<?php echo htmlspecialchars($settings['publication_max_jobs_per_project']); ?>"
+                                   required>
+                            <div class="form-text">
+                                <?php echo sprintf(__('Ограничивает число публикаций из очереди, работающих параллельно. Не может превышать %d.'), (int)$queueCap); ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-field settings-field--wide">
                     <div class="settings-field__header">
                         <span class="settings-field__title"><?php echo __('Google OAuth'); ?></span>
                         <div class="pp-switch">

@@ -51,6 +51,8 @@ if (!function_exists('pp_admin_setting_keys')) {
             'promotion_level2_enabled',
             'promotion_level3_enabled',
             'promotion_crowd_enabled',
+            'promotion_max_active_runs_per_project',
+            'publication_max_jobs_per_project',
             // Referral program
             'referral_enabled',
             'referral_default_percent',
@@ -87,6 +89,12 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
         $level2PerLevel1 = max(1, min(500, (int)($post['promotion_level2_per_level1'] ?? 10)));
         $level3PerLevel2 = max(1, min(500, (int)($post['promotion_level3_per_level2'] ?? 5)));
         $crowdPerArticle = max(0, min(5000, (int)($post['promotion_crowd_per_article'] ?? 100)));
+        $maxConcurrentJobs = pp_get_max_concurrent_jobs();
+        if (!is_int($maxConcurrentJobs) || $maxConcurrentJobs < 1) {
+            $maxConcurrentJobs = 1;
+        }
+        $promotionMaxRuns = max(1, min($maxConcurrentJobs, (int)($post['promotion_max_active_runs_per_project'] ?? 1)));
+        $publicationMaxPerProject = max(1, min($maxConcurrentJobs, (int)($post['publication_max_jobs_per_project'] ?? 1)));
 
         $pairs = [
             ['currency', $currency],
@@ -111,6 +119,8 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
             ['promotion_level2_enabled', isset($post['promotion_level2_enabled']) ? '1' : '0'],
             ['promotion_level3_enabled', isset($post['promotion_level3_enabled']) ? '1' : '0'],
             ['promotion_crowd_enabled', isset($post['promotion_crowd_enabled']) ? '1' : '0'],
+            ['promotion_max_active_runs_per_project', (string)$promotionMaxRuns],
+            ['publication_max_jobs_per_project', (string)$publicationMaxPerProject],
             // Referral program settings
             ['referral_enabled', isset($post['referral_enabled']) ? '1' : '0'],
             ['referral_default_percent', number_format(max(0, min(100, (float)str_replace(',', '.', (string)($post['referral_default_percent'] ?? '5')))), 2, '.', '')],

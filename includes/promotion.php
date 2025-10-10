@@ -1153,6 +1153,119 @@ if (!function_exists('pp_promotion_process_run')) {
     }
 }
 
+if (!function_exists('pp_promotion_pick_next_run')) {
+    function pp_promotion_pick_next_run(mysqli $conn): ?array {
+        $statusPriority = [
+            'level1_active',
+            'pending_level2',
+            'level2_active',
+            'pending_level3',
+            'level3_active',
+            'pending_crowd',
+            'crowd_ready',
+            'report_ready',
+            'pending_level1',
+            'running',
+            'queued',
+        ];
+        $activeStatuses = [
+            'running',
+            'pending_level1',
+            'level1_active',
+            'pending_level2',
+            'level2_active',
+            'pending_level3',
+            'level3_active',
+            'pending_crowd',
+            'crowd_ready',
+            'report_ready',
+        ];
+        $maxPerProject = max(1, pp_promotion_get_max_active_runs_per_project());
+        $activeCounts = [];
+        if (!empty($activeStatuses)) {
+            $activeStatusParts = [];
+            foreach ($activeStatuses as $status) {
+                $activeStatusParts[] = "'" . $conn->real_escape_string($status) . "'";
+            }
+            $activeStatusSql = implode(', ', $activeStatusParts);
+            if ($activeStatusSql !== '') {
+                if ($res = @$conn->query("SELECT project_id, COUNT(*) AS c FROM promotion_runs WHERE status IN ($activeStatusSql) GROUP BY project_id")) {
+                    while ($row = $res->fetch_assoc()) {
+                        $activeCounts[(int)($row['project_id'] ?? 0)] = (int)($row['c'] ?? 0);
+                    }
+                    $res->free();
+                }
+            }
+        }
+
+        $statusParts = [];
+        foreach ($statusPriority as $status) {
+            $statusParts[] = "'" . $conn->real_escape_string($status) . "'";
+        }
+        $statusListSql = implode(', ', $statusParts);
+        $selected = null;
+        $skipped = [];
+        if ($statusListSql !== '') {
+            $sql = "SELECT * FROM promotion_runs WHERE status IN ($statusListSql) ORDER BY FIELD(status, $statusListSql), created_at ASC, id ASC LIMIT 50";
+            if ($res = @$conn->query($sql)) {
+                while ($row = $res->fetch_assoc()) {
+                    $status = (string)($row['status'] ?? '');
+                    $projectId = (int)($row['project_id'] ?? 0);
+                    $isQueued = ($status === 'queued');
+                    $activeForProject = $activeCounts[$projectId] ?? 0;
+                    if ($isQueued && $projectId > 0 && $activeForProject >= $maxPerProject) {
+                        $skipped[$projectId] = $activeForProject;
+                        continue;
+                    }
+                    $selected = $row;
+                    break;
+                }
+                $res->free();
+            }
+        }
+
+        if ($selected === null && !empty($skipped)) {
+            static $lastLogTs = 0;
+            $now = time();
+            if ($now - $lastLogTs > 30) {
+                $lastLogTs = $now;
+                pp_promotion_log('promotion.worker.capacity_wait', [
+                    'projects' => array_keys($skipped),
+                    'counts' => $skipped,
+                    'max_per_project' => $maxPerProject,
+                ]);
+            }
+        }
+
+        return $selected;
+    }
+}
+
+if (!function_exists('pp_promotion_recover_overdue_nodes')) {
+    function pp_promotion_recover_overdue_nodes(int $maxAgeSeconds = 900, int $limit = 25): array {
+        $stats = ['runs' => 0, 'candidates' => 0];
+        try { $conn = @connect_db(); } catch (Throwable $e) { return $stats; }
+        if (!$conn) { return $stats; }
+        $runIds = [];
+        $limit = max(1, (int)$limit);
+        $sql = "SELECT DISTINCT run_id FROM promotion_nodes WHERE status IN ('queued','running') ORDER BY run_id ASC LIMIT {$limit}";
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $runId = (int)($row['run_id'] ?? 0);
+                if ($runId > 0) { $runIds[] = $runId; }
+            }
+            $res->free();
+        }
+        $stats['candidates'] = count($runIds);
+        foreach ($runIds as $runId) {
+            pp_promotion_recover_stuck_nodes($conn, $runId, $maxAgeSeconds);
+            $stats['runs']++;
+        }
+        $conn->close();
+        return $stats;
+    }
+}
+
 if (!function_exists('pp_promotion_worker')) {
     function pp_promotion_worker(?int $specificRunId = null, int $maxIterations = 20): void {
         if (function_exists('session_write_close')) { @session_write_close(); }
@@ -1184,11 +1297,7 @@ if (!function_exists('pp_promotion_worker')) {
                 }
                 $specificRunId = null;
             } else {
-                $sql = "SELECT * FROM promotion_runs WHERE status IN ('queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready') ORDER BY id ASC LIMIT 1";
-                if ($res = @$conn->query($sql)) {
-                    $run = $res->fetch_assoc();
-                    $res->free();
-                }
+                $run = pp_promotion_pick_next_run($conn);
             }
             if (!$run) { break; }
             pp_promotion_process_run($conn, $run);
@@ -1352,6 +1461,18 @@ if (!function_exists('pp_promotion_get_status')) {
         $linkIdResolved = isset($run['link_id']) ? (int)$run['link_id'] : ($linkId ?? 0);
         if (!empty($run['target_url']) && $url === '') {
             $url = (string)$run['target_url'];
+        }
+        $ownerId = 0;
+        $ownerStmt = $conn->prepare('SELECT user_id FROM projects WHERE id = ? LIMIT 1');
+        if ($ownerStmt) {
+            $ownerStmt->bind_param('i', $projectId);
+            if ($ownerStmt->execute()) {
+                $ownerRow = $ownerStmt->get_result()->fetch_assoc();
+                if ($ownerRow) {
+                    $ownerId = (int)($ownerRow['user_id'] ?? 0);
+                }
+            }
+            $ownerStmt->close();
         }
 
         $settingsSnapshot = [];
@@ -1586,11 +1707,92 @@ if (!function_exists('pp_promotion_get_status')) {
         if ($crowdStats['target'] > 0) {
             $crowdStats['total'] = (int)$crowdStats['target'];
             $crowdStats['remaining'] = max(0, (int)$crowdStats['target'] - (int)$crowdStats['completed']);
-            $crowdStats['percent'] = $crowdStats['target'] > 0
-                ? (float)round(($crowdStats['completed'] / $crowdStats['target']) * 100, 1)
-                : 0.0;
+                $crowdStats['percent'] = $crowdStats['target'] > 0
+                    ? (float)round(($crowdStats['completed'] / $crowdStats['target']) * 100, 1)
+                    : 0.0;
         }
+        $queueStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+        $queueInfo = [
+            'statuses' => $queueStatuses,
+            'status_in_queue' => in_array((string)$run['status'], $queueStatuses, true),
+            'owner' => [
+                'user_id' => $ownerId,
+                'position' => 0,
+                'total' => 0,
+                'ahead' => 0,
+            ],
+            'global' => [
+                'position' => 0,
+                'total' => 0,
+                'ahead' => 0,
+            ],
+        ];
+        if ($queueInfo['status_in_queue']) {
+            $queueListSql = "'" . implode("','", $queueStatuses) . "'";
+            if ($ownerId > 0) {
+                $ownerTotalSql = "SELECT COUNT(*) AS c FROM promotion_runs pr INNER JOIN projects pj ON pj.id = pr.project_id WHERE pj.user_id = ? AND pr.status IN ($queueListSql)";
+                if ($stmt = $conn->prepare($ownerTotalSql)) {
+                    $stmt->bind_param('i', $ownerId);
+                    if ($stmt->execute()) {
+                        $row = $stmt->get_result()->fetch_assoc();
+                        if ($row) {
+                            $queueInfo['owner']['total'] = (int)($row['c'] ?? 0);
+                        }
+                    }
+                    $stmt->close();
+                }
+                $ownerAheadSql = "SELECT COUNT(*) AS c FROM promotion_runs pr INNER JOIN projects pj ON pj.id = pr.project_id WHERE pj.user_id = ? AND pr.status IN ($queueListSql) AND pr.id < ?";
+                if ($stmt = $conn->prepare($ownerAheadSql)) {
+                    $stmt->bind_param('ii', $ownerId, $runId);
+                    if ($stmt->execute()) {
+                        $row = $stmt->get_result()->fetch_assoc();
+                        if ($row) {
+                            $queueInfo['owner']['ahead'] = (int)($row['c'] ?? 0);
+                        }
+                    }
+                    $stmt->close();
+                }
+                $queueInfo['owner']['position'] = $queueInfo['owner']['ahead'] + 1;
+            }
+            $globalTotalSql = "SELECT COUNT(*) AS c FROM promotion_runs WHERE status IN ($queueListSql)";
+            if ($stmt = $conn->prepare($globalTotalSql)) {
+                if ($stmt->execute()) {
+                    $row = $stmt->get_result()->fetch_assoc();
+                    if ($row) {
+                        $queueInfo['global']['total'] = (int)($row['c'] ?? 0);
+                    }
+                }
+                $stmt->close();
+            }
+            $globalAheadSql = "SELECT COUNT(*) AS c FROM promotion_runs WHERE status IN ($queueListSql) AND id < ?";
+            if ($stmt = $conn->prepare($globalAheadSql)) {
+                $stmt->bind_param('i', $runId);
+                if ($stmt->execute()) {
+                    $row = $stmt->get_result()->fetch_assoc();
+                    if ($row) {
+                        $queueInfo['global']['ahead'] = (int)($row['c'] ?? 0);
+                    }
+                }
+                $stmt->close();
+            }
+            $queueInfo['global']['position'] = $queueInfo['global']['ahead'] + 1;
+        }
+        if ($queueInfo['owner']['total'] <= 0) {
+            $queueInfo['owner']['position'] = 0;
+            $queueInfo['owner']['ahead'] = 0;
+        }
+        if ($queueInfo['global']['total'] <= 0) {
+            $queueInfo['global']['position'] = 0;
+            $queueInfo['global']['ahead'] = 0;
+        }
+        $scheduleInfo = [
+            'start_at' => isset($run['schedule_start_at']) ? (string)$run['schedule_start_at'] : null,
+            'end_at' => isset($run['schedule_end_at']) ? (string)$run['schedule_end_at'] : null,
+            'strategy' => isset($run['schedule_strategy']) ? (string)$run['schedule_strategy'] : null,
+            'spread_seconds' => isset($run['schedule_spread_seconds']) ? (int)$run['schedule_spread_seconds'] : 0,
+        ];
         $conn->close();
+
         return [
             'ok' => true,
             'status' => (string)$run['status'],
@@ -1612,6 +1814,9 @@ if (!function_exists('pp_promotion_get_status')) {
             'updated_at' => isset($run['updated_at']) ? (string)$run['updated_at'] : null,
             'started_at' => isset($run['started_at']) ? (string)$run['started_at'] : null,
             'finished_at' => isset($run['finished_at']) ? (string)$run['finished_at'] : null,
+            'queue' => $queueInfo,
+            'schedule' => $scheduleInfo,
+            'owner_id' => $ownerId,
         ];
     }
 }

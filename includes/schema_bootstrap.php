@@ -1054,6 +1054,10 @@ function pp_run_schema_bootstrap(): void {
             `report_json` LONGTEXT NULL,
             `started_at` TIMESTAMP NULL DEFAULT NULL,
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `schedule_start_at` DATETIME NULL DEFAULT NULL,
+            `schedule_end_at` DATETIME NULL DEFAULT NULL,
+            `schedule_strategy` VARCHAR(32) NULL DEFAULT NULL,
+            `schedule_spread_seconds` INT UNSIGNED NOT NULL DEFAULT 0,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX `idx_promotion_runs_project` (`project_id`),
@@ -1078,6 +1082,10 @@ function pp_run_schema_bootstrap(): void {
         $ensureRunCol('report_json', "ADD COLUMN `report_json` LONGTEXT NULL AFTER `error`");
         $ensureRunCol('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `report_json`");
         $ensureRunCol('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $ensureRunCol('schedule_start_at', "ADD COLUMN `schedule_start_at` DATETIME NULL DEFAULT NULL AFTER `finished_at`");
+        $ensureRunCol('schedule_end_at', "ADD COLUMN `schedule_end_at` DATETIME NULL DEFAULT NULL AFTER `schedule_start_at`");
+        $ensureRunCol('schedule_strategy', "ADD COLUMN `schedule_strategy` VARCHAR(32) NULL DEFAULT NULL AFTER `schedule_end_at`");
+        $ensureRunCol('schedule_spread_seconds', "ADD COLUMN `schedule_spread_seconds` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `schedule_strategy`");
         $ensureRunCol('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
         if (pp_mysql_index_exists($conn, 'promotion_runs', 'idx_promotion_runs_status') === false) {
             @$conn->query("CREATE INDEX `idx_promotion_runs_status` ON `promotion_runs`(`status`)");

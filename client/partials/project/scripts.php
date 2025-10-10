@@ -52,6 +52,9 @@ document.addEventListener('DOMContentLoaded', function() {
         return str.slice(0, Math.max(0, limit - 1)).trimEnd() + '…';
     }
 
+    const QUEUE_LABEL_OUT = '<?php echo __('Вне очереди'); ?>';
+    const QUEUE_LABEL_GLOBAL = '<?php echo __('Общая очередь'); ?>';
+
     function statusBadgeHtml(statusKey, customLabel) {
         const key = statusKey ? String(statusKey) : '';
         const derivedLabel = customLabel && customLabel !== key ? customLabel : formatPromotionStatusLabel(key) || key;
@@ -151,6 +154,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 <span class="kv-value">${statusBadgeHtml(ctx.statusKey, ctx.statusLabel)}</span>
             </div>
         `);
+        if (ctx.queue && typeof ctx.queue === 'object') {
+            const ownerQueue = ctx.queue.owner && typeof ctx.queue.owner === 'object' ? ctx.queue.owner : {};
+            const globalQueue = ctx.queue.global && typeof ctx.queue.global === 'object' ? ctx.queue.global : {};
+            const ownerDisplay = (ctx.queue.status_in_queue && ownerQueue.total > 0 && ownerQueue.position > 0)
+                ? `${ownerQueue.position} / ${ownerQueue.total}`
+                : QUEUE_LABEL_OUT;
+            const globalDisplay = (globalQueue.total > 0 && globalQueue.position > 0)
+                ? `${globalQueue.position} / ${globalQueue.total}`
+                : (globalQueue.total > 0 ? `0 / ${globalQueue.total}` : QUEUE_LABEL_OUT);
+            summaryRows.push(`
+                <div class="promotion-report-kv">
+                    <span class="kv-label"><?php echo __('Очередь по вашим проектам'); ?></span>
+                    <span class="kv-value">${escapeHtml(ownerDisplay)}</span>
+                </div>
+            `);
+            summaryRows.push(`
+                <div class="promotion-report-kv">
+                    <span class="kv-label"><?php echo __('Общая очередь'); ?></span>
+                    <span class="kv-value">${escapeHtml(globalDisplay)}</span>
+                </div>
+            `);
+        }
         summaryRows.push(`
             <div class="promotion-report-kv">
                 <span class="kv-label"><?php echo __('Всего публикаций'); ?></span>
@@ -814,7 +839,8 @@ document.addEventListener('DOMContentLoaded', function() {
             totalPublications,
             uniqueNetworksCount,
             manualFallbackCount,
-            levelsEnabled
+            levelsEnabled,
+            queue: data.queue && typeof data.queue === 'object' ? data.queue : null
         };
         const overviewHtml = renderPromotionReportOverview(context);
         const cascadeHtml = renderPromotionReportCascade(context);
@@ -3428,14 +3454,29 @@ document.addEventListener('DOMContentLoaded', function() {
                      data-crowd-running="0"
                      data-crowd-queued="0"
                      data-crowd-failed="0"
+                     data-queue-active="0"
+                     data-queue-owner-position="0"
+                     data-queue-owner-total="0"
+                     data-queue-owner-ahead="0"
+                     data-queue-global-position="0"
+                     data-queue-global-total="0"
+                     data-queue-global-ahead="0"
                      data-level1-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level1 === false ? '0' : '1'}"
                      data-level2-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level2 ? '1' : '0'}"
                      data-level3-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.level3 ? '1' : '0'}"
-                     data-crowd-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.crowd ? '1' : '0'}">
+                     data-crowd-enabled="${PROMOTION_LEVELS_ENABLED && PROMOTION_LEVELS_ENABLED.crowd ? '1' : '0'}"
+                     data-queue-active="0"
+                     data-queue-owner-position="0"
+                     data-queue-owner-total="0"
+                     data-queue-owner-ahead="0"
+                     data-queue-global-position="0"
+                     data-queue-global-total="0"
+                     data-queue-global-ahead="0">
                     <div class="promotion-status-top">
                         <span class="promotion-status-heading"><?php echo __('Продвижение'); ?>:</span>
                         <span class="promotion-status-label ms-1"><?php echo __('Продвижение не запускалось'); ?></span>
                         <span class="promotion-progress-count ms-1 d-none"></span>
+                        <span class="badge bg-warning-subtle text-warning-emphasis ms-2 d-none" data-queue-badge data-bs-toggle="tooltip"><?php echo __('Вне очереди'); ?></span>
                     </div>
                     <div class="promotion-progress-visual mt-2 d-none">
                         ${progressLevelsMarkup}
@@ -3614,6 +3655,94 @@ document.addEventListener('DOMContentLoaded', function() {
             tr.dataset.crowdFailed = String(crowd.failed ?? 0);
             tr.dataset.crowdManual = String(crowd.manual_fallback ?? 0);
         }
+        if (data.queue && typeof data.queue === 'object') {
+            const queue = data.queue;
+            const owner = queue.owner && typeof queue.owner === 'object' ? queue.owner : {};
+            const globalQueue = queue.global && typeof queue.global === 'object' ? queue.global : {};
+            const active = queue.status_in_queue ? '1' : '0';
+            const ownerPosition = Number(owner.position ?? 0) || 0;
+            const ownerTotal = Number(owner.total ?? 0) || 0;
+            const ownerAhead = Number(owner.ahead ?? 0) || 0;
+            const globalPosition = Number(globalQueue.position ?? 0) || 0;
+            const globalTotal = Number(globalQueue.total ?? 0) || 0;
+            const globalAhead = Number(globalQueue.ahead ?? 0) || 0;
+            tr.dataset.queueActive = active;
+            tr.dataset.queueOwnerPosition = String(ownerPosition);
+            tr.dataset.queueOwnerTotal = String(ownerTotal);
+            tr.dataset.queueOwnerAhead = String(ownerAhead);
+            tr.dataset.queueGlobalPosition = String(globalPosition);
+            tr.dataset.queueGlobalTotal = String(globalTotal);
+            tr.dataset.queueGlobalAhead = String(globalAhead);
+            block.dataset.queueActive = active;
+            block.dataset.queueOwnerPosition = String(ownerPosition);
+            block.dataset.queueOwnerTotal = String(ownerTotal);
+            block.dataset.queueOwnerAhead = String(ownerAhead);
+            block.dataset.queueGlobalPosition = String(globalPosition);
+            block.dataset.queueGlobalTotal = String(globalTotal);
+            block.dataset.queueGlobalAhead = String(globalAhead);
+            const queueBadge = block.querySelector('[data-queue-badge]');
+            if (queueBadge) {
+                if (active === '1' && ownerTotal > 0 && ownerPosition > 0) {
+                    queueBadge.classList.remove('d-none');
+                    queueBadge.textContent = `${ownerPosition} / ${ownerTotal}`;
+                } else {
+                    queueBadge.classList.add('d-none');
+                    queueBadge.textContent = QUEUE_LABEL_OUT;
+                }
+                const tooltip = (globalTotal > 0 && globalPosition > 0)
+                    ? `${QUEUE_LABEL_GLOBAL}: ${globalPosition} / ${globalTotal}`
+                    : '';
+                if (tooltip) {
+                    queueBadge.setAttribute('title', tooltip);
+                    queueBadge.setAttribute('data-bs-original-title', tooltip);
+                    if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+                        const instance = window.bootstrap.Tooltip.getInstance(queueBadge);
+                        if (instance) {
+                            instance.setContent({ '.tooltip-inner': tooltip });
+                        } else {
+                            new window.bootstrap.Tooltip(queueBadge);
+                        }
+                    }
+                } else {
+                    queueBadge.removeAttribute('title');
+                    queueBadge.removeAttribute('data-bs-original-title');
+                    if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+                        const instance = window.bootstrap.Tooltip.getInstance(queueBadge);
+                        if (instance) {
+                            instance.dispose();
+                        }
+                    }
+                }
+            }
+        } else {
+            tr.dataset.queueActive = '0';
+            tr.dataset.queueOwnerPosition = '0';
+            tr.dataset.queueOwnerTotal = '0';
+            tr.dataset.queueOwnerAhead = '0';
+            tr.dataset.queueGlobalPosition = '0';
+            tr.dataset.queueGlobalTotal = '0';
+            tr.dataset.queueGlobalAhead = '0';
+            block.dataset.queueActive = '0';
+            block.dataset.queueOwnerPosition = '0';
+            block.dataset.queueOwnerTotal = '0';
+            block.dataset.queueOwnerAhead = '0';
+            block.dataset.queueGlobalPosition = '0';
+            block.dataset.queueGlobalTotal = '0';
+            block.dataset.queueGlobalAhead = '0';
+            const queueBadge = block.querySelector('[data-queue-badge]');
+            if (queueBadge) {
+                queueBadge.classList.add('d-none');
+                queueBadge.textContent = QUEUE_LABEL_OUT;
+                queueBadge.removeAttribute('title');
+                queueBadge.removeAttribute('data-bs-original-title');
+                if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+                    const instance = window.bootstrap.Tooltip.getInstance(queueBadge);
+                    if (instance) {
+                        instance.dispose();
+                    }
+                }
+            }
+        }
 
         const createdTs = parseTimestampToSeconds(data.created_at ?? data.createdAt ?? data.createdAtSeconds ?? 0);
         const startedTs = parseTimestampToSeconds(data.started_at ?? data.startedAt ?? data.startedAtSeconds ?? 0);
@@ -3759,6 +3888,15 @@ document.addEventListener('DOMContentLoaded', function() {
             failed: read('crowdFailed'),
             manual_fallback: read('crowdManual')
         };
+        const queue = {
+            active: (tr.dataset.queueActive || '') === '1',
+            owner_position: read('queueOwnerPosition'),
+            owner_total: read('queueOwnerTotal'),
+            owner_ahead: read('queueOwnerAhead'),
+            global_position: read('queueGlobalPosition'),
+            global_total: read('queueGlobalTotal'),
+            global_ahead: read('queueGlobalAhead')
+        };
         const targetRaw = read('promotionTarget');
         const totalRaw = read('promotionTotal');
         return {
@@ -3769,7 +3907,8 @@ document.addEventListener('DOMContentLoaded', function() {
             target: targetRaw > 0 ? targetRaw : totalRaw,
             done: read('promotionDone'),
             levels,
-            crowd
+            crowd,
+            queue
         };
     }
 
@@ -3805,6 +3944,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 queued: snapshot.crowd.queued,
                 failed: snapshot.crowd.failed,
                 manual_fallback: snapshot.crowd.manual_fallback
+            };
+        }
+        if (snapshot.queue) {
+            payload.queue = {
+                status_in_queue: snapshot.queue.active,
+                owner: {
+                    position: snapshot.queue.owner_position,
+                    total: snapshot.queue.owner_total,
+                    ahead: snapshot.queue.owner_ahead
+                },
+                global: {
+                    position: snapshot.queue.global_position,
+                    total: snapshot.queue.global_total,
+                    ahead: snapshot.queue.global_ahead
+                }
             };
         }
         return payload;

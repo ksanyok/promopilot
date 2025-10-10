@@ -755,12 +755,12 @@ if (!function_exists('pp_crowd_links_start_check')) {
             if ($stmt) {
                 $params = array_merge([$runId], $chunk);
                 $types = str_repeat('i', count($params));
-                $bind = [$types];
-                foreach ($params as $idx => $value) {
-                    $bind[] = &$params[$idx];
+                try {
+                    pp_stmt_bind_safe_array($stmt, $types, $params);
+                    $stmt->execute();
+                } catch (Throwable $bindError) {
+                    error_log('crowd_links bind failed: ' . $bindError->getMessage());
                 }
-                call_user_func_array([$stmt, 'bind_param'], $bind);
-                $stmt->execute();
                 $stmt->close();
             }
         }
