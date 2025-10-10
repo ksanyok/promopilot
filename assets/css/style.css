@@ -2566,6 +2566,40 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .hero-metrics .metric-badge span { font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
 
 .hero-image { max-width: 100%; height: auto; }
+.hero-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; background: linear-gradient(135deg, rgba(96,165,250,.28), rgba(34,211,238,.2)); border: 1px solid rgba(148,163,184,.32); color: var(--text); font-size: .8rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; margin-bottom: 1.2rem; box-shadow: 0 10px 32px -18px rgba(96,165,250,.65); }
+
+.auth-divider { position: relative; text-align: center; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.auth-divider::before, .auth-divider::after { content: ""; position: absolute; top: 50%; width: 28%; height: 1px; background: var(--border); }
+.auth-divider::before { left: 0; }
+.auth-divider::after { right: 0; }
+.auth-divider span { background: var(--bg-2); padding: 0 .75rem; }
+
+.btn-google { display: inline-flex; align-items: center; justify-content: center; gap: 10px; border-radius: var(--radius-xs); background: linear-gradient(135deg, rgba(250, 128, 114, .22), rgba(234, 67, 53, .36)); border: 1px solid rgba(234, 67, 53, .48); color: var(--text); font-weight: 600; padding: .75rem 1.1rem; transition: transform .15s ease, filter .2s ease; box-shadow: 0 14px 32px -20px rgba(234, 67, 53, .8); }
+.btn-google:hover { filter: brightness(1.1); transform: translateY(-1px); color: #fff; }
+.btn-google:active { transform: translateY(1px) scale(.99); }
+.btn-google i { color: #fff; font-size: 1.05rem; }
+
+.value-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.value-card { background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1.1rem 1.25rem; display: grid; gap: .4rem; box-shadow: 0 8px 24px -18px rgba(15,23,42,.66); }
+.value-card i { font-size: 1.4rem; color: var(--accent); }
+
+.stat-card { background: linear-gradient(165deg, rgba(59,130,246,.18), rgba(17,24,39,.86)); border: 1px solid rgba(148,163,184,.32); border-radius: var(--radius); padding: 1.8rem; box-shadow: 0 24px 48px -28px rgba(15,23,42,.85); text-align: left; }
+.stat-card__grid { display: grid; grid-template-columns: repeat(1, minmax(0,1fr)); gap: 1.2rem; }
+.stat-item { display: grid; gap: .3rem; }
+.stat-item .label { text-transform: uppercase; letter-spacing: .14em; font-size: .7rem; color: color-mix(in srgb, var(--muted) 88%, white 12%); }
+.stat-item strong { font-size: 1.45rem; letter-spacing: .04em; font-weight: 700; }
+.stat-item .hint { font-size: .8rem; color: var(--muted); }
+
+.testimonial-card { background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.7rem; box-shadow: 0 18px 38px -28px rgba(8,12,24,.7); position: relative; overflow: hidden; }
+.testimonial-card::before { content: "\201C"; position: absolute; font-size: 6rem; color: rgba(148,163,184,.16); top: -.2rem; left: 1rem; font-family: "Georgia", serif; }
+.testimonial-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.1rem; }
+.testimonial-photo { width: 60px; height: 60px; border-radius: 999px; object-fit: cover; border: 2px solid rgba(255,255,255,.2); box-shadow: 0 10px 20px -18px rgba(15,23,42,.9); }
+.testimonial-quote { margin-bottom: 0; position: relative; font-size: .98rem; color: color-mix(in srgb, var(--text) 92%, white 8%); line-height: 1.7; }
+
+.faq-accordion .accordion-item { background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.015)); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.faq-accordion .accordion-button { background: transparent; color: var(--text); font-weight: 600; }
+.faq-accordion .accordion-button:not(.collapsed) { color: var(--primary); box-shadow: inset 0 -1px 0 rgba(255,255,255,.05); }
+.faq-accordion .accordion-body { color: var(--muted); }
 
 /* Auth panel */
 .auth-panel { background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid var(--border); box-shadow: var(--shadow); }
@@ -2608,11 +2642,13 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
   .landing-hero { margin-bottom: 3rem; }
   .landing-section { margin-top: 3.5rem; }
   .auth-panel { margin-left: auto; margin-right: auto; max-width: 520px; }
+  .value-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 576px) {
   .hero-metrics .metric-badge { min-width: 46%; flex: 1 1 46%; }
   .hero-title { font-size: clamp(1.9rem, 7vw, 2.4rem); }
   .landing-container { padding-left: 14px; padding-right: 14px; }
+  .hero-pill { letter-spacing: .16em; font-size: .72rem; }
 }
 
 /* Light theme adjustments */
@@ -2621,6 +2657,11 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 :root[data-theme="light"] .process-steps .step-item { background: linear-gradient(160deg, rgba(0,0,0,.05), rgba(0,0,0,.015)); }
 :root[data-theme="light"] .cta-card { background: radial-gradient(120% 160% at 0% 0%, rgba(59,130,246,.25), transparent 60%), radial-gradient(120% 160% at 100% 0%, rgba(6,182,212,.22), transparent 60%), linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.78)); }
 :root[data-theme="light"] .note-section .p-4 { background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.9)); }
+:root[data-theme="light"] .hero-pill { background: linear-gradient(135deg, rgba(59,130,246,.72), rgba(14,165,233,.52)); color: #0b1220; border-color: rgba(59,130,246,.65); }
+:root[data-theme="light"] .btn-google { background: linear-gradient(135deg, rgba(234, 67, 53, .9), rgba(255, 152, 0, .82)); color: #fff; border-color: rgba(234, 67, 53, .85); }
+:root[data-theme="light"] .value-card { background: linear-gradient(180deg, rgba(0,0,0,.05), rgba(0,0,0,.015)); }
+:root[data-theme="light"] .stat-card { background: linear-gradient(165deg, rgba(59,130,246,.18), rgba(255,255,255,.92)); color: #111827; }
+:root[data-theme="light"] .testimonial-card { background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,255,255,.86)); color: #0f172a; }
 
 /* Focus states */
 .hero-points li a:focus-visible, .benefit-list li a:focus-visible, .level-card:focus-visible, .step-item:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }

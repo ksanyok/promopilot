@@ -1411,6 +1411,257 @@ document.addEventListener('DOMContentLoaded', function() {
         'cancelled': '<?php echo __('Отменено'); ?>',
         'idle': '<?php echo __('Продвижение не запускалось'); ?>'
     };
+
+    const previewRoot = document.querySelector('[data-project-preview]');
+    if (previewRoot) {
+        initProjectPreview(previewRoot);
+    }
+
+    function initProjectPreview(root) {
+        const frameEl = root.querySelector('.project-hero__preview-frame');
+        let imageEl = root.querySelector('[data-preview-image]');
+        const placeholderEl = root.querySelector('[data-preview-placeholder]');
+        const statusEl = root.querySelector('[data-preview-status]');
+        const statusTextEl = statusEl ? statusEl.querySelector('[data-preview-status-text]') : null;
+        const statusIconEl = statusEl ? statusEl.querySelector('i') : null;
+        const refreshButtons = Array.from(root.querySelectorAll('[data-action="refresh-preview"]'));
+        const overlayButton = root.querySelector('.project-hero__refresh--overlay');
+        const endpoint = root.dataset.endpoint || '';
+        const projectId = root.dataset.projectId || '';
+        const csrfToken = root.dataset.csrf || '';
+        const textSuccess = root.dataset.textSuccess || '';
+        const textWarning = root.dataset.textWarning || '';
+        const textPending = root.dataset.textPending || '';
+        const textError = root.dataset.textError || '';
+        const textProcessing = root.dataset.textProcessing || '';
+        const previewAlt = root.dataset.previewAlt || '';
+        const autoRefresh = root.dataset.autoRefresh === '1';
+        const staleSeconds = 60 * 60 * 24 * 3;
+        let abortController = null;
+        let isLoadingPreview = false;
+
+        const statusIcons = {
+            ok: 'bi-check-circle',
+            success: 'bi-check-circle',
+            warning: 'bi-exclamation-triangle',
+            pending: 'bi-hourglass-split',
+            processing: 'bi-arrow-repeat',
+            error: 'bi-exclamation-octagon'
+        };
+
+        const handleImageError = () => {
+            if (imageEl) {
+                imageEl.classList.add('d-none');
+            }
+            if (placeholderEl) {
+                placeholderEl.classList.remove('d-none');
+            }
+            if (overlayButton) {
+                overlayButton.classList.add('d-none');
+            }
+            root.dataset.hasPreview = '0';
+            root.dataset.hasPreviewUrl = '0';
+        };
+
+        const appendCacheBust = (url) => {
+            if (!url) { return ''; }
+            const sep = url.includes('?') ? '&' : '?';
+            return `${url}${sep}cb=${Date.now().toString(36)}`;
+        };
+
+        const setStatus = (type, message) => {
+            if (!statusEl) { return; }
+            const trimmed = (message || '').trim();
+            statusEl.dataset.status = type || '';
+            if (statusIconEl) {
+                const iconClass = statusIcons[type] || 'bi-info-circle';
+                statusIconEl.className = `bi ${iconClass}`;
+            }
+            if (statusTextEl) {
+                statusTextEl.textContent = trimmed;
+            }
+            statusEl.classList.toggle('d-none', trimmed === '');
+        };
+
+        const formatStatusMessage = (template, value) => {
+            if (!template) { return value || ''; }
+            if (template.includes('%s')) {
+                return template.replace('%s', value || '');
+            }
+            return template;
+        };
+
+        const toggleButtonsLoading = (flag) => {
+            refreshButtons.forEach((btn) => {
+                if (flag) {
+                    btn.classList.add('is-loading');
+                    btn.setAttribute('disabled', 'disabled');
+                } else {
+                    btn.classList.remove('is-loading');
+                    btn.removeAttribute('disabled');
+                }
+            });
+        };
+
+        const setPlaceholderVisible = (visible) => {
+            if (placeholderEl) {
+                placeholderEl.classList.toggle('d-none', !visible);
+            }
+        };
+
+        const ensureImageElement = () => {
+            if (imageEl) {
+                return imageEl;
+            }
+            if (!frameEl) {
+                return null;
+            }
+            const img = document.createElement('img');
+            img.className = 'project-hero__screenshot';
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.setAttribute('data-preview-image', '');
+            img.alt = previewAlt;
+            frameEl.insertBefore(img, overlayButton || frameEl.firstChild);
+            imageEl = img;
+            img.addEventListener('error', handleImageError);
+            return img;
+        };
+
+        const applyPreview = (url, modifiedAt, modifiedHuman) => {
+            if (!url) {
+                handleImageError();
+                setStatus('pending', textPending);
+                return;
+            }
+
+            const target = ensureImageElement();
+            if (!target) {
+                return;
+            }
+
+            target.classList.add('d-none');
+            setPlaceholderVisible(true);
+
+            const finalUrl = appendCacheBust(url);
+            const onLoad = () => {
+                target.removeEventListener('load', onLoad);
+                target.removeEventListener('error', onError);
+                target.classList.remove('d-none');
+                setPlaceholderVisible(false);
+                if (overlayButton) {
+                    overlayButton.classList.remove('d-none');
+                }
+                root.dataset.hasPreview = '1';
+                root.dataset.hasPreviewUrl = '1';
+            };
+            const onError = () => {
+                target.removeEventListener('load', onLoad);
+                target.removeEventListener('error', onError);
+                handleImageError();
+                setStatus('error', textError);
+            };
+
+            target.addEventListener('load', onLoad);
+            target.addEventListener('error', onError);
+            target.src = finalUrl;
+            target.alt = previewAlt;
+
+            const timestamp = Number(modifiedAt || 0) || 0;
+            root.dataset.previewUpdatedAt = String(timestamp);
+            const human = modifiedHuman || (timestamp ? formatDateTimeShort(timestamp) : '');
+            root.dataset.previewUpdatedHuman = human;
+
+            if (timestamp > 0) {
+                const age = Math.floor(Date.now() / 1000) - timestamp;
+                const isStale = Number.isFinite(age) && age > staleSeconds;
+                const template = isStale ? textWarning : textSuccess;
+                setStatus(isStale ? 'warning' : 'ok', formatStatusMessage(template, human));
+            } else {
+                setStatus('ok', formatStatusMessage(textSuccess, human));
+            }
+        };
+
+        const refreshPreview = async (force = true) => {
+            if (!endpoint || !projectId || isLoadingPreview) {
+                return;
+            }
+            if (abortController) {
+                abortController.abort();
+            }
+            abortController = new AbortController();
+            isLoadingPreview = true;
+            toggleButtonsLoading(true);
+            setStatus('processing', textProcessing);
+
+            const formData = new FormData();
+            formData.append('csrf_token', csrfToken);
+            formData.append('project_id', projectId);
+            if (force) {
+                formData.append('force', '1');
+            }
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin',
+                    signal: abortController.signal
+                });
+                const raw = await response.text();
+                let payload = null;
+                if (raw) {
+                    try {
+                        payload = JSON.parse(raw);
+                    } catch (error) {
+                        console.error('Preview response parse failed', error, raw);
+                    }
+                }
+                if (!payload || !payload.ok || !response.ok) {
+                    console.warn('Preview refresh failed', payload || raw);
+                    setStatus('error', textError);
+                    return;
+                }
+                applyPreview(payload.preview_url || '', payload.modified_at, payload.modified_human || '');
+            } catch (error) {
+                if (isAbortError(error)) {
+                    return;
+                }
+                console.error('Preview refresh error', error);
+                setStatus('error', textError);
+            } finally {
+                isLoadingPreview = false;
+                toggleButtonsLoading(false);
+            }
+        };
+
+        refreshButtons.forEach((btn) => {
+            btn.addEventListener('click', (event) => {
+                event.preventDefault();
+                refreshPreview(true);
+            });
+        });
+
+        if (imageEl) {
+            imageEl.addEventListener('error', handleImageError);
+        }
+
+        const initialUpdatedAt = Number(root.dataset.previewUpdatedAt || '0');
+        const initialUpdatedHuman = root.dataset.previewUpdatedHuman || '';
+        if (root.dataset.hasPreviewUrl === '1' && initialUpdatedHuman) {
+            const age = Math.floor(Date.now() / 1000) - initialUpdatedAt;
+            const isStale = Number.isFinite(age) && age > staleSeconds;
+            const template = isStale ? textWarning : textSuccess;
+            setStatus(isStale ? 'warning' : 'ok', formatStatusMessage(template, initialUpdatedHuman));
+        } else if (textPending) {
+            setStatus('pending', textPending);
+        }
+
+        if (autoRefresh) {
+            root.dataset.autoRefresh = '0';
+            setTimeout(() => refreshPreview(false), 450);
+        }
+    }
     const STATUS_BADGE_CLASS_MAP = {
         'success': 'bg-success-subtle text-success-emphasis',
         'completed': 'bg-success-subtle text-success-emphasis',

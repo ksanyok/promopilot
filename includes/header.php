@@ -42,12 +42,13 @@ if (is_logged_in()) {
                     if ($res = $sta->get_result()) { $pp_nav_stats['active_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
                     $sta->close();
                 }
-                // Published links (successful publications or known URL)
-                if ($stpub = $conn->prepare("SELECT COUNT(*) AS cnt FROM publications pub INNER JOIN projects p ON p.id = pub.project_id WHERE p.user_id = ? AND (pub.status = 'success' OR pub.post_url <> '')")) {
-                    $stpub->bind_param('i', $uid);
-                    $stpub->execute();
-                    if ($res = $stpub->get_result()) { $pp_nav_stats['published_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
-                    $stpub->close();
+                // Promoted links (unique links with at least one promotion run)
+                $sqlPromoted = "SELECT COUNT(DISTINCT pr.link_id) AS cnt FROM promotion_runs pr INNER JOIN projects p ON p.id = pr.project_id WHERE p.user_id = ?";
+                if ($stPromoted = $conn->prepare($sqlPromoted)) {
+                    $stPromoted->bind_param('i', $uid);
+                    $stPromoted->execute();
+                    if ($res = $stPromoted->get_result()) { $pp_nav_stats['published_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
+                    $stPromoted->close();
                 }
             }
         }
