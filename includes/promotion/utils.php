@@ -438,6 +438,7 @@ if (!function_exists('pp_promotion_pick_networks')) {
         }
 
         $selected = [];
+        $selectedSlugs = [];
         $allowRepeats = false;
         for ($i = 0; $i < $count; $i++) {
             $candidates = [];
@@ -449,6 +450,7 @@ if (!function_exists('pp_promotion_pick_networks')) {
                 }
                 if ($usageLimit > 0 && $perTargetUsed >= $usageLimit) { continue; }
                 if (!$allowRepeats && $usageLimit > 0 && $used >= $usageLimit) { continue; }
+                if (!$allowRepeats && isset($selectedSlugs[$slug])) { continue; }
                 $score = $meta['baseScore'];
                 if ($used > 0) { $score -= $used * 250; }
                 if ($allowRepeats && $usageLimit > 0 && $used >= $usageLimit) {
@@ -475,6 +477,7 @@ if (!function_exists('pp_promotion_pick_networks')) {
             });
             $choice = $candidates[0];
             $selected[] = $choice['network'];
+            $selectedSlugs[$choice['slug']] = true;
             $usage[$choice['slug']] = (int)($usage[$choice['slug']] ?? 0) + 1;
             if ($targetKey !== '') {
                 if (!isset($usage['__targets'][$targetKey][$choice['slug']])) {
@@ -658,17 +661,18 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             }
             pp_promotion_log('promotion.publications.job_payload_column', ['present' => $hasJobPayloadColumn]);
         }
+        $publicationUuid = pp_generate_uuid_v4();
         if ($hasJobPayloadColumn) {
-            $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, enqueued_by_user_id, job_payload) VALUES (?, ?, ?, ?, 'queued', ?, ?)");
+            $stmt = $conn->prepare("INSERT INTO publications (uuid, project_id, page_url, anchor, network, status, enqueued_by_user_id, job_payload) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)");
         } else {
-            $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, enqueued_by_user_id) VALUES (?, ?, ?, ?, 'queued', ?)");
+            $stmt = $conn->prepare("INSERT INTO publications (uuid, project_id, page_url, anchor, network, status, enqueued_by_user_id) VALUES (?, ?, ?, ?, ?, 'queued', ?)");
         }
         if (!$stmt) { return false; }
         $userId = (int)$node['initiated_by'];
         if ($hasJobPayloadColumn) {
-            $stmt->bind_param('isssis', $projectId, $targetUrl, $anchor, $networkSlug, $userId, $payloadJson);
+            $stmt->bind_param('sisssis', $publicationUuid, $projectId, $targetUrl, $anchor, $networkSlug, $userId, $payloadJson);
         } else {
-            $stmt->bind_param('isssi', $projectId, $targetUrl, $anchor, $networkSlug, $userId);
+            $stmt->bind_param('sisssi', $publicationUuid, $projectId, $targetUrl, $anchor, $networkSlug, $userId);
         }
         if (!$stmt->execute()) {
             pp_promotion_log('promotion.publication_queue_failed', [
@@ -715,6 +719,7 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             'project_id' => $projectId,
             'node_id' => (int)$node['id'],
             'publication_id' => $publicationId,
+            'publication_uuid' => $publicationUuid,
             'level' => (int)$node['level'],
             'network' => $networkSlug,
             'target_url' => $targetUrl,
@@ -742,9 +747,9 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         try {
             $conn2 = @connect_db();
             if ($conn2) {
-                $insQ = $conn2->prepare("INSERT INTO publication_queue (publication_id, project_id, user_id, page_url, status) VALUES (?, ?, ?, ?, 'queued')");
+                $insQ = $conn2->prepare("INSERT INTO publication_queue (job_uuid, publication_id, project_id, user_id, page_url, status) VALUES (?, ?, ?, ?, ?, 'queued')");
                 if ($insQ) {
-                    $insQ->bind_param('iiis', $publicationId, $projectId, $userId, $targetUrl);
+                    $insQ->bind_param('siiis', $publicationUuid, $publicationId, $projectId, $userId, $targetUrl);
                     @$insQ->execute();
                     $insQ->close();
                 }

@@ -24,12 +24,60 @@ function pp_run_schema_bootstrap(): void {
         return $cols;
     };
 
+    $generateUuid = static function(): string {
+        return pp_generate_uuid_v4();
+    };
+
+    $ensureUuidColumn = static function(string $table, string $column, string $afterColumn = 'id') use ($conn, $getCols, $generateUuid): void {
+        $cols = $getCols($table);
+        if (empty($cols)) {
+            return;
+        }
+        if (!isset($cols[$column])) {
+            @$conn->query("ALTER TABLE `{$table}` ADD COLUMN `{$column}` CHAR(36) NULL DEFAULT NULL AFTER `{$afterColumn}`");
+            $cols = $getCols($table);
+        }
+        if (isset($cols[$column])) {
+            for ($i = 0; $i < 20; $i++) {
+                $res = @$conn->query("SELECT `id` FROM `{$table}` WHERE (`{$column}` IS NULL OR `{$column}` = '') LIMIT 500");
+                if (!$res || $res->num_rows === 0) {
+                    if ($res) { $res->free(); }
+                    break;
+                }
+                $filled = 0;
+                while ($row = $res->fetch_assoc()) {
+                    $uuid = $generateUuid();
+                    $id = (int)($row['id'] ?? 0);
+                    if ($id <= 0) { continue; }
+                    @$conn->query("UPDATE `{$table}` SET `{$column}` = '" . $conn->real_escape_string($uuid) . "' WHERE `id` = {$id} LIMIT 1");
+                    $filled++;
+                }
+                $res->free();
+                if ($filled === 0) {
+                    break;
+                }
+            }
+            $colInfo = $cols[$column];
+            if (strtoupper($colInfo['Null'] ?? '') === 'YES') {
+                @$conn->query("ALTER TABLE `{$table}` MODIFY COLUMN `{$column}` CHAR(36) NOT NULL");
+            }
+            if (pp_mysql_index_exists($conn, $table, 'uniq_' . $table . '_' . $column) === false) {
+                try {
+                    @$conn->query("CREATE UNIQUE INDEX `uniq_{$table}_{$column}` ON `{$table}`(`{$column}`)");
+                } catch (Throwable $e) {
+                    // ignore unique creation errors (e.g., duplicates)
+                }
+            }
+        }
+    };
+
     // Projects table
     $projectsCols = $getCols('projects');
     if (empty($projectsCols)) {
         // Create minimal projects table if missing
         @$conn->query("CREATE TABLE IF NOT EXISTS `projects` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` CHAR(36) NOT NULL,
             `user_id` INT NOT NULL,
             `name` VARCHAR(255) NOT NULL,
             `description` TEXT NULL,
@@ -39,7 +87,8 @@ function pp_run_schema_bootstrap(): void {
             `domain_host` VARCHAR(190) NULL,
             `region` VARCHAR(100) NULL,
             `topic` VARCHAR(100) NULL,
-            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_projects_uuid` (`uuid`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
         // Add missing columns
@@ -73,6 +122,7 @@ function pp_run_schema_bootstrap(): void {
             @$conn->query("ALTER TABLE `projects` ADD COLUMN `topic` VARCHAR(100) NULL");
         }
     }
+    $ensureUuidColumn('projects', 'uuid');
 
     // Users table: ensure balance column exists
     $usersCols = $getCols('users');
@@ -177,6 +227,7 @@ function pp_run_schema_bootstrap(): void {
     if (empty($pubCols)) {
         @$conn->query("CREATE TABLE IF NOT EXISTS `publications` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` CHAR(36) NOT NULL,
             `project_id` INT NOT NULL,
             `page_url` TEXT NOT NULL,
             `anchor` VARCHAR(255) NULL,
@@ -200,6 +251,7 @@ function pp_run_schema_bootstrap(): void {
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX (`project_id`),
             INDEX `idx_publications_status` (`status`),
+            UNIQUE KEY `uniq_publications_uuid` (`uuid`),
             CONSTRAINT `fk_publications_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } else {
@@ -266,12 +318,14 @@ function pp_run_schema_bootstrap(): void {
             @$conn->query("CREATE INDEX `idx_publications_status` ON `publications`(`status`)");
         }
     }
+    $ensureUuidColumn('publications', 'uuid');
 
     // New: lightweight publication queue tracker (optional; mirrors publications queue for visibility and ordering per user)
     $pqCols = $getCols('publication_queue');
     if (empty($pqCols)) {
         @$conn->query("CREATE TABLE IF NOT EXISTS `publication_queue` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `job_uuid` CHAR(36) NOT NULL,
             `publication_id` INT NOT NULL,
             `project_id` INT NOT NULL,
             `user_id` INT NOT NULL,
@@ -282,6 +336,8 @@ function pp_run_schema_bootstrap(): void {
             INDEX (`project_id`),
             INDEX (`user_id`),
             INDEX `idx_pubqueue_status` (`status`),
+            UNIQUE KEY `uniq_pubqueue_job_uuid` (`job_uuid`),
+            UNIQUE KEY `uniq_pubqueue_publication` (`publication_id`),
             CONSTRAINT `fk_pubqueue_publication` FOREIGN KEY (`publication_id`) REFERENCES `publications`(`id`) ON DELETE CASCADE,
             CONSTRAINT `fk_pubqueue_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
@@ -293,9 +349,24 @@ function pp_run_schema_bootstrap(): void {
         if (!isset($pqCols['status'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'queued'"); }
         if (!isset($pqCols['scheduled_at'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `scheduled_at` TIMESTAMP NULL DEFAULT NULL"); }
         if (!isset($pqCols['created_at'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); }
+        if (!isset($pqCols['job_uuid'])) { @$conn->query("ALTER TABLE `publication_queue` ADD COLUMN `job_uuid` CHAR(36) NULL DEFAULT NULL AFTER `id`"); }
         if (pp_mysql_index_exists($conn, 'publication_queue', 'idx_pubqueue_status') === false && isset($pqCols['status'])) {
             @$conn->query("CREATE INDEX `idx_pubqueue_status` ON `publication_queue`(`status`)");
         }
+        if (pp_mysql_index_exists($conn, 'publication_queue', 'uniq_pubqueue_publication') === false) {
+            @$conn->query("DELETE pq1 FROM publication_queue pq1 INNER JOIN publication_queue pq2 ON pq1.publication_id = pq2.publication_id AND pq1.id > pq2.id");
+            @$conn->query("CREATE UNIQUE INDEX `uniq_pubqueue_publication` ON `publication_queue`(`publication_id`)");
+        }
+        if (pp_mysql_index_exists($conn, 'publication_queue', 'uniq_pubqueue_job_uuid') === false && isset($pqCols['job_uuid'])) {
+            @$conn->query("UPDATE publication_queue pq JOIN publications p ON p.id = pq.publication_id SET pq.job_uuid = p.uuid WHERE (pq.job_uuid IS NULL OR pq.job_uuid = '')");
+            @$conn->query("CREATE UNIQUE INDEX `uniq_pubqueue_job_uuid` ON `publication_queue`(`job_uuid`)");
+        }
+        $pqCols = $getCols('publication_queue');
+    }
+
+    if (isset($pqCols['job_uuid'])) {
+        @$conn->query("UPDATE publication_queue pq JOIN publications p ON p.id = pq.publication_id SET pq.job_uuid = p.uuid WHERE (pq.job_uuid IS NULL OR pq.job_uuid = '')");
+        @$conn->query("ALTER TABLE `publication_queue` MODIFY COLUMN `job_uuid` CHAR(36) NOT NULL");
     }
 
     // Networks registry tracks available publication handlers
@@ -759,6 +830,7 @@ function pp_run_schema_bootstrap(): void {
     if (empty($plCols)) {
         @$conn->query("CREATE TABLE IF NOT EXISTS `project_links` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` CHAR(36) NOT NULL,
             `project_id` INT NOT NULL,
             `url` TEXT NOT NULL,
             `anchor` VARCHAR(255) NULL,
@@ -767,9 +839,12 @@ function pp_run_schema_bootstrap(): void {
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX (`project_id`),
+            UNIQUE KEY `uniq_project_links_uuid` (`uuid`),
             CONSTRAINT `fk_project_links_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     }
+
+    $ensureUuidColumn('project_links', 'uuid');
 
     // Best-effort one-time migration from projects.links JSON to project_links
     try {
@@ -787,7 +862,7 @@ function pp_run_schema_bootstrap(): void {
                     $defaultLang = trim((string)$row['language'] ?? 'ru');
                     $arr = json_decode($linksJson, true);
                     if (!is_array($arr)) { continue; }
-                    $stmt = $conn->prepare("INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)");
+                    $stmt = $conn->prepare("INSERT INTO project_links (uuid, project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?, ?)");
                     if ($stmt) {
                         foreach ($arr as $it) {
                             $url = '';
@@ -802,7 +877,8 @@ function pp_run_schema_bootstrap(): void {
                                 $wish = trim((string)($it['wish'] ?? ''));
                             }
                             if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
-                                $stmt->bind_param('issss', $pid, $url, $anchor, $lang, $wish);
+                                $linkUuid = pp_generate_uuid_v4();
+                                $stmt->bind_param('sissss', $linkUuid, $pid, $url, $anchor, $lang, $wish);
                                 @$stmt->execute();
                             }
                         }
@@ -962,6 +1038,7 @@ function pp_run_schema_bootstrap(): void {
     if (empty($promoRunsCols)) {
         @$conn->query("CREATE TABLE IF NOT EXISTS `promotion_runs` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` CHAR(36) NOT NULL,
             `project_id` INT NOT NULL,
             `link_id` INT NOT NULL,
             `target_url` TEXT NOT NULL,
@@ -982,6 +1059,7 @@ function pp_run_schema_bootstrap(): void {
             INDEX `idx_promotion_runs_project` (`project_id`),
             INDEX `idx_promotion_runs_link` (`link_id`),
             INDEX `idx_promotion_runs_status` (`status`),
+            UNIQUE KEY `uniq_promotion_runs_uuid` (`uuid`),
             CONSTRAINT `fk_promotion_runs_project` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE CASCADE,
             CONSTRAINT `fk_promotion_runs_link` FOREIGN KEY (`link_id`) REFERENCES `project_links`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
@@ -1011,6 +1089,8 @@ function pp_run_schema_bootstrap(): void {
             @$conn->query("CREATE INDEX `idx_promotion_runs_link` ON `promotion_runs`(`link_id`)");
         }
     }
+
+    $ensureUuidColumn('promotion_runs', 'uuid');
 
     $promoNodesCols = $getCols('promotion_nodes');
     if (empty($promoNodesCols)) {

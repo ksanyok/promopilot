@@ -123,12 +123,20 @@ $linkWish = $linkWish ?? $projectWish;
 
 if ($action === 'publish') {
     // Уже есть запись? (учитываем статус)
-    $stmt = $conn->prepare("SELECT id, post_url, status, network FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, uuid, post_url, status, network FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
     $stmt->bind_param('is', $project_id, $url);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     if ($row) {
+        $publicationUuid = trim((string)($row['uuid'] ?? ''));
+        if ($publicationUuid === '') {
+            $publicationUuid = pp_generate_uuid_v4();
+            try {
+                $fixUuid = $conn->prepare('UPDATE publications SET uuid = ? WHERE id = ? LIMIT 1');
+                if ($fixUuid) { $fixUuid->bind_param('si', $publicationUuid, $row['id']); @$fixUuid->execute(); $fixUuid->close(); }
+            } catch (Throwable $e) { /* ignore */ }
+        }
         $pubId = (int)$row['id'];
         $postUrl = trim((string)($row['post_url'] ?? ''));
         $status = trim((string)($row['status'] ?? '')) ?: ($postUrl !== '' ? 'success' : 'queued');
@@ -200,14 +208,14 @@ if ($action === 'publish') {
                     $upq->close();
                 } else {
                     // If not exists, insert
-                    $insQ = $conn2->prepare("INSERT INTO publication_queue (publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, 'queued', ?)");
+                    $insQ = $conn2->prepare("INSERT INTO publication_queue (job_uuid, publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)");
                     if ($insQ) {
                         if ($scheduleTs > 0 && $scheduleTs > time()) {
                             $dt = date('Y-m-d H:i:s', $scheduleTs);
-                            $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
+                            $insQ->bind_param('siiiss', $publicationUuid, $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
                         } else {
                             $null = NULL;
-                            $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $null);
+                            $insQ->bind_param('siiiss', $publicationUuid, $pubId, $project_id, $_SESSION['user_id'], $url, $null);
                         }
                         @$insQ->execute();
                         $insQ->close();
@@ -246,14 +254,15 @@ if ($action === 'publish') {
         exit;
     }
 
-    $stmt = $conn->prepare("INSERT INTO publications (project_id, page_url, anchor, network, status, scheduled_at, enqueued_by_user_id) VALUES (?,?,?,?, 'queued', ?, ?)");
+    $publicationUuid = pp_generate_uuid_v4();
+    $stmt = $conn->prepare("INSERT INTO publications (uuid, project_id, page_url, anchor, network, status, scheduled_at, enqueued_by_user_id) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)");
     $networkSlug = $network['slug'];
     if ($scheduleTs > 0 && $scheduleTs > time()) {
         $dt = date('Y-m-d H:i:s', $scheduleTs);
-        $stmt->bind_param('issssi', $project_id, $url, $anchor, $networkSlug, $dt, $_SESSION['user_id']);
+        $stmt->bind_param('sissssi', $publicationUuid, $project_id, $url, $anchor, $networkSlug, $dt, $_SESSION['user_id']);
     } else {
         $null = NULL;
-        $stmt->bind_param('issssi', $project_id, $url, $anchor, $networkSlug, $null, $_SESSION['user_id']);
+        $stmt->bind_param('sissssi', $publicationUuid, $project_id, $url, $anchor, $networkSlug, $null, $_SESSION['user_id']);
     }
     if (!$stmt->execute()) {
         $stmt->close();
@@ -267,14 +276,14 @@ if ($action === 'publish') {
     try {
         $conn2 = @connect_db();
         if ($conn2) {
-            $insQ = $conn2->prepare("INSERT INTO publication_queue (publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, 'queued', ?)");
+            $insQ = $conn2->prepare("INSERT INTO publication_queue (job_uuid, publication_id, project_id, user_id, page_url, status, scheduled_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)");
             if ($insQ) {
                 if ($scheduleTs > 0 && $scheduleTs > time()) {
                     $dt = date('Y-m-d H:i:s', $scheduleTs);
-                    $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
+                    $insQ->bind_param('siiiss', $publicationUuid, $pubId, $project_id, $_SESSION['user_id'], $url, $dt);
                 } else {
                     $null = NULL;
-                    $insQ->bind_param('iiiss', $pubId, $project_id, $_SESSION['user_id'], $url, $null);
+                    $insQ->bind_param('siiiss', $publicationUuid, $pubId, $project_id, $_SESSION['user_id'], $url, $null);
                 }
                 @$insQ->execute();
                 $insQ->close();
@@ -309,7 +318,7 @@ if ($action === 'publish') {
     exit;
 } elseif ($action === 'cancel') {
     // Можно отменить только если не опубликована (нет post_url) и не выполняется
-    $stmt = $conn->prepare("SELECT id, post_url, status FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, uuid, post_url, status FROM publications WHERE project_id = ? AND page_url = ? LIMIT 1");
     $stmt->bind_param('is', $project_id, $url);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();

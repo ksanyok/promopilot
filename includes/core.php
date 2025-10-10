@@ -12,6 +12,27 @@ if (!function_exists('__')) {
     }
 }
 
+if (!function_exists('pp_generate_uuid_v4')) {
+    function pp_generate_uuid_v4(): string {
+        try {
+            $bytes = random_bytes(16);
+        } catch (Throwable $e) {
+            $bytes = openssl_random_pseudo_bytes(16);
+            if ($bytes === false || strlen((string)$bytes) < 16) {
+                $bytes = md5(uniqid((string)mt_rand(), true), true);
+            }
+        }
+        if (!is_string($bytes) || strlen($bytes) < 16) {
+            $bytes = str_pad((string)$bytes, 16, "\0");
+        }
+        $bytes = substr($bytes, 0, 16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+        $hex = bin2hex($bytes);
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split($hex, 4));
+    }
+}
+
 // Sessions
 if (!function_exists('pp_session_regenerate')) {
     function pp_session_regenerate() {

@@ -1765,12 +1765,14 @@ if (!function_exists('pp_promotion_start_run')) {
                 $progressDone = 0;
                 $initiator = $initiatedBy > 0 ? $initiatedBy : $ownerId;
 
-                $insertStmt = $conn->prepare('INSERT INTO promotion_runs (project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent, progress_total, progress_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $runUuid = pp_generate_uuid_v4();
+                $insertStmt = $conn->prepare('INSERT INTO promotion_runs (uuid, project_id, link_id, target_url, status, stage, initiated_by, settings_snapshot, charged_amount, discount_percent, progress_total, progress_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                 if (!$insertStmt) { break; }
                 $chargedParam = $chargedAmount;
                 $discountParam = $discountPercent;
                 $insertStmt->bind_param(
-                    'iisssisddii',
+                    'siisssisddii',
+                    $runUuid,
                     $projectId,
                     $linkId,
                     $url,

@@ -1001,12 +1001,13 @@ if (!function_exists('pp_project_handle_links_update')) {
                             $anchor = pp_project_pick_default_anchor($lang, $project, $url);
                         }
 
-                        $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
+                        $ins = $conn->prepare('INSERT INTO project_links (uuid, project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?, ?)');
                         if ($ins) {
-                            $ins->bind_param('issss', $projectId, $url, $anchor, $lang, $wish);
+                            $linkUuid = pp_generate_uuid_v4();
+                            $ins->bind_param('sissss', $linkUuid, $projectId, $url, $anchor, $lang, $wish);
                             if (@$ins->execute()) {
                                 $newId = (int)$conn->insert_id;
-                                $newLinkPayload = ['id' => $newId, 'url' => $url, 'anchor' => $anchor, 'language' => $lang, 'wish' => $wish, 'anchor_strategy' => $anchorStrategy];
+                                $newLinkPayload = ['id' => $newId, 'uuid' => $linkUuid, 'url' => $url, 'anchor' => $anchor, 'language' => $lang, 'wish' => $wish, 'anchor_strategy' => $anchorStrategy];
                                 try {
                                     if (function_exists('pp_save_page_meta')) {
                                         if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($url); }
@@ -1062,12 +1063,13 @@ if (!function_exists('pp_project_handle_links_update')) {
                             $new_anchor = pp_project_pick_default_anchor($new_language, $project, $new_link);
                         }
 
-                        $ins = $conn->prepare('INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)');
+                        $ins = $conn->prepare('INSERT INTO project_links (uuid, project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?, ?)');
                         if ($ins) {
-                            $ins->bind_param('issss', $projectId, $new_link, $new_anchor, $new_language, $new_wish);
+                            $linkUuid = pp_generate_uuid_v4();
+                            $ins->bind_param('sissss', $linkUuid, $projectId, $new_link, $new_anchor, $new_language, $new_wish);
                             if (@$ins->execute()) {
                                 $newId = (int)$conn->insert_id;
-                                $newLinkPayload = ['id' => $newId, 'url' => $new_link, 'anchor' => $new_anchor, 'language' => $new_language, 'wish' => $new_wish, 'anchor_strategy' => $new_anchor_strategy];
+                                $newLinkPayload = ['id' => $newId, 'uuid' => $linkUuid, 'url' => $new_link, 'anchor' => $new_anchor, 'language' => $new_language, 'wish' => $new_wish, 'anchor_strategy' => $new_anchor_strategy];
                                 try {
                                     if (function_exists('pp_save_page_meta')) {
                                         if (!is_array($meta) && function_exists('pp_analyze_url_data')) { $meta = pp_analyze_url_data($new_link); }

@@ -45,8 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         } else {
             $conn = connect_db();
             // Insert project with region/topic
-            $stmt = $conn->prepare("INSERT INTO projects (user_id, name, description, language, region, topic) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("isssss", $user_id, $name, $description, $language, $region, $topic);
+            $projectUuid = pp_generate_uuid_v4();
+            $stmt = $conn->prepare("INSERT INTO projects (uuid, user_id, name, description, language, region, topic) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("sisssss", $projectUuid, $user_id, $name, $description, $language, $region, $topic);
             if ($stmt->execute()) {
                 $project_id = $stmt->insert_id;
                 // Подготовим данные по домену и сохраним пожелания

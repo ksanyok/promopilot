@@ -500,7 +500,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $arr = json_decode((string)$row['links'], true);
                     $defaultLang = trim((string)($row['language'] ?? 'ru')) ?: 'ru';
                     if (!is_array($arr) || empty($arr)) { continue; }
-                    $stmt = $conn->prepare("INSERT INTO project_links (project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?)");
+                    $stmt = $conn->prepare("INSERT INTO project_links (uuid, project_id, url, anchor, language, wish) VALUES (?, ?, ?, ?, ?, ?)");
                     if ($stmt) {
                         foreach ($arr as $it) {
                             $url = '';$anchor='';$lang=$defaultLang;$wish='';
@@ -512,7 +512,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 $wish = trim((string)($it['wish'] ?? ''));
                             }
                             if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
-                                $stmt->bind_param('issss', $pid, $url, $anchor, $lang, $wish);
+                                $linkUuid = pp_generate_uuid_v4();
+                                $stmt->bind_param('sissss', $linkUuid, $pid, $url, $anchor, $lang, $wish);
                                 @$stmt->execute();
                             }
                         }

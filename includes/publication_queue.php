@@ -7,6 +7,116 @@ if (!function_exists('pp_get_max_concurrent_jobs')) {
 if (!function_exists('pp_get_min_job_spacing_ms')) {
     function pp_get_min_job_spacing_ms(): int { $ms = (int) get_setting('min_job_spacing_ms', 0); if ($ms < 0) $ms = 0; if ($ms > 60000) $ms = 60000; return $ms; }
 }
+if (!function_exists('pp_get_publication_timeout_seconds')) {
+    function pp_get_publication_timeout_seconds(): int {
+        $fallback = 900;
+        $value = (int)get_setting('publication_timeout_seconds', (string)$fallback);
+        if ($value < 300) { $value = 300; }
+        if ($value > 7200) { $value = 7200; }
+        return $value;
+    }
+}
+if (!function_exists('pp_get_publication_max_attempts')) {
+    function pp_get_publication_max_attempts(): int {
+        $fallback = 3;
+        $value = (int)get_setting('publication_max_attempts', (string)$fallback);
+        if ($value < 1) { $value = 1; }
+        if ($value > 10) { $value = 10; }
+        return $value;
+    }
+}
+if (!function_exists('pp_release_stuck_publications')) {
+    function pp_release_stuck_publications(?mysqli $sharedConn = null): array {
+        $stats = ['released' => 0, 'failed' => 0, 'checked' => 0];
+        try { $conn = $sharedConn instanceof mysqli ? $sharedConn : @connect_db(); } catch (Throwable $e) { return $stats; }
+        if (!$conn) { return $stats; }
+        $closeConn = !($sharedConn instanceof mysqli);
+        $timeoutSeconds = pp_get_publication_timeout_seconds();
+        $maxAttempts = pp_get_publication_max_attempts();
+        $threshold = date('Y-m-d H:i:s', time() - $timeoutSeconds);
+        $stmt = $conn->prepare("SELECT id, uuid, project_id, page_url, enqueued_by_user_id, attempts, started_at FROM publications WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ? ORDER BY started_at ASC LIMIT 200");
+        if ($stmt) {
+            $stmt->bind_param('s', $threshold);
+            if ($stmt->execute()) {
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) {
+                    $stats['checked']++;
+                    $pubId = (int)($row['id'] ?? 0);
+                    if ($pubId <= 0) { continue; }
+                    $uuid = trim((string)($row['uuid'] ?? ''));
+                    if ($uuid === '') {
+                        $uuid = pp_generate_uuid_v4();
+                        $fix = $conn->prepare('UPDATE publications SET uuid = ? WHERE id = ? LIMIT 1');
+                        if ($fix) { $fix->bind_param('si', $uuid, $pubId); @$fix->execute(); $fix->close(); }
+                    }
+                    $attempts = (int)($row['attempts'] ?? 0);
+                    $startedAt = (string)($row['started_at'] ?? '');
+                    $projectId = (int)($row['project_id'] ?? 0);
+                    $pageUrl = (string)($row['page_url'] ?? '');
+                    $userId = (int)($row['enqueued_by_user_id'] ?? 0);
+                    if ($attempts >= $maxAttempts) {
+                        $err = 'TIMEOUT_MAX_ATTEMPTS';
+                        $failStmt = $conn->prepare("UPDATE publications SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP, pid=NULL WHERE id = ? LIMIT 1");
+                        if ($failStmt) { $failStmt->bind_param('si', $err, $pubId); $failStmt->execute(); $failStmt->close(); }
+                        $queueFailStmt = $conn->prepare("UPDATE publication_queue SET status='failed', scheduled_at=NULL, job_uuid=? WHERE publication_id = ? LIMIT 1");
+                        if ($queueFailStmt) {
+                            $queueFailStmt->bind_param('si', $uuid, $pubId);
+                            $queueFailStmt->execute();
+                            $affected = $queueFailStmt->affected_rows;
+                            $queueFailStmt->close();
+                        } else {
+                            $affected = 0;
+                        }
+                        if ($affected === 0) {
+                            $insFail = $conn->prepare("INSERT INTO publication_queue (job_uuid, publication_id, project_id, user_id, page_url, status) VALUES (?, ?, ?, ?, ?, 'failed')");
+                            if ($insFail) { $insFail->bind_param('siiis', $uuid, $pubId, $projectId, $userId, $pageUrl); @$insFail->execute(); $insFail->close(); }
+                        }
+                        $stats['failed']++;
+                        pp_promotion_log('promotion.publication_timeout_failed', [
+                            'publication_id' => $pubId,
+                            'publication_uuid' => $uuid,
+                            'project_id' => $projectId,
+                            'attempts' => $attempts,
+                            'max_attempts' => $maxAttempts,
+                            'started_at' => $startedAt,
+                            'timeout_seconds' => $timeoutSeconds,
+                        ]);
+                        continue;
+                    }
+                    $retryStmt = $conn->prepare("UPDATE publications SET status='queued', error=NULL, started_at=NULL, finished_at=NULL, pid=NULL WHERE id = ? LIMIT 1");
+                    if ($retryStmt) { $retryStmt->bind_param('i', $pubId); $retryStmt->execute(); $retryStmt->close(); }
+                    $queueStmt = $conn->prepare("UPDATE publication_queue SET status='queued', scheduled_at=NULL, job_uuid=? WHERE publication_id = ? LIMIT 1");
+                    if ($queueStmt) {
+                        $queueStmt->bind_param('si', $uuid, $pubId);
+                        $queueStmt->execute();
+                        $affected = $queueStmt->affected_rows;
+                        $queueStmt->close();
+                    } else {
+                        $affected = 0;
+                    }
+                    if ($affected === 0) {
+                        $insQueue = $conn->prepare("INSERT INTO publication_queue (job_uuid, publication_id, project_id, user_id, page_url, status) VALUES (?, ?, ?, ?, ?, 'queued')");
+                        if ($insQueue) { $insQueue->bind_param('siiis', $uuid, $pubId, $projectId, $userId, $pageUrl); @$insQueue->execute(); $insQueue->close(); }
+                    }
+                    $stats['released']++;
+                    pp_promotion_log('promotion.publication_timeout_requeued', [
+                        'publication_id' => $pubId,
+                        'publication_uuid' => $uuid,
+                        'project_id' => $projectId,
+                        'attempts' => $attempts,
+                        'max_attempts' => $maxAttempts,
+                        'started_at' => $startedAt,
+                        'timeout_seconds' => $timeoutSeconds,
+                    ]);
+                }
+                $res->free();
+            }
+            $stmt->close();
+        }
+        if ($closeConn) { $conn->close(); }
+        return $stats;
+    }
+}
 if (!function_exists('pp_count_running_jobs')) {
     function pp_count_running_jobs(): int {
         try { $conn = @connect_db(); } catch (Throwable $e) { return 0; }
@@ -18,7 +128,7 @@ if (!function_exists('pp_claim_next_publication_job')) {
     function pp_claim_next_publication_job(): ?int {
         try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
         if (!$conn) return null; $jobId = null; $id = null;
-        if ($res = @$conn->query("SELECT id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 1")) {
+    if ($res = @$conn->query("SELECT id FROM publications WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP) ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC LIMIT 1")) {
             if ($row = $res->fetch_assoc()) { $id = (int) $row['id']; } $res->free();
         }
         if ($id) {
@@ -43,7 +153,7 @@ if (!function_exists('pp_process_publication_job')) {
                     $res->free();
                 }
             }
-            $selectSql = 'SELECT p.id, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish';
+            $selectSql = 'SELECT p.id, p.uuid, p.project_id, p.page_url, p.anchor, p.network, p.post_url, p.status, pr.name AS project_name, pr.language AS project_language, pr.wishes AS project_wish';
             if ($hasJobPayloadColumn) { $selectSql .= ', p.job_payload'; }
             $selectSql .= ' FROM publications p JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? LIMIT 1';
             $stmt = $conn->prepare($selectSql);
@@ -63,6 +173,19 @@ if (!function_exists('pp_process_publication_job')) {
             return $candidate;
         };
 
+        $publicationUuid = trim((string)($row['uuid'] ?? ''));
+        if ($publicationUuid === '') {
+            if (function_exists('pp_generate_uuid_v4')) {
+                $publicationUuid = pp_generate_uuid_v4();
+                if ($publicationUuid !== '') {
+                    if ($upd = $conn->prepare('UPDATE publications SET uuid = ? WHERE id = ? LIMIT 1')) {
+                        $upd->bind_param('si', $publicationUuid, $pubId);
+                        $upd->execute();
+                        $upd->close();
+                    }
+                }
+            }
+        }
         $projectId = (int)$row['project_id']; $url = (string)$row['page_url']; $anchor = trim((string)$row['anchor'] ?? ''); $networkSlug = trim((string)$row['network'] ?? '');
         $projectLanguageRaw = (string)($row['project_language'] ?? 'ru');
         $projectLanguageNorm = $normalizeLanguage($projectLanguageRaw);
@@ -114,6 +237,7 @@ if (!function_exists('pp_process_publication_job')) {
             'language' => $linkLanguage,
             'wish' => $linkWish,
             'projectId' => $projectId,
+            'publicationUuid' => $publicationUuid,
             'projectName' => $projectName,
             'openaiApiKey' => $openaiKey,
             'openaiModel' => $openaiModel,
@@ -237,7 +361,16 @@ if (!function_exists('pp_process_publication_job')) {
         $verificationJson = json_encode($verificationStore, JSON_UNESCAPED_UNICODE); if ($verificationJson === false) { $verificationJson = '{}'; }
         $finalStatus = 'success'; $errorMsg = null; switch ($verificationStatus) { case 'success': $finalStatus = 'success'; break; case 'partial': $finalStatus = 'partial'; break; case 'failed': case 'error': $finalStatus = 'failed'; $reasonCode = strtoupper((string)($verificationResult['reason'] ?? 'FAILED')); $errorMsg = 'VERIFICATION_' . $reasonCode; break; case 'skipped': default: $finalStatus = 'success'; break; }
         $up = $conn->prepare('UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, log_file = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1');
-        if ($up) { $statusParam = $finalStatus; $errorParam = $errorMsg; $verificationStatusParam = $verificationStatus; $detailsParam = $verificationJson; $logParam = $logRelative; $up->bind_param('sssssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $logParam, $verificationStatusParam, $detailsParam, $pubId); $up->execute(); $up->close(); }
+        if ($up) {
+            $statusParam = $finalStatus;
+            $errorParam = $errorMsg;
+            $verificationStatusParam = $verificationStatus;
+            $detailsParam = $verificationJson;
+            $logParam = $logRelative;
+            $up->bind_param('ssssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $logParam, $verificationStatusParam, $detailsParam, $pubId);
+            $up->execute();
+            $up->close();
+        }
         if ($finalStatus === 'failed') { @$conn->query("UPDATE publication_queue SET status='failed' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         else { $queueStatus = ($finalStatus === 'partial') ? 'partial' : 'success'; @$conn->query("UPDATE publication_queue SET status='" . $queueStatus . "' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         if (function_exists('pp_promotion_handle_publication_update')) {
@@ -259,6 +392,10 @@ if (!function_exists('pp_process_publication_job')) {
 if (!function_exists('pp_run_queue_worker')) {
     function pp_run_queue_worker(int $maxJobs = 1): void {
         if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); } else { if (function_exists('session_write_close')) { @session_write_close(); } @ignore_user_abort(true); }
+        $releaseStats = pp_release_stuck_publications();
+        if (($releaseStats['released'] ?? 0) > 0 || ($releaseStats['failed'] ?? 0) > 0) {
+            pp_promotion_log('promotion.pubqueue.watchdog_summary', $releaseStats);
+        }
         $maxJobs = max(1, $maxJobs); $processed = 0; $spacingMs = function_exists('pp_get_min_job_spacing_ms') ? pp_get_min_job_spacing_ms() : 0;
         while ($processed < $maxJobs) { $running = pp_count_running_jobs(); if ($running >= pp_get_max_concurrent_jobs()) { break; } $jobId = pp_claim_next_publication_job(); if (!$jobId) { break; } pp_process_publication_job($jobId); $processed++; if ($spacingMs > 0) { @usleep($spacingMs * 1000); } }
     }
