@@ -6,6 +6,132 @@ require_once __DIR__ . '/promotion/settings.php';
 require_once __DIR__ . '/promotion/utils.php';
 require_once __DIR__ . '/promotion/crowd.php';
 
+if (!function_exists('pp_promotion_recover_stuck_nodes')) {
+    function pp_promotion_recover_stuck_nodes(mysqli $conn, int $runId, int $maxAgeSeconds = 900): void {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return; }
+        $maxAgeSeconds = max(180, (int)$maxAgeSeconds);
+        $cutoffTs = time() - $maxAgeSeconds;
+        $cutoff = date('Y-m-d H:i:s', $cutoffTs);
+        $stmt = $conn->prepare("SELECT id, publication_id, status, level, network_slug FROM promotion_nodes WHERE run_id = ? AND status IN ('queued','running') AND COALESCE(updated_at, started_at, queued_at, created_at) < ? LIMIT 200");
+        if (!$stmt) { return; }
+        $stmt->bind_param('is', $runId, $cutoff);
+        if (!$stmt->execute()) { $stmt->close(); return; }
+        $result = $stmt->get_result();
+        if (!$result) { $stmt->close(); return; }
+        $changed = false;
+        while ($node = $result->fetch_assoc()) {
+            $nodeId = (int)($node['id'] ?? 0);
+            if ($nodeId <= 0) { continue; }
+            $publicationId = (int)($node['publication_id'] ?? 0);
+            $pubStatus = null;
+            $pubStartedAt = null;
+            $pubCreatedAt = null;
+            $pubPostUrl = null;
+            $pubError = null;
+            if ($publicationId > 0) {
+                $pubStmt = $conn->prepare('SELECT status, started_at, created_at, post_url, error FROM publications WHERE id = ? LIMIT 1');
+                if ($pubStmt) {
+                    $pubStmt->bind_param('i', $publicationId);
+                    if ($pubStmt->execute()) {
+                        $pubRow = $pubStmt->get_result()->fetch_assoc();
+                        if ($pubRow) {
+                            $pubStatus = (string)($pubRow['status'] ?? '');
+                            $pubStartedAt = $pubRow['started_at'] ?? null;
+                            $pubCreatedAt = $pubRow['created_at'] ?? null;
+                            $pubPostUrl = $pubRow['post_url'] ?? null;
+                            $pubError = $pubRow['error'] ?? null;
+                        }
+                    }
+                    $pubStmt->close();
+                }
+            }
+
+            $shouldFail = false;
+            $shouldComplete = false;
+            $reason = 'NODE_STUCK';
+            if ($publicationId <= 0) {
+                $shouldFail = true;
+                $reason = 'PUBLICATION_MISSING';
+            } elseif ($pubStatus === null || $pubStatus === '') {
+                $shouldFail = true;
+                $reason = 'PUBLICATION_MISSING';
+            } elseif (in_array($pubStatus, ['success','completed','partial'], true)) {
+                $shouldComplete = true;
+            } elseif (in_array($pubStatus, ['failed','cancelled'], true)) {
+                $shouldFail = true;
+                $reason = $pubStatus === 'failed' ? (string)($pubError ?? 'PUBLICATION_FAILED') : 'PUBLICATION_CANCELLED';
+            } else {
+                $timeRef = $pubStartedAt ?: $pubCreatedAt;
+                $timeOk = false;
+                if ($timeRef) {
+                    $ts = strtotime((string)$timeRef);
+                    if ($ts !== false) {
+                        $timeOk = ($ts >= $cutoffTs);
+                    }
+                }
+                if (!$timeOk) {
+                    $shouldFail = true;
+                    $reason = 'PUBLICATION_TIMEOUT';
+                }
+            }
+
+            if ($shouldComplete) {
+                $finalStatus = in_array($pubStatus, ['partial'], true) ? 'partial' : 'success';
+                $resultUrl = is_string($pubPostUrl) ? trim($pubPostUrl) : '';
+                $nodeUpdate = $conn->prepare('UPDATE promotion_nodes SET status=?, result_url=?, error=NULL, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1');
+                if ($nodeUpdate) {
+                    $nodeUpdate->bind_param('ssi', $finalStatus, $resultUrl, $nodeId);
+                    if ($nodeUpdate->execute()) {
+                        $changed = true;
+                        pp_promotion_log('promotion.node_recovered_success', [
+                            'run_id' => $runId,
+                            'node_id' => $nodeId,
+                            'publication_id' => $publicationId,
+                            'status' => $finalStatus,
+                        ]);
+                    }
+                    $nodeUpdate->close();
+                }
+                continue;
+            }
+
+            if (!$shouldFail) { continue; }
+
+            $reasonText = is_string($reason) && $reason !== '' ? $reason : 'NODE_STUCK';
+            if ($publicationId > 0 && !in_array($pubStatus, ['success','completed','partial'], true)) {
+                $pubUpdate = $conn->prepare("UPDATE publications SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP, pid=NULL WHERE id=? AND status NOT IN ('success','completed','partial') LIMIT 1");
+                if ($pubUpdate) {
+                    $pubUpdate->bind_param('si', $reasonText, $publicationId);
+                    $pubUpdate->execute();
+                    $pubUpdate->close();
+                }
+                @$conn->query('UPDATE publication_queue SET status=\'failed\' WHERE publication_id = ' . $publicationId);
+                @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . $publicationId);
+            }
+            $nodeUpdate = $conn->prepare("UPDATE promotion_nodes SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running') LIMIT 1");
+            if ($nodeUpdate) {
+                $nodeUpdate->bind_param('si', $reasonText, $nodeId);
+                if ($nodeUpdate->execute()) {
+                    $changed = true;
+                    pp_promotion_log('promotion.node_recovered_failed', [
+                        'run_id' => $runId,
+                        'node_id' => $nodeId,
+                        'publication_id' => $publicationId,
+                        'reason' => $reasonText,
+                    ]);
+                }
+                $nodeUpdate->close();
+            }
+        }
+        $result->free();
+        $stmt->close();
+        if ($changed) {
+            pp_promotion_update_progress($conn, $runId);
+        }
+    }
+}
+
 if (!function_exists('pp_promotion_process_run')) {
     function pp_promotion_process_run(mysqli $conn, array $run): void {
         $runId = (int)$run['id'];
@@ -37,7 +163,8 @@ if (!function_exists('pp_promotion_process_run')) {
             $req = $requirements[1];
             $count = (int)$req['count'];
             $usage = [];
-            $nets = pp_promotion_pick_networks(1, $count, $project, $usage);
+            $targetForLevel = (string)($run['target_url'] ?? '');
+            $nets = pp_promotion_pick_networks(1, $count, $project, $usage, $targetForLevel);
             if (empty($nets)) {
                 pp_promotion_log('promotion.level1.networks_missing', [
                     'run_id' => $runId,
@@ -99,6 +226,7 @@ if (!function_exists('pp_promotion_process_run')) {
             return;
         }
         if ($stage === 'level1_active') {
+            pp_promotion_recover_stuck_nodes($conn, $runId);
             $res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=1 GROUP BY status');
             $pending = 0; $success = 0; $failed = 0;
             if ($res) {
@@ -124,7 +252,23 @@ if (!function_exists('pp_promotion_process_run')) {
                     }
                     $usageRes->free();
                 }
-                $netsRetry = pp_promotion_pick_networks(1, $needed, $project, $usage);
+                $targetForLevel = (string)($run['target_url'] ?? '');
+                if ($targetForLevel !== '') {
+                    $targetKey = pp_promotion_normalize_target_key($targetForLevel);
+                    if ($targetKey !== '') {
+                        if (!isset($usage['__targets']) || !is_array($usage['__targets'])) {
+                            $usage['__targets'] = [];
+                        }
+                        if (!isset($usage['__targets'][$targetKey])) {
+                            $usage['__targets'][$targetKey] = [];
+                        }
+                        foreach ($usage as $slugUsage => $countUsage) {
+                            if ($slugUsage === '__targets') { continue; }
+                            $usage['__targets'][$targetKey][$slugUsage] = (int)$countUsage;
+                        }
+                    }
+                }
+                $netsRetry = pp_promotion_pick_networks(1, $needed, $project, $usage, $targetForLevel);
                 if (empty($netsRetry)) {
                     pp_promotion_log('promotion.level1.retry_exhausted', [
                         'run_id' => $runId,
@@ -232,7 +376,11 @@ if (!function_exists('pp_promotion_process_run')) {
             }
             $created = 0;
             foreach ($nodesL1 as $parentNode) {
-                $nets = pp_promotion_pick_networks(2, $perParent, $project, $usage);
+                $targetUrlForParent = trim((string)($parentNode['result_url'] ?? ''));
+                if ($targetUrlForParent === '') {
+                    $targetUrlForParent = trim((string)($parentNode['target_url'] ?? ''));
+                }
+                $nets = pp_promotion_pick_networks(2, $perParent, $project, $usage, $targetUrlForParent);
                 if (empty($nets)) { continue; }
                 $selectedSlugsL2 = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $nets);
                 $usageSnapshotL2 = [];
@@ -320,6 +468,7 @@ if (!function_exists('pp_promotion_process_run')) {
             return;
         }
         if ($stage === 'level2_active') {
+            pp_promotion_recover_stuck_nodes($conn, $runId);
             $res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=2 GROUP BY status');
             $pending = 0; $success = 0; $failed = 0;
             if ($res) {
@@ -347,6 +496,7 @@ if (!function_exists('pp_promotion_process_run')) {
 
             $parentStats = [];
             $parentInfo = [];
+            $usageLevel2Targets = [];
             if ($detailRes = @$conn->query('SELECT n.id, n.parent_id, n.status, n.network_slug, n.target_url, p.result_url AS parent_result_url, p.target_url AS parent_target_url, p.level AS parent_level FROM promotion_nodes n LEFT JOIN promotion_nodes p ON p.id = n.parent_id WHERE n.run_id=' . $runId . ' AND n.level=2')) {
                 while ($row = $detailRes->fetch_assoc()) {
                     $parentId = isset($row['parent_id']) ? (int)$row['parent_id'] : 0;
@@ -359,8 +509,25 @@ if (!function_exists('pp_promotion_process_run')) {
                         $parentStats[$parentId]['success']++;
                     }
                     $slugUsage = (string)($row['network_slug'] ?? '');
-                    if ($slugUsage !== '' && !isset($usageLevel2[$slugUsage])) {
-                        $usageLevel2[$slugUsage] = 1;
+                    if ($slugUsage !== '') {
+                        if (!isset($usageLevel2[$slugUsage])) {
+                            $usageLevel2[$slugUsage] = 0;
+                        }
+                        $usageLevel2[$slugUsage] = (int)$usageLevel2[$slugUsage];
+                        $targetForUsage = trim((string)($row['target_url'] ?? ''));
+                        if ($targetForUsage === '') {
+                            $targetForUsage = trim((string)($row['parent_result_url'] ?? ''));
+                        }
+                        $targetKeyUsage = pp_promotion_normalize_target_key($targetForUsage);
+                        if ($targetKeyUsage !== '') {
+                            if (!isset($usageLevel2Targets[$targetKeyUsage])) {
+                                $usageLevel2Targets[$targetKeyUsage] = [];
+                            }
+                            if (!isset($usageLevel2Targets[$targetKeyUsage][$slugUsage])) {
+                                $usageLevel2Targets[$targetKeyUsage][$slugUsage] = 0;
+                            }
+                            $usageLevel2Targets[$targetKeyUsage][$slugUsage]++;
+                        }
                     }
                     $parentInfo[$parentId] = [
                         'result_url' => (string)($row['parent_result_url'] ?? ''),
@@ -369,6 +536,10 @@ if (!function_exists('pp_promotion_process_run')) {
                     ];
                 }
                 $detailRes->free();
+            }
+
+            if (!empty($usageLevel2Targets)) {
+                $usageLevel2['__targets'] = $usageLevel2Targets;
             }
 
             $parentsNeeding = [];
@@ -433,7 +604,11 @@ if (!function_exists('pp_promotion_process_run')) {
                         }
                     }
 
-                    $netsRetry = pp_promotion_pick_networks(2, $deficit, $project, $usageLevel2);
+                    $targetUrlForParent = (string)($parentInfo[$parentId]['result_url'] ?? '');
+                    if ($targetUrlForParent === '') {
+                        $targetUrlForParent = (string)($parentInfo[$parentId]['target_url'] ?? '');
+                    }
+                    $netsRetry = pp_promotion_pick_networks(2, $deficit, $project, $usageLevel2, $targetUrlForParent);
                     if (empty($netsRetry)) { continue; }
                     $retrySlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $netsRetry);
                     pp_promotion_log('promotion.level2.retry_scheduled', [
@@ -565,7 +740,11 @@ if (!function_exists('pp_promotion_process_run')) {
                 }
             }
             foreach ($level2Nodes as $parentNode) {
-                $nets = pp_promotion_pick_networks(3, $perParent, $project, $usage);
+                $targetUrlForParent = trim((string)($parentNode['result_url'] ?? ''));
+                if ($targetUrlForParent === '') {
+                    $targetUrlForParent = trim((string)($parentNode['target_url'] ?? ''));
+                }
+                $nets = pp_promotion_pick_networks(3, $perParent, $project, $usage, $targetUrlForParent);
                 if (empty($nets)) { continue; }
                 $selectedSlugs = array_map(static function(array $net) { return (string)($net['slug'] ?? ''); }, $nets);
                 $usageSnapshot = [];
@@ -691,6 +870,7 @@ if (!function_exists('pp_promotion_process_run')) {
             return;
         }
         if ($stage === 'level3_active') {
+            pp_promotion_recover_stuck_nodes($conn, $runId);
             $res = @$conn->query('SELECT status, COUNT(*) AS c FROM promotion_nodes WHERE run_id=' . $runId . ' AND level=3 GROUP BY status');
             $pending = 0; $success = 0; $failed = 0;
             if ($res) {

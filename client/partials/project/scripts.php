@@ -2725,6 +2725,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function createLinkTableManager() {
         const state = {
             search: '',
+            searchRaw: '',
             status: 'all',
             history: 'all',
             duplicates: 'all',
@@ -2744,10 +2745,21 @@ document.addEventListener('DOMContentLoaded', function() {
             empty: null,
             searchInput: null,
             statusSelect: null,
+            statusTabs: [],
             historySelect: null,
             duplicatesSelect: null,
             languageSelect: null
         };
+
+        const STATUS_FILTER_OPTIONS = ['all', 'active', 'completed', 'idle', 'issues', 'report_ready'];
+        const HISTORY_FILTER_OPTIONS = ['all', 'with', 'without'];
+        const DUPLICATE_FILTER_OPTIONS = ['all', 'duplicates', 'unique'];
+
+        function normalizeChoice(value, allowed, fallback) {
+            if (!Array.isArray(allowed) || allowed.length === 0) { return fallback; }
+            const lowered = (value || '').toString().toLowerCase();
+            return allowed.includes(lowered) ? lowered : fallback;
+        }
 
         let searchTimer = null;
         let bound = false;
@@ -2762,6 +2774,7 @@ document.addEventListener('DOMContentLoaded', function() {
             dom.empty = document.querySelector('[data-link-empty]');
             dom.searchInput = document.querySelector('[data-link-filter-search]');
             dom.statusSelect = document.querySelector('[data-link-filter-status]');
+            dom.statusTabs = Array.from(document.querySelectorAll('[data-link-status-tab]'));
             dom.historySelect = document.querySelector('[data-link-filter-history]');
             dom.duplicatesSelect = document.querySelector('[data-link-filter-duplicates]');
             dom.languageSelect = document.querySelector('[data-link-filter-language]');
@@ -2771,6 +2784,120 @@ document.addEventListener('DOMContentLoaded', function() {
                     state.perPage = parsed;
                 }
             }
+        }
+
+        function getLanguageOptions() {
+            if (!dom.languageSelect) { return []; }
+            return Array.from(dom.languageSelect.options || [])
+                .map(option => (option.value || '').toString().toLowerCase())
+                .filter(Boolean);
+        }
+
+        function loadStateFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            state.status = normalizeChoice(params.get('status'), STATUS_FILTER_OPTIONS, state.status);
+            state.history = normalizeChoice(params.get('history'), HISTORY_FILTER_OPTIONS, state.history);
+            state.duplicates = normalizeChoice(params.get('duplicates'), DUPLICATE_FILTER_OPTIONS, state.duplicates);
+
+            const langParam = (params.get('lang') || '').toLowerCase();
+            if (langParam && langParam !== 'all') {
+                const availableLangs = getLanguageOptions();
+                state.language = availableLangs.includes(langParam) ? langParam : 'all';
+            } else {
+                state.language = 'all';
+            }
+
+            const searchParamRaw = params.has('q') ? (params.get('q') || '') : '';
+            state.searchRaw = searchParamRaw;
+            state.search = searchParamRaw.trim().toLowerCase();
+
+            const pageParam = parseInt(params.get('page') || '', 10);
+            if (Number.isFinite(pageParam) && pageParam > 0) {
+                state.page = pageParam;
+            } else {
+                state.page = 1;
+            }
+        }
+
+        function syncStatusInputs() {
+            const statusValue = normalizeChoice(state.status, STATUS_FILTER_OPTIONS, 'all');
+            state.status = statusValue;
+            if (dom.statusSelect && dom.statusSelect.value !== statusValue) {
+                dom.statusSelect.value = statusValue;
+            }
+            if (dom.statusTabs && dom.statusTabs.length) {
+                dom.statusTabs.forEach(button => {
+                    const buttonValue = normalizeChoice(button.dataset.status, STATUS_FILTER_OPTIONS, 'all');
+                    const isActive = buttonValue === statusValue;
+                    button.classList.toggle('active', isActive);
+                    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                    if (isActive) {
+                        button.setAttribute('aria-current', 'page');
+                    } else {
+                        button.removeAttribute('aria-current');
+                    }
+                });
+            }
+        }
+
+        function syncFilterInputs() {
+            syncStatusInputs();
+            if (dom.searchInput && dom.searchInput.value !== state.searchRaw) {
+                dom.searchInput.value = state.searchRaw;
+            }
+            if (dom.historySelect && dom.historySelect.value !== state.history) {
+                dom.historySelect.value = state.history;
+            }
+            if (dom.duplicatesSelect && dom.duplicatesSelect.value !== state.duplicates) {
+                dom.duplicatesSelect.value = state.duplicates;
+            }
+            if (dom.languageSelect) {
+                const options = getLanguageOptions();
+                const desired = options.includes(state.language) ? state.language : 'all';
+                if (dom.languageSelect.value !== desired) {
+                    dom.languageSelect.value = desired;
+                }
+                state.language = desired;
+            }
+        }
+
+        function updateUrlParams() {
+            if (!window.history || typeof window.history.replaceState !== 'function') {
+                return;
+            }
+            const url = new URL(window.location.href);
+            const params = url.searchParams;
+            const searchRaw = (state.searchRaw || '').trim();
+
+            const setParam = (key, value, defaultValue) => {
+                if (value === undefined || value === null || value === '' || value === defaultValue) {
+                    params.delete(key);
+                } else {
+                    params.set(key, value);
+                }
+            };
+
+            setParam('status', state.status, 'all');
+            setParam('history', state.history, 'all');
+            setParam('duplicates', state.duplicates, 'all');
+            setParam('lang', state.language, 'all');
+            setParam('page', state.page, 1);
+            setParam('q', searchRaw, '');
+
+            url.search = params.toString();
+            window.history.replaceState(null, '', url.toString());
+        }
+
+        function setStatus(value) {
+            const normalized = normalizeChoice(value, STATUS_FILTER_OPTIONS, 'all');
+            if (state.status === normalized && state.page === 1) {
+                syncStatusInputs();
+                return;
+            }
+            state.status = normalized;
+            state.page = 1;
+            syncStatusInputs();
+            applyFilters();
         }
 
         function collectRows() {
@@ -2960,10 +3087,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         function applyFilters() {
+            syncFilterInputs();
             if (!dom.table) {
                 if (dom.summary) { dom.summary.textContent = NO_MATCHES_LABEL; }
                 if (dom.paginationWrapper) { dom.paginationWrapper.classList.add('d-none'); }
                 recalcPromotionStats();
+                updateUrlParams();
                 return;
             }
             const filteredRows = [];
@@ -2999,6 +3128,7 @@ document.addEventListener('DOMContentLoaded', function() {
             updateSummary(total, totalPages, total === 0 ? 0 : pageStartIndex + 1, pageEndIndex);
             renderPagination(totalPages);
             recalcPromotionStats();
+            updateUrlParams();
         }
 
         function bind() {
@@ -3006,10 +3136,11 @@ document.addEventListener('DOMContentLoaded', function() {
             bound = true;
             if (dom.searchInput) {
                 dom.searchInput.addEventListener('input', (event) => {
-                    const value = (event.target.value || '').toLowerCase();
+                    const rawValue = event.target.value || '';
                     if (searchTimer) { clearTimeout(searchTimer); }
                     searchTimer = setTimeout(() => {
-                        state.search = value.trim();
+                        state.searchRaw = rawValue;
+                        state.search = rawValue.trim().toLowerCase();
                         state.page = 1;
                         applyFilters();
                     }, 180);
@@ -3017,28 +3148,36 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (dom.statusSelect) {
                 dom.statusSelect.addEventListener('change', () => {
-                    state.status = (dom.statusSelect.value || 'all');
-                    state.page = 1;
-                    applyFilters();
+                    setStatus(dom.statusSelect.value || 'all');
+                });
+            }
+            if (dom.statusTabs && dom.statusTabs.length) {
+                dom.statusTabs.forEach(button => {
+                    button.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        const value = button.dataset.status || 'all';
+                        setStatus(value);
+                    });
                 });
             }
             if (dom.historySelect) {
                 dom.historySelect.addEventListener('change', () => {
-                    state.history = (dom.historySelect.value || 'all');
+                    state.history = normalizeChoice(dom.historySelect.value, HISTORY_FILTER_OPTIONS, 'all');
                     state.page = 1;
                     applyFilters();
                 });
             }
             if (dom.duplicatesSelect) {
                 dom.duplicatesSelect.addEventListener('change', () => {
-                    state.duplicates = (dom.duplicatesSelect.value || 'all');
+                    state.duplicates = normalizeChoice(dom.duplicatesSelect.value, DUPLICATE_FILTER_OPTIONS, 'all');
                     state.page = 1;
                     applyFilters();
                 });
             }
             if (dom.languageSelect) {
                 dom.languageSelect.addEventListener('change', () => {
-                    state.language = (dom.languageSelect.value || 'all');
+                    const raw = (dom.languageSelect.value || 'all').toString().toLowerCase();
+                    state.language = raw || 'all';
                     state.page = 1;
                     applyFilters();
                 });
@@ -3047,12 +3186,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
         function sync() {
             cacheDom();
+            loadStateFromUrl();
             collectRows();
             updateLayoutVisibility();
             if (state.rows.length === 0) {
                 if (dom.summary) { dom.summary.textContent = NO_MATCHES_LABEL; }
                 if (dom.paginationWrapper) { dom.paginationWrapper.classList.add('d-none'); }
                 recalcPromotionStats();
+                updateUrlParams();
                 return;
             }
             updateMetadata();
@@ -3061,6 +3202,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         function init() {
             cacheDom();
+            loadStateFromUrl();
+            syncFilterInputs();
             bind();
             collectRows();
             updateLayoutVisibility();

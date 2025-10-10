@@ -57,10 +57,13 @@ $levelsList = [];
 // Project-wide summary stats
 if ($stmt = $conn->prepare("SELECT
     COUNT(*) AS total,
-    SUM(CASE WHEN p.post_url IS NOT NULL AND p.post_url <> '' THEN 1 ELSE 0 END) AS published,
+    COUNT(*) AS published,
     MAX(p.created_at) AS lastDate
   FROM publications p
-  WHERE p.project_id = ?")) {
+  WHERE p.project_id = ?
+    AND p.status IN ('success','completed','partial')
+    AND p.post_url IS NOT NULL
+    AND p.post_url <> ''")) {
   $stmt->bind_param('i', $id);
   $stmt->execute();
   if ($summaryRes = $stmt->get_result()) {
@@ -76,7 +79,11 @@ if ($stmt = $conn->prepare("SELECT
 // Network counts for chips
 if ($stmt = $conn->prepare("SELECT p.network, COUNT(*) AS cnt
   FROM publications p
-  WHERE p.project_id = ? AND p.network <> ''
+  WHERE p.project_id = ?
+    AND p.network <> ''
+    AND p.status IN ('success','completed','partial')
+    AND p.post_url IS NOT NULL
+    AND p.post_url <> ''
   GROUP BY p.network
   ORDER BY cnt DESC")) {
   $stmt->bind_param('i', $id);
@@ -96,6 +103,9 @@ if ($stmt = $conn->prepare("SELECT COALESCE(pn.level, 0) AS lvl, COUNT(*) AS cnt
   FROM publications p
   LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
   WHERE p.project_id = ?
+    AND p.status IN ('success','completed','partial')
+    AND p.post_url IS NOT NULL
+    AND p.post_url <> ''
   GROUP BY lvl
   ORDER BY lvl ASC")) {
   $stmt->bind_param('i', $id);
@@ -122,7 +132,10 @@ $publications = [];
 $sql = "SELECT p.id, p.created_at, p.network, p.published_by, p.anchor, p.page_url, p.post_url, pn.level AS promotion_level
   FROM publications p
   LEFT JOIN promotion_nodes pn ON pn.publication_id = p.id
-  WHERE p.project_id = ?";
+  WHERE p.project_id = ?
+    AND p.status IN ('success','completed','partial')
+    AND p.post_url IS NOT NULL
+    AND p.post_url <> ''";
 $types = 'i';
 $params = [$id];
 

@@ -116,15 +116,29 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
             </div>
         </div>
         <div class="card-body">
-            <div class="link-filters d-flex flex-wrap align-items-center gap-2 mb-3 <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-filters>
-                <div class="flex-grow-1 flex-md-grow-0" style="min-width:220px;">
-                    <div class="input-group input-group-sm">
-                        <span class="input-group-text"><i class="bi bi-search"></i></span>
-                        <input type="search" class="form-control" placeholder="<?php echo __('Поиск по ссылкам, анкорам, пожеланиям'); ?>" data-link-filter-search>
+            <div class="link-filters d-flex flex-column gap-3 mb-3 <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-filters>
+                <div class="link-filter-status w-100">
+                    <div class="nav nav-pills link-status-tabs flex-wrap gap-2 d-none d-lg-flex" data-link-status-tabs>
+                        <button type="button" class="nav-link active" data-link-status-tab data-status="all">
+                            <i class="bi bi-list-task me-1"></i><?php echo __('Все'); ?>
+                        </button>
+                        <button type="button" class="nav-link" data-link-status-tab data-status="active">
+                            <i class="bi bi-lightning-charge me-1"></i><?php echo __('В работе'); ?>
+                        </button>
+                        <button type="button" class="nav-link" data-link-status-tab data-status="completed">
+                            <i class="bi bi-patch-check me-1"></i><?php echo __('Завершено'); ?>
+                        </button>
+                        <button type="button" class="nav-link" data-link-status-tab data-status="idle">
+                            <i class="bi bi-hourglass-split me-1"></i><?php echo __('Не запускалось'); ?>
+                        </button>
+                        <button type="button" class="nav-link" data-link-status-tab data-status="issues">
+                            <i class="bi bi-exclamation-triangle me-1"></i><?php echo __('Ошибки / отменено'); ?>
+                        </button>
+                        <button type="button" class="nav-link" data-link-status-tab data-status="report_ready">
+                            <i class="bi bi-clipboard-check me-1"></i><?php echo __('Отчет готов'); ?>
+                        </button>
                     </div>
-                </div>
-                <div>
-                    <select class="form-select form-select-sm" data-link-filter-status>
+                    <select class="form-select form-select-sm d-lg-none mt-2" data-link-filter-status>
                         <option value="all"><?php echo __('Все статусы'); ?></option>
                         <option value="active"><?php echo __('В работе'); ?></option>
                         <option value="completed"><?php echo __('Завершено'); ?></option>
@@ -133,28 +147,36 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                         <option value="report_ready"><?php echo __('Отчет готов'); ?></option>
                     </select>
                 </div>
-                <div>
-                    <select class="form-select form-select-sm" data-link-filter-history>
+                <div class="link-filter-controls d-flex flex-wrap align-items-center gap-2">
+                    <div class="flex-grow-1 flex-md-grow-0" style="min-width:220px;">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="search" class="form-control" placeholder="<?php echo __('Поиск по ссылкам, анкорам, пожеланиям'); ?>" data-link-filter-search>
+                        </div>
+                    </div>
+                    <div>
+                        <select class="form-select form-select-sm" data-link-filter-history>
                         <option value="all"><?php echo __('Все продвижения'); ?></option>
                         <option value="with"><?php echo __('С промо-историей'); ?></option>
                         <option value="without"><?php echo __('Без продвижения'); ?></option>
                     </select>
-                </div>
-                <div>
-                    <select class="form-select form-select-sm" data-link-filter-duplicates>
+                    </div>
+                    <div>
+                        <select class="form-select form-select-sm" data-link-filter-duplicates>
                         <option value="all"><?php echo __('Все ссылки'); ?></option>
                         <option value="duplicates"><?php echo __('Только дубли'); ?></option>
                         <option value="unique"><?php echo __('Без дублей'); ?></option>
                     </select>
-                </div>
-                <div>
-                    <select class="form-select form-select-sm" data-link-filter-language>
+                    </div>
+                    <div>
+                        <select class="form-select form-select-sm" data-link-filter-language>
                         <option value="all"><?php echo __('Любой язык'); ?></option>
                         <?php foreach ($linkLanguageOptions as $langOption): ?>
                             <?php $langOption = strtolower((string)$langOption); ?>
                             <option value="<?php echo htmlspecialchars($langOption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php echo strtoupper(htmlspecialchars($langOption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?></option>
                         <?php endforeach; ?>
                     </select>
+                    </div>
                 </div>
             </div>
             <div class="table-responsive <?php echo $linksHaveEntries ? '' : 'd-none'; ?>" data-link-table-wrapper>

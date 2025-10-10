@@ -370,8 +370,18 @@ if (!function_exists('pp_promotion_send_completion_notification')) {
     }
 }
 
+if (!function_exists('pp_promotion_normalize_target_key')) {
+    function pp_promotion_normalize_target_key(?string $url): string {
+        $candidate = trim((string)$url);
+        if ($candidate === '') { return ''; }
+        $candidate = preg_replace('~[#].*$~u', '', $candidate ?? '') ?? $candidate;
+        $candidate = preg_replace('~[\s\r\n\t]+~u', ' ', $candidate ?? '') ?? $candidate;
+        return strtolower($candidate);
+    }
+}
+
 if (!function_exists('pp_promotion_pick_networks')) {
-    function pp_promotion_pick_networks(int $level, int $count, array $project, array &$usage): array {
+    function pp_promotion_pick_networks(int $level, int $count, array $project, array &$usage, ?string $currentTarget = null): array {
         $count = (int)$count;
         if ($count <= 0) { return []; }
 
@@ -381,6 +391,14 @@ if (!function_exists('pp_promotion_pick_networks')) {
         $levelStr = (string)$level;
         $usageLimit = (int)(pp_promotion_settings()['network_repeat_limit'] ?? 0);
         if ($usageLimit < 0) { $usageLimit = 0; }
+
+        $targetKey = pp_promotion_normalize_target_key($currentTarget);
+        if (!isset($usage['__targets']) || !is_array($usage['__targets'])) {
+            $usage['__targets'] = [];
+        }
+        if ($targetKey !== '' && !isset($usage['__targets'][$targetKey])) {
+            $usage['__targets'][$targetKey] = [];
+        }
 
         $catalog = [];
         foreach ($networks as $net) {
@@ -393,7 +411,8 @@ if (!function_exists('pp_promotion_pick_networks')) {
             }
             $slug = (string)($net['slug'] ?? '');
             if ($slug === '') { continue; }
-            if (!isset($usage[$slug])) { $usage[$slug] = 0; }
+            if ($slug === '__targets') { continue; }
+            if (!isset($usage[$slug]) || !is_numeric($usage[$slug])) { $usage[$slug] = 0; }
             $baseScore = (int)($net['priority'] ?? 0);
             $metaRegions = [];
             if (!empty($net['regions']) && is_array($net['regions'])) {
@@ -424,6 +443,11 @@ if (!function_exists('pp_promotion_pick_networks')) {
             $candidates = [];
             foreach ($catalog as $slug => $meta) {
                 $used = (int)($usage[$slug] ?? 0);
+                $perTargetUsed = 0;
+                if ($targetKey !== '' && isset($usage['__targets'][$targetKey]) && is_array($usage['__targets'][$targetKey])) {
+                    $perTargetUsed = (int)($usage['__targets'][$targetKey][$slug] ?? 0);
+                }
+                if ($usageLimit > 0 && $perTargetUsed >= $usageLimit) { continue; }
                 if (!$allowRepeats && $usageLimit > 0 && $used >= $usageLimit) { continue; }
                 $score = $meta['baseScore'];
                 if ($used > 0) { $score -= $used * 250; }
@@ -452,6 +476,12 @@ if (!function_exists('pp_promotion_pick_networks')) {
             $choice = $candidates[0];
             $selected[] = $choice['network'];
             $usage[$choice['slug']] = (int)($usage[$choice['slug']] ?? 0) + 1;
+            if ($targetKey !== '') {
+                if (!isset($usage['__targets'][$targetKey][$choice['slug']])) {
+                    $usage['__targets'][$targetKey][$choice['slug']] = 0;
+                }
+                $usage['__targets'][$targetKey][$choice['slug']]++;
+            }
         }
 
         return $selected;
