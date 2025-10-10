@@ -25,8 +25,12 @@ $level1Length = $level1Enabled ? $formatRange($promotionSettings['level1_min_len
 $level2Length = $level2Enabled ? $formatRange($promotionSettings['level2_min_len'] ?? 0, $promotionSettings['level2_max_len'] ?? 0) : '';
 $level3Length = $level3Enabled ? $formatRange($promotionSettings['level3_min_len'] ?? 0, $promotionSettings['level3_max_len'] ?? 0) : '';
 
-$levels = [];
-$cumulative = 0;
+$crowdPerPublication = max(0, (int)($promotionSettings['crowd_per_article'] ?? 0));
+$hasCrowd = !empty($promotionSettings['crowd_enabled']) && $crowdPerPublication > 0;
+$crowdLabel = $hasCrowd
+  ? sprintf(__('Crowd-слой: до %s проверенных площадок на публикацию'), $formatNumber($crowdPerPublication))
+  : __('Crowd-слой подключаем точечно под нишу');
+
 $levelImages = [
   1 => ['src' => 'img/level1.png', 'alt' => __('Уровень 1')],
   2 => ['src' => 'img/level2.png', 'alt' => __('Уровень 2')],
@@ -34,27 +38,49 @@ $levelImages = [
 ];
 
 $level1Total = $level1Count;
-$cumulative += $level1Total;
-$levels[] = [
-  'index' => 1,
-  'title' => __('Уровень 1 — фундаментальные активы'),
-  'description' => __('Надёжные Web 2.0 площадки с прямыми ссылками и проработанной семантикой. Каждая страница получает уникальный AI-контент и визуализацию.'),
-  'count' => $level1Total,
-  'cumulative' => $cumulative,
-  'length' => sprintf(__('Объём: %s знаков'), $level1Length),
-];
+$level2Total = $level2Enabled ? ($level1Total * $level2Per) : 0;
+$level3Total = $level3Enabled ? ($level2Total * $level3Per) : 0;
 
-$level2Total = 0;
+$levels = [];
+$cumulative = 0;
+
+if ($level1Enabled) {
+  $cumulative += $level1Total;
+  $levels[] = [
+    'index' => 1,
+    'title' => __('Уровень 1 — фундаментальные активы'),
+    'description' => __('Web 2.0 хабы с прямыми ссылками, уникальным AI-контентом и выверенным анкор-листом.'),
+    'count' => $level1Total,
+    'cumulative' => $cumulative,
+    'length' => $level1Length ? sprintf(__('Объём: %s знаков'), $level1Length) : __('Объём уточняется после брифа'),
+  ];
+}
+
 if ($level2Enabled) {
-  $level2Total = $level1Total * $level2Per;
   $cumulative += $level2Total;
   $levels[] = [
+    'index' => 2,
+    'title' => __('Уровень 2 — тематические волны'),
+    'description' => $hasCrowd
+      ? __('Контентные статьи и первые крауд-цепочки связывают фундамент с нишевыми площадками и публикациями.')
+      : __('Контентные статьи и подборки закрепляют фундаментальный уровень в тематических кластерах.'),
+    'count' => $level2Total,
+    'cumulative' => $cumulative,
+    'length' => $level2Length ? sprintf(__('Объём: %s знаков'), $level2Length) : __('Объём подстраивается под нишу'),
+  ];
+}
+
+if ($level3Enabled) {
+  $cumulative += $level3Total;
+  $levels[] = [
     'index' => 3,
-    'title' => __('Уровень 3 — широкое покрытие'),
-    'description' => __('Сотни контекстных публикаций создают распределённую сетку сигналов и ускоряют индексацию без резких всплесков.'),
+    'title' => __('Уровень 3 — crowd-слой и сигналы'),
+    'description' => $hasCrowd
+      ? __('Форумы, Q&A, соцплощадки и каталоги создают сотни живых упоминаний, пинги и доводят сигнал до индексации.')
+      : __('Широкий охват из новостных, соц и нишевых площадок усиливает предыдущие уровни и ускоряет индексацию.'),
     'count' => $level3Total,
     'cumulative' => $cumulative,
-    'length' => sprintf(__('Объём: %s знаков'), $level3Length),
+    'length' => $level3Length ? sprintf(__('Объём: %s знаков'), $level3Length) : __('Объём гибко распределяем по публикациям'),
   ];
 }
 
@@ -65,11 +91,41 @@ $pricePerLink = max(0.0, (float)($promotionSettings['price_per_link'] ?? 0.0));
 $priceFormatted = $pricePerLink > 0 ? format_currency($pricePerLink) : null;
 $pricePerPublication = ($cascadeTotal > 0 && $pricePerLink > 0) ? ($pricePerLink / $cascadeTotal) : null;
 
-$crowdPerPublication = max(0, (int)($promotionSettings['crowd_per_article'] ?? 0));
-$hasCrowd = !empty($promotionSettings['crowd_enabled']) && $crowdPerPublication > 0;
-$crowdLabel = $hasCrowd
-  ? sprintf(__('Крауд-мониторинг: до %s площадок на публикацию'), $formatNumber($crowdPerPublication))
-  : __('Крауд-мониторинг включён точечно');
+$schemeParts = [];
+if ($level1Enabled) {
+  $schemeParts[] = sprintf(__('L1: %s фундаментальных активов'), $formatNumber($level1Total));
+}
+if ($level2Enabled) {
+  $level2Descriptor = $hasCrowd
+    ? __('крауд-цепочек и тематических веток')
+    : __('поддерживающих публикаций и тематических волн');
+  $schemeParts[] = sprintf(__('L2: %s %s'), $formatNumber($level2Total), $level2Descriptor);
+}
+if ($level3Enabled) {
+  $level3Descriptor = $hasCrowd ? __('crowd-сигналов, пингов и живых упоминаний') : __('охватных публикаций и сигналов');
+  $schemeParts[] = sprintf(__('L3: %s %s'), $formatNumber($level3Total), $level3Descriptor);
+}
+$schemeSummary = $schemeParts ? implode(' → ', $schemeParts) : __('Схема будет зафиксирована после брифа.');
+$crowdSummary = $hasCrowd
+  ? sprintf(__('Crowd-слой: до %s живых касаний на публикацию с мониторингом'), $formatNumber($crowdPerPublication))
+  : '';
+$levelBreakdownParts = [];
+if ($level1Enabled) {
+  $levelBreakdownParts[] = sprintf(__('L1: %s'), $formatNumber($level1Total));
+}
+if ($level2Enabled) {
+  $levelBreakdownParts[] = sprintf(__('L2: %s'), $formatNumber($level2Total));
+}
+if ($level3Enabled) {
+  $levelBreakdownParts[] = sprintf(__('L3: %s'), $formatNumber($level3Total));
+}
+$levelBreakdown = $levelBreakdownParts ? implode(' • ', $levelBreakdownParts) : __('Конфигурация будет зафиксирована после брифа');
+$heroLeadParts = [
+  sprintf(__('Активная схема: %s.'), $schemeSummary),
+  $crowdSummary ?: __('Crowd-слой подключаем, когда нише нужна дополнительная сигнализация.'),
+  __('Управляем таймингом, анкорами и индексацией из одного дашборда.'),
+];
+$heroLead = trim(implode(' ', array_filter($heroLeadParts)));
 
 $googleEnabled = get_setting('google_oauth_enabled', '0') === '1';
 $googleStartUrl = $googleEnabled ? pp_url('public/google_oauth_start.php') : '';
@@ -80,9 +136,24 @@ $testimonialAuthor = 'Александр Крикун';
 $testimonialRole = __('Основатель PromoPilot, SEO-эксперт BuyReadySite');
 
 $baseUrl = function_exists('pp_guess_base_url') ? pp_guess_base_url() : pp_url('');
+$metaPriceAmount = $pricePerLink > 0 ? number_format($pricePerLink, 2, '.', '') : null;
+$metaImage = asset_url('img/hero_main.jpg');
+$pp_meta = [
+  'title' => __('PromoPilot — линкбилдинг каскадом с живым crowd-слоем'),
+  'description' => $heroLead,
+  'url' => $baseUrl . '/',
+  'image' => $metaImage,
+  'site_name' => 'PromoPilot',
+  'author' => $testimonialAuthor,
+  'developer' => 'BuyReadySite',
+  'price_amount' => $metaPriceAmount,
+  'price_currency' => $currencyCode,
+];
+
 $organizationSchema = [
   '@context' => 'https://schema.org',
   '@type' => 'Organization',
+  '@id' => $baseUrl . '/#organization',
   'name' => 'PromoPilot',
   'url' => $baseUrl,
   'logo' => asset_url('img/logo.svg'),
@@ -127,15 +198,17 @@ if ($pricePerLink > 0) {
 $serviceSchema = [
   '@context' => 'https://schema.org',
   '@type' => 'Service',
+  '@id' => $baseUrl . '/#service',
   'name' => __('Каскадное продвижение PromoPilot'),
-  'serviceType' => 'SEO link building',
+  'serviceType' => 'LinkBuildingService',
   'provider' => [
     '@type' => 'Organization',
+    '@id' => $baseUrl . '/#organization',
     'name' => 'PromoPilot',
     'url' => $baseUrl,
   ],
   'areaServed' => ['European Union', 'United States', 'CIS'],
-  'description' => __('Автоматизированное многоуровневое продвижение с AI-контентом, пингом URL и прозрачной аналитикой.'),
+  'description' => trim(sprintf(__('Активная схема: %s.'), $schemeSummary) . ' ' . ($crowdSummary ?: __('Crowd-слой включается по запросу.'))),
   'offers' => $serviceOffer,
   'review' => [
     '@type' => 'Review',
@@ -153,32 +226,247 @@ $serviceSchema = [
   ],
 ];
 
+$linkSeriesParts = [];
+foreach ($levels as $level) {
+  $linkSeriesParts[] = [
+    '@type' => 'CreativeWork',
+    'name' => sprintf('L%s', $level['index']),
+    'position' => (int)$level['index'],
+    'description' => $level['description'],
+    'size' => (int)$level['count'],
+  ];
+}
+
+$creativeSeriesSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => 'CreativeWorkSeries',
+  '@id' => $baseUrl . '/#creativeSeries',
+  'name' => __('Каскад линкбилдинга PromoPilot'),
+  'description' => trim($schemeSummary . ($crowdSummary ? ' • ' . $crowdSummary : '')),
+  'creator' => [
+    '@type' => 'Organization',
+    'name' => 'PromoPilot',
+    'url' => $baseUrl,
+  ],
+  'hasPart' => $linkSeriesParts,
+  'keywords' => ['link building', 'crowd marketing', 'PromoPilot'],
+];
+if ($crowdSummary) {
+  $creativeSeriesSchema['additionalProperty'] = [
+    '@type' => 'PropertyValue',
+    'name' => 'CrowdLayer',
+    'value' => $crowdSummary,
+  ];
+}
+
+$websiteSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => 'WebSite',
+  '@id' => $baseUrl . '/#website',
+  'name' => 'PromoPilot',
+  'url' => $baseUrl . '/',
+  'inLanguage' => $current_lang ?? 'ru',
+  'potentialAction' => [
+    '@type' => 'SearchAction',
+    'target' => $baseUrl . '/public/?q={search_term_string}',
+    'query-input' => 'required name=search_term_string',
+  ],
+];
+
+$webPageSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => ['WebPage', 'LandingPage'],
+  '@id' => $baseUrl . '/#webpage',
+  'url' => $baseUrl . '/',
+  'name' => __('PromoPilot — линкбилдинг каскадом'),
+  'isPartOf' => [
+    '@type' => 'WebSite',
+    '@id' => $baseUrl . '/#website',
+    'name' => 'PromoPilot',
+    'url' => $baseUrl . '/',
+  ],
+  'description' => strip_tags($heroLead),
+  'inLanguage' => $current_lang ?? 'ru',
+  'about' => [
+    '@type' => 'Service',
+    '@id' => $baseUrl . '/#service',
+    'name' => __('Каскадное продвижение PromoPilot'),
+  ],
+  'primaryImageOfPage' => [
+    '@type' => 'ImageObject',
+    'url' => asset_url('img/hero_main.jpg'),
+    'width' => 1600,
+    'height' => 900,
+  ],
+  'breadcrumb' => [
+    '@type' => 'BreadcrumbList',
+    'itemListElement' => $breadcrumbSchema['itemListElement'],
+  ],
+  'speakable' => [
+    '@type' => 'SpeakableSpecification',
+    'xpath' => [
+      '/html/head/title',
+      "//section[@id='hero']//h1",
+    ],
+  ],
+  'potentialAction' => [
+    [
+      '@type' => 'ReadAction',
+      'target' => $baseUrl . '/',
+      'expectsAcceptanceOf' => $serviceOffer,
+    ],
+    [
+      '@type' => 'RegisterAction',
+      'target' => pp_url('auth/register.php'),
+      'result' => [
+        '@type' => 'Thing',
+        'name' => __('Создание аккаунта PromoPilot'),
+      ],
+    ],
+  ],
+  'mainEntity' => [
+    '@type' => 'Service',
+    '@id' => $baseUrl . '/#service',
+  ],
+];
+
+$levelListItems = [];
+foreach ($levels as $position => $level) {
+  $levelListItems[] = [
+    '@type' => 'ListItem',
+    'position' => $position + 1,
+    'item' => [
+      '@type' => 'CreativeWork',
+      'name' => sprintf('L%s — %s', $level['index'], $level['title']),
+      'description' => $level['description'],
+      'isPartOf' => $creativeSeriesSchema['@id'] ?? ($baseUrl . '/#creativeSeries'),
+      'additionalProperty' => [
+        [
+          '@type' => 'PropertyValue',
+          'name' => __('Публикаций на уровне'),
+          'value' => (int)$level['count'],
+        ],
+        [
+          '@type' => 'PropertyValue',
+          'name' => __('Накопительно'),
+          'value' => (int)$level['cumulative'],
+        ],
+      ],
+    ],
+  ];
+}
+
+$levelListSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => 'ItemList',
+  'name' => __('Структура каскада PromoPilot'),
+  'description' => $schemeSummary,
+  'numberOfItems' => count($levels),
+  'itemListElement' => $levelListItems ?: [],
+];
+
+$howToSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => 'HowTo',
+  'name' => __('Как запустить каскад PromoPilot'),
+  'description' => __('Трёхшаговый план запуска многоуровневого линкбилдинга с живым краудом.'),
+  'step' => [
+    [
+      '@type' => 'HowToStep',
+      'position' => 1,
+      'name' => __('Собрать бриф и анкор-лист'),
+      'text' => __('Вы сообщаете целевые URL, географию и акценты, а мы формируем анкорный микс и сети площадок.'),
+    ],
+    [
+      '@type' => 'HowToStep',
+      'position' => 2,
+      'name' => __('Синхронизировать контент и крауд'),
+      'text' => __('Мы создаём фундаментальные активы, запускаем поддерживающие ветви и готовим живые аккаунты для крауд-волны.'),
+    ],
+    [
+      '@type' => 'HowToStep',
+      'position' => 3,
+      'name' => __('Отслеживать прогресс и индексацию'),
+      'text' => __('Дашборд показывает статусы публикаций, появление ссылок и динамику crowd-сигналов в реальном времени.'),
+    ],
+  ],
+  'tool' => [
+    [
+      '@type' => 'HowToTool',
+      'name' => 'PromoPilot Platform',
+    ],
+  ],
+  'supply' => [
+    [
+      '@type' => 'HowToSupply',
+      'name' => __('Анкор-лист и целевые URL'),
+    ],
+  ],
+];
+
+$breadcrumbSchema = [
+  '@context' => 'https://schema.org',
+  '@type' => 'BreadcrumbList',
+  'itemListElement' => [
+    [
+      '@type' => 'ListItem',
+      'position' => 1,
+      'name' => __('Главная'),
+      'item' => $baseUrl . '/',
+    ],
+    [
+      '@type' => 'ListItem',
+      'position' => 2,
+      'name' => __('Линкбилдинг каскадом'),
+      'item' => $baseUrl . '/public/',
+    ],
+  ],
+];
+
 $faqSchema = [
   '@context' => 'https://schema.org',
   '@type' => 'FAQPage',
   'mainEntity' => [
     [
       '@type' => 'Question',
-      'name' => __('Как PromoPilot гарантирует безопасный тайминг?'),
+      'name' => __('Что входит в линкбилдинг PromoPilot?'),
       'acceptedAnswer' => [
         '@type' => 'Answer',
-        'text' => __('Мы распределяем публикации на 2–3 месяца, чередуем площадки и автоматически пингуем URL. При отклонениях система уведомит и скорректирует график.'),
+        'text' => trim(sprintf(__('Текущая схема: %s.'), $schemeSummary) . ' ' . ($crowdSummary ?: __('Дополнительно подключаем крауд-слой, когда это критично для ниши.'))),
       ],
     ],
     [
       '@type' => 'Question',
-      'name' => __('Можно ли изменить количество уровней или объём статей?'),
+      'name' => __('Сколько crowd-сигналов вы подключаете?'),
       'acceptedAnswer' => [
         '@type' => 'Answer',
-        'text' => __('Да, все параметры — количество статей, длина текстов, наличие уровня L3 — управляются в настройках. Лендинг и калькуляция обновятся без правок кода.'),
+        'text' => $crowdSummary ? sprintf(__('Мы планируем до %s живых крауд-ссылок и упоминаний на публикацию и мониторим каждую площадку.'), $formatNumber($crowdPerPublication)) : __('Crowd-слой масштабируется индивидуально: мы выбираем площадки и частоту после анализа ниши и конкурентов.'),
+      ],
+    ],
+    [
+      '@type' => 'Question',
+      'name' => __('Можно ли адаптировать схему под нишу и бюджет?'),
+      'acceptedAnswer' => [
+        '@type' => 'Answer',
+        'text' => __('Да. Мы регулируем количество уровней, плотность публикаций, долю crowd-ссылок и темп выхода в зависимости от рынка, сезонности и вашего бюджета. Все изменения видны в личном кабинете.'),
       ],
     ],
   ],
 ];
 
-$structuredData = [$organizationSchema, $serviceSchema, $faqSchema];
+$structuredData = [
+  $organizationSchema,
+  $serviceSchema,
+  $creativeSeriesSchema,
+  $websiteSchema,
+  $webPageSchema,
+  $levelListSchema,
+  $howToSchema,
+  $breadcrumbSchema,
+  $faqSchema,
+];
 
-include '../includes/header.php';
+include __DIR__ . '/../includes/header.php';
 
 foreach ($structuredData as $schema) {
   if (!is_array($schema) || empty($schema)) { continue; }
@@ -192,15 +480,26 @@ foreach ($structuredData as $schema) {
       <div class="row align-items-center g-5 flex-column-reverse flex-lg-row">
         <div class="col-lg-6">
           <div class="hero-intro fade-in">
-            <span class="hero-pill"><?php echo __('Каскадное продвижение под ключ'); ?></span>
-            <h1 class="hero-title fw-bold mb-3"><?php echo __('PromoPilot — многоуровневое продвижение с живым таймингом и AI-контентом'); ?></h1>
-            <p class="lead mb-4 hero-lead"><?php echo __('Мы строим каскад 5 → 100 → 300 публикаций (или по вашим настройкам), распределяем анкор-лист, пингуем ссылки и показываем прогресс в реальном времени.'); ?></p>
+            <span class="hero-pill"><?php echo __('Линкбилдинг каскадом под вашу нишу'); ?></span>
+            <h1 class="hero-title fw-bold mb-3"><?php echo __('PromoPilot — линкбилдинг каскадом с живым crowd-слоем'); ?></h1>
+            <p class="lead mb-4 hero-lead"><?php echo htmlspecialchars($heroLead, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
             <ul class="hero-points list-unstyled mb-4">
-              <li><i class="bi bi-diagram-3-fill"></i><span><?php echo sprintf(__('Структура %s уровня(ов) — управляем семантикой и потоками веса'), $levelsCount); ?></span></li>
-              <li><i class="bi bi-graph-up-arrow"></i><span><?php echo __('AI-контент и визуал под нишу с ручной QA-проверкой'); ?></span></li>
-              <li><i class="bi bi-clock-history"></i><span><?php echo __('Тайминг на 2–3 месяца: без всплесков, с автопингом'); ?></span></li>
-              <li><i class="bi bi-shield-check"></i><span><?php echo __('Мониторинг индексации и статусов доступен в личном кабинете'); ?></span></li>
+              <li><i class="bi bi-diagram-3-fill"></i><span><?php echo sprintf(__('Структура %s уровня(ов): выстраиваем анкор-листы, объём и географию'), $levelsCount); ?></span></li>
+              <li><i class="bi bi-graph-up-arrow"></i><span><?php echo $hasCrowd ? __('Живой crowd и тематические волны из проверенных аккаунтов') : __('Готовим площадки и тематические волны под ваш запрос'); ?></span></li>
+              <li><i class="bi bi-clock-history"></i><span><?php echo __('Тайминг на 2–3 месяца: управляем скоростью и пингами без всплесков'); ?></span></li>
+              <li><i class="bi bi-shield-check"></i><span><?php echo __('Мониторинг индексации, статусов и отчётов в личном кабинете'); ?></span></li>
             </ul>
+            <div class="card bg-dark border border-primary-subtle hero-scheme mb-4 shadow-sm">
+              <div class="card-body py-3 px-4">
+                <div class="small text-uppercase text-primary fw-semibold mb-1"><?php echo __('Текущая схема PromoPilot'); ?></div>
+                <div class="d-flex flex-column flex-md-row gap-2 align-items-start">
+                  <span class="fw-semibold"><?php echo htmlspecialchars($schemeSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+                  <?php if ($hasCrowd && $crowdSummary): ?>
+                  <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle"><?php echo htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+                  <?php endif; ?>
+                </div>
+              </div>
+            </div>
             <div class="d-flex flex-wrap gap-3 mb-4">
               <a href="#cta" class="btn btn-gradient btn-lg"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запустить каскад'); ?></a>
               <a href="#levels" class="btn btn-outline-light btn-lg"><i class="bi bi-info-circle me-2"></i><?php echo __('Посмотреть структуру'); ?></a>
@@ -208,11 +507,15 @@ foreach ($structuredData as $schema) {
             <div class="hero-metrics d-flex flex-wrap gap-3">
               <div class="metric-badge"><strong><?php echo $formatNumber($cascadeTotal); ?></strong><span><?php echo __('публикаций в пакете'); ?></span></div>
               <div class="metric-badge"><strong><?php echo $levelsCount; ?></strong><span><?php echo __('уровня каскада'); ?></span></div>
+              <div class="metric-badge"><strong><?php echo htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('разбивка по уровням'); ?></span></div>
               <?php if ($priceFormatted): ?>
               <div class="metric-badge"><strong><?php echo htmlspecialchars($priceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('стоимость за ссылку'); ?></span></div>
               <?php endif; ?>
               <?php if ($pricePerPublication): ?>
               <div class="metric-badge"><strong><?php echo htmlspecialchars(number_format($pricePerPublication, 2, '.', ' '), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('за публикацию в каскаде'); ?></span></div>
+              <?php endif; ?>
+              <?php if ($hasCrowd): ?>
+              <div class="metric-badge"><strong><?php echo sprintf(__('до %s'), $formatNumber($crowdPerPublication)); ?></strong><span><?php echo __('крауд-касаний на публикацию'); ?></span></div>
               <?php endif; ?>
             </div>
           </div>
@@ -223,7 +526,7 @@ foreach ($structuredData as $schema) {
               <source srcset="<?php echo asset_url('img/hero_main.jpg'); ?>" type="image/jpeg">
               <img src="<?php echo asset_url('img/hero_main.jpg'); ?>" alt="<?php echo __('Схема многоуровневого продвижения'); ?>" class="img-fluid rounded-4 shadow hero-image mb-3" loading="lazy" width="1600" height="900">
             </picture>
-            <figcaption class="small text-muted"><?php echo sprintf(__('Актуальная конфигурация: %s публикаций, %s %s'), $formatNumber($cascadeTotal), $levelsCount, __('уровня')); ?></figcaption>
+            <figcaption class="small text-muted"><?php echo sprintf(__('Схема сейчас: %s (%s).'), htmlspecialchars($schemeSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?></figcaption>
             <?php if (!is_logged_in()): ?>
             <div class="auth-panel card mt-4 text-start">
               <div class="card-body p-4">
@@ -402,7 +705,7 @@ foreach ($structuredData as $schema) {
               <div class="stat-item">
                 <span class="label"><?php echo __('Пакет публикаций'); ?></span>
                 <strong><?php echo $formatNumber($cascadeTotal); ?></strong>
-                <span class="hint"><?php echo sprintf(__('L1: %s • L2: %s • L3: %s'), $formatNumber($level1Total), $formatNumber($level2Total), $formatNumber($level3Total)); ?></span>
+                <span class="hint"><?php echo htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
               </div>
               <div class="stat-item">
                 <span class="label"><?php echo __('Стоимость за ссылку'); ?></span>
@@ -412,7 +715,7 @@ foreach ($structuredData as $schema) {
               <div class="stat-item">
                 <span class="label"><?php echo __('Крауд-касания'); ?></span>
                 <strong><?php echo $hasCrowd ? sprintf(__('до %s/статью'), $formatNumber($crowdPerPublication)) : __('ручной отбор'); ?></strong>
-                <span class="hint"><?php echo __('Проверяем появления и докладываем в отчёты'); ?></span>
+                <span class="hint"><?php echo $crowdSummary ? htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : __('Площадки и частоту фиксируем в дашборде'); ?></span>
               </div>
             </div>
           </div>
@@ -531,4 +834,4 @@ foreach ($structuredData as $schema) {
       </div>
     </section>
 
-    <?php include '../includes/footer.php'; ?>
+  <?php include __DIR__ . '/../includes/footer.php'; ?>

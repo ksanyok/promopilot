@@ -2564,6 +2564,9 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .hero-metrics .metric-badge { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px 12px; background: linear-gradient(135deg, rgba(59,130,246,.18), rgba(34,211,238,.08)); border: 1px solid var(--border); border-radius: var(--radius-xs); min-width: 130px; text-align: center; box-shadow: 0 4px 16px -4px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.04); }
 .hero-metrics .metric-badge strong { font-size: 1.3rem; font-weight: 700; letter-spacing: .5px; }
 .hero-metrics .metric-badge span { font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+.hero-scheme { background: linear-gradient(140deg, rgba(59,130,246,.18), rgba(34,211,238,.1)); border-radius: var(--radius-sm); border: 1px solid rgba(148,163,184,.35); backdrop-filter: blur(18px) saturate(140%); }
+.hero-scheme .card-body { padding: 1rem 1.25rem; }
+.hero-scheme .badge { letter-spacing: .08em; font-size: .7rem; text-transform: uppercase; padding: .35rem .8rem; }
 
 .hero-image { max-width: 100%; height: auto; }
 .hero-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; background: linear-gradient(135deg, rgba(96,165,250,.28), rgba(34,211,238,.2)); border: 1px solid rgba(148,163,184,.32); color: var(--text); font-size: .8rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; margin-bottom: 1.2rem; box-shadow: 0 10px 32px -18px rgba(96,165,250,.65); }
@@ -2662,6 +2665,7 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 :root[data-theme="light"] .value-card { background: linear-gradient(180deg, rgba(0,0,0,.05), rgba(0,0,0,.015)); }
 :root[data-theme="light"] .stat-card { background: linear-gradient(165deg, rgba(59,130,246,.18), rgba(255,255,255,.92)); color: #111827; }
 :root[data-theme="light"] .testimonial-card { background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,255,255,.86)); color: #0f172a; }
+:root[data-theme="light"] .hero-scheme { background: linear-gradient(140deg, rgba(59,130,246,.2), rgba(14,165,233,.26)); border-color: rgba(59,130,246,.45); }
 
 /* Focus states */
 .hero-points li a:focus-visible, .benefit-list li a:focus-visible, .level-card:focus-visible, .step-item:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }

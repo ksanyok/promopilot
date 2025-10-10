@@ -71,9 +71,63 @@ if ($pp_nav_balance !== null) {
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+    <?php
+    $pp_meta = isset($pp_meta) && is_array($pp_meta) ? $pp_meta : [];
+    $ppBase = function_exists('pp_guess_base_url') ? pp_guess_base_url() : '';
+    $metaTitle = trim((string)($pp_meta['title'] ?? 'PromoPilot')) ?: 'PromoPilot';
+    $metaDescription = trim((string)($pp_meta['description'] ?? __('Каскадное продвижение с crowd-слоями и AI-контентом.')));
+    $metaUrl = trim((string)($pp_meta['url'] ?? ''));
+    $metaImage = trim((string)($pp_meta['image'] ?? asset_url('img/hero_main.jpg')));
+    if ($metaImage && !preg_match('~^https?://~i', $metaImage)) {
+        $metaImage = rtrim($ppBase, '/') . '/' . ltrim($metaImage, '/');
+    }
+    $metaSiteName = trim((string)($pp_meta['site_name'] ?? 'PromoPilot')) ?: 'PromoPilot';
+    $metaAuthor = trim((string)($pp_meta['author'] ?? 'PromoPilot Team')) ?: 'PromoPilot Team';
+    $metaDeveloper = trim((string)($pp_meta['developer'] ?? 'BuyReadySite')) ?: 'BuyReadySite';
+    $metaPriceAmount = isset($pp_meta['price_amount']) ? trim((string)$pp_meta['price_amount']) : '';
+    $metaPriceCurrency = trim((string)($pp_meta['price_currency'] ?? 'USD')) ?: 'USD';
+    $metaLocale = (isset($current_lang) && $current_lang === 'en') ? 'en_US' : 'ru_RU';
+    $metaTwitterSite = trim((string)($pp_meta['twitter_site'] ?? ''));
+    $metaTwitterCreator = trim((string)($pp_meta['twitter_creator'] ?? $metaAuthor));
+    ?>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PromoPilot</title>
+    <title><?php echo htmlspecialchars($metaTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></title>
+    <meta name="description" content="<?php echo htmlspecialchars($metaDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaUrl): ?><link rel="canonical" href="<?php echo htmlspecialchars($metaUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <meta name="author" content="<?php echo htmlspecialchars($metaAuthor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta name="developer" content="<?php echo htmlspecialchars($metaDeveloper, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta name="creator" content="<?php echo htmlspecialchars($metaDeveloper, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta name="publisher" content="<?php echo htmlspecialchars($metaDeveloper, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta name="copyright" content="<?php echo htmlspecialchars($metaDeveloper, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta itemprop="name" content="<?php echo htmlspecialchars($metaTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta itemprop="description" content="<?php echo htmlspecialchars($metaDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaImage): ?><meta itemprop="image" content="<?php echo htmlspecialchars($metaImage, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="<?php echo htmlspecialchars($metaTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta property="og:description" content="<?php echo htmlspecialchars($metaDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaUrl): ?><meta property="og:url" content="<?php echo htmlspecialchars($metaUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <meta property="og:site_name" content="<?php echo htmlspecialchars($metaSiteName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta property="og:locale" content="<?php echo htmlspecialchars($metaLocale, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaImage): ?><meta property="og:image" content="<?php echo htmlspecialchars($metaImage, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <?php if ($metaImage): ?><meta property="og:image:alt" content="<?php echo htmlspecialchars($metaTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <meta property="article:author" content="<?php echo htmlspecialchars($metaAuthor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta property="article:publisher" content="<?php echo htmlspecialchars($metaDeveloper, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaPriceAmount !== '' && is_numeric(str_replace([' ', ','], '', $metaPriceAmount))): ?>
+        <meta property="product:price:amount" content="<?php echo htmlspecialchars($metaPriceAmount, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta property="product:price:currency" content="<?php echo htmlspecialchars($metaPriceCurrency, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta property="og:price:amount" content="<?php echo htmlspecialchars($metaPriceAmount, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta property="og:price:currency" content="<?php echo htmlspecialchars($metaPriceCurrency, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta name="price" content="<?php echo htmlspecialchars($metaPriceAmount . ' ' . $metaPriceCurrency, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta itemprop="price" content="<?php echo htmlspecialchars($metaPriceAmount, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <meta itemprop="priceCurrency" content="<?php echo htmlspecialchars($metaPriceCurrency, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php endif; ?>
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="<?php echo htmlspecialchars($metaTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <meta name="twitter:description" content="<?php echo htmlspecialchars($metaDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+    <?php if ($metaImage): ?><meta name="twitter:image" content="<?php echo htmlspecialchars($metaImage, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <?php if ($metaTwitterCreator !== ''): ?><meta name="twitter:creator" content="<?php echo htmlspecialchars($metaTwitterCreator, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
+    <?php if ($metaTwitterSite !== ''): ?><meta name="twitter:site" content="<?php echo htmlspecialchars($metaTwitterSite, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"><?php endif; ?>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="<?php echo asset_url('css/style.css?v=' . rawurlencode(get_version())); ?>" rel="stylesheet">
@@ -83,8 +137,7 @@ if ($pp_nav_balance !== null) {
     <?php if (!is_admin() && $pp_nav_balance_raw !== null): ?>
     <script>window.PP_BALANCE = <?php echo json_encode((float)$pp_nav_balance_raw); ?>;</script>
     <?php endif; ?>
-    <?php $ppBase = function_exists('pp_guess_base_url') ? pp_guess_base_url() : ''; ?>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars($ppBase . '/assets/css/admin.css'); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(rtrim($ppBase, '/') . '/assets/css/admin.css'); ?>">
 </head>
 <body>
     <!-- Futuristic neutral background canvas -->
