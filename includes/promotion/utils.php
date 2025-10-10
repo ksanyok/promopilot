@@ -558,6 +558,29 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         $anchor = (string)$node['anchor_text'];
         $level = isset($node['level']) ? (int)$node['level'] : 1;
         $language = pp_promotion_resolve_language($linkRow, $project);
+        $nodeId = isset($node['id']) ? (int)$node['id'] : 0;
+        $failNode = static function(string $reason, array $extra = []) use ($conn, $runId, $projectId, $nodeId, $networkSlug, $targetUrl, $node) : bool {
+            if ($nodeId > 0) {
+                $failStmt = $conn->prepare("UPDATE promotion_nodes SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+                if ($failStmt) {
+                    $failStmt->bind_param('si', $reason, $nodeId);
+                    $failStmt->execute();
+                    $failStmt->close();
+                }
+            }
+            $payload = [
+                'run_id' => $runId,
+                'project_id' => $projectId,
+                'node_id' => $nodeId ?: null,
+                'level' => isset($node['level']) ? (int)$node['level'] : null,
+                'network' => $networkSlug,
+                'target_url' => $targetUrl,
+                'error' => $reason,
+            ];
+            if (!empty($extra)) { $payload = array_merge($payload, $extra); }
+            pp_promotion_log('promotion.publication_queue_failed', $payload);
+            return false;
+        };
         if ($level >= 2) {
             static $genericAnchorUsage = [];
             $usageKey = $projectId . '|' . $targetUrl;
@@ -677,7 +700,9 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
         } else {
             $stmt = $conn->prepare("INSERT INTO publications (uuid, project_id, page_url, anchor, network, status, enqueued_by_user_id) VALUES (?, ?, ?, ?, ?, 'queued', ?)");
         }
-        if (!$stmt) { return false; }
+        if (!$stmt) {
+            return $failNode('PUBLICATION_PREPARE_FAILED', ['db_error' => $conn->error]);
+        }
         $userId = (int)$node['initiated_by'];
         if ($hasJobPayloadColumn) {
             $stmt->bind_param('sisssis', $publicationUuid, $projectId, $targetUrl, $anchor, $networkSlug, $userId, $payloadJson);
@@ -685,26 +710,27 @@ if (!function_exists('pp_promotion_enqueue_publication')) {
             $stmt->bind_param('sisssi', $publicationUuid, $projectId, $targetUrl, $anchor, $networkSlug, $userId);
         }
         if (!$stmt->execute()) {
-            pp_promotion_log('promotion.publication_queue_failed', [
-                'run_id' => $runId,
-                'node_id' => (int)$node['id'],
-                'level' => (int)$node['level'],
-                'network' => $networkSlug,
-                'target_url' => $targetUrl,
-                'error' => 'DB_INSERT_FAILED',
-            ]);
             $stmt->close();
-            return false;
+            return $failNode('DB_INSERT_FAILED', ['db_error' => $conn->error]);
         }
         $publicationId = (int)$conn->insert_id;
         $stmt->close();
-    $update = $conn->prepare("UPDATE promotion_nodes SET publication_id=?, status='queued', queued_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
-        if ($update) {
-            $nodeId = (int)$node['id'];
-            $update->bind_param('ii', $publicationId, $nodeId);
-            $update->execute();
-            $update->close();
+        $update = $conn->prepare("UPDATE promotion_nodes SET publication_id=?, status='queued', queued_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+        if (!$update) {
+            return $failNode('NODE_LINK_PREPARE_FAILED', [
+                'publication_id' => $publicationId,
+                'db_error' => $conn->error,
+            ]);
         }
+        $update->bind_param('ii', $publicationId, $nodeId);
+        if (!$update->execute()) {
+            $update->close();
+            return $failNode('NODE_LINK_UPDATE_FAILED', [
+                'publication_id' => $publicationId,
+                'db_error' => $update->error,
+            ]);
+        }
+        $update->close();
         $preparedArticleLanguage = null;
         if (!empty($requirements['prepared_article']) && is_array($requirements['prepared_article'])) {
             if (isset($requirements['prepared_article']['language']) && $requirements['prepared_article']['language'] !== '') {

@@ -13,7 +13,7 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
         $maxAgeSeconds = max(180, (int)$maxAgeSeconds);
         $cutoffTs = time() - $maxAgeSeconds;
         $cutoff = date('Y-m-d H:i:s', $cutoffTs);
-        $stmt = $conn->prepare("SELECT id, publication_id, status, level, network_slug FROM promotion_nodes WHERE run_id = ? AND status IN ('queued','running') AND COALESCE(updated_at, started_at, queued_at, created_at) < ? LIMIT 200");
+        $stmt = $conn->prepare("SELECT id, publication_id, status, level, network_slug FROM promotion_nodes WHERE run_id = ? AND status IN ('pending','queued','running') AND COALESCE(updated_at, started_at, queued_at, created_at) < ? LIMIT 200");
         if (!$stmt) { return; }
         $stmt->bind_param('is', $runId, $cutoff);
         if (!$stmt->execute()) { $stmt->close(); return; }
@@ -52,9 +52,10 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
             $shouldFail = false;
             $shouldComplete = false;
             $reason = 'NODE_STUCK';
+            $nodeStatus = (string)($node['status'] ?? '');
             if ($publicationId <= 0) {
                 $shouldFail = true;
-                $reason = 'PUBLICATION_MISSING';
+                $reason = ($nodeStatus === 'pending') ? 'NODE_PENDING_TIMEOUT' : 'PUBLICATION_MISSING';
             } elseif ($pubStatus === null || $pubStatus === '') {
                 $shouldFail = true;
                 $reason = 'PUBLICATION_MISSING';
@@ -95,6 +96,7 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                             'node_id' => $nodeId,
                             'publication_id' => $publicationId,
                             'status' => $finalStatus,
+                            'node_status' => $nodeStatus,
                         ];
                         if (is_array($logReference)) {
                             $payload['log_file'] = $logReference['relative'] ?? ($logReference['absolute'] ?? null);
@@ -119,7 +121,7 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                 @$conn->query('UPDATE publication_queue SET status=\'failed\' WHERE publication_id = ' . $publicationId);
                 @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . $publicationId);
             }
-            $nodeUpdate = $conn->prepare("UPDATE promotion_nodes SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running') LIMIT 1");
+            $nodeUpdate = $conn->prepare("UPDATE promotion_nodes SET status='failed', error=?, finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','queued','running') LIMIT 1");
             if ($nodeUpdate) {
                 $nodeUpdate->bind_param('si', $reasonText, $nodeId);
                 if ($nodeUpdate->execute()) {
@@ -133,6 +135,7 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                         'node_id' => $nodeId,
                         'publication_id' => $publicationId,
                         'reason' => $reasonText,
+                        'node_status' => $nodeStatus,
                     ];
                     if (is_array($logReference)) {
                         $payload['log_file'] = $logReference['relative'] ?? ($logReference['absolute'] ?? null);
