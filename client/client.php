@@ -180,128 +180,126 @@ foreach ($chartDays as $info) {
     $clientChartData['finance']['spend'][] = round((float)$info['spend'], 2);
 }
 
-$referralSummary = null;
-$referralEnabled = get_setting('referral_enabled', '0') === '1';
-if ($referralEnabled) {
-    $referralSummary = [
-        'code' => '',
-        'link' => '',
-        'percent' => null,
-        'total_referred' => 0,
-        'total_earnings' => 0.0,
-        'earnings_30d' => 0.0,
-        'clicks_30d' => 0,
-        'signups_30d' => 0,
-        'cookie_days' => (int)get_setting('referral_cookie_days', '30'),
-    ];
-    try {
-        if (function_exists('pp_referral_get_or_create_user_code')) {
-            $referralSummary['code'] = pp_referral_get_or_create_user_code($conn, (int)$user_id);
-        } else {
-            if ($st = $conn->prepare('SELECT referral_code FROM users WHERE id = ? LIMIT 1')) {
-                $st->bind_param('i', $user_id);
-                $st->execute();
-                if ($res = $st->get_result()) {
-                    if ($row = $res->fetch_assoc()) {
-                        $referralSummary['code'] = (string)($row['referral_code'] ?? '');
-                    }
-                    $res->free();
-                }
-                $st->close();
-            }
-        }
-    } catch (Throwable $e) {
-        // leave empty code
+$referralSummary = [
+    'enabled' => get_setting('referral_enabled', '0') === '1',
+    'code' => '',
+    'link' => '',
+    'percent' => null,
+    'total_referred' => 0,
+    'total_earnings' => 0.0,
+    'earnings_30d' => 0.0,
+    'clicks_30d' => 0,
+    'signups_30d' => 0,
+    'cookie_days' => (int)get_setting('referral_cookie_days', '30'),
+];
+try {
+    if (function_exists('pp_referral_get_or_create_user_code')) {
+        $referralSummary['code'] = pp_referral_get_or_create_user_code($conn, (int)$user_id);
     }
-    if ($referralSummary['code'] !== '') {
-        $referralSummary['link'] = pp_url('?ref=' . rawurlencode($referralSummary['code']));
+    if ($referralSummary['code'] === '') {
+        if ($st = $conn->prepare('SELECT referral_code FROM users WHERE id = ? LIMIT 1')) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['code'] = (string)($row['referral_code'] ?? '');
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+    }
+} catch (Throwable $e) {
+    // leave empty code
+}
+if ($referralSummary['code'] !== '') {
+    $referralSummary['link'] = pp_url('?ref=' . rawurlencode($referralSummary['code']));
+}
+
+$defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
+try {
+    if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $pct = (float)($row['referral_commission_percent'] ?? 0);
+                if ($pct > 0) {
+                    $referralSummary['percent'] = $pct;
+                }
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+} catch (Throwable $e) {
+}
+if ($referralSummary['percent'] === null) {
+    $referralSummary['percent'] = $defaultPercent;
+}
+
+try {
+    if ($st = $conn->prepare('SELECT COUNT(*) AS c FROM users WHERE referred_by = ?')) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $referralSummary['total_referred'] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $st->close();
     }
 
-    $defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
-    try {
-        if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $pct = (float)($row['referral_commission_percent'] ?? 0);
-                    if ($pct > 0) {
-                        $referralSummary['percent'] = $pct;
-                    }
-                }
-                $res->free();
+    if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS total_sum FROM balance_history WHERE user_id = ? AND source = 'referral'")) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $referralSummary['total_earnings'] = (float)($row['total_sum'] ?? 0);
             }
-            $st->close();
+            $res->free();
         }
-    } catch (Throwable $e) {
-    }
-    if ($referralSummary['percent'] === null) {
-        $referralSummary['percent'] = $defaultPercent;
+        $st->close();
     }
 
-    try {
-        if ($st = $conn->prepare('SELECT COUNT(*) AS c FROM users WHERE referred_by = ?')) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $referralSummary['total_referred'] = (int)($row['c'] ?? 0);
-                }
-                $res->free();
+    if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS recent_sum FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $referralSummary['earnings_30d'] = (float)($row['recent_sum'] ?? 0);
             }
-            $st->close();
+            $res->free();
         }
-
-        if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS total_sum FROM balance_history WHERE user_id = ? AND source = 'referral'")) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $referralSummary['total_earnings'] = (float)($row['total_sum'] ?? 0);
-                }
-                $res->free();
-            }
-            $st->close();
-        }
-
-        if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS recent_sum FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $referralSummary['earnings_30d'] = (float)($row['recent_sum'] ?? 0);
-                }
-                $res->free();
-            }
-            $st->close();
-        }
-
-        if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $referralSummary['clicks_30d'] = (int)($row['c'] ?? 0);
-                }
-                $res->free();
-            }
-            $st->close();
-        }
-
-        if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM users WHERE referred_by = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
-            $st->bind_param('i', $user_id);
-            $st->execute();
-            if ($res = $st->get_result()) {
-                if ($row = $res->fetch_assoc()) {
-                    $referralSummary['signups_30d'] = (int)($row['c'] ?? 0);
-                }
-                $res->free();
-            }
-            $st->close();
-        }
-    } catch (Throwable $e) {
-        // fallback to defaults on failure
+        $st->close();
     }
+
+    if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $referralSummary['clicks_30d'] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+
+    if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM users WHERE referred_by = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+        $st->bind_param('i', $user_id);
+        $st->execute();
+        if ($res = $st->get_result()) {
+            if ($row = $res->fetch_assoc()) {
+                $referralSummary['signups_30d'] = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $st->close();
+    }
+} catch (Throwable $e) {
+    // fallback to defaults on failure
 }
 
 $currencyCode = function_exists('get_currency_code') ? get_currency_code() : 'USD';
@@ -350,6 +348,28 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                     <i class="bi bi-info-circle info-help" data-bs-toggle="tooltip" data-bs-placement="right" title="<?php echo __('Обзор ключевых показателей и быстрый доступ к проектам.'); ?>"></i>
                 </div>
                 <p class="text-muted mb-0 small"><?php echo __('Следите за балансом, активными кампаниями и переходите к нужному проекту в один клик.'); ?></p>
+                <?php if (!empty($referralSummary['link'])): ?>
+                    <div class="referral-inline mt-3">
+                        <div class="referral-inline__stats">
+                            <div class="referral-inline__income" title="<?php echo __('Реферальный доход всего'); ?>">
+                                <span class="label"><?php echo __('Реферальный доход'); ?></span>
+                                <span class="value"><?php echo htmlspecialchars(format_currency($referralSummary['total_earnings'])); ?></span>
+                            </div>
+                            <div class="referral-inline__count text-muted" title="<?php echo __('Количество приглашённых пользователей'); ?>">
+                                <i class="bi bi-people me-1"></i><?php echo sprintf(__('Рефералов: %s'), number_format((int)$referralSummary['total_referred'], 0, '.', ' ')); ?>
+                            </div>
+                        </div>
+                        <div class="referral-inline__links">
+                            <span class="text-muted"><i class="bi bi-link-45deg me-1"></i><?php echo __('Реферальная ссылка'); ?>:</span>
+                            <a href="<?php echo htmlspecialchars($referralSummary['link']); ?>" class="referral-inline__link text-decoration-underline text-break">
+                                <?php echo htmlspecialchars($referralSummary['link']); ?>
+                            </a>
+                            <a class="btn btn-sm btn-outline-secondary" href="<?php echo pp_url('client/referrals.php'); ?>">
+                                <i class="bi bi-box-arrow-up-right me-1"></i><?php echo __('Реферальный кабинет'); ?>
+                            </a>
+                        </div>
+                    </div>
+                <?php endif; ?>
             </div>
             <div class="dashboard-hero-card__balance position-relative">
                 <a href="<?php echo pp_url('client/balance.php'); ?>" class="stretched-link" aria-label="<?php echo __('Открыть финансовый дашборд'); ?>"></a>
@@ -367,140 +387,18 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                         <span><?php echo __('Нажмите, чтобы открыть пополнение и историю операций.'); ?></span>
                     </div>
                 </div>
-            </div>
-            <div class="dashboard-hero-card__actions">
-                <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient"><i class="bi bi-plus-lg me-1"></i><?php echo __('Новый проект'); ?></a>
-            </div>
-        </div>
-        <?php
-            // Referral strip inside hero-card to promote affiliate program
-            $refEnabled = get_setting('referral_enabled', '0') === '1';
-            if ($refEnabled) {
-                $uid = (int)$_SESSION['user_id'];
-                $conn2 = connect_db();
-                $userCode = '';
-                try {
-                    if (function_exists('pp_referral_get_or_create_user_code')) {
-                        $userCode = pp_referral_get_or_create_user_code($conn2, $uid);
-                    }
-                } catch (Throwable $e) {}
-                $conn2->close();
-                $refLink = pp_url('?ref=' . rawurlencode($userCode));
-        ?>
-        <div class="hero-referral-strip">
-            <div class="hero-referral-strip__content">
-                <div class="hero-referral-strip__icon" aria-hidden="true"><i class="bi bi-people"></i></div>
-                <div class="hero-referral-strip__text">
-                    <div class="hero-referral-strip__title"><?php echo __('Партнёрская программа'); ?></div>
-                    <div class="hero-referral-strip__desc small text-muted"><?php echo __('Делитесь ссылкой и получайте бонусы за активность приглашённых.'); ?></div>
-                </div>
-                <div class="hero-referral-strip__actions">
-                    <div class="input-group input-group-sm ref-link-input">
-                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($refLink); ?>" readonly>
-                        <button class="btn btn-outline-primary" type="button" id="copyRefLinkTop"><i class="bi bi-clipboard"></i></button>
-                        <a class="btn btn-primary" href="<?php echo pp_url('client/referrals.php'); ?>"><i class="bi bi-graph-up-arrow me-1"></i><?php echo __('Рефералы'); ?></a>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <script>
-        document.addEventListener('DOMContentLoaded', function(){
-            const btn = document.getElementById('copyRefLinkTop');
-            if (btn) {
-                btn.addEventListener('click', function(){
-                    const inp = btn.closest('.ref-link-input')?.querySelector('input');
-                    if (inp) { inp.select(); document.execCommand('copy'); btn.innerHTML = '<i class="bi bi-check2"></i>'; setTimeout(()=>{ btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200); }
-                });
-            }
-        });
-        </script>
-        <?php } ?>
-    </div>
-
-    <?php if (!empty($referralSummary) && !empty($referralSummary['code'])): ?>
-    <div class="card referral-summary-card mb-4">
-        <div class="card-body">
-            <div class="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3 mb-3">
-                <div>
-                    <div class="d-flex align-items-center gap-2 mb-1">
-                        <h5 class="mb-0"><?php echo __('Реферальная программа'); ?></h5>
-                        <span class="badge bg-primary-subtle text-primary"><i class="bi bi-percent me-1"></i><?php echo number_format((float)$referralSummary['percent'], 1, '.', ''); ?>%</span>
-                    </div>
-                    <div class="text-muted small">
-                        <?php echo sprintf(__('Куки хранятся %s дн., начисления зависят от активности приглашённых.'), (int)$referralSummary['cookie_days']); ?>
-                    </div>
-                </div>
-                <div class="referral-link-group w-100 w-lg-auto">
-                    <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($referralSummary['link']); ?>" readonly id="refSummaryLink">
-                        <button class="btn btn-outline-primary" type="button" id="copyRefSummary"><i class="bi bi-clipboard"></i></button>
-                        <a class="btn btn-primary" href="<?php echo pp_url('client/referrals.php'); ?>"><i class="bi bi-graph-up-arrow me-1"></i><?php echo __('Статистика'); ?></a>
-                    </div>
-                </div>
-            </div>
-            <div class="row g-3 referral-summary-grid">
-                <div class="col-6 col-lg-3">
-                    <div class="referral-summary-metric">
-                        <div class="referral-summary-label"><?php echo __('Приглашено всего'); ?></div>
-                        <div class="referral-summary-value"><?php echo number_format((int)$referralSummary['total_referred'], 0, '.', ' '); ?></div>
-                        <div class="referral-summary-foot text-muted small"><i class="bi bi-people me-1"></i><?php echo __('Пользователей'); ?></div>
-                    </div>
-                </div>
-                <div class="col-6 col-lg-3">
-                    <div class="referral-summary-metric">
-                        <div class="referral-summary-label"><?php echo __('Заработано'); ?></div>
-                        <div class="referral-summary-value"><?php echo htmlspecialchars(format_currency($referralSummary['total_earnings'])); ?></div>
-                        <div class="referral-summary-foot text-muted small"><i class="bi bi-piggy-bank me-1"></i><?php echo __('Все время'); ?></div>
-                    </div>
-                </div>
-                <div class="col-6 col-lg-3">
-                    <div class="referral-summary-metric">
-                        <div class="referral-summary-label"><?php echo __('Доход за 30 дней'); ?></div>
-                        <div class="referral-summary-value"><?php echo htmlspecialchars(format_currency($referralSummary['earnings_30d'])); ?></div>
-                        <div class="referral-summary-foot text-muted small"><i class="bi bi-calendar-week me-1"></i><?php echo __('Последние 30 дней'); ?></div>
-                    </div>
-                </div>
-                <div class="col-6 col-lg-3">
-                    <div class="referral-summary-metric">
-                        <div class="referral-summary-label"><?php echo __('Активность за 30 дней'); ?></div>
-                        <div class="referral-summary-value">
-                            <span class="me-2"><i class="bi bi-mouse2"></i> <?php echo number_format((int)$referralSummary['clicks_30d'], 0, '.', ' '); ?></span>
-                            <span class="badge bg-success-subtle text-success"><i class="bi bi-person-plus"></i> <?php echo number_format((int)$referralSummary['signups_30d'], 0, '.', ' '); ?></span>
-                        </div>
-                        <div class="referral-summary-foot text-muted small"><?php echo __('Клики / регистрации'); ?></div>
-                    </div>
+                <div class="dashboard-hero-card__actions mt-3">
+                    <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient btn-sm">
+                        <i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить проект'); ?>
+                    </a>
                 </div>
             </div>
         </div>
     </div>
-    <script>
-    document.addEventListener('DOMContentLoaded', function(){
-        const btn = document.getElementById('copyRefSummary');
-        if (btn) {
-            btn.addEventListener('click', function(){
-                const inp = document.getElementById('refSummaryLink');
-                if (inp) {
-                    inp.select();
-                    document.execCommand('copy');
-                    btn.innerHTML = '<i class="bi bi-check2"></i>';
-                    setTimeout(()=>{ btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200);
-                }
-            });
-        }
-    });
-    </script>
-    <?php endif; ?>
 
     <div class="row g-3 dashboard-stat-row mb-4">
         <div class="col-sm-6 col-lg-3">
-            <div class="dashboard-metric-card dashboard-metric-card--projects h-100">
-                <div class="dashboard-metric-card__label"><?php echo __('Проектов'); ?></div>
-                <div class="dashboard-metric-card__value"><?php echo number_format($dashboardSummary['projects'], 0, '.', ' '); ?></div>
-                <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-clock-history me-1"></i><?php echo __('Последнее действие'); ?>: <span><?php echo htmlspecialchars($formatActivity($dashboardSummary['last_activity'])); ?></span></div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg-3">
-            <div class="dashboard-metric-card dashboard-metric-card--links h-100">
+            <div class="dashboard-metric-card h-100">
                 <div class="dashboard-metric-card__label"><?php echo __('Ссылок в проектах'); ?></div>
                 <div class="dashboard-metric-card__value"><?php echo number_format($dashboardSummary['links'], 0, '.', ' '); ?></div>
                 <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-diagram-3 me-1"></i><?php echo __('Опубликовано ссылок'); ?>: <span><?php echo number_format($dashboardSummary['published_links'], 0, '.', ' '); ?></span></div>
@@ -518,6 +416,13 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                 <div class="dashboard-metric-card__label"><?php echo __('Завершенные запуски'); ?></div>
                 <div class="dashboard-metric-card__value"><?php echo number_format($dashboardSummary['completed_runs'], 0, '.', ' '); ?></div>
                 <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-patch-check-fill me-1"></i><?php echo __('Успешно завершено'); ?></div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg-3">
+            <div class="dashboard-metric-card h-100">
+                <div class="dashboard-metric-card__label"><?php echo __('Проектов всего'); ?></div>
+                <div class="dashboard-metric-card__value"><?php echo number_format($dashboardSummary['projects'], 0, '.', ' '); ?></div>
+                <div class="dashboard-metric-card__meta text-muted small"><i class="bi bi-clock-history me-1"></i><?php echo __('Последняя активность'); ?>: <span><?php echo htmlspecialchars($formatActivity($dashboardSummary['last_activity'])); ?></span></div>
             </div>
         </div>
     </div>
@@ -556,9 +461,12 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
             <h3 class="mb-1"><?php echo __('Ваши проекты'); ?></h3>
             <div class="text-muted small"><i class="bi bi-question-circle me-1"></i><?php echo __('Каждый проект имеет собственный набор ссылок и историю публикаций. Подсветка означает активное продвижение.'); ?></div>
         </div>
-        <?php if ($firstProjectId): ?>
-        <a href="<?php echo pp_url('client/history.php?id=' . $firstProjectId); ?>" class="btn btn-outline-secondary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
-        <?php endif; ?>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient btn-sm"><i class="bi bi-plus-lg me-1"></i><?php echo __('Добавить проект'); ?></a>
+            <?php if ($firstProjectId): ?>
+            <a href="<?php echo pp_url('client/history.php?id=' . $firstProjectId); ?>" class="btn btn-outline-secondary btn-sm"><i class="bi bi-clock-history me-1"></i><?php echo __('История'); ?></a>
+            <?php endif; ?>
+        </div>
     </div>
 
     <?php if (!empty($projectsData)): ?>
@@ -783,6 +691,65 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    const copyButtons = document.querySelectorAll('[data-copy-target]');
+    copyButtons.forEach((button) => {
+        const labelEl = button.querySelector('.copy-label');
+        const defaultLabel = button.getAttribute('data-copy-label-default') || (labelEl ? labelEl.textContent.trim() : button.textContent.trim());
+        const doneLabel = button.getAttribute('data-copy-label-done') || defaultLabel;
+        let resetTimer = null;
+
+        button.addEventListener('click', async () => {
+            const targetId = button.getAttribute('data-copy-target');
+            if (!targetId) { return; }
+            const target = document.getElementById(targetId);
+            if (!target) { return; }
+            const value = target.value || target.getAttribute('value') || '';
+            if (value === '') { return; }
+
+            const revert = () => {
+                if (labelEl) { labelEl.textContent = defaultLabel; }
+            };
+
+            const applyDoneState = () => {
+                if (labelEl) { labelEl.textContent = doneLabel; }
+                if (resetTimer) { clearTimeout(resetTimer); }
+                resetTimer = setTimeout(revert, 2000);
+            };
+
+            let copied = false;
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                try {
+                    await navigator.clipboard.writeText(value);
+                    copied = true;
+                } catch (err) {
+                    copied = false;
+                }
+            }
+
+            if (!copied) {
+                const previouslyReadOnly = target.hasAttribute('readonly');
+                if (!previouslyReadOnly) { target.setAttribute('readonly', 'readonly'); }
+                target.focus();
+                target.select();
+                try {
+                    copied = document.execCommand && document.execCommand('copy');
+                } catch (err) {
+                    copied = false;
+                }
+                target.blur();
+                if (!previouslyReadOnly) { target.removeAttribute('readonly'); }
+                const selection = window.getSelection ? window.getSelection() : null;
+                if (selection && selection.removeAllRanges) {
+                    selection.removeAllRanges();
+                }
+            }
+
+            if (copied) {
+                applyDoneState();
+            }
+        });
+    });
 });
 </script>
 
