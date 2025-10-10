@@ -67,6 +67,10 @@ $modifiedAt = (int)($capture['modified_at'] ?? time());
 $descriptor = pp_project_preview_descriptor($project);
 $previewUrl = $capture['url'] ?? ($descriptor['exists'] ? pp_project_preview_url($project, $primaryUrl, ['cache_bust' => true]) : null);
 
+if (!$previewUrl) {
+    $respond(['ok' => false, 'error' => 'PREVIEW_URL_MISSING']);
+}
+
 $respond([
     'ok' => true,
     'preview_url' => $previewUrl,

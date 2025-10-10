@@ -1432,8 +1432,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const textSuccess = root.dataset.textSuccess || '';
         const textWarning = root.dataset.textWarning || '';
         const textPending = root.dataset.textPending || '';
-        const textError = root.dataset.textError || '';
-        const textProcessing = root.dataset.textProcessing || '';
+    const textError = root.dataset.textError || '';
+    const textProcessing = root.dataset.textProcessing || '';
+    const textFallback = root.dataset.textFallback || '';
         const previewAlt = root.dataset.previewAlt || '';
         const autoRefresh = root.dataset.autoRefresh === '1';
         const staleSeconds = 60 * 60 * 24 * 3;
@@ -1455,9 +1456,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (placeholderEl) {
                 placeholderEl.classList.remove('d-none');
-            }
-            if (overlayButton) {
-                overlayButton.classList.add('d-none');
             }
             root.dataset.hasPreview = '0';
             root.dataset.hasPreviewUrl = '0';
@@ -1528,10 +1526,33 @@ document.addEventListener('DOMContentLoaded', function() {
             return img;
         };
 
-        const applyPreview = (url, modifiedAt, modifiedHuman) => {
+        const applyPreview = (payload, options = {}) => {
+            const data = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null;
+            const forced = !!options.forced;
+            const url = data ? ((data.preview_url || data.url || data.fallback_url || '')).trim() : (typeof payload === 'string' ? payload.trim() : '');
+            const modifiedAtRaw = data && Object.prototype.hasOwnProperty.call(data, 'modified_at') ? data.modified_at : options.modifiedAt;
+            const modifiedAt = Number(modifiedAtRaw || 0) || 0;
+            const modifiedHuman = data && Object.prototype.hasOwnProperty.call(data, 'modified_human')
+                ? (data.modified_human !== null && data.modified_human !== undefined ? String(data.modified_human) : '')
+                : (options.modifiedHuman || '');
+            const fallbackUsed = data ? !!(data.fallback || data.preview_fallback) : !!options.fallback;
+            const previewSource = data && data.preview_source ? String(data.preview_source) : (fallbackUsed ? 'external' : (root.dataset.previewSource || 'local'));
+            const statusHuman = modifiedHuman || (modifiedAt ? formatDateTimeShort(modifiedAt) : '');
+
             if (!url) {
                 handleImageError();
-                setStatus('pending', textPending);
+                root.dataset.previewSource = 'none';
+                root.dataset.previewFallback = fallbackUsed ? '1' : '0';
+                root.dataset.previewUpdatedAt = '0';
+                root.dataset.previewUpdatedHuman = '';
+                if (forced) {
+                    setStatus('error', textError);
+                } else {
+                    setStatus('pending', textPending);
+                }
+                if (data && (data.error || data.fallback_reason)) {
+                    console.warn('Project preview update failed', data.error || data.fallback_reason, data);
+                }
                 return;
             }
 
@@ -1549,9 +1570,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 target.removeEventListener('error', onError);
                 target.classList.remove('d-none');
                 setPlaceholderVisible(false);
-                if (overlayButton) {
-                    overlayButton.classList.remove('d-none');
-                }
                 root.dataset.hasPreview = '1';
                 root.dataset.hasPreviewUrl = '1';
             };
@@ -1559,6 +1577,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 target.removeEventListener('load', onLoad);
                 target.removeEventListener('error', onError);
                 handleImageError();
+                root.dataset.previewSource = 'none';
+                root.dataset.previewFallback = fallbackUsed ? '1' : '0';
                 setStatus('error', textError);
             };
 
@@ -1567,18 +1587,38 @@ document.addEventListener('DOMContentLoaded', function() {
             target.src = finalUrl;
             target.alt = previewAlt;
 
-            const timestamp = Number(modifiedAt || 0) || 0;
-            root.dataset.previewUpdatedAt = String(timestamp);
-            const human = modifiedHuman || (timestamp ? formatDateTimeShort(timestamp) : '');
-            root.dataset.previewUpdatedHuman = human;
-
-            if (timestamp > 0) {
-                const age = Math.floor(Date.now() / 1000) - timestamp;
-                const isStale = Number.isFinite(age) && age > staleSeconds;
-                const template = isStale ? textWarning : textSuccess;
-                setStatus(isStale ? 'warning' : 'ok', formatStatusMessage(template, human));
+            root.dataset.previewUpdatedAt = String(modifiedAt);
+            root.dataset.previewUpdatedHuman = statusHuman;
+            root.dataset.previewSource = previewSource || '';
+            root.dataset.previewFallback = fallbackUsed ? '1' : '0';
+            if (data && data.error) {
+                root.dataset.previewError = String(data.error);
             } else {
-                setStatus('ok', formatStatusMessage(textSuccess, human));
+                delete root.dataset.previewError;
+            }
+            if (data && data.fallback_reason) {
+                root.dataset.previewFallbackReason = String(data.fallback_reason);
+            } else {
+                delete root.dataset.previewFallbackReason;
+            }
+
+            let statusType = 'ok';
+            let template = textSuccess;
+            if (fallbackUsed) {
+                statusType = 'warning';
+                template = textFallback || textWarning || textSuccess;
+            } else if (modifiedAt > 0) {
+                const age = Math.floor(Date.now() / 1000) - modifiedAt;
+                const isStale = Number.isFinite(age) && age > staleSeconds;
+                statusType = isStale ? 'warning' : 'ok';
+                template = isStale ? textWarning : textSuccess;
+            }
+
+            const finalMessage = template ? formatStatusMessage(template, statusHuman) : '';
+            setStatus(statusType, finalMessage);
+
+            if (fallbackUsed && data && (data.error || data.fallback_reason)) {
+                console.warn('Project preview fallback used', data.fallback_reason || data.error, data);
             }
         };
 
@@ -1622,7 +1662,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     setStatus('error', textError);
                     return;
                 }
-                applyPreview(payload.preview_url || '', payload.modified_at, payload.modified_human || '');
+                applyPreview(payload, { forced: force });
             } catch (error) {
                 if (isAbortError(error)) {
                     return;

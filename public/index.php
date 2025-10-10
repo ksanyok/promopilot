@@ -53,6 +53,8 @@ if ($level1Enabled) {
     'count' => $level1Total,
     'cumulative' => $cumulative,
     'length' => $level1Length ? sprintf(__('Объём: %s знаков'), $level1Length) : __('Объём уточняется после брифа'),
+    'per' => null,
+    'perLabel' => '',
   ];
 }
 
@@ -67,6 +69,8 @@ if ($level2Enabled) {
     'count' => $level2Total,
     'cumulative' => $cumulative,
     'length' => $level2Length ? sprintf(__('Объём: %s знаков'), $level2Length) : __('Объём подстраивается под нишу'),
+    'per' => $level2Per,
+    'perLabel' => __('публикаций на L1'),
   ];
 }
 
@@ -81,6 +85,8 @@ if ($level3Enabled) {
     'count' => $level3Total,
     'cumulative' => $cumulative,
     'length' => $level3Length ? sprintf(__('Объём: %s знаков'), $level3Length) : __('Объём гибко распределяем по публикациям'),
+    'per' => $level3Per,
+    'perLabel' => __('сигналов на L2'),
   ];
 }
 
@@ -148,6 +154,144 @@ $pp_meta = [
   'developer' => 'BuyReadySite',
   'price_amount' => $metaPriceAmount,
   'price_currency' => $currencyCode,
+];
+
+$levelCascadePathParts = [];
+if ($level1Enabled) {
+  $levelCascadePathParts[] = $formatNumber($level1Total);
+}
+if ($level2Enabled) {
+  $levelCascadePathParts[] = $formatNumber($level2Total);
+}
+if ($level3Enabled) {
+  $levelCascadePathParts[] = $formatNumber($level3Total);
+}
+$levelCascadePath = $levelCascadePathParts ? implode(' → ', $levelCascadePathParts) : __('Настраиваем каскад после брифа');
+
+$metricChips = [
+  [
+    'label' => __('Общий объём каскада'),
+    'value' => $cascadeTotal ? $formatNumber($cascadeTotal) : __('по запросу'),
+    'hint' => __('публикаций во всех уровнях'),
+  ],
+  [
+    'label' => __('Разбивка уровней'),
+    'value' => $levelCascadePath,
+    'hint' => $levelBreakdown,
+  ],
+  [
+    'label' => __('Crowd-слой'),
+    'value' => $hasCrowd ? sprintf(__('до %s касаний'), $formatNumber($crowdPerPublication)) : __('подключаем точечно'),
+    'hint' => $hasCrowd ? __('живых упоминаний на публикацию') : __('включаем при необходимости'),
+  ],
+  [
+    'label' => __('Тайминг каскада'),
+    'value' => __('2–3 месяца'),
+    'hint' => __('постепенные волны без пиков'),
+  ],
+];
+
+if ($priceFormatted) {
+  $metricChips[] = [
+    'label' => __('Стоимость за ссылку'),
+    'value' => $priceFormatted,
+    'hint' => __('динамический расчёт по каскаду'),
+  ];
+}
+
+if ($pricePerPublication) {
+  $metricChips[] = [
+    'label' => __('Средняя цена публикации'),
+    'value' => number_format($pricePerPublication, 2, '.', ' ') . ' ' . $currencyCode,
+    'hint' => __('ориентир по текущей конфигурации'),
+  ];
+}
+
+$comparisonCards = [
+  'single' => [
+    'title' => __('Одиночная покупка ссылок'),
+    'subtitle' => __('Риск и отсутствие контроля'),
+    'points' => [
+      __('Один домен передаёт риск напрямую на целевой проект.'),
+      __('Сложно управлять анкорами и скоростью появления ссылок.'),
+      __('Нет прозрачных отчётов по индексации и статусам.'),
+    ],
+  ],
+  'network' => [
+    'title' => __('Классический линкбилдинг'),
+    'subtitle' => __('Вручную, медленно, без живых сигналов'),
+    'points' => [
+      __('Нужны собственные PBN/сетки и команда модераторов.'),
+      __('Crowd-поддержка и пинги подключаются эпизодически.'),
+      __('Любые ошибки в тайминге выглядят как всплески.'),
+    ],
+  ],
+  'cascade' => [
+    'title' => __('Каскад PromoPilot'),
+    'subtitle' => __('Многоуровневая защита и автоматизация'),
+    'points' => [
+      sprintf(__('Стартуем с %s L1-активов и усиливаем уровни 5 → 10 → 100.'), $formatNumber($level1Total ?: 5)),
+      __('Crowd-слой снимает риски, сигналы идут через промежуточные площадки.'),
+      __('Отчёты, индексация, API и корректировки живут в одном кабинете.'),
+    ],
+  ],
+];
+
+$safetyPoints = [
+  [
+    'icon' => 'shield-lock',
+    'title' => __('Разделяем риски по уровням'),
+    'text' => __('Целевая страница получает вес через L1, а эксперименты остаются на L2–L3.'),
+  ],
+  [
+    'icon' => 'activity',
+    'title' => __('Контролируем темп и сигналы'),
+    'text' => __('Автоматический таймлайн растягивает публикации на 2–3 месяца и пингует только нужные URL.'),
+  ],
+  [
+    'icon' => 'people',
+    'title' => __('Crowd с ручной валидацией'),
+    'text' => __('Аккаунты проходят проверку, ответы модерируются, спам и дубли отсекаются.'),
+  ],
+  [
+    'icon' => 'card-checklist',
+    'title' => __('Отчёты по каждому уровню'),
+    'text' => __('Видите статусы публикаций, анкоры и индексацию без ожидания сводной таблицы.'),
+  ],
+];
+
+$processSteps = [
+  [
+    'title' => __('Бриф и настройка каскада'),
+    'description' => __('Получаем цели, анкоры, географию. Фиксируем требования к площадкам и crowd-слою.'),
+  ],
+  [
+    'title' => __('Производство и публикации'),
+    'description' => __('AI готовит тексты и визуалы, редакторы проверяют, PromoPilot разворачивает 5 → 10 → 100.'),
+  ],
+  [
+    'title' => __('Мониторинг и адаптация'),
+    'description' => __('Пингуем, проверяем индексацию, докручиваем crowd и обновляем отчёты в реальном времени.'),
+  ],
+];
+
+$faqItems = [
+  [
+    'question' => __('Можно ли изменить пропорции уровней?'),
+    'answer' => __('Да. Настройте количество публикаций, длину и наличие crowd-слоя в админке — лендинг и схемы обновятся автоматически.'),
+  ],
+  [
+    'question' => __('Как обеспечивается безопасность каскада?'),
+    'answer' => __('Риск разделён по уровням. Целевая ссылка живёт на L1, а L2–L3 создают фон и сигналы. Тайминг управляется автоматически.'),
+  ],
+  [
+    'question' => __('Что входит в отчёты?'),
+    'answer' => __('Для каждого уровня вы видите статусы, индексацию, анкоры, пинги и crowd-касания. Доступен экспорт и API.'),
+  ],
+  [
+    'question' => __('Сколько занимает запуск?'),
+    'answer' => __('После брифа мы за 48 часов разворачиваем каскад и запускаем первые публикации. Полный цикл занимает 2–3 месяца.'),
+  ],
 ];
 
 $organizationSchema = [
@@ -332,6 +476,35 @@ $webPageSchema = [
 
 $levelListItems = [];
 foreach ($levels as $position => $level) {
+  $additionalProperties = [
+    [
+      '@type' => 'PropertyValue',
+      'name' => __('Публикаций на уровне'),
+      'value' => (int)$level['count'],
+    ],
+    [
+      '@type' => 'PropertyValue',
+      'name' => __('Накопительно'),
+      'value' => (int)$level['cumulative'],
+    ],
+  ];
+
+  if (!empty($level['per']) && !empty($level['perLabel'])) {
+    $additionalProperties[] = [
+      '@type' => 'PropertyValue',
+      'name' => $level['perLabel'],
+      'value' => (int)$level['per'],
+    ];
+  }
+
+  if (!empty($level['length'])) {
+    $additionalProperties[] = [
+      '@type' => 'PropertyValue',
+      'name' => __('Объём контента'),
+      'value' => $level['length'],
+    ];
+  }
+
   $levelListItems[] = [
     '@type' => 'ListItem',
     'position' => $position + 1,
@@ -340,18 +513,7 @@ foreach ($levels as $position => $level) {
       'name' => sprintf('L%s — %s', $level['index'], $level['title']),
       'description' => $level['description'],
       'isPartOf' => $creativeSeriesSchema['@id'] ?? ($baseUrl . '/#creativeSeries'),
-      'additionalProperty' => [
-        [
-          '@type' => 'PropertyValue',
-          'name' => __('Публикаций на уровне'),
-          'value' => (int)$level['count'],
-        ],
-        [
-          '@type' => 'PropertyValue',
-          'name' => __('Накопительно'),
-          'value' => (int)$level['cumulative'],
-        ],
-      ],
+      'additionalProperty' => $additionalProperties,
     ],
   ];
 }
@@ -365,31 +527,22 @@ $levelListSchema = [
   'itemListElement' => $levelListItems ?: [],
 ];
 
+$howToSteps = [];
+foreach ($processSteps as $position => $step) {
+  $howToSteps[] = [
+    '@type' => 'HowToStep',
+    'position' => $position + 1,
+    'name' => $step['title'],
+    'text' => $step['description'],
+  ];
+}
+
 $howToSchema = [
   '@context' => 'https://schema.org',
   '@type' => 'HowTo',
   'name' => __('Как запустить каскад PromoPilot'),
   'description' => __('Трёхшаговый план запуска многоуровневого линкбилдинга с живым краудом.'),
-  'step' => [
-    [
-      '@type' => 'HowToStep',
-      'position' => 1,
-      'name' => __('Собрать бриф и анкор-лист'),
-      'text' => __('Вы сообщаете целевые URL, географию и акценты, а мы формируем анкорный микс и сети площадок.'),
-    ],
-    [
-      '@type' => 'HowToStep',
-      'position' => 2,
-      'name' => __('Синхронизировать контент и крауд'),
-      'text' => __('Мы создаём фундаментальные активы, запускаем поддерживающие ветви и готовим живые аккаунты для крауд-волны.'),
-    ],
-    [
-      '@type' => 'HowToStep',
-      'position' => 3,
-      'name' => __('Отслеживать прогресс и индексацию'),
-      'text' => __('Дашборд показывает статусы публикаций, появление ссылок и динамику crowd-сигналов в реальном времени.'),
-    ],
-  ],
+  'step' => $howToSteps,
   'tool' => [
     [
       '@type' => 'HowToTool',
@@ -423,35 +576,22 @@ $breadcrumbSchema = [
   ],
 ];
 
+$faqSchemaEntities = [];
+foreach ($faqItems as $item) {
+  $faqSchemaEntities[] = [
+    '@type' => 'Question',
+    'name' => $item['question'],
+    'acceptedAnswer' => [
+      '@type' => 'Answer',
+      'text' => $item['answer'],
+    ],
+  ];
+}
+
 $faqSchema = [
   '@context' => 'https://schema.org',
   '@type' => 'FAQPage',
-  'mainEntity' => [
-    [
-      '@type' => 'Question',
-      'name' => __('Что входит в линкбилдинг PromoPilot?'),
-      'acceptedAnswer' => [
-        '@type' => 'Answer',
-        'text' => trim(sprintf(__('Текущая схема: %s.'), $schemeSummary) . ' ' . ($crowdSummary ?: __('Дополнительно подключаем крауд-слой, когда это критично для ниши.'))),
-      ],
-    ],
-    [
-      '@type' => 'Question',
-      'name' => __('Сколько crowd-сигналов вы подключаете?'),
-      'acceptedAnswer' => [
-        '@type' => 'Answer',
-        'text' => $crowdSummary ? sprintf(__('Мы планируем до %s живых крауд-ссылок и упоминаний на публикацию и мониторим каждую площадку.'), $formatNumber($crowdPerPublication)) : __('Crowd-слой масштабируется индивидуально: мы выбираем площадки и частоту после анализа ниши и конкурентов.'),
-      ],
-    ],
-    [
-      '@type' => 'Question',
-      'name' => __('Можно ли адаптировать схему под нишу и бюджет?'),
-      'acceptedAnswer' => [
-        '@type' => 'Answer',
-        'text' => __('Да. Мы регулируем количество уровней, плотность публикаций, долю crowd-ссылок и темп выхода в зависимости от рынка, сезонности и вашего бюджета. Все изменения видны в личном кабинете.'),
-      ],
-    ],
-  ],
+  'mainEntity' => $faqSchemaEntities,
 ];
 
 $structuredData = [
@@ -476,362 +616,213 @@ foreach ($structuredData as $schema) {
 }
 
 ?>
-<section class="landing-hero" id="hero">
-      <div class="row align-items-center g-5 flex-column-reverse flex-lg-row">
-        <div class="col-lg-6">
-          <div class="hero-intro fade-in">
-            <span class="hero-pill"><?php echo __('Линкбилдинг каскадом под вашу нишу'); ?></span>
-            <h1 class="hero-title fw-bold mb-3"><?php echo __('PromoPilot — линкбилдинг каскадом с живым crowd-слоем'); ?></h1>
-            <p class="lead mb-4 hero-lead"><?php echo htmlspecialchars($heroLead, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
-            <ul class="hero-points list-unstyled mb-4">
-              <li><i class="bi bi-diagram-3-fill"></i><span><?php echo sprintf(__('Структура %s уровня(ов): выстраиваем анкор-листы, объём и географию'), $levelsCount); ?></span></li>
-              <li><i class="bi bi-graph-up-arrow"></i><span><?php echo $hasCrowd ? __('Живой crowd и тематические волны из проверенных аккаунтов') : __('Готовим площадки и тематические волны под ваш запрос'); ?></span></li>
-              <li><i class="bi bi-clock-history"></i><span><?php echo __('Тайминг на 2–3 месяца: управляем скоростью и пингами без всплесков'); ?></span></li>
-              <li><i class="bi bi-shield-check"></i><span><?php echo __('Мониторинг индексации, статусов и отчётов в личном кабинете'); ?></span></li>
-            </ul>
-            <div class="card bg-dark border border-primary-subtle hero-scheme mb-4 shadow-sm">
-              <div class="card-body py-3 px-4">
-                <div class="small text-uppercase text-primary fw-semibold mb-1"><?php echo __('Текущая схема PromoPilot'); ?></div>
-                <div class="d-flex flex-column flex-md-row gap-2 align-items-start">
-                  <span class="fw-semibold"><?php echo htmlspecialchars($schemeSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
-                  <?php if ($hasCrowd && $crowdSummary): ?>
-                  <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle"><?php echo htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
-                  <?php endif; ?>
-                </div>
-              </div>
-            </div>
-            <div class="d-flex flex-wrap gap-3 mb-4">
-              <a href="#cta" class="btn btn-gradient btn-lg"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запустить каскад'); ?></a>
-              <a href="#levels" class="btn btn-outline-light btn-lg"><i class="bi bi-info-circle me-2"></i><?php echo __('Посмотреть структуру'); ?></a>
-            </div>
-            <div class="hero-metrics d-flex flex-wrap gap-3">
-              <div class="metric-badge"><strong><?php echo $formatNumber($cascadeTotal); ?></strong><span><?php echo __('публикаций в пакете'); ?></span></div>
-              <div class="metric-badge"><strong><?php echo $levelsCount; ?></strong><span><?php echo __('уровня каскада'); ?></span></div>
-              <div class="metric-badge"><strong><?php echo htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('разбивка по уровням'); ?></span></div>
-              <?php if ($priceFormatted): ?>
-              <div class="metric-badge"><strong><?php echo htmlspecialchars($priceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('стоимость за ссылку'); ?></span></div>
-              <?php endif; ?>
-              <?php if ($pricePerPublication): ?>
-              <div class="metric-badge"><strong><?php echo htmlspecialchars(number_format($pricePerPublication, 2, '.', ' '), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong><span><?php echo __('за публикацию в каскаде'); ?></span></div>
-              <?php endif; ?>
-              <?php if ($hasCrowd): ?>
-              <div class="metric-badge"><strong><?php echo sprintf(__('до %s'), $formatNumber($crowdPerPublication)); ?></strong><span><?php echo __('крауд-касаний на публикацию'); ?></span></div>
-              <?php endif; ?>
-            </div>
-          </div>
-        </div>
-        <div class="col-lg-6">
-          <div class="hero-media position-relative text-center">
-            <picture>
-              <source srcset="<?php echo asset_url('img/hero_main.jpg'); ?>" type="image/jpeg">
-              <img src="<?php echo asset_url('img/hero_main.jpg'); ?>" alt="<?php echo __('Схема многоуровневого продвижения'); ?>" class="img-fluid rounded-4 shadow hero-image mb-3" loading="lazy" width="1600" height="900">
-            </picture>
-            <figcaption class="small text-muted"><?php echo sprintf(__('Схема сейчас: %s (%s).'), htmlspecialchars($schemeSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')); ?></figcaption>
-            <?php if (!is_logged_in()): ?>
-            <div class="auth-panel card mt-4 text-start">
-              <div class="card-body p-4">
-                <h2 class="h5 mb-3"><?php echo __('Войти и посмотреть демо-дашборд'); ?></h2>
-                <?php if ($googleEnabled): ?>
-                <a href="<?php echo htmlspecialchars($googleStartUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" class="btn btn-google w-100 mb-3"><i class="bi bi-google me-2"></i><?php echo __('Войти через Google'); ?></a>
-                <div class="auth-divider text-center mb-3"><span><?php echo __('или продолжить классически'); ?></span></div>
-                <?php endif; ?>
-                <ul class="nav nav-pills mb-3 gap-2 auth-tabs" id="pills-auth" role="tablist">
-                  <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="tab-login" data-bs-toggle="pill" data-bs-target="#pane-login" type="button" role="tab" aria-controls="pane-login" aria-selected="true"><?php echo __('Вход'); ?></button>
-                  </li>
-                  <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="tab-register" data-bs-toggle="pill" data-bs-target="#pane-register" type="button" role="tab" aria-controls="pane-register" aria-selected="false"><?php echo __('Регистрация'); ?></button>
-                  </li>
-                </ul>
-                <div class="tab-content" id="pills-authContent">
-                  <div class="tab-pane fade show active" id="pane-login" role="tabpanel" aria-labelledby="tab-login">
-                    <form method="post" action="<?php echo pp_url('auth/login.php'); ?>" class="auth-form" novalidate>
-                      <?php echo csrf_field(); ?>
-                      <div class="mb-3">
-                        <label class="form-label"><?php echo __('Email или логин'); ?></label>
-                        <input type="text" name="login" class="form-control form-control-lg" required autocomplete="username">
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label d-flex justify-content-between align-items-center"><span><?php echo __('Пароль'); ?></span> <a href="<?php echo pp_url('auth/login.php'); ?>#recover" class="small text-decoration-none"><?php echo __('Забыли?'); ?></a></label>
-                        <input type="password" name="password" class="form-control form-control-lg" required autocomplete="current-password">
-                      </div>
-                      <div class="d-grid gap-2">
-                        <button class="btn btn-primary btn-lg" type="submit"><i class="bi bi-box-arrow-in-right me-2"></i><?php echo __('Войти'); ?></button>
-                        <a href="<?php echo pp_url('auth/register.php'); ?>" class="btn btn-outline-light btn-sm"><?php echo __('Создать аккаунт отдельно'); ?></a>
-                      </div>
-                    </form>
-                  </div>
-                  <div class="tab-pane fade" id="pane-register" role="tabpanel" aria-labelledby="tab-register">
-                    <form method="post" action="<?php echo pp_url('auth/register.php'); ?>" class="auth-form" novalidate>
-                      <?php echo csrf_field(); ?>
-                      <div class="mb-3">
-                        <label class="form-label"><?php echo __('Email'); ?></label>
-                        <input type="email" name="email" class="form-control form-control-lg" required autocomplete="email">
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label"><?php echo __('Логин'); ?></label>
-                        <input type="text" name="username" class="form-control form-control-lg" required autocomplete="username">
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label"><?php echo __('Пароль'); ?></label>
-                        <input type="password" name="password" class="form-control form-control-lg" required autocomplete="new-password">
-                      </div>
-                      <div class="d-grid gap-2">
-                        <button class="btn btn-success btn-lg" type="submit"><i class="bi bi-person-plus me-2"></i><?php echo __('Зарегистрироваться'); ?></button>
-                        <a href="<?php echo pp_url('auth/login.php'); ?>" class="btn btn-outline-light btn-sm"><?php echo __('У меня уже есть аккаунт'); ?></a>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <?php endif; ?>
-          </div>
-        </div>
+<section class="hero-modern" id="hero">
+  <div class="hero-modern__copy">
+    <span class="hero-badge"><?php echo __('Новый формат линкбилдинга'); ?></span>
+    <h1 class="hero-title"><?php echo __('PromoPilot — безопасный каскад ссылок вместо одиночных покупок'); ?></h1>
+    <p class="hero-lead"><?php echo htmlspecialchars($heroLead, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+    <ul class="hero-list">
+      <li><i class="bi bi-stars"></i><span><?php echo __('Редакционные L1-активы с ручной модерацией и тематическим контентом.'); ?></span></li>
+      <li><i class="bi bi-diagram-3"></i><span><?php echo __('Каскад 5 → 10 → 100 усиливает ссылку уровня за уровнем.'); ?></span></li>
+      <li><i class="bi bi-shield-lock"></i><span><?php echo __('Риск остаётся на внешних площадках, целевая страница получает чистый вес.'); ?></span></li>
+    </ul>
+    <div class="hero-actions">
+      <a href="#cta" class="btn btn-primary btn-lg"><i class="bi bi-rocket-takeoff me-2"></i><?php echo __('Запустить каскад'); ?></a>
+      <a href="#cascade" class="btn btn-outline-light btn-lg"><i class="bi bi-diagram-3 me-2"></i><?php echo __('Посмотреть уровни'); ?></a>
+    </div>
+  </div>
+  <div class="hero-modern__card">
+    <div class="hero-card">
+      <div class="hero-card__head">
+        <h2><?php echo __('Сводка активной схемы'); ?></h2>
+        <span class="hero-card__label"><?php echo __('Автообновление из настроек'); ?></span>
       </div>
-    </section>
+      <dl class="hero-card__stats">
+        <div class="hero-card__row">
+          <dt><?php echo __('Уровней'); ?></dt>
+          <dd><?php echo $levelsCount; ?></dd>
+        </div>
+        <div class="hero-card__row">
+          <dt><?php echo __('Структура'); ?></dt>
+          <dd><?php echo htmlspecialchars($schemeSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></dd>
+        </div>
+        <div class="hero-card__row">
+          <dt><?php echo __('Всего ссылок'); ?></dt>
+          <dd><?php echo $formatNumber($cascadeTotal); ?></dd>
+        </div>
+        <?php if ($priceFormatted): ?>
+        <div class="hero-card__row">
+          <dt><?php echo __('Стоимость'); ?></dt>
+          <dd><?php echo htmlspecialchars($priceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></dd>
+        </div>
+        <?php endif; ?>
+        <?php if ($hasCrowd && $crowdSummary): ?>
+        <div class="hero-card__row">
+          <dt><?php echo __('Crowd-слой'); ?></dt>
+          <dd><?php echo htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></dd>
+        </div>
+        <?php endif; ?>
+      </dl>
+      <p class="hero-card__note"><?php echo __('Меняйте параметры в админке — лендинг адаптируется автоматически.'); ?></p>
+      <div class="hero-card__actions">
+        <a href="<?php echo pp_url('auth/register.php'); ?>" class="btn btn-outline-light btn-sm"><i class="bi bi-person-plus me-2"></i><?php echo __('Создать аккаунт'); ?></a>
+        <a href="<?php echo pp_url('auth/login.php'); ?>" class="btn btn-link btn-sm text-decoration-none text-muted"><?php echo __('Войти'); ?></a>
+      </div>
+    </div>
+  </div>
+</section>
 
-    <section class="landing-section" id="levels">
-      <div class="section-head">
-        <h2 class="h3 fw-bold mb-2"><?php echo __('Автообновляемая структура каскада'); ?></h2>
-        <p class="text-muted mb-0"><?php echo __('Данные берутся из текущих настроек PromoPilot — измените конфигурацию в админке, и лендинг обновится автоматически.'); ?></p>
-      </div>
-      <div class="row g-4 align-items-start mt-1">
-        <div class="col-xl-5">
-          <div class="levels-desc pe-xl-3">
-            <?php foreach ($levels as $level): ?>
-              <div class="mb-3 level-block">
-                <h6 class="text-primary mb-1"><span class="badge bg-primary-subtle text-primary-emphasis"><?php echo $level['index']; ?></span> <?php echo htmlspecialchars($level['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></h6>
-                <p class="mb-2 small"><?php echo htmlspecialchars($level['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
-                <div class="level-meta small text-muted d-flex flex-wrap gap-3">
-                  <span><i class="bi bi-bar-chart me-1"></i><?php echo sprintf(__('Публикаций: %s'), $formatNumber($level['count'])); ?></span>
-                  <span><i class="bi bi-collection me-1"></i><?php echo sprintf(__('Накопительно: %s'), $formatNumber($level['cumulative'])); ?></span>
-                  <span><i class="bi bi-text-paragraph me-1"></i><?php echo htmlspecialchars($level['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
-                </div>
-              </div>
-            <?php endforeach; ?>
-            <div class="ratio ratio-16x9 rounded bg-gradient position-relative overflow-hidden mb-3 border border-1 border-opacity-25 border-primary-subtle">
-              <img src="<?php echo asset_url('img/diagram_levels.svg'); ?>" alt="<?php echo __('Диаграмма уровней'); ?>" class="w-100 h-100 object-fit-contain p-3" loading="lazy">
-            </div>
-            <p class="small text-muted mb-0"><i class="bi bi-lightning-charge me-1"></i><?php echo htmlspecialchars($crowdLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
-          </div>
-        </div>
-        <div class="col-xl-7">
-          <div class="table-responsive shadow-sm rounded overflow-hidden level-table-wrapper mb-4">
-            <table class="table table-dark table-striped table-sm align-middle mb-0">
-              <thead>
-                <tr>
-                  <th><?php echo __('Уровень'); ?></th>
-                  <th><?php echo __('Описание'); ?></th>
-                  <th><?php echo __('Публикаций на уровне'); ?></th>
-                  <th><?php echo __('Всего накопительно'); ?></th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php foreach ($levels as $level): ?>
-                <tr>
-                  <td class="fw-bold">L<?php echo $level['index']; ?></td>
-                  <td><?php echo htmlspecialchars($level['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></td>
-                  <td><?php echo $formatNumber($level['count']); ?></td>
-                  <td><?php echo $formatNumber($level['cumulative']); ?></td>
-                </tr>
-                <?php endforeach; ?>
-              </tbody>
-              <tfoot>
-                <tr class="table-secondary text-dark">
-                  <th colspan="2" class="text-end"><?php echo __('Итого'); ?></th>
-                  <th><?php echo $formatNumber($cascadeTotal); ?></th>
-                  <th><?php echo $formatNumber($cascadeTotal); ?></th>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          <div class="row g-3 level-cards">
-            <?php foreach ($levels as $level): ?>
-              <?php $media = $levelImages[$level['index']] ?? null; ?>
-              <div class="col-md-<?php echo $levelsCount >= 3 ? '4' : '6'; ?>">
-                <div class="card h-100 text-center level-card">
-                  <div class="card-body p-3">
-                    <?php if ($media): ?>
-                      <img src="<?php echo asset_url($media['src']); ?>" alt="<?php echo htmlspecialchars($media['alt'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" class="img-fluid rounded level-image mb-2" loading="lazy">
-                    <?php endif; ?>
-                    <h6 class="fw-bold mb-1">L<?php echo $level['index']; ?></h6>
-                    <p class="small mb-0 text-muted"><?php echo htmlspecialchars($level['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
-                  </div>
-                </div>
-              </div>
-            <?php endforeach; ?>
-          </div>
-        </div>
-      </div>
-    </section>
+<section class="landing-section metrics-panel" id="metrics">
+  <div class="section-head">
+    <h2><?php echo __('Цифры каскада из вашей конфигурации'); ?></h2>
+    <p class="text-muted"><?php echo __('Никаких маркетинговых обещаний — только данные из активных настроек PromoPilot.'); ?></p>
+  </div>
+  <div class="metric-grid">
+    <?php foreach ($metricChips as $chip): ?>
+      <article class="metric-chip">
+        <span class="metric-chip__label"><?php echo htmlspecialchars($chip['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+        <strong><?php echo htmlspecialchars($chip['value'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong>
+        <span class="metric-chip__hint"><?php echo htmlspecialchars($chip['hint'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+      </article>
+    <?php endforeach; ?>
+  </div>
+</section>
 
-    <section class="landing-section" id="benefits">
-      <div class="row g-5 align-items-center">
-        <div class="col-lg-6 order-2 order-lg-1">
-          <h2 class="h3 fw-bold mb-3"><?php echo __('Что даёт каскад PromoPilot'); ?></h2>
-          <p><?php echo __('Комбинация AI-контента, распределённого расписания и крауд-мониторинга создаёт безопасный рост ссылочного профиля и ускоряет индексацию.'); ?></p>
-          <div class="value-grid mb-4">
-            <div class="value-card">
-              <i class="bi bi-stars"></i>
-              <h6><?php echo __('AI-копирайтинг + иллюстрации'); ?></h6>
-              <p class="small text-muted mb-0"><?php echo __('Каждая публикация получает тематический текст и обложку, проверенные перед выгрузкой.'); ?></p>
-            </div>
-            <div class="value-card">
-              <i class="bi bi-stopwatch"></i>
-              <h6><?php echo __('Плавный тайминг 2–3 месяца'); ?></h6>
-              <p class="small text-muted mb-0"><?php echo __('Алгоритм растягивает публикации, чтобы траст рос естественно и без фильтров.'); ?></p>
-            </div>
-            <div class="value-card">
-              <i class="bi bi-speedometer2"></i>
-              <h6><?php echo __('Дашборд с метриками'); ?></h6>
-              <p class="small text-muted mb-0"><?php echo __('Видите статусы, индексацию, ссылки и экспортируете отчёты по каждому уровню.'); ?></p>
-            </div>
-          </div>
-          <ul class="list-unstyled benefit-list mb-4">
-            <li><i class="bi bi-check-circle"></i><?php echo __(' Управляем анкорами и географией площадок'); ?></li>
-            <li><i class="bi bi-check-circle"></i><?php echo __(' Пингуем и проверяем появление публикаций автоматически'); ?></li>
-            <li><i class="bi bi-check-circle"></i><?php echo __(' Предиктивно распределяем нагрузку, чтобы профиль выглядел натурально'); ?></li>
-          </ul>
-          <div class="d-flex gap-3 flex-wrap">
-            <a href="#process" class="btn btn-primary btn-lg"><i class="bi bi-lightning-charge me-2"></i><?php echo __('Посмотреть этапы'); ?></a>
-            <a href="#faq" class="btn btn-outline-light btn-lg"><i class="bi bi-question-circle me-2"></i><?php echo __('Ответы на вопросы'); ?></a>
-          </div>
-        </div>
-        <div class="col-lg-6 order-1 order-lg-2 text-center">
-          <div class="stat-card shadow">
-            <h5 class="mb-3"><?php echo __('Сводка по вашему каскаду'); ?></h5>
-            <div class="stat-card__grid">
-              <div class="stat-item">
-                <span class="label"><?php echo __('Пакет публикаций'); ?></span>
-                <strong><?php echo $formatNumber($cascadeTotal); ?></strong>
-                <span class="hint"><?php echo htmlspecialchars($levelBreakdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
-              </div>
-              <div class="stat-item">
-                <span class="label"><?php echo __('Стоимость за ссылку'); ?></span>
-                <strong><?php echo $priceFormatted ? htmlspecialchars($priceFormatted, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : __('по запросу'); ?></strong>
-                <span class="hint"><?php echo $pricePerPublication ? sprintf(__('~%s %s за публикацию'), htmlspecialchars(number_format($pricePerPublication, 2, '.', ' '), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), $currencyCode) : __('индивидуальный расчёт'); ?></span>
-              </div>
-              <div class="stat-item">
-                <span class="label"><?php echo __('Крауд-касания'); ?></span>
-                <strong><?php echo $hasCrowd ? sprintf(__('до %s/статью'), $formatNumber($crowdPerPublication)) : __('ручной отбор'); ?></strong>
-                <span class="hint"><?php echo $crowdSummary ? htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : __('Площадки и частоту фиксируем в дашборде'); ?></span>
-              </div>
-            </div>
-          </div>
-          <article class="testimonial-card mt-4" id="testimonial">
-            <div class="testimonial-header">
-              <img src="<?php echo asset_url('img/photo.jpeg'); ?>" alt="<?php echo htmlspecialchars($testimonialAuthor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" class="testimonial-photo" loading="lazy" width="120" height="120">
-              <div>
-                <strong><?php echo htmlspecialchars($testimonialAuthor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></strong>
-                <span class="small text-muted d-block"><?php echo htmlspecialchars($testimonialRole, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
-              </div>
-            </div>
-            <p class="testimonial-quote">“<?php echo htmlspecialchars($testimonialQuote, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>”</p>
-          </article>
-        </div>
-      </div>
-    </section>
+<section class="landing-section" id="comparison">
+  <div class="section-head">
+    <h2><?php echo __('Почему каскад выгоднее одиночной ссылки'); ?></h2>
+    <p class="text-muted"><?php echo __('Сравнили рынок и PromoPilot, чтобы показать, где появляется добавленная ценность.'); ?></p>
+  </div>
+  <div class="comparison-grid">
+    <?php foreach ($comparisonCards as $slug => $card): ?>
+      <article class="comparison-card comparison-card--<?php echo htmlspecialchars($slug, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+        <h3><?php echo htmlspecialchars($card['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></h3>
+        <p class="comparison-subtitle"><?php echo htmlspecialchars($card['subtitle'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+        <ul class="comparison-list">
+          <?php foreach ($card['points'] as $point): ?>
+            <li><i class="bi bi-dot"></i><span><?php echo htmlspecialchars($point, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span></li>
+          <?php endforeach; ?>
+        </ul>
+      </article>
+    <?php endforeach; ?>
+  </div>
+</section>
 
-    <section class="landing-section" id="process">
-      <div class="section-head">
-        <h2 class="h4 fw-bold mb-2"><?php echo __('Этапы запуска и контроля'); ?></h2>
-        <p class="text-muted mb-0"><?php echo __('Прозрачный маршрут от технического задания до первых индексаций в поиске.'); ?></p>
-      </div>
-      <div class="row g-4 process-steps">
-        <div class="col-md-4">
-          <div class="step-item h-100 p-4 rounded border position-relative">
-            <div class="step-number">1</div>
-            <h6 class="fw-bold mb-2"><?php echo __('Сбор брифа и анкор-листа'); ?></h6>
-            <p class="small mb-0"><?php echo __('Фиксируем целевые страницы, пропорции типов анкоров и географию площадок.'); ?></p>
+<section class="landing-section" id="cascade">
+  <div class="section-head">
+    <h2><?php echo __('Структура каскада по уровням'); ?></h2>
+    <p class="text-muted"><?php echo __('Значения берутся из настроек и обновляются автоматически при изменениях.'); ?></p>
+  </div>
+  <div class="cascade-flow">
+    <?php foreach ($levels as $level): ?>
+      <article class="flow-step">
+        <span class="flow-step__badge">L<?php echo $level['index']; ?></span>
+        <h3><?php echo htmlspecialchars($level['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></h3>
+        <p><?php echo htmlspecialchars($level['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+        <dl class="flow-step__stats">
+          <div class="flow-step__stat">
+            <dt><?php echo __('Публикаций на уровне'); ?></dt>
+            <dd><?php echo $formatNumber($level['count']); ?></dd>
           </div>
-        </div>
-        <div class="col-md-4">
-          <div class="step-item h-100 p-4 rounded border position-relative">
-            <div class="step-number">2</div>
-            <h6 class="fw-bold mb-2"><?php echo __('Генерация каскада и публикации'); ?></h6>
-            <p class="small mb-0"><?php echo __('AI-модели готовят тексты и визуалы, PromoPilot распределяет тайминг и размещает материалы.'); ?></p>
+          <div class="flow-step__stat">
+            <dt><?php echo __('Накопительно'); ?></dt>
+            <dd><?php echo $formatNumber($level['cumulative']); ?></dd>
           </div>
-        </div>
-        <div class="col-md-4">
-          <div class="step-item h-100 p-4 rounded border position-relative">
-            <div class="step-number">3</div>
-            <h6 class="fw-bold mb-2"><?php echo __('Мониторинг и адаптация'); ?></h6>
-            <p class="small mb-0"><?php echo __('Пингуем, проверяем индексацию, докручиваем крауд-ссылки и публикуем отчёты.'); ?></p>
+          <?php if (!empty($level['per']) && !empty($level['perLabel'])): ?>
+          <div class="flow-step__stat">
+            <dt><?php echo htmlspecialchars($level['perLabel'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></dt>
+            <dd><?php echo $formatNumber($level['per']); ?></dd>
           </div>
-        </div>
-      </div>
-      <div class="process-flow mt-4 text-center">
-        <picture>
-          <source srcset="<?php echo asset_url('img/process_flow.svg'); ?>" type="image/svg+xml">
-          <img src="<?php echo asset_url('img/process_flow.png'); ?>" alt="<?php echo __('Поток этапов: бриф → публикация → индекс'); ?>" class="img-fluid process-flow-image rounded-3 shadow" loading="lazy" width="1400" height="500">
-        </picture>
-        <div class="small text-muted mt-2"><?php echo __('Средний горизонт — 10–12 недель, первые индексации обычно появляются в течение 14 дней после старта.'); ?></div>
-      </div>
-    </section>
+          <?php endif; ?>
+          <?php if (!empty($level['length'])): ?>
+          <div class="flow-step__stat">
+            <dt><?php echo __('Объём'); ?></dt>
+            <dd><?php echo htmlspecialchars($level['length'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></dd>
+          </div>
+          <?php endif; ?>
+        </dl>
+      </article>
+    <?php endforeach; ?>
+  </div>
+  <?php if ($crowdSummary): ?>
+    <p class="cascade-note text-muted"><i class="bi bi-lightning-charge me-2"></i><?php echo htmlspecialchars($crowdSummary, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+  <?php endif; ?>
+</section>
 
-    <section class="landing-section" id="faq">
-      <div class="section-head">
-        <h2 class="h4 fw-bold mb-2"><?php echo __('Частые вопросы'); ?></h2>
-        <p class="text-muted mb-0"><?php echo __('Если нужен индивидуальный разбор — заполните бриф в личном кабинете или напишите в поддержку.'); ?></p>
-      </div>
-      <div class="accordion faq-accordion" id="faqAccordion">
-        <div class="accordion-item">
-          <h2 class="accordion-header" id="faqOne">
-            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapseOne" aria-expanded="true" aria-controls="faqCollapseOne">
-              <?php echo __('Как PromoPilot гарантирует безопасный тайминг?'); ?>
-            </button>
-          </h2>
-          <div id="faqCollapseOne" class="accordion-collapse collapse show" aria-labelledby="faqOne" data-bs-parent="#faqAccordion">
-            <div class="accordion-body">
-              <?php echo __('Мы распределяем публикации на 2–3 месяца, чередуем площадки и автоматически пингуем URL. При отклонениях система уведомит и скорректирует график.'); ?>
-            </div>
-          </div>
-        </div>
-        <div class="accordion-item">
-          <h2 class="accordion-header" id="faqTwo">
-            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapseTwo" aria-expanded="false" aria-controls="faqCollapseTwo">
-              <?php echo __('Можно ли изменить количество уровней или объём статей?'); ?>
-            </button>
-          </h2>
-          <div id="faqCollapseTwo" class="accordion-collapse collapse" aria-labelledby="faqTwo" data-bs-parent="#faqAccordion">
-            <div class="accordion-body">
-              <?php echo __('Да, все параметры — количество статей, длина текстов, наличие уровня L3 — управляются в настройках. Лендинг и калькуляция обновятся без правок кода.'); ?>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+<section class="landing-section" id="safety">
+  <div class="section-head">
+    <h2><?php echo __('Безопасность встроена в каскад'); ?></h2>
+    <p class="text-muted"><?php echo __('Каждый уровень выполняет свою роль и страхует предыдущий.'); ?></p>
+  </div>
+  <div class="safety-grid">
+    <?php foreach ($safetyPoints as $point): ?>
+      <article class="safety-card">
+        <span class="safety-icon"><i class="bi bi-<?php echo htmlspecialchars($point['icon'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"></i></span>
+        <h3><?php echo htmlspecialchars($point['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></h3>
+        <p><?php echo htmlspecialchars($point['text'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+      </article>
+    <?php endforeach; ?>
+  </div>
+</section>
 
-    <section class="landing-section cta-final" id="cta">
-      <div class="card cta-card overflow-hidden">
-        <div class="card-body p-5 p-md-5 text-center text-md-start position-relative">
-          <div class="row align-items-center g-4">
-            <div class="col-md-7">
-              <h2 class="h3 fw-bold mb-3"><?php echo __('Готовы запустить каскад?'); ?></h2>
-              <p class="mb-4 lead mb-md-3"><?php echo __('Создайте аккаунт и получите доступ к демо-проекту, отчётам по публикациям и настройкам своей структуры.'); ?></p>
-              <div class="d-flex flex-wrap gap-3">
-                <a href="<?php echo pp_url('auth/register.php'); ?>" class="btn btn-gradient btn-lg"><i class="bi bi-person-plus me-2"></i><?php echo __('Зарегистрироваться'); ?></a>
-                <a href="<?php echo pp_url('auth/login.php'); ?>" class="btn btn-outline-light btn-lg"><i class="bi bi-box-arrow-in-right me-2"></i><?php echo __('Войти'); ?></a>
-              </div>
-              <?php if ($googleEnabled): ?>
-              <p class="small text-muted mt-3 mb-0"><i class="bi bi-google me-1"></i><?php echo __('Есть Google-аккаунт? Войдите одним кликом через Google OAuth.'); ?></p>
-              <?php endif; ?>
-              <p class="small text-muted mt-1 mb-0"><i class="bi bi-shield-lock me-1"></i><?php echo __('Данные защищены. Никакого спама, только прогресс-уведомления.'); ?></p>
-            </div>
-            <div class="col-md-5 text-center text-md-end">
-              <img src="<?php echo asset_url('img/dashboard_preview.png'); ?>" alt="<?php echo __('Превью панели'); ?>" class="img-fluid rounded-4 shadow-lg dashboard-preview" loading="lazy" width="900" height="640">
-            </div>
+<section class="landing-section" id="process">
+  <div class="section-head">
+    <h2><?php echo __('Как запускается каскад'); ?></h2>
+    <p class="text-muted"><?php echo __('От брифа до отчёта — три прозрачных шага.'); ?></p>
+  </div>
+  <div class="process-modern">
+    <?php foreach ($processSteps as $index => $step): ?>
+      <article class="process-card">
+        <span class="process-step">0<?php echo $index + 1; ?></span>
+        <h3><?php echo htmlspecialchars($step['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></h3>
+        <p><?php echo htmlspecialchars($step['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
+      </article>
+    <?php endforeach; ?>
+  </div>
+</section>
+
+<section class="landing-section" id="faq">
+  <div class="section-head">
+    <h2><?php echo __('Частые вопросы'); ?></h2>
+    <p class="text-muted"><?php echo __('Не нашли ответ — напишите нам или заполните бриф, и команда всё настроит.'); ?></p>
+  </div>
+  <div class="accordion faq-accordion" id="faqAccordion">
+    <?php foreach ($faqItems as $idx => $item): ?>
+      <?php $collapseId = 'faqCollapse' . $idx; $headingId = 'faqHeading' . $idx; ?>
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="<?php echo htmlspecialchars($headingId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+          <button class="accordion-button <?php echo $idx === 0 ? '' : 'collapsed'; ?>" type="button" data-bs-toggle="collapse" data-bs-target="#<?php echo htmlspecialchars($collapseId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" aria-expanded="<?php echo $idx === 0 ? 'true' : 'false'; ?>" aria-controls="<?php echo htmlspecialchars($collapseId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+            <?php echo htmlspecialchars($item['question'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
+          </button>
+        </h2>
+        <div id="<?php echo htmlspecialchars($collapseId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" class="accordion-collapse collapse <?php echo $idx === 0 ? 'show' : ''; ?>" aria-labelledby="<?php echo htmlspecialchars($headingId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>" data-bs-parent="#faqAccordion">
+          <div class="accordion-body">
+            <?php echo htmlspecialchars($item['answer'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>
           </div>
         </div>
       </div>
-    </section>
+    <?php endforeach; ?>
+  </div>
+</section>
 
-    <section class="landing-section note-section">
-      <div class="p-4 rounded border bg-dark-subtle text-dark">
-        <p class="small mb-1"><strong><?php echo __('Примечание'); ?>:</strong> <?php echo __('Объём и конфигурация структуры автоматически адаптируются под нишу, язык и конкуренцию. Нужно больше уровня L3 или крауда — укажите в брифе.'); ?></p>
-        <p class="small text-muted mb-0"><?php echo __('Статусы публикаций, индексации и крауд-касаций доступны после старта проекта в личном кабинете PromoPilot.'); ?></p>
+<section class="landing-section" id="cta">
+  <div class="cta-modern">
+    <div class="cta-modern__content">
+      <span class="cta-badge"><?php echo __('Демо и онбординг'); ?></span>
+      <h2><?php echo __('Запустим ваш каскад за два дня'); ?></h2>
+      <p><?php echo __('Создайте аккаунт, заполните короткий бриф и получите доступ к отчётам и API.'); ?></p>
+      <div class="cta-actions">
+        <a href="<?php echo pp_url('auth/register.php'); ?>" class="btn btn-primary btn-lg"><i class="bi bi-person-plus me-2"></i><?php echo __('Зарегистрироваться'); ?></a>
+        <a href="<?php echo pp_url('auth/login.php'); ?>" class="btn btn-outline-light btn-lg"><i class="bi bi-box-arrow-in-right me-2"></i><?php echo __('Войти'); ?></a>
       </div>
-    </section>
+      <?php if ($googleEnabled): ?>
+      <p class="cta-note"><i class="bi bi-google me-1"></i><?php echo __('Можно войти через Google OAuth — без паролей.'); ?></p>
+      <?php endif; ?>
+    </div>
+    <div class="cta-modern__visual">
+      <img src="<?php echo asset_url('img/logo.svg'); ?>" alt="PromoPilot" class="cta-logo" loading="lazy" width="260" height="92">
+    </div>
+  </div>
+</section>
 
-  <?php include __DIR__ . '/../includes/footer.php'; ?>
+<?php include __DIR__ . '/../includes/footer.php'; ?>

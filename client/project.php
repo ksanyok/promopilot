@@ -266,14 +266,15 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                              data-text-warning="<?php echo htmlspecialchars(__('Скрин обновлен давно: %s')); ?>"
                              data-text-pending="<?php echo htmlspecialchars(__('Скрин еще не готов')); ?>"
                              data-text-error="<?php echo htmlspecialchars(__('Не удалось обновить скрин')); ?>"
-                             data-text-processing="<?php echo htmlspecialchars(__('Обновляем превью...')); ?>">
+                             data-text-processing="<?php echo htmlspecialchars(__('Обновляем превью...')); ?>"
+                             data-text-fallback="<?php echo htmlspecialchars(__('Временный скрин из резервного сервиса. Настройте автоматический захват.')); ?>">
                             <div class="project-hero__preview-frame">
                                 <?php if (!empty($projectPreviewUrl)): ?>
                                     <img src="<?php echo htmlspecialchars($projectPreviewUrl); ?>" alt="<?php echo htmlspecialchars($project['name']); ?>" class="project-hero__screenshot" loading="lazy" decoding="async" data-preview-image>
                                 <?php else: ?>
                                     <div class="project-hero__screenshot project-hero__screenshot--placeholder" data-preview-placeholder><span><?php echo htmlspecialchars($projectInitial); ?></span></div>
                                 <?php endif; ?>
-                                <button type="button" class="project-hero__refresh project-hero__refresh--overlay<?php echo $projectPreviewHasUrl ? '' : ' d-none'; ?>" data-action="refresh-preview" title="<?php echo __('Обновить превью'); ?>" aria-label="<?php echo __('Обновить превью'); ?>">
+                                <button type="button" class="project-hero__refresh project-hero__refresh--overlay" data-action="refresh-preview" title="<?php echo __('Обновить превью'); ?>" aria-label="<?php echo __('Обновить превью'); ?>">
                                     <span class="label-default"><i class="bi bi-arrow-repeat"></i></span>
                                     <span class="label-loading"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span></span>
                                     <span class="visually-hidden"><?php echo __('Обновить превью'); ?></span>
