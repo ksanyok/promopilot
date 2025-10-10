@@ -190,15 +190,37 @@ if (!function_exists('pp_process_publication_job')) {
             pp_promotion_log('promotion.publication_job_language', $logPayload);
         }
         $result = pp_publish_via_network($network, $job, 480);
+        $logRelative = null;
+        $logDetails = null;
+        if (is_array($result)) {
+            $logCandidate = null;
+            if (!empty($result['logFile'])) { $logCandidate = (string)$result['logFile']; }
+            elseif (!empty($result['logfile'])) { $logCandidate = (string)$result['logfile']; }
+            $logDirCandidate = $result['logDir'] ?? ($result['log_directory'] ?? null);
+            $logRelative = pp_promotion_store_log_path($logCandidate, $logDirCandidate);
+            if ($logRelative !== null) {
+                $logDetails = pp_promotion_expand_log_path($logRelative);
+            }
+        }
         if (!is_array($result) || empty($result['ok']) || empty($result['publishedUrl'])) {
             $errText = 'NETWORK_ERROR'; $details = ''; if (is_array($result)) { $details = (string)($result['details'] ?? ($result['error'] ?? ($result['stderr'] ?? ''))); }
             $msg = trim($errText . ($details !== '' ? (': ' . $details) : ''));
-            $up = $conn->prepare("UPDATE publications SET status=IF(cancel_requested=1,'cancelled','failed'), finished_at=CURRENT_TIMESTAMP, error=?, pid=NULL WHERE id = ? LIMIT 1");
-            if ($up) { $up->bind_param('si', $msg, $pubId); $up->execute(); $up->close(); }
+            $up = $conn->prepare("UPDATE publications SET status=IF(cancel_requested=1,'cancelled','failed'), finished_at=CURRENT_TIMESTAMP, error=?, log_file=?, pid=NULL WHERE id = ? LIMIT 1");
+            if ($up) { $logParam = $logRelative; $up->bind_param('ssi', $msg, $logParam, $pubId); $up->execute(); $up->close(); }
             @$conn->query("UPDATE publication_queue SET status=IF((SELECT cancel_requested FROM publications WHERE id=".(int)$pubId.")=1,'cancelled','failed') WHERE publication_id = " . (int)$pubId);
             @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId);
             if (function_exists('pp_promotion_handle_publication_update')) {
-                pp_promotion_handle_publication_update($pubId, 'failed', null, $msg, null);
+                $resultContext = is_array($result) ? $result : [];
+                if (is_array($resultContext)) {
+                    if ($logRelative !== null) {
+                        $resultContext['_log_relative'] = $logRelative;
+                        if ($logDetails) {
+                            $resultContext['_log_absolute'] = $logDetails['absolute'] ?? null;
+                            $resultContext['_log_exists'] = $logDetails['exists'] ?? null;
+                        }
+                    }
+                }
+                pp_promotion_handle_publication_update($pubId, 'failed', null, $msg, $resultContext ?: null);
             }
             $conn->close(); return;
         }
@@ -214,11 +236,20 @@ if (!function_exists('pp_process_publication_job')) {
         $verificationStore = ['result' => $verificationResult, 'expected' => ['link' => $expectedLink, 'anchor' => $verificationPayload['anchorText'] ?? $job['anchor'] ?? '', 'supports_link' => $verificationResult['supports_link'] ?? ($verificationPayload['supportsLinkCheck'] ?? true), 'supports_text' => $verificationResult['supports_text'] ?? ($verificationPayload['supportsTextCheck'] ?? ($expectedSample !== '')), 'text_sample' => $expectedSample, ], 'checked_at' => gmdate('c'), ];
         $verificationJson = json_encode($verificationStore, JSON_UNESCAPED_UNICODE); if ($verificationJson === false) { $verificationJson = '{}'; }
         $finalStatus = 'success'; $errorMsg = null; switch ($verificationStatus) { case 'success': $finalStatus = 'success'; break; case 'partial': $finalStatus = 'partial'; break; case 'failed': case 'error': $finalStatus = 'failed'; $reasonCode = strtoupper((string)($verificationResult['reason'] ?? 'FAILED')); $errorMsg = 'VERIFICATION_' . $reasonCode; break; case 'skipped': default: $finalStatus = 'success'; break; }
-        $up = $conn->prepare('UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1');
-        if ($up) { $statusParam = $finalStatus; $errorParam = $errorMsg; $verificationStatusParam = $verificationStatus; $detailsParam = $verificationJson; $up->bind_param('sssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $verificationStatusParam, $detailsParam, $pubId); $up->execute(); $up->close(); }
+        $up = $conn->prepare('UPDATE publications SET post_url = ?, network = ?, published_by = ?, status = ?, error = ?, log_file = ?, finished_at=CURRENT_TIMESTAMP, cancel_requested=0, pid=NULL, verification_status = ?, verification_checked_at = CURRENT_TIMESTAMP, verification_details = ? WHERE id = ? LIMIT 1');
+        if ($up) { $statusParam = $finalStatus; $errorParam = $errorMsg; $verificationStatusParam = $verificationStatus; $detailsParam = $verificationJson; $logParam = $logRelative; $up->bind_param('sssssssssi', $publishedUrl, $netSlug, $publishedBy, $statusParam, $errorParam, $logParam, $verificationStatusParam, $detailsParam, $pubId); $up->execute(); $up->close(); }
         if ($finalStatus === 'failed') { @$conn->query("UPDATE publication_queue SET status='failed' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         else { $queueStatus = ($finalStatus === 'partial') ? 'partial' : 'success'; @$conn->query("UPDATE publication_queue SET status='" . $queueStatus . "' WHERE publication_id = " . (int)$pubId); @$conn->query('DELETE FROM publication_queue WHERE publication_id = ' . (int)$pubId); }
         if (function_exists('pp_promotion_handle_publication_update')) {
+            if (is_array($result)) {
+                if ($logRelative !== null) {
+                    $result['_log_relative'] = $logRelative;
+                    if ($logDetails) {
+                        $result['_log_absolute'] = $logDetails['absolute'] ?? null;
+                        $result['_log_exists'] = $logDetails['exists'] ?? null;
+                    }
+                }
+            }
             pp_promotion_handle_publication_update($pubId, $finalStatus, $publishedUrl, $errorMsg, $result);
         }
         $conn->close();

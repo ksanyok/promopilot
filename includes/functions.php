@@ -487,6 +487,12 @@ if (!function_exists('pp_verify_published_content')) {
 function pp_verify_published_content(string $publishedUrl, ?array $verification, ?array $job = null): array {
     $publishedUrl = trim($publishedUrl);
     $verification = is_array($verification) ? $verification : [];
+
+    $networkSlug = '';
+    if (is_array($job) && isset($job['network']) && is_array($job['network'])) {
+        $networkSlug = strtolower(trim((string)($job['network']['slug'] ?? '')));
+    }
+
     $supportsLink = array_key_exists('supportsLinkCheck', $verification) ? (bool)$verification['supportsLinkCheck'] : true;
     $supportsText = array_key_exists('supportsTextCheck', $verification) ? (bool)$verification['supportsTextCheck'] : null;
     $linkUrl = trim((string)($verification['linkUrl'] ?? ''));
@@ -498,6 +504,87 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
         $supportsText = ($textSample !== '');
     }
 
+    $skipLink = false;
+    $skipText = false;
+    $altFetcher = null;
+
+    if ($networkSlug !== '') {
+        switch ($networkSlug) {
+            case 'privatebin':
+                $skipLink = true;
+                $skipText = true;
+                break;
+            case 'riseuppad':
+                $altFetcher = static function(string $finalUrl, string $originalUrl): array {
+                    $base = $finalUrl !== '' ? $finalUrl : $originalUrl;
+                    $parts = parse_url($base);
+                    if (!$parts || empty($parts['path'])) { return []; }
+                    $path = trim((string)$parts['path'], '/');
+                    if ($path === '') { return []; }
+                    if (strpos($path, 'p/') === 0) {
+                        $slug = substr($path, 2);
+                    } else {
+                        $segments = explode('/', $path);
+                        $slug = (string)end($segments);
+                    }
+                    $slug = trim($slug);
+                    if ($slug === '') { return []; }
+                    $host = 'https://pad.riseup.net';
+                    return array_unique([
+                        $host . '/p/' . $slug . '/export/txt',
+                        $host . '/p/' . $slug . '/export/html',
+                    ]);
+                };
+                break;
+            case 'rentry':
+                $altFetcher = static function(string $finalUrl, string $originalUrl): array {
+                    $base = $finalUrl !== '' ? $finalUrl : $originalUrl;
+                    $parts = parse_url($base);
+                    if (!$parts || empty($parts['path'])) { return []; }
+                    $slug = trim((string)$parts['path'], '/');
+                    if ($slug === '') { return []; }
+                    return array_unique([
+                        'https://rentry.co/' . $slug . '/raw',
+                        'https://rentry.co/api/read/' . $slug,
+                    ]);
+                };
+                break;
+            case 'ideone':
+                $altFetcher = static function(string $finalUrl, string $originalUrl): array {
+                    $base = $finalUrl !== '' ? $finalUrl : $originalUrl;
+                    $parts = parse_url($base);
+                    if (!$parts || empty($parts['path'])) { return []; }
+                    $slug = trim((string)$parts['path'], '/');
+                    if ($slug === '') { return []; }
+                    $slug = explode('/', $slug)[0];
+                    return array_unique([
+                        'https://ideone.com/plain/' . $slug,
+                        'https://ideone.com/textarea/' . $slug,
+                    ]);
+                };
+                break;
+            case 'dpaste':
+                $altFetcher = static function(string $finalUrl, string $originalUrl): array {
+                    $base = $finalUrl !== '' ? $finalUrl : $originalUrl;
+                    $parts = parse_url($base);
+                    if (!$parts || empty($parts['path'])) { return []; }
+                    $slug = trim((string)$parts['path'], '/');
+                    if ($slug === '') { return []; }
+                    $segments = explode('/', $slug);
+                    $slug = (string)$segments[0];
+                    if ($slug === '') { return []; }
+                    return array_unique([
+                        'https://dpaste.com/' . $slug . '.txt',
+                        'https://dpaste.com/' . $slug . '/raw',
+                    ]);
+                };
+                break;
+        }
+    }
+
+    if ($skipLink) { $supportsLink = false; }
+    if ($skipText) { $supportsText = false; }
+
     $result = [
         'status' => 'skipped',
         'supports_link' => $supportsLink,
@@ -508,11 +595,34 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
         'final_url' => null,
         'content_type' => null,
         'reason' => null,
+        'checked_sources' => [],
     ];
 
     if ($publishedUrl === '' || (!$supportsLink && !$supportsText)) {
         return $result;
     }
+
+    $documents = [];
+    $registerDocument = static function(string $body, string $url, array $headers, string $label) use (&$documents, &$result) {
+        if ($body === '') { return; }
+        $contentTypeLocal = strtolower((string)($headers['content-type'] ?? ''));
+        $doc = null;
+        if ($contentTypeLocal === '' || strpos($contentTypeLocal, 'text/') === 0 || strpos($contentTypeLocal, 'html') !== false || strpos($contentTypeLocal, 'xml') !== false) {
+            $doc = pp_html_dom($body);
+        }
+        $plain = $doc ? pp_normalize_text_content($doc->textContent ?? '') : pp_plain_text_from_html($body);
+        $documents[] = [
+            'url' => $url,
+            'body' => $body,
+            'doc' => $doc,
+            'plain' => $plain,
+            'content_type' => $contentTypeLocal,
+            'label' => $label,
+        ];
+        if (!in_array($url, $result['checked_sources'], true)) {
+            $result['checked_sources'][] = $url;
+        }
+    };
 
     $fetch = pp_http_fetch($publishedUrl, 18);
     $status = (int)($fetch['status'] ?? 0);
@@ -525,77 +635,113 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
     $result['final_url'] = $finalUrl;
     $result['content_type'] = $contentType;
 
-    if ($status >= 400 || $body === '') {
+    if ($status < 400 && $body !== '') {
+        $registerDocument($body, $finalUrl, $headers, 'primary');
+    }
+
+    $altUrls = [];
+    if (is_callable($altFetcher)) {
+        $altUrls = $altFetcher($finalUrl, $publishedUrl);
+    }
+
+    $altUsed = false;
+    if (!empty($altUrls)) {
+        foreach ($altUrls as $altUrl) {
+            if (!is_string($altUrl) || $altUrl === '') { continue; }
+            $altFetch = pp_http_fetch($altUrl, 18);
+            $altStatus = (int)($altFetch['status'] ?? 0);
+            $altBody = (string)($altFetch['body'] ?? '');
+            if ($altStatus >= 400 || $altBody === '') { continue; }
+            $altHeaders = $altFetch['headers'] ?? [];
+            $altFinal = (string)($altFetch['final_url'] ?? $altUrl);
+            $registerDocument($altBody, $altFinal, $altHeaders, 'alternative');
+            if ($result['http_status'] === null || $result['http_status'] >= 400) {
+                $result['http_status'] = $altStatus;
+            }
+            if ($result['final_url'] === null || $result['final_url'] === '' || $result['http_status'] >= 400) {
+                $result['final_url'] = $altFinal;
+            }
+            if ($result['content_type'] === null || $result['content_type'] === '') {
+                $result['content_type'] = strtolower((string)($altHeaders['content-type'] ?? ''));
+            }
+            $altUsed = true;
+        }
+    }
+
+    if (empty($documents)) {
         $result['status'] = 'error';
         $result['reason'] = 'FETCH_FAILED';
+        if ($altUsed) {
+            $result['used_alternative_source'] = true;
+        }
         return $result;
     }
 
-    $doc = null;
-    if ($contentType === '' || strpos($contentType, 'text/') === 0 || strpos($contentType, 'html') !== false || strpos($contentType, 'xml') !== false) {
-        $doc = pp_html_dom($body);
+    if ($supportsLink && $linkUrl === '') {
+        $result['supports_link'] = false;
     }
 
     if ($supportsLink && $linkUrl !== '') {
         $targetNorm = pp_normalize_url_compare($linkUrl);
-        if ($doc) {
-            $xp = new DOMXPath($doc);
-            foreach ($xp->query('//a[@href]') as $node) {
-                if (!($node instanceof DOMElement)) { continue; }
-                $href = trim((string)$node->getAttribute('href'));
-                if ($href === '') { continue; }
-                $abs = pp_abs_url($href, $finalUrl);
-                $absNorm = pp_normalize_url_compare($abs);
-                if ($absNorm === $targetNorm) {
+        foreach ($documents as $docEntry) {
+            $doc = $docEntry['doc'];
+            $docUrl = $docEntry['url'];
+            if ($doc) {
+                $xp = new DOMXPath($doc);
+                foreach ($xp->query('//a[@href]') as $node) {
+                    if (!($node instanceof DOMElement)) { continue; }
+                    $href = trim((string)$node->getAttribute('href'));
+                    if ($href === '') { continue; }
+                    $abs = pp_abs_url($href, $docUrl);
+                    $absNorm = pp_normalize_url_compare($abs);
+                    if ($absNorm === $targetNorm) {
+                        $result['link_found'] = true;
+                        $result['link_source_url'] = $docUrl;
+                        break 2;
+                    }
+                }
+            }
+            if (!$result['link_found']) {
+                $haystack = strtolower($docEntry['body']);
+                $direct = strtolower($linkUrl);
+                if ($direct !== '' && strpos($haystack, $direct) !== false) {
                     $result['link_found'] = true;
+                    $result['link_source_url'] = $docUrl;
+                    break;
+                }
+                $noScheme = preg_replace('~^https?://~i', '', $direct);
+                if ($noScheme && strpos($haystack, $noScheme) !== false) {
+                    $result['link_found'] = true;
+                    $result['link_source_url'] = $docUrl;
                     break;
                 }
             }
         }
-        if (!$result['link_found']) {
-            $haystack = strtolower($body);
-            $direct = strtolower($linkUrl);
-            if ($direct !== '' && strpos($haystack, $direct) !== false) {
-                $result['link_found'] = true;
-            } else {
-                $noScheme = preg_replace('~^https?://~i', '', $direct);
-                if ($noScheme && strpos($haystack, $noScheme) !== false) {
-                    $result['link_found'] = true;
-                }
-            }
-        }
-    } elseif ($supportsLink) {
-        $result['supports_link'] = false;
     }
 
     if ($supportsText) {
         if ($textSample === '') {
             $result['supports_text'] = false;
         } else {
-            $bodyPlain = $doc ? pp_normalize_text_content($doc->textContent ?? '') : pp_plain_text_from_html($body);
             $sampleNorm = pp_normalize_text_content($textSample);
-            $matchFragment = '';
-            if ($sampleNorm !== '' && strpos($bodyPlain, $sampleNorm) !== false) {
-                $result['text_found'] = true;
-                $matchFragment = $sampleNorm;
-            } elseif ($sampleNorm !== '') {
-                if (function_exists('mb_strlen')) {
-                    $strlen = static function($str) { return mb_strlen($str, 'UTF-8'); };
-                } else {
-                    $strlen = static function($str) { return strlen($str); };
-                }
-                if (function_exists('mb_substr')) {
-                    $substr = static function($str, $start, $length) { return mb_substr($str, $start, $length, 'UTF-8'); };
-                } else {
-                    $substr = static function($str, $start, $length) { return substr($str, $start, $length); };
+            if (function_exists('mb_strlen')) {
+                $strlen = static function($str) { return mb_strlen($str, 'UTF-8'); };
+                $substr = static function($str, $start, $length) { return mb_substr($str, $start, $length, 'UTF-8'); };
+            } else {
+                $strlen = static function($str) { return strlen($str); };
+                $substr = static function($str, $start, $length) { return substr($str, $start, $length); };
+            }
+            $findFragment = static function(string $bodyPlain, string $sampleNorm) use ($strlen, $substr): ?string {
+                if ($sampleNorm === '' || $bodyPlain === '') { return null; }
+                if (strpos($bodyPlain, $sampleNorm) !== false) {
+                    return $strlen($sampleNorm) > 220 ? $substr($sampleNorm, 0, 220) : $sampleNorm;
                 }
                 $len = $strlen($sampleNorm);
                 $short = $len > 120 ? $substr($sampleNorm, 0, 120) : $sampleNorm;
                 if ($short !== '' && strpos($bodyPlain, $short) !== false) {
-                    $result['text_found'] = true;
-                    $matchFragment = $short;
+                    return $strlen($short) > 220 ? $substr($short, 0, 220) : $short;
                 }
-                if (!$result['text_found'] && $len > 0) {
+                if ($len > 0) {
                     $window = min(220, max(80, (int)ceil($len * 0.4)));
                     $step = max(40, (int)floor($window / 2));
                     for ($offset = 0; $offset < $len; $offset += $step) {
@@ -608,33 +754,35 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
                             continue;
                         }
                         if (strpos($bodyPlain, $fragment) !== false) {
-                            $result['text_found'] = true;
-                            $matchFragment = $fragment;
-                            break;
+                            return $strlen($fragment) > 220 ? $substr($fragment, 0, 220) : $fragment;
                         }
                         if ($offset + $window >= $len) { break; }
                     }
                 }
-                if (!$result['text_found']) {
-                    $sentences = preg_split('~[.!?…]+\s*~u', $sampleNorm) ?: [];
-                    $foundParts = [];
-                    foreach ($sentences as $sentence) {
-                        $sentence = trim($sentence);
-                        if ($sentence === '') { continue; }
-                        if ($strlen($sentence) < 40) { continue; }
-                        if (strpos($bodyPlain, $sentence) !== false) {
-                            $foundParts[] = $sentence;
-                            if (count($foundParts) >= 2) {
-                                $result['text_found'] = true;
-                                $matchFragment = implode(' ', array_slice($foundParts, 0, 2));
-                                break;
-                            }
+                $sentences = preg_split('~[.!?…]+\s*~u', $sampleNorm) ?: [];
+                $foundParts = [];
+                foreach ($sentences as $sentence) {
+                    $sentence = trim($sentence);
+                    if ($sentence === '' || $strlen($sentence) < 40) { continue; }
+                    if (strpos($bodyPlain, $sentence) !== false) {
+                        $foundParts[] = $sentence;
+                        if (count($foundParts) >= 2) {
+                            $combined = implode(' ', array_slice($foundParts, 0, 2));
+                            return $strlen($combined) > 220 ? $substr($combined, 0, 220) : $combined;
                         }
                     }
                 }
-            }
-            if ($result['text_found'] && $matchFragment !== '') {
-                $result['matched_fragment'] = $strlen($matchFragment) > 220 ? $substr($matchFragment, 0, 220) : $matchFragment;
+                return null;
+            };
+
+            foreach ($documents as $docEntry) {
+                $matchFragment = $findFragment($docEntry['plain'], $sampleNorm);
+                if ($matchFragment !== null) {
+                    $result['text_found'] = true;
+                    $result['matched_fragment'] = $matchFragment;
+                    $result['text_source_url'] = $docEntry['url'];
+                    break;
+                }
             }
         }
     }
@@ -653,6 +801,8 @@ function pp_verify_published_content(string $publishedUrl, ?array $verification,
     } else {
         $result['status'] = 'success';
     }
+
+    $result['used_alternative_source'] = $altUsed;
 
     return $result;
 }}

@@ -190,6 +190,7 @@ function pp_run_schema_bootstrap(): void {
             `finished_at` TIMESTAMP NULL DEFAULT NULL,
             `attempts` INT NOT NULL DEFAULT 0,
             `error` TEXT NULL,
+            `log_file` TEXT NULL,
             `verification_status` VARCHAR(20) NULL,
             `verification_checked_at` TIMESTAMP NULL DEFAULT NULL,
             `verification_details` TEXT NULL,
@@ -235,8 +236,11 @@ function pp_run_schema_bootstrap(): void {
         if (!isset($pubCols['error'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `error` TEXT NULL AFTER `attempts`");
         }
+        if (!isset($pubCols['log_file'])) {
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `log_file` TEXT NULL AFTER `error`");
+        }
         if (!isset($pubCols['verification_status'])) {
-            @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_status` VARCHAR(20) NULL AFTER `error`");
+            @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_status` VARCHAR(20) NULL AFTER `log_file`");
         }
         if (!isset($pubCols['verification_checked_at'])) {
             @$conn->query("ALTER TABLE `publications` ADD COLUMN `verification_checked_at` TIMESTAMP NULL DEFAULT NULL AFTER `verification_status`");

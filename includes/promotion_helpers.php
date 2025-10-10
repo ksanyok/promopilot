@@ -23,6 +23,93 @@ if (!function_exists('pp_promotion_log')) {
     }
 }
 
+if (!function_exists('pp_promotion_resolve_log_reference')) {
+    function pp_promotion_resolve_log_reference(?string $file, ?string $dir = null): ?array {
+        $file = trim((string)$file);
+        $dir = trim((string)$dir);
+        if ($file === '' && $dir === '') { return null; }
+
+        $candidates = [];
+        if ($file !== '') { $candidates[] = $file; }
+        if ($file !== '' && $dir !== '') {
+            $candidates[] = rtrim(str_replace('\\', '/', $dir), '/').'/' . ltrim(str_replace('\\', '/', $file), '/');
+        }
+        if ($file === '' && $dir !== '') { $candidates[] = $dir; }
+
+        $absolute = null;
+        foreach ($candidates as $candidate) {
+            if ($candidate === '') { continue; }
+            $normalized = str_replace('\\', '/', $candidate);
+            if (preg_match('~^([a-zA-Z]:[\\/]|/)~', $normalized)) {
+                $absolute = $normalized;
+            } elseif (defined('PP_ROOT_PATH')) {
+                $absolute = rtrim(str_replace('\\', '/', PP_ROOT_PATH), '/'). '/' . ltrim($normalized, '/');
+            } else {
+                $absolute = $normalized;
+            }
+            $real = @realpath($absolute);
+            if ($real !== false && $real !== null) {
+                $absolute = str_replace('\\', '/', $real);
+                break;
+            }
+        }
+        if ($absolute === null) { return null; }
+
+        $relative = null;
+        if (defined('PP_ROOT_PATH')) {
+            $root = str_replace('\\', '/', PP_ROOT_PATH);
+            $absNorm = str_replace('\\', '/', $absolute);
+            if (strpos($absNorm, $root) === 0) {
+                $relative = ltrim(substr($absNorm, strlen($root)), '/');
+            }
+        }
+        if ($relative === null) {
+            $relative = str_replace('\\', '/', $file !== '' ? $file : $absolute);
+        }
+
+        return [
+            'absolute' => $absolute,
+            'relative' => $relative,
+            'exists' => is_file($absolute),
+        ];
+    }
+}
+
+if (!function_exists('pp_promotion_expand_log_path')) {
+    function pp_promotion_expand_log_path(?string $stored): ?array {
+        $stored = trim((string)$stored);
+        if ($stored === '') { return null; }
+        $relative = str_replace('\\', '/', $stored);
+        $absolute = $relative;
+        if (!preg_match('~^([a-zA-Z]:[\\/]|/)~', $absolute) && defined('PP_ROOT_PATH')) {
+            $absolute = rtrim(str_replace('\\', '/', PP_ROOT_PATH), '/'). '/' . ltrim($relative, '/');
+        }
+        $real = @realpath($absolute);
+        if ($real !== false && $real !== null) {
+            $absolute = str_replace('\\', '/', $real);
+            if (defined('PP_ROOT_PATH')) {
+                $root = str_replace('\\', '/', PP_ROOT_PATH);
+                if (strpos($absolute, $root) === 0) {
+                    $relative = ltrim(substr($absolute, strlen($root)), '/');
+                }
+            }
+        }
+        return [
+            'relative' => $relative,
+            'absolute' => $absolute,
+            'exists' => is_file($absolute),
+        ];
+    }
+}
+
+if (!function_exists('pp_promotion_store_log_path')) {
+    function pp_promotion_store_log_path(?string $file, ?string $dir = null): ?string {
+        $ref = pp_promotion_resolve_log_reference($file, $dir);
+        if (!$ref) { return null; }
+        return $ref['relative'] ?? null;
+    }
+}
+
 if (!function_exists('pp_promotion_ensure_crowd_payload_column')) {
     function pp_promotion_ensure_crowd_payload_column(\mysqli $conn): bool {
         static $available = null;

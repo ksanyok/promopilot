@@ -180,6 +180,130 @@ foreach ($chartDays as $info) {
     $clientChartData['finance']['spend'][] = round((float)$info['spend'], 2);
 }
 
+$referralSummary = null;
+$referralEnabled = get_setting('referral_enabled', '0') === '1';
+if ($referralEnabled) {
+    $referralSummary = [
+        'code' => '',
+        'link' => '',
+        'percent' => null,
+        'total_referred' => 0,
+        'total_earnings' => 0.0,
+        'earnings_30d' => 0.0,
+        'clicks_30d' => 0,
+        'signups_30d' => 0,
+        'cookie_days' => (int)get_setting('referral_cookie_days', '30'),
+    ];
+    try {
+        if (function_exists('pp_referral_get_or_create_user_code')) {
+            $referralSummary['code'] = pp_referral_get_or_create_user_code($conn, (int)$user_id);
+        } else {
+            if ($st = $conn->prepare('SELECT referral_code FROM users WHERE id = ? LIMIT 1')) {
+                $st->bind_param('i', $user_id);
+                $st->execute();
+                if ($res = $st->get_result()) {
+                    if ($row = $res->fetch_assoc()) {
+                        $referralSummary['code'] = (string)($row['referral_code'] ?? '');
+                    }
+                    $res->free();
+                }
+                $st->close();
+            }
+        }
+    } catch (Throwable $e) {
+        // leave empty code
+    }
+    if ($referralSummary['code'] !== '') {
+        $referralSummary['link'] = pp_url('?ref=' . rawurlencode($referralSummary['code']));
+    }
+
+    $defaultPercent = (float)str_replace(',', '.', (string)get_setting('referral_default_percent', '5.0'));
+    try {
+        if ($st = $conn->prepare('SELECT referral_commission_percent FROM users WHERE id = ? LIMIT 1')) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $pct = (float)($row['referral_commission_percent'] ?? 0);
+                    if ($pct > 0) {
+                        $referralSummary['percent'] = $pct;
+                    }
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+    } catch (Throwable $e) {
+    }
+    if ($referralSummary['percent'] === null) {
+        $referralSummary['percent'] = $defaultPercent;
+    }
+
+    try {
+        if ($st = $conn->prepare('SELECT COUNT(*) AS c FROM users WHERE referred_by = ?')) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['total_referred'] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+
+        if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS total_sum FROM balance_history WHERE user_id = ? AND source = 'referral'")) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['total_earnings'] = (float)($row['total_sum'] ?? 0);
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+
+        if ($st = $conn->prepare("SELECT COALESCE(SUM(delta), 0) AS recent_sum FROM balance_history WHERE user_id = ? AND source = 'referral' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['earnings_30d'] = (float)($row['recent_sum'] ?? 0);
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+
+        if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM referral_events WHERE referrer_user_id = ? AND type = 'click' AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['clicks_30d'] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+
+        if ($st = $conn->prepare("SELECT COUNT(*) AS c FROM users WHERE referred_by = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 29 DAY)")) {
+            $st->bind_param('i', $user_id);
+            $st->execute();
+            if ($res = $st->get_result()) {
+                if ($row = $res->fetch_assoc()) {
+                    $referralSummary['signups_30d'] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
+            }
+            $st->close();
+        }
+    } catch (Throwable $e) {
+        // fallback to defaults on failure
+    }
+}
+
 $currencyCode = function_exists('get_currency_code') ? get_currency_code() : 'USD';
 
 $conn->close();
@@ -227,17 +351,22 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
                 </div>
                 <p class="text-muted mb-0 small"><?php echo __('Следите за балансом, активными кампаниями и переходите к нужному проекту в один клик.'); ?></p>
             </div>
-            <div class="dashboard-hero-card__balance text-start text-md-end position-relative">
+            <div class="dashboard-hero-card__balance position-relative">
                 <a href="<?php echo pp_url('client/balance.php'); ?>" class="stretched-link" aria-label="<?php echo __('Открыть финансовый дашборд'); ?>"></a>
-                <div class="dashboard-balance-label text-uppercase small fw-semibold text-muted d-flex align-items-center gap-2">
-                    <span><?php echo __('Ваш баланс'); ?></span>
-                    <span class="badge bg-success-subtle text-success d-inline-flex align-items-center gap-1 topup-hint"><i class="bi bi-plus-circle"></i><span><?php echo __('пополнить'); ?></span></span>
+                <div class="dashboard-balance-stack">
+                    <div class="dashboard-balance-label text-uppercase small fw-semibold text-muted d-flex align-items-center gap-2">
+                        <span><?php echo __('Ваш баланс'); ?></span>
+                        <span class="badge bg-success-subtle text-success d-inline-flex align-items-center gap-1 topup-hint"><i class="bi bi-plus-circle"></i><span><?php echo __('пополнить'); ?></span></span>
+                    </div>
+                    <div class="dashboard-balance-value with-cta">
+                        <i class="bi bi-lightning-charge me-2 text-warning"></i>
+                        <span><?php echo htmlspecialchars(format_currency($balance)); ?></span>
+                    </div>
+                    <div class="dashboard-balance-meta">
+                        <span class="icon text-warning"><i class="bi bi-wallet2"></i></span>
+                        <span><?php echo __('Нажмите, чтобы открыть пополнение и историю операций.'); ?></span>
+                    </div>
                 </div>
-                <div class="dashboard-balance-value with-cta">
-                    <i class="bi bi-lightning-charge me-2 text-warning"></i>
-                    <span><?php echo htmlspecialchars(format_currency($balance)); ?></span>
-                </div>
-                <div class="text-muted small"><i class="bi bi-wallet2 me-1"></i><?php echo __('Нажмите, чтобы открыть пополнение и историю операций.'); ?></div>
             </div>
             <div class="dashboard-hero-card__actions">
                 <a href="<?php echo pp_url('client/add_project.php'); ?>" class="btn btn-gradient"><i class="bi bi-plus-lg me-1"></i><?php echo __('Новый проект'); ?></a>
@@ -287,6 +416,80 @@ $GLOBALS['pp_layout_has_sidebar'] = true;
         </script>
         <?php } ?>
     </div>
+
+    <?php if (!empty($referralSummary) && !empty($referralSummary['code'])): ?>
+    <div class="card referral-summary-card mb-4">
+        <div class="card-body">
+            <div class="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3 mb-3">
+                <div>
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <h5 class="mb-0"><?php echo __('Реферальная программа'); ?></h5>
+                        <span class="badge bg-primary-subtle text-primary"><i class="bi bi-percent me-1"></i><?php echo number_format((float)$referralSummary['percent'], 1, '.', ''); ?>%</span>
+                    </div>
+                    <div class="text-muted small">
+                        <?php echo sprintf(__('Куки хранятся %s дн., начисления зависят от активности приглашённых.'), (int)$referralSummary['cookie_days']); ?>
+                    </div>
+                </div>
+                <div class="referral-link-group w-100 w-lg-auto">
+                    <div class="input-group input-group-sm">
+                        <input type="text" class="form-control" value="<?php echo htmlspecialchars($referralSummary['link']); ?>" readonly id="refSummaryLink">
+                        <button class="btn btn-outline-primary" type="button" id="copyRefSummary"><i class="bi bi-clipboard"></i></button>
+                        <a class="btn btn-primary" href="<?php echo pp_url('client/referrals.php'); ?>"><i class="bi bi-graph-up-arrow me-1"></i><?php echo __('Статистика'); ?></a>
+                    </div>
+                </div>
+            </div>
+            <div class="row g-3 referral-summary-grid">
+                <div class="col-6 col-lg-3">
+                    <div class="referral-summary-metric">
+                        <div class="referral-summary-label"><?php echo __('Приглашено всего'); ?></div>
+                        <div class="referral-summary-value"><?php echo number_format((int)$referralSummary['total_referred'], 0, '.', ' '); ?></div>
+                        <div class="referral-summary-foot text-muted small"><i class="bi bi-people me-1"></i><?php echo __('Пользователей'); ?></div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="referral-summary-metric">
+                        <div class="referral-summary-label"><?php echo __('Заработано'); ?></div>
+                        <div class="referral-summary-value"><?php echo htmlspecialchars(format_currency($referralSummary['total_earnings'])); ?></div>
+                        <div class="referral-summary-foot text-muted small"><i class="bi bi-piggy-bank me-1"></i><?php echo __('Все время'); ?></div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="referral-summary-metric">
+                        <div class="referral-summary-label"><?php echo __('Доход за 30 дней'); ?></div>
+                        <div class="referral-summary-value"><?php echo htmlspecialchars(format_currency($referralSummary['earnings_30d'])); ?></div>
+                        <div class="referral-summary-foot text-muted small"><i class="bi bi-calendar-week me-1"></i><?php echo __('Последние 30 дней'); ?></div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="referral-summary-metric">
+                        <div class="referral-summary-label"><?php echo __('Активность за 30 дней'); ?></div>
+                        <div class="referral-summary-value">
+                            <span class="me-2"><i class="bi bi-mouse2"></i> <?php echo number_format((int)$referralSummary['clicks_30d'], 0, '.', ' '); ?></span>
+                            <span class="badge bg-success-subtle text-success"><i class="bi bi-person-plus"></i> <?php echo number_format((int)$referralSummary['signups_30d'], 0, '.', ' '); ?></span>
+                        </div>
+                        <div class="referral-summary-foot text-muted small"><?php echo __('Клики / регистрации'); ?></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function(){
+        const btn = document.getElementById('copyRefSummary');
+        if (btn) {
+            btn.addEventListener('click', function(){
+                const inp = document.getElementById('refSummaryLink');
+                if (inp) {
+                    inp.select();
+                    document.execCommand('copy');
+                    btn.innerHTML = '<i class="bi bi-check2"></i>';
+                    setTimeout(()=>{ btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200);
+                }
+            });
+        }
+    });
+    </script>
+    <?php endif; ?>
 
     <div class="row g-3 dashboard-stat-row mb-4">
         <div class="col-sm-6 col-lg-3">

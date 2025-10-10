@@ -29,8 +29,9 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
             $pubCreatedAt = null;
             $pubPostUrl = null;
             $pubError = null;
+            $pubLogFile = null;
             if ($publicationId > 0) {
-                $pubStmt = $conn->prepare('SELECT status, started_at, created_at, post_url, error FROM publications WHERE id = ? LIMIT 1');
+                $pubStmt = $conn->prepare('SELECT status, started_at, created_at, post_url, error, log_file FROM publications WHERE id = ? LIMIT 1');
                 if ($pubStmt) {
                     $pubStmt->bind_param('i', $publicationId);
                     if ($pubStmt->execute()) {
@@ -41,6 +42,7 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                             $pubCreatedAt = $pubRow['created_at'] ?? null;
                             $pubPostUrl = $pubRow['post_url'] ?? null;
                             $pubError = $pubRow['error'] ?? null;
+                            $pubLogFile = $pubRow['log_file'] ?? null;
                         }
                     }
                     $pubStmt->close();
@@ -84,12 +86,20 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                     $nodeUpdate->bind_param('ssi', $finalStatus, $resultUrl, $nodeId);
                     if ($nodeUpdate->execute()) {
                         $changed = true;
-                        pp_promotion_log('promotion.node_recovered_success', [
+                        $logReference = null;
+                        if (!empty($pubLogFile)) {
+                            $logReference = pp_promotion_expand_log_path((string)$pubLogFile);
+                        }
+                        $payload = [
                             'run_id' => $runId,
                             'node_id' => $nodeId,
                             'publication_id' => $publicationId,
                             'status' => $finalStatus,
-                        ]);
+                        ];
+                        if (is_array($logReference)) {
+                            $payload['log_file'] = $logReference['relative'] ?? ($logReference['absolute'] ?? null);
+                        }
+                        pp_promotion_log('promotion.node_recovered_success', $payload);
                     }
                     $nodeUpdate->close();
                 }
@@ -114,12 +124,20 @@ if (!function_exists('pp_promotion_recover_stuck_nodes')) {
                 $nodeUpdate->bind_param('si', $reasonText, $nodeId);
                 if ($nodeUpdate->execute()) {
                     $changed = true;
-                    pp_promotion_log('promotion.node_recovered_failed', [
+                    $logReference = null;
+                    if (!empty($pubLogFile)) {
+                        $logReference = pp_promotion_expand_log_path((string)$pubLogFile);
+                    }
+                    $payload = [
                         'run_id' => $runId,
                         'node_id' => $nodeId,
                         'publication_id' => $publicationId,
                         'reason' => $reasonText,
-                    ]);
+                    ];
+                    if (is_array($logReference)) {
+                        $payload['log_file'] = $logReference['relative'] ?? ($logReference['absolute'] ?? null);
+                    }
+                    pp_promotion_log('promotion.node_recovered_failed', $payload);
                 }
                 $nodeUpdate->close();
             }
@@ -1185,7 +1203,7 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
     function pp_promotion_handle_publication_update(int $publicationId, string $status, ?string $postUrl, ?string $error, ?array $jobResult = null): void {
         try { $conn = @connect_db(); } catch (Throwable $e) { return; }
         if (!$conn) { return; }
-    $stmt = $conn->prepare('SELECT run_id, id, level, target_url, parent_id, network_slug FROM promotion_nodes WHERE publication_id = ? LIMIT 1');
+    $stmt = $conn->prepare('SELECT pn.run_id, pn.id, pn.level, pn.target_url, pn.parent_id, pn.network_slug, pub.log_file FROM promotion_nodes pn LEFT JOIN publications pub ON pub.id = pn.publication_id WHERE pn.publication_id = ? LIMIT 1');
         if (!$stmt) { $conn->close(); return; }
         $stmt->bind_param('i', $publicationId);
         if (!$stmt->execute()) { $stmt->close(); $conn->close(); return; }
@@ -1208,7 +1226,23 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
             $stmt2->close();
         }
         pp_promotion_update_progress($conn, $runId);
-        pp_promotion_log('promotion.publication_update', [
+        $logReference = null;
+        if (is_array($jobResult)) {
+            if (!empty($jobResult['_log_relative'])) {
+                $logReference = pp_promotion_expand_log_path((string)$jobResult['_log_relative']);
+            } elseif (!empty($jobResult['logFile']) || !empty($jobResult['logfile']) || !empty($jobResult['LOG_FILE']) || !empty($jobResult['logDir']) || !empty($jobResult['log_directory'])) {
+                $logReference = pp_promotion_resolve_log_reference(
+                    $jobResult['logFile'] ?? ($jobResult['logfile'] ?? ($jobResult['LOG_FILE'] ?? null)),
+                    $jobResult['logDir'] ?? ($jobResult['log_directory'] ?? null)
+                );
+            }
+        }
+        if (!$logReference && !empty($node['log_file'])) {
+            $logReference = pp_promotion_expand_log_path((string)$node['log_file']);
+        }
+        if (!is_array($logReference)) { $logReference = null; }
+
+        $logPayload = [
             'run_id' => $runId,
             'node_id' => $nodeId,
             'publication_id' => $publicationId,
@@ -1216,7 +1250,12 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
             'original_status' => $status,
             'post_url' => $postUrl,
             'error' => $error,
-        ]);
+        ];
+        if ($logReference) {
+            $logPayload['log_file'] = $logReference['relative'] ?? ($logReference['absolute'] ?? null);
+            $logPayload['log_reference'] = $logReference;
+        }
+        pp_promotion_log('promotion.publication_update', $logPayload);
         if (in_array($statusUpdate, ['success','completed','partial'], true) && is_array($jobResult)) {
             $article = $jobResult['article'] ?? null;
             if (is_array($article) && !empty($article['htmlContent'])) {
@@ -1237,19 +1276,19 @@ if (!function_exists('pp_promotion_handle_publication_update')) {
                     }
                 }
                 $storedPath = pp_promotion_store_cached_article($nodeId, $article, $meta);
+                $articleLogPayload = [
+                    'run_id' => $runId,
+                    'node_id' => $nodeId,
+                    'level' => $nodeLevel,
+                ];
+                if ($logReference) {
+                    $articleLogPayload['log_file'] = $logReference['relative'] ?? null;
+                }
                 if ($storedPath) {
-                    pp_promotion_log('promotion.article_cached', [
-                        'run_id' => $runId,
-                        'node_id' => $nodeId,
-                        'level' => $nodeLevel,
-                        'path' => $storedPath,
-                    ]);
+                    $articleLogPayload['path'] = $storedPath;
+                    pp_promotion_log('promotion.article_cached', $articleLogPayload);
                 } else {
-                    pp_promotion_log('promotion.article_cache_failed', [
-                        'run_id' => $runId,
-                        'node_id' => $nodeId,
-                        'level' => $nodeLevel,
-                    ]);
+                    pp_promotion_log('promotion.article_cache_failed', $articleLogPayload);
                 }
             }
         }
