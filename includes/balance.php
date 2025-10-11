@@ -133,28 +133,6 @@ if (!function_exists('pp_balance_record_event')) {
         $stmt->close();
         $event['history_id'] = (int)$conn->insert_id;
 
-        if (function_exists('pp_notification_store')) {
-            $summary = pp_balance_notification_summary($event);
-            $eventKey = $summary['meta']['event_key'] ?? pp_balance_notification_event_key($event);
-            $allowed = true;
-            if ($eventKey === null) {
-                $allowed = false;
-            } elseif (function_exists('pp_notification_user_allows')) {
-                $allowed = pp_notification_user_allows((int)$event['user_id'], $eventKey);
-            }
-            if ($allowed) {
-                pp_notification_store((int)$event['user_id'], [
-                    'event_key' => $eventKey,
-                    'type' => 'balance',
-                    'title' => $summary['title'],
-                    'message' => $summary['message'],
-                    'meta' => $summary['meta'],
-                    'cta_url' => pp_url('client/balance.php'),
-                    'cta_label' => __('Перейти к балансу'),
-                ]);
-            }
-        }
-
         return $event;
     }
 }
@@ -271,6 +249,36 @@ if (!function_exists('pp_balance_notification_summary')) {
                 'source' => $event['source'],
             ],
         ];
+    }
+}
+
+if (!function_exists('pp_balance_store_notification')) {
+    function pp_balance_store_notification(array $event): ?array {
+        if (!function_exists('pp_notification_store')) {
+            return null;
+        }
+        $event = pp_balance_normalize_event($event);
+        $userId = (int)($event['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return null;
+        }
+        $summary = pp_balance_notification_summary($event);
+        $eventKey = $summary['meta']['event_key'] ?? pp_balance_notification_event_key($event);
+        if ($eventKey === null) {
+            return null;
+        }
+        if (function_exists('pp_notification_user_allows') && !pp_notification_user_allows($userId, $eventKey)) {
+            return null;
+        }
+        return pp_notification_store($userId, [
+            'event_key' => $eventKey,
+            'type' => 'balance',
+            'title' => $summary['title'],
+            'message' => $summary['message'],
+            'meta' => $summary['meta'],
+            'cta_url' => pp_url('client/balance.php'),
+            'cta_label' => __('Перейти к балансу'),
+        ]);
     }
 }
 
@@ -511,7 +519,6 @@ if (!function_exists('pp_referral_award_for_spend')) {
                     'percent' => $pct,
                 ]),
             ]);
-            if ($event) { pp_balance_send_event_notification($event); }
             return $event;
         } catch (Throwable $e) { return null; }
     }

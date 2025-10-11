@@ -101,6 +101,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $messageType = 'danger';
         }
         if ($balanceEvent) {
+            if (function_exists('pp_balance_store_notification')) {
+                pp_balance_store_notification($balanceEvent);
+            }
             $notificationSent = pp_balance_send_event_notification($balanceEvent);
             if (!$notificationSent) {
                 if ($messageType === 'success') {

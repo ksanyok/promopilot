@@ -1972,9 +1972,11 @@ if (!function_exists('pp_promotion_start_run')) {
         try { $conn = connect_db(); } catch (Throwable $e) { return ['ok' => false, 'error' => 'DB']; }
         if (!$conn) { return ['ok' => false, 'error' => 'DB']; }
 
-        $transactionStarted = false;
-        $shouldCommit = false;
-        $result = ['ok' => false, 'error' => 'DB'];
+    $transactionStarted = false;
+    $shouldCommit = false;
+    $result = ['ok' => false, 'error' => 'DB'];
+    $balanceEvent = null;
+    $referralAwardEvent = null;
         $balanceEvent = null;
         $runId = 0;
     $linkId = $linkIdOverride !== null ? max(0, (int)$linkIdOverride) : 0;
@@ -2164,7 +2166,7 @@ if (!function_exists('pp_promotion_start_run')) {
                     ]);
                     // Award referral commission for spend if enabled
                     if (function_exists('pp_referral_award_for_spend')) {
-                        pp_referral_award_for_spend($conn, $ownerId, $chargedAmount, [
+                        $referralAwardEvent = pp_referral_award_for_spend($conn, $ownerId, $chargedAmount, [
                             'source' => 'promotion',
                             'project_id' => $projectId,
                             'run_id' => $runId,
@@ -2204,7 +2206,16 @@ if (!function_exists('pp_promotion_start_run')) {
 
         if (!empty($result['ok']) && empty($result['already'])) {
             if ($balanceEvent && !empty($balanceEvent['history_id'])) {
+                if (function_exists('pp_balance_store_notification')) {
+                    pp_balance_store_notification($balanceEvent);
+                }
                 pp_balance_send_event_notification($balanceEvent);
+            }
+            if ($referralAwardEvent && !empty($referralAwardEvent['history_id'])) {
+                if (function_exists('pp_balance_store_notification')) {
+                    pp_balance_store_notification($referralAwardEvent);
+                }
+                pp_balance_send_event_notification($referralAwardEvent);
             }
             if ($runId > 0) {
                 pp_promotion_launch_worker($runId);

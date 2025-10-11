@@ -594,9 +594,15 @@ if (!function_exists('pp_payment_transaction_mark_confirmed')) {
         $row['provider_payload'] = $payloadStruct;
         $row['confirmed_amount'] = $creditAmount;
         if (!empty($balanceEvent)) {
+            if (function_exists('pp_balance_store_notification')) {
+                pp_balance_store_notification($balanceEvent);
+            }
             pp_balance_send_event_notification($balanceEvent);
         }
         if (!empty($referralEvent)) {
+            if (function_exists('pp_balance_store_notification')) {
+                pp_balance_store_notification($referralEvent);
+            }
             pp_balance_send_event_notification($referralEvent);
         }
         return ['ok' => true, 'already' => false, 'transaction' => $row];
