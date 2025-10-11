@@ -3409,6 +3409,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i>${escapeHtml(hostDisp)}</div>
                 <a href="${escapeHtml(urlVal)}" target="_blank" class="view-url text-truncate-path" title="${escapeHtml(urlVal)}" data-bs-toggle="tooltip">${escapeHtml(pathDisp)}</a>
                 <div class="link-meta small text-muted mt-2 d-flex flex-wrap align-items-center gap-2">
+                    <span class="badge bg-light border text-body link-meta__id" data-bs-toggle="tooltip" title="<?php echo __('ID ссылки в системе'); ?>">ID #${newId}</span>
+                    <span class="badge bg-info-subtle text-info-emphasis link-meta__run d-none" data-bs-toggle="tooltip" title="<?php echo __('ID активного продвижения'); ?>"></span>
                     <span class="link-meta__created d-none" data-created-label></span>
                     <span class="badge bg-warning-subtle text-warning-emphasis d-none" data-duplicate-badge></span>
                 </div>
@@ -3481,7 +3483,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="promotion-progress-visual mt-2 d-none">
                         ${progressLevelsMarkup}
                     </div>
-                    <div class="promotion-progress-details text-muted d-none"></div>
                     <div class="promotion-status-dates small text-muted mt-2 d-none" data-promotion-dates>
                         <i class="bi bi-clock-history me-1"></i>
                         <span data-promotion-last></span>
@@ -3534,6 +3535,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const block = tr.querySelector('.promotion-status-block');
         if (!block) return;
         const linkIdRaw = data.link_id ?? data.linkId ?? data.id ?? null;
+        const linkMeta = tr.querySelector('.link-meta');
+        const runBadge = linkMeta ? linkMeta.querySelector('.link-meta__run') : null;
+        const linkIdBadge = linkMeta ? linkMeta.querySelector('.link-meta__id') : null;
         if (linkIdRaw !== null && linkIdRaw !== undefined) {
             const linkIdNum = Number(linkIdRaw);
             if (Number.isFinite(linkIdNum) && linkIdNum > 0) {
@@ -3542,6 +3546,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 tr.dataset.id = linkIdStr;
                 tr.dataset.linkId = linkIdStr;
                 tr.dataset.promotionLinkId = linkIdStr;
+                if (linkIdBadge) {
+                    linkIdBadge.textContent = `ID #${linkIdStr}`;
+                }
                 const actionsContainer = tr.querySelector('.link-actions');
                 if (actionsContainer) {
                     const promoteBtn = actionsContainer.querySelector('.action-promote');
@@ -3574,6 +3581,36 @@ document.addEventListener('DOMContentLoaded', function() {
         block.dataset.stage = data.stage || '';
         block.dataset.runId = tr.dataset.promotionRunId;
         block.dataset.reportReady = tr.dataset.promotionReportReady;
+
+        if (runBadge) {
+            const runIdStr = tr.dataset.promotionRunId || '';
+            if (runIdStr) {
+                runBadge.textContent = `Run #${runIdStr}`;
+                runBadge.classList.remove('d-none');
+                const tooltip = runBadge.getAttribute('title') || '';
+                if (tooltip) {
+                    runBadge.setAttribute('data-bs-original-title', tooltip);
+                    if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+                        const instance = window.bootstrap.Tooltip.getInstance(runBadge);
+                        if (instance) {
+                            instance.setContent({ '.tooltip-inner': tooltip });
+                        } else {
+                            new window.bootstrap.Tooltip(runBadge);
+                        }
+                    }
+                }
+            } else {
+                runBadge.textContent = '';
+                runBadge.classList.add('d-none');
+                runBadge.removeAttribute('data-bs-original-title');
+                if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+                    const instance = window.bootstrap.Tooltip.getInstance(runBadge);
+                    if (instance) {
+                        instance.dispose();
+                    }
+                }
+            }
+        }
 
         const topEl = block.querySelector('.promotion-status-top');
         const labelEl = block.querySelector('.promotion-status-label');
@@ -3837,12 +3874,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const completeBlock = block.querySelector('.promotion-status-complete');
         if (completeBlock) {
             completeBlock.classList.toggle('d-none', status !== 'completed');
-        }
-        const detailsBlock = block.querySelector('.promotion-progress-details');
-        if (detailsBlock) {
-            const hasDetails = detailsBlock.children && detailsBlock.children.length > 0;
-            const shouldShowDetails = hasDetails && isPromotionActiveStatus(status);
-            detailsBlock.classList.toggle('d-none', !shouldShowDetails);
         }
     }
 

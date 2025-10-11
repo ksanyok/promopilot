@@ -423,6 +423,10 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                 <div class="small text-muted host-muted"><i class="bi bi-globe2 me-1"></i><?php echo htmlspecialchars($hostDisp); ?></div>
                                 <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="view-url text-truncate-path" title="<?php echo htmlspecialchars($url); ?>" data-bs-toggle="tooltip"><?php echo htmlspecialchars($pathDisp); ?></a>
                                 <div class="link-meta small text-muted mt-2 d-flex flex-wrap align-items-center gap-2">
+                                    <span class="badge bg-light border text-body link-meta__id" data-bs-toggle="tooltip" title="<?php echo __('ID ссылки в системе'); ?>">ID #<?php echo (int)$linkId; ?></span>
+                                    <?php if ($promotionRunId > 0): ?>
+                                        <span class="badge bg-info-subtle text-info-emphasis link-meta__run" data-bs-toggle="tooltip" title="<?php echo __('ID активного продвижения'); ?>">Run #<?php echo (int)$promotionRunId; ?></span>
+                                    <?php endif; ?>
                                     <?php if ($createdAtHuman): ?>
                                         <span class="link-meta__created" data-created-label><i class="bi bi-calendar3 me-1"></i><?php echo sprintf(__('Добавлена %s'), htmlspecialchars($createdAtHuman)); ?></span>
                                     <?php endif; ?>
@@ -539,12 +543,6 @@ $promotionCrowdEnabled = function_exists('pp_promotion_is_crowd_enabled') ? pp_p
                                             </div>
                                         </div>
                                         <?php endif; ?>
-                                    </div>
-                                    <?php $showPromotionDetails = !in_array($promotionStatus, ['completed', 'failed', 'cancelled', 'idle'], true) && !empty($promotionDetails); ?>
-                                    <div class="promotion-progress-details text-muted <?php echo $showPromotionDetails ? '' : 'd-none'; ?>">
-                                        <?php foreach ($promotionDetails as $detail): ?>
-                                            <div><?php echo htmlspecialchars($detail); ?></div>
-                                        <?php endforeach; ?>
                                     </div>
                                     <div class="promotion-status-dates small text-muted mt-2 <?php echo $hasPromotionHistory ? '' : 'd-none'; ?>" data-promotion-dates>
                                         <i class="bi bi-clock-history me-1"></i>

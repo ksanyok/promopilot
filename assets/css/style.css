@@ -3134,8 +3134,17 @@ main.page-wrap.layout-has-sidebar .sidebar .menu-block { margin: 0; }
 .progress-thin .promotion-progress-bar { border-radius: 999px; transition: width .35s ease; }
 .promotion-status-block.text-success .promotion-progress-bar { background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, #fff 20%)); }
 .promotion-status-block.text-primary .promotion-progress-bar { background: linear-gradient(90deg, var(--primary), var(--accent)); }
-.promotion-progress-details { gap: 4px; }
-.promotion-progress-details div { font-size: .78rem; }
+.link-meta__id,
+.link-meta__run {
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  border-radius: var(--radius-pill, 999px);
+  padding: 4px 8px;
+}
+.link-meta__run {
+  border: 1px solid color-mix(in srgb, var(--info) 35%, transparent 65%);
+}
 .promotion-status-complete {
   display: inline-flex;
   align-items: center;
