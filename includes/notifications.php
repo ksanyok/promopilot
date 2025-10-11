@@ -241,3 +241,292 @@ if (!function_exists('pp_notification_user_allows')) {
         return !empty($settings[$eventKey]);
     }
 }
+
+if (!function_exists('pp_notification_normalize_row')) {
+    function pp_notification_normalize_row(array $row): array {
+        $id = isset($row['id']) ? (int)$row['id'] : 0;
+        $userId = isset($row['user_id']) ? (int)$row['user_id'] : 0;
+        $eventKey = trim((string)($row['event_key'] ?? ''));
+        $eventKey = ($eventKey !== '') ? $eventKey : null;
+        $type = trim((string)($row['type'] ?? ''));
+        $type = ($type !== '') ? $type : null;
+        $title = trim((string)($row['title'] ?? ''));
+        $message = (string)($row['message'] ?? '');
+        $metaRaw = $row['meta_json'] ?? null;
+        if (is_array($metaRaw)) {
+            $meta = $metaRaw;
+        } else {
+            $decoded = json_decode((string)$metaRaw, true);
+            $meta = is_array($decoded) ? $decoded : [];
+        }
+        $ctaUrl = trim((string)($row['cta_url'] ?? ''));
+        $ctaUrl = ($ctaUrl !== '') ? $ctaUrl : null;
+        $ctaLabel = trim((string)($row['cta_label'] ?? ''));
+        $ctaLabel = ($ctaLabel !== '') ? $ctaLabel : null;
+        $isRead = !empty($row['is_read']);
+        $readAt = $row['read_at'] ?? null;
+        $createdAt = $row['created_at'] ?? null;
+        $createdAtIso = null;
+        if ($createdAt) {
+            $ts = strtotime((string)$createdAt);
+            if ($ts !== false) {
+                $createdAtIso = gmdate('c', $ts);
+            }
+        }
+
+        return [
+            'id' => $id,
+            'user_id' => $userId,
+            'event_key' => $eventKey,
+            'type' => $type,
+            'title' => $title,
+            'message' => $message,
+            'meta' => $meta,
+            'cta_url' => $ctaUrl,
+            'cta_label' => $ctaLabel,
+            'is_read' => $isRead,
+            'read_at' => $readAt,
+            'created_at' => $createdAt,
+            'created_at_iso' => $createdAtIso,
+        ];
+    }
+}
+
+if (!function_exists('pp_notification_store')) {
+    function pp_notification_store(int $userId, array $data): ?array {
+        $userId = (int)$userId;
+        if ($userId <= 0) {
+            return null;
+        }
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+        if (!$conn) {
+            return null;
+        }
+        $conn->set_charset('utf8mb4');
+
+        $eventKey = trim((string)($data['event_key'] ?? ''));
+        $type = trim((string)($data['type'] ?? ''));
+        $title = trim((string)($data['title'] ?? ''));
+        if ($title === '') {
+            $title = __('Уведомление');
+        }
+        $message = trim((string)($data['message'] ?? ''));
+        $ctaUrl = trim((string)($data['cta_url'] ?? ''));
+        $ctaLabel = trim((string)($data['cta_label'] ?? ''));
+
+        if (function_exists('mb_substr')) {
+            $title = mb_substr($title, 0, 190, 'UTF-8');
+            $ctaLabel = mb_substr($ctaLabel, 0, 100, 'UTF-8');
+        } else {
+            $title = substr($title, 0, 190);
+            $ctaLabel = substr($ctaLabel, 0, 100);
+        }
+
+        if ($ctaUrl !== '' && defined('PP_BASE_URL') && strpos($ctaUrl, 'http') !== 0 && strpos($ctaUrl, '//') !== 0) {
+            if ($ctaUrl[0] === '/') {
+                $ctaUrl = rtrim(PP_BASE_URL, '/') . $ctaUrl;
+            }
+        }
+
+        if (array_key_exists('meta_json', $data)) {
+            $metaJson = is_array($data['meta_json'])
+                ? json_encode($data['meta_json'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                : (string)$data['meta_json'];
+            if ($metaJson === '' || $metaJson === false) {
+                $metaJson = '{}';
+            }
+        } elseif (isset($data['meta']) && is_array($data['meta'])) {
+            $metaJson = json_encode($data['meta'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+        } else {
+            $metaJson = '{}';
+        }
+
+        $isRead = !empty($data['is_read']) ? 1 : 0;
+
+        $stmt = $conn->prepare('INSERT INTO user_notifications (user_id, event_key, type, title, message, meta_json, cta_url, cta_label, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+        if (!$stmt) {
+            $conn->close();
+            return null;
+        }
+        $eventKeyParam = $eventKey !== '' ? $eventKey : null;
+        $typeParam = $type !== '' ? $type : null;
+        $messageParam = $message !== '' ? $message : null;
+        $ctaUrlParam = $ctaUrl !== '' ? $ctaUrl : null;
+        $ctaLabelParam = $ctaLabel !== '' ? $ctaLabel : null;
+        $stmt->bind_param(
+            'isssssssi',
+            $userId,
+            $eventKeyParam,
+            $typeParam,
+            $title,
+            $messageParam,
+            $metaJson,
+            $ctaUrlParam,
+            $ctaLabelParam,
+            $isRead
+        );
+        $ok = $stmt->execute();
+        $insertId = $ok ? (int)$stmt->insert_id : 0;
+        $stmt->close();
+        if (!$ok) {
+            $conn->close();
+            return null;
+        }
+
+        $row = [
+            'id' => $insertId,
+            'user_id' => $userId,
+            'event_key' => $eventKeyParam,
+            'type' => $typeParam,
+            'title' => $title,
+            'message' => $messageParam ?? '',
+            'meta_json' => $metaJson,
+            'cta_url' => $ctaUrlParam,
+            'cta_label' => $ctaLabelParam,
+            'is_read' => $isRead,
+            'read_at' => null,
+            'created_at' => gmdate('Y-m-d H:i:s'),
+        ];
+        $conn->close();
+
+        return pp_notification_normalize_row($row);
+    }
+}
+
+if (!function_exists('pp_notification_fetch_recent')) {
+    function pp_notification_fetch_recent(int $userId, int $limit = 10, bool $includeRead = true): array {
+        $userId = (int)$userId;
+        if ($userId <= 0) {
+            return [];
+        }
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+        if (!$conn) {
+            return [];
+        }
+        $conn->set_charset('utf8mb4');
+
+        $limit = max(1, min(100, (int)$limit));
+        $sql = 'SELECT id, user_id, event_key, type, title, message, meta_json, cta_url, cta_label, is_read, read_at, created_at FROM user_notifications WHERE user_id = ?';
+        if (!$includeRead) {
+            $sql .= ' AND is_read = 0';
+        }
+        $sql .= ' ORDER BY created_at DESC, id DESC LIMIT ?';
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            $conn->close();
+            return [];
+        }
+        $stmt->bind_param('ii', $userId, $limit);
+
+        $items = [];
+        if ($stmt->execute()) {
+            $res = $stmt->get_result();
+            if ($res) {
+                while ($row = $res->fetch_assoc()) {
+                    $items[] = pp_notification_normalize_row($row);
+                }
+                $res->free();
+            }
+        }
+        $stmt->close();
+        $conn->close();
+
+        return $items;
+    }
+}
+
+if (!function_exists('pp_notification_count_unread')) {
+    function pp_notification_count_unread(int $userId): int {
+        $userId = (int)$userId;
+        if ($userId <= 0) {
+            return 0;
+        }
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+        if (!$conn) {
+            return 0;
+        }
+
+        $count = 0;
+        if ($stmt = $conn->prepare('SELECT COUNT(*) AS cnt FROM user_notifications WHERE user_id = ? AND is_read = 0')) {
+            $stmt->bind_param('i', $userId);
+            if ($stmt->execute()) {
+                if ($res = $stmt->get_result()) {
+                    if ($row = $res->fetch_assoc()) {
+                        $count = (int)($row['cnt'] ?? 0);
+                    }
+                    $res->free();
+                }
+            }
+            $stmt->close();
+        }
+        $conn->close();
+
+        return $count;
+    }
+}
+
+if (!function_exists('pp_notification_mark_read')) {
+    function pp_notification_mark_read(int $userId, array $notificationIds): bool {
+        $userId = (int)$userId;
+        if ($userId <= 0) {
+            return false;
+        }
+        $ids = array_values(array_unique(array_filter(array_map('intval', $notificationIds), static function ($value) {
+            return $value > 0;
+        })));
+        if (empty($ids)) {
+            return true;
+        }
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+        if (!$conn) {
+            return false;
+        }
+        $conn->set_charset('utf8mb4');
+
+        $idsSql = implode(',', $ids);
+        $sql = "UPDATE user_notifications SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE user_id = {$userId} AND is_read = 0 AND id IN ({$idsSql})";
+        $ok = $conn->query($sql) === true;
+        $conn->close();
+
+        return $ok;
+    }
+}
+
+if (!function_exists('pp_notification_mark_all_read')) {
+    function pp_notification_mark_all_read(int $userId): bool {
+        $userId = (int)$userId;
+        if ($userId <= 0) {
+            return false;
+        }
+        try {
+            $conn = @connect_db();
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+        if (!$conn) {
+            return false;
+        }
+        $sql = "UPDATE user_notifications SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE user_id = {$userId} AND is_read = 0";
+        $ok = $conn->query($sql) === true;
+        $conn->close();
+
+        return $ok;
+    }
+}

@@ -132,6 +132,29 @@ if (!function_exists('pp_balance_record_event')) {
         }
         $stmt->close();
         $event['history_id'] = (int)$conn->insert_id;
+
+        if (function_exists('pp_notification_store')) {
+            $summary = pp_balance_notification_summary($event);
+            $eventKey = $summary['meta']['event_key'] ?? pp_balance_notification_event_key($event);
+            $allowed = true;
+            if ($eventKey === null) {
+                $allowed = false;
+            } elseif (function_exists('pp_notification_user_allows')) {
+                $allowed = pp_notification_user_allows((int)$event['user_id'], $eventKey);
+            }
+            if ($allowed) {
+                pp_notification_store((int)$event['user_id'], [
+                    'event_key' => $eventKey,
+                    'type' => 'balance',
+                    'title' => $summary['title'],
+                    'message' => $summary['message'],
+                    'meta' => $summary['meta'],
+                    'cta_url' => pp_url('client/balance.php'),
+                    'cta_label' => __('Перейти к балансу'),
+                ]);
+            }
+        }
+
         return $event;
     }
 }
@@ -202,6 +225,52 @@ if (!function_exists('pp_balance_notification_event_key')) {
             return 'balance_debit';
         }
         return null;
+    }
+}
+
+if (!function_exists('pp_balance_notification_summary')) {
+    function pp_balance_notification_summary(array $event): array {
+        $event = pp_balance_normalize_event($event);
+        $eventKey = pp_balance_notification_event_key($event);
+        $deltaFormatted = pp_balance_sign_amount($event['delta']);
+        $balanceFormatted = format_currency($event['balance_after']);
+
+        $title = __('Баланс обновлён');
+        if ($eventKey === 'balance_topup') {
+            $title = __('Баланс пополнен');
+        } elseif ($eventKey === 'balance_manual_adjustment') {
+            $title = __('Баланс скорректирован');
+        } elseif ($eventKey === 'balance_debit') {
+            $title = __('Списание с баланса');
+        }
+
+        $lines = [];
+        $lines[] = sprintf(__('Изменение: %s'), $deltaFormatted);
+        $lines[] = sprintf(__('Текущий баланс: %s'), $balanceFormatted);
+
+        $reason = trim((string)pp_balance_event_reason($event));
+        if ($reason !== '') {
+            $lines[] = sprintf(__('Причина: %s'), $reason);
+        }
+
+        $comment = pp_balance_event_comment($event);
+        if ($comment !== null && trim((string)$comment) !== '') {
+            $lines[] = trim((string)$comment);
+        }
+
+        return [
+            'title' => $title,
+            'message' => implode("\n", $lines),
+            'meta' => [
+                'event_key' => $eventKey,
+                'delta' => $event['delta'],
+                'delta_formatted' => $deltaFormatted,
+                'balance_after' => $event['balance_after'],
+                'balance_after_formatted' => $balanceFormatted,
+                'history_id' => $event['history_id'] ?? null,
+                'source' => $event['source'],
+            ],
+        ];
     }
 }
 

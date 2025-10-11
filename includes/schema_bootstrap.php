@@ -222,6 +222,48 @@ function pp_run_schema_bootstrap(): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     }
 
+    // User notifications timeline (in-app feed)
+    $userNotifCols = $getCols('user_notifications');
+    if (empty($userNotifCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `user_notifications` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `user_id` INT NOT NULL,
+            `event_key` VARCHAR(64) NULL,
+            `type` VARCHAR(32) NULL,
+            `title` VARCHAR(190) NOT NULL,
+            `message` TEXT NULL,
+            `meta_json` LONGTEXT NULL,
+            `cta_url` TEXT NULL,
+            `cta_label` VARCHAR(100) NULL,
+            `is_read` TINYINT(1) NOT NULL DEFAULT 0,
+            `read_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            INDEX `idx_user_notifications_user_created` (`user_id`, `created_at`),
+            INDEX `idx_user_notifications_unread` (`user_id`, `is_read`, `created_at`),
+            CONSTRAINT `fk_user_notifications_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        if (!isset($userNotifCols['cta_label'])) {
+            @$conn->query("ALTER TABLE `user_notifications` ADD COLUMN `cta_label` VARCHAR(100) NULL AFTER `cta_url`");
+        }
+        if (!isset($userNotifCols['is_read'])) {
+            @$conn->query("ALTER TABLE `user_notifications` ADD COLUMN `is_read` TINYINT(1) NOT NULL DEFAULT 0 AFTER `cta_label`");
+        }
+        if (!isset($userNotifCols['read_at'])) {
+            @$conn->query("ALTER TABLE `user_notifications` ADD COLUMN `read_at` TIMESTAMP NULL DEFAULT NULL AFTER `is_read`");
+        }
+        if (!isset($userNotifCols['created_at'])) {
+            @$conn->query("ALTER TABLE `user_notifications` ADD COLUMN `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `read_at`");
+        }
+        if (pp_mysql_index_exists($conn, 'user_notifications', 'idx_user_notifications_user_created') === false) {
+            @$conn->query("CREATE INDEX `idx_user_notifications_user_created` ON `user_notifications`(`user_id`, `created_at`)");
+        }
+        if (pp_mysql_index_exists($conn, 'user_notifications', 'idx_user_notifications_unread') === false) {
+            @$conn->query("CREATE INDEX `idx_user_notifications_unread` ON `user_notifications`(`user_id`, `is_read`, `created_at`)");
+        }
+    }
+
     // Publications table for history
     $pubCols = $getCols('publications');
     if (empty($pubCols)) {

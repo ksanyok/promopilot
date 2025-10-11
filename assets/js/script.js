@@ -129,6 +129,267 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    (function initNotificationsDropdown() {
+        const root = document.querySelector('[data-pp-notifications]');
+        if (!root) { return; }
+
+        const toggleEl = root.querySelector('[data-pp-notifications-toggle]');
+        const listEl = root.querySelector('[data-pp-notifications-list]');
+        const badgeEl = root.querySelector('[data-pp-notifications-badge]');
+        const emptyEl = root.querySelector('[data-pp-notifications-empty]');
+        const markAllBtn = root.querySelector('[data-pp-notifications-mark-all]');
+        if (!listEl || !emptyEl) { return; }
+
+    const baseUrlRaw = String(window.PP_BASE_URL || '').replace(/\/$/, '');
+        const endpoint = (baseUrlRaw ? baseUrlRaw : '') + '/client/notifications_feed.php';
+        const preferredLocale = (document.documentElement.getAttribute('lang') || 'ru').toLowerCase();
+        const rtFormatter = (typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function')
+            ? new Intl.RelativeTimeFormat(preferredLocale.startsWith('en') ? 'en' : preferredLocale, { numeric: 'auto' })
+            : null;
+        let loaded = false;
+        let isLoading = false;
+
+        function setUnreadIndicator(count) {
+            const icon = root.querySelector('.nav-notifications__icon i');
+            const hasUnread = count > 0;
+            if (icon) {
+                if (hasUnread) {
+                    icon.classList.add('bi-bell-fill');
+                    icon.classList.remove('bi-bell');
+                } else {
+                    icon.classList.add('bi-bell');
+                    icon.classList.remove('bi-bell-fill');
+                }
+            }
+            if (badgeEl) {
+                if (hasUnread) {
+                    const display = count > 99 ? '99+' : String(count);
+                    badgeEl.textContent = display;
+                    badgeEl.classList.remove('d-none');
+                } else {
+                    badgeEl.classList.add('d-none');
+                }
+            }
+            root.classList.toggle('has-unread', hasUnread);
+        }
+
+        function formatRelativeTime(isoString) {
+            if (!isoString) { return ''; }
+            const targetDate = new Date(isoString);
+            if (Number.isNaN(targetDate.getTime())) {
+                return '';
+            }
+            const diffSeconds = Math.round((targetDate.getTime() - Date.now()) / 1000);
+            const absoluteSeconds = Math.abs(diffSeconds);
+            const ranges = [
+                { limit: 60, unit: 'second', value: diffSeconds },
+                { limit: 3600, unit: 'minute', value: Math.round(diffSeconds / 60) },
+                { limit: 86400, unit: 'hour', value: Math.round(diffSeconds / 3600) },
+                { limit: 604800, unit: 'day', value: Math.round(diffSeconds / 86400) },
+                { limit: 2629800, unit: 'week', value: Math.round(diffSeconds / 604800) },
+                { limit: 31557600, unit: 'month', value: Math.round(diffSeconds / 2629800) },
+                { limit: Infinity, unit: 'year', value: Math.round(diffSeconds / 31557600) },
+            ];
+            let chosen = ranges[ranges.length - 1];
+            for (let i = 0; i < ranges.length; i++) {
+                if (absoluteSeconds < ranges[i].limit) {
+                    chosen = ranges[i];
+                    break;
+                }
+            }
+            if (rtFormatter) {
+                return rtFormatter.format(chosen.value, chosen.unit);
+            }
+            return targetDate.toLocaleString();
+        }
+
+        function renderItems(items) {
+            listEl.innerHTML = '';
+            const entries = Array.isArray(items) ? items : [];
+            if (!entries.length) {
+                emptyEl.textContent = emptyEl.dataset.emptyText || emptyEl.textContent || 'Сообщений нет';
+                emptyEl.classList.remove('d-none');
+                return;
+            }
+            emptyEl.classList.add('d-none');
+            entries.forEach((item) => {
+                const id = parseInt(item.id, 10);
+                const entry = document.createElement('div');
+                entry.className = 'notifications-item' + (item.is_read ? '' : ' is-unread');
+                entry.dataset.notificationId = Number.isNaN(id) ? '' : String(id);
+                entry.dataset.notificationRead = item.is_read ? '1' : '0';
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'notifications-item__title';
+                titleEl.textContent = item.title || '';
+                entry.appendChild(titleEl);
+
+                if (item.message) {
+                    const messageEl = document.createElement('div');
+                    messageEl.className = 'notifications-item__message';
+                    String(item.message).split('\n').forEach((line) => {
+                        const row = document.createElement('div');
+                        row.textContent = line;
+                        messageEl.appendChild(row);
+                    });
+                    entry.appendChild(messageEl);
+                }
+
+                const metaEl = document.createElement('div');
+                metaEl.className = 'notifications-item__meta';
+                metaEl.textContent = formatRelativeTime(item.created_at || item.created_at_iso || item.created_at_utc);
+                entry.appendChild(metaEl);
+
+                if (item.cta_url) {
+                    const ctaEl = document.createElement('a');
+                    ctaEl.className = 'notifications-item__cta';
+                    ctaEl.href = item.cta_url;
+                    ctaEl.target = '_blank';
+                    ctaEl.rel = 'noopener noreferrer';
+                    ctaEl.dataset.notificationCta = '1';
+                    ctaEl.textContent = item.cta_label || 'Подробнее';
+                    entry.appendChild(ctaEl);
+                }
+
+                listEl.appendChild(entry);
+            });
+        }
+
+        function applyReadState(ids) {
+            ids.forEach((id) => {
+                const selector = '[data-notification-id="' + id + '"]';
+                const itemEl = listEl.querySelector(selector);
+                if (itemEl) {
+                    itemEl.classList.remove('is-unread');
+                    itemEl.dataset.notificationRead = '1';
+                }
+            });
+        }
+
+        async function fetchNotifications(force = false) {
+            if (isLoading || (loaded && !force)) { return; }
+            isLoading = true;
+            root.classList.add('is-loading');
+            try {
+                const response = await fetch(endpoint + '?limit=12', { credentials: 'same-origin' });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data || data.ok === false) {
+                    throw new Error((data && data.error) || 'LOAD_FAILED');
+                }
+                renderItems(data.items || []);
+                updateBadge(data.unread_count);
+                loaded = true;
+            } catch (error) {
+                console.warn('notifications fetch failed', error);
+                emptyEl.textContent = emptyEl.dataset.errorText || emptyEl.dataset.emptyText || 'Не удалось загрузить уведомления.';
+                emptyEl.classList.remove('d-none');
+            } finally {
+                isLoading = false;
+                root.classList.remove('is-loading');
+            }
+        }
+
+        function updateBadge(count) {
+            const value = typeof count === 'number' ? count : 0;
+            setUnreadIndicator(value);
+        }
+
+        async function markAsRead(ids) {
+            const targetIds = Array.isArray(ids) ? ids.filter((id) => Number(id) > 0) : [];
+            if (!targetIds.length) { return; }
+            applyReadState(targetIds);
+            const params = new URLSearchParams();
+            params.set('action', 'mark_read');
+            params.set('ids', targetIds.join(','));
+            if (window.CSRF_TOKEN) {
+                params.set('csrf_token', window.CSRF_TOKEN);
+            }
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: params.toString(),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (data && typeof data.unread_count === 'number') {
+                    updateBadge(data.unread_count);
+                }
+            } catch (err) {
+                console.warn('notifications mark read failed', err);
+            }
+        }
+
+        async function markAllRead() {
+            const unreadNodes = listEl.querySelectorAll('.notifications-item[data-notification-read="0"]');
+            if (!unreadNodes.length) { return; }
+            const ids = Array.from(unreadNodes).map((node) => parseInt(node.dataset.notificationId || '0', 10)).filter((id) => id > 0);
+            if (!ids.length) { return; }
+            applyReadState(ids.map((id) => String(id)));
+            const params = new URLSearchParams();
+            params.set('action', 'mark_read');
+            params.set('ids', ids.join(','));
+            if (window.CSRF_TOKEN) {
+                params.set('csrf_token', window.CSRF_TOKEN);
+            }
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: params.toString(),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (data && typeof data.unread_count === 'number') {
+                    updateBadge(data.unread_count);
+                }
+            } catch (err) {
+                console.warn('notifications mark all failed', err);
+            }
+        }
+
+        root.addEventListener('shown.bs.dropdown', () => {
+            fetchNotifications();
+        });
+
+        if (markAllBtn) {
+            markAllBtn.addEventListener('click', (event) => {
+                event.preventDefault();
+                markAllRead();
+            });
+        }
+
+        listEl.addEventListener('click', (event) => {
+            const cta = event.target.closest('[data-notification-cta]');
+            if (cta) {
+                const parent = cta.closest('[data-notification-id]');
+                if (parent) {
+                    const id = parseInt(parent.dataset.notificationId || '0', 10);
+                    if (id > 0) {
+                        markAsRead([id]);
+                    }
+                }
+                return;
+            }
+            const item = event.target.closest('.notifications-item');
+            if (item) {
+                const id = parseInt(item.dataset.notificationId || '0', 10);
+                if (id > 0) {
+                    markAsRead([id]);
+                }
+            }
+        });
+
+        // Periodic refresh to keep badge up-to-date
+        setInterval(() => {
+            fetchNotifications(true);
+        }, 90000);
+
+        const initialBadge = badgeEl && !badgeEl.classList.contains('d-none') ? badgeEl.textContent : '0';
+        const initialValue = parseInt(initialBadge, 10);
+        setUnreadIndicator(Number.isNaN(initialValue) ? 0 : initialValue);
+    })();
+
     // Admin sections toggle (users, projects, settings, networks, diagnostics)
     const sectionKeys = ['overview','users','projects','settings','mail','crowd','networks','diagnostics'];
     const sections = {};

@@ -189,6 +189,54 @@ if (!function_exists('pp_promotion_send_completion_notification')) {
             return;
         }
 
+        $projectName = trim((string)($project['name'] ?? ''));
+        if ($projectName === '') {
+            $projectName = __('Ваш проект');
+        }
+        $projectNameSafe = htmlspecialchars($projectName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $linkUrl = trim((string)($run['target_url'] ?? ($linkRow['url'] ?? '')));
+        $linkDisplay = $linkUrl !== '' ? $linkUrl : __('ссылка не указана');
+        $linkDisplaySafe = htmlspecialchars($linkDisplay, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $linkAnchor = trim((string)($linkRow['anchor'] ?? ''));
+        $linkAnchorSafe = htmlspecialchars($linkAnchor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $projectId = isset($project['id']) ? (int)$project['id'] : 0;
+        $runId = isset($run['id']) ? (int)$run['id'] : 0;
+        $linkId = isset($run['link_id']) ? (int)$run['link_id'] : (isset($linkRow['id']) ? (int)$linkRow['id'] : 0);
+
+        $projectUrl = pp_url('client/project.php?id=' . $projectId);
+        $reportUrl = $projectUrl;
+        if ($linkId > 0) {
+            $reportUrl .= '#link-' . $linkId;
+        }
+        $reportUrlSafe = htmlspecialchars($reportUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        if (function_exists('pp_notification_store')) {
+            $lines = [];
+            $lines[] = sprintf(__('Проект: %s'), $projectName);
+            $lines[] = sprintf(__('Ссылка: %s'), $linkDisplay);
+            if ($linkAnchor !== '') {
+                $lines[] = sprintf(__('Анкор: %s'), $linkAnchor);
+            }
+            $lines[] = __('Отчёт доступен в карточке ссылки.');
+            pp_notification_store($userId, [
+                'event_key' => 'promotion_completed',
+                'type' => 'promotion',
+                'title' => __('Продвижение завершено'),
+                'message' => implode("\n", $lines),
+                'meta' => [
+                    'project_id' => $projectId,
+                    'project_name' => $projectName,
+                    'run_id' => $runId,
+                    'link_id' => $linkId,
+                    'link_url' => $linkUrl,
+                ],
+                'cta_url' => $reportUrl,
+                'cta_label' => __('Открыть отчёт'),
+            ]);
+        }
+
         $userStmt = $conn->prepare('SELECT id, email, full_name, username FROM users WHERE id = ? LIMIT 1');
         if (!$userStmt) {
             pp_promotion_log('promotion.notify.skipped_user_stmt', [
@@ -235,29 +283,6 @@ if (!function_exists('pp_promotion_send_completion_notification')) {
         if ($name === '') {
             $name = __('клиент');
         }
-
-        $projectName = trim((string)($project['name'] ?? ''));
-        if ($projectName === '') {
-            $projectName = __('Ваш проект');
-        }
-        $projectNameSafe = htmlspecialchars($projectName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-        $linkUrl = trim((string)($run['target_url'] ?? ($linkRow['url'] ?? '')));
-        $linkDisplay = $linkUrl !== '' ? $linkUrl : __('ссылка не указана');
-        $linkDisplaySafe = htmlspecialchars($linkDisplay, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $linkAnchor = trim((string)($linkRow['anchor'] ?? ''));
-        $linkAnchorSafe = htmlspecialchars($linkAnchor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-        $projectId = isset($project['id']) ? (int)$project['id'] : 0;
-        $runId = isset($run['id']) ? (int)$run['id'] : 0;
-        $linkId = isset($run['link_id']) ? (int)$run['link_id'] : (isset($linkRow['id']) ? (int)$linkRow['id'] : 0);
-
-        $projectUrl = pp_url('client/project.php?id=' . $projectId);
-        $reportUrl = $projectUrl;
-        if ($linkId > 0) {
-            $reportUrl .= '#link-' . $linkId;
-        }
-        $reportUrlSafe = htmlspecialchars($reportUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         $notificationsUrl = pp_url('client/settings.php#notifications-settings');
         $notificationsUrlSafe = htmlspecialchars($notificationsUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');

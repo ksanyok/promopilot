@@ -6,6 +6,7 @@ $pp_nav_balance = null;
 $pp_nav_balance_raw = null;
 $pp_nav_balance_locale = null;
 $pp_nav_balance_currency = null;
+$pp_nav_notifications_unread = 0;
 if (is_logged_in()) {
     try {
         $conn = connect_db();
@@ -49,6 +50,17 @@ if (is_logged_in()) {
                     $stPromoted->execute();
                     if ($res = $stPromoted->get_result()) { $pp_nav_stats['published_links'] = (int)($res->fetch_assoc()['cnt'] ?? 0); }
                     $stPromoted->close();
+                }
+
+                if ($conn) {
+                    if ($stNotif = $conn->prepare('SELECT COUNT(*) AS cnt FROM user_notifications WHERE user_id = ? AND is_read = 0')) {
+                        $stNotif->bind_param('i', $uid);
+                        $stNotif->execute();
+                        if ($res = $stNotif->get_result()) {
+                            $pp_nav_notifications_unread = (int)($res->fetch_assoc()['cnt'] ?? 0);
+                        }
+                        $stNotif->close();
+                    }
                 }
             }
         }
@@ -134,6 +146,7 @@ if ($pp_nav_balance !== null) {
     <link rel="icon" type="image/png" href="<?php echo asset_url('img/favicon.png'); ?>">
     <meta name="csrf-token" content="<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
     <script>window.CSRF_TOKEN = '<?php echo htmlspecialchars(get_csrf_token(), ENT_QUOTES | ENT_SUBSTITUTE, "UTF-8"); ?>';</script>
+    <script>window.PP_BASE_URL = <?php echo json_encode(defined('PP_BASE_URL') ? PP_BASE_URL : pp_guess_base_url(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;</script>
     <?php if (!is_admin() && $pp_nav_balance_raw !== null): ?>
     <script>window.PP_BALANCE = <?php echo json_encode((float)$pp_nav_balance_raw); ?>;</script>
     <?php endif; ?>
@@ -174,6 +187,40 @@ if ($pp_nav_balance !== null) {
                                         <i class="bi bi-link-45deg" aria-hidden="true"></i>
                                         <span class="value"><?php echo (int)$pp_nav_stats['published_links']; ?></span>
                                     </span>
+                                </div>
+                            </li>
+                        <?php endif; ?>
+                        <?php if (!is_admin()): ?>
+                            <?php
+                                $pp_nav_notifications_count = (int)$pp_nav_notifications_unread;
+                                $pp_nav_notifications_label = $pp_nav_notifications_count > 99 ? '99+' : (string)$pp_nav_notifications_count;
+                            ?>
+                            <li class="nav-item dropdown nav-notifications" data-pp-notifications>
+                                <a class="nav-link nav-link-icon" href="#" id="notificationsDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false" data-pp-notifications-toggle>
+                                    <span class="nav-notifications__icon" aria-hidden="true">
+                                        <i class="bi bi-bell"></i>
+                                        <span class="nav-notifications__badge<?php echo ($pp_nav_notifications_count > 0) ? '' : ' d-none'; ?>" data-pp-notifications-badge><?php echo htmlspecialchars($pp_nav_notifications_label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></span>
+                                    </span>
+                                    <span class="visually-hidden"><?php echo __('Открыть уведомления'); ?></span>
+                                </a>
+                                <div class="dropdown-menu dropdown-menu-end notifications-dropdown" aria-labelledby="notificationsDropdown">
+                                    <div class="notifications-dropdown__header">
+                                        <span><?php echo __('Уведомления'); ?></span>
+                                        <button type="button" class="btn btn-link btn-sm notifications-dropdown__mark-read" data-pp-notifications-mark-all><?php echo __('Отметить прочитанными'); ?></button>
+                                    </div>
+                                    <div class="notifications-dropdown__content" data-pp-notifications-list>
+                                        <div class="notifications-dropdown__empty text-center text-muted small py-3"
+                                             data-pp-notifications-empty
+                                             data-empty-text="<?php echo htmlspecialchars(__('Пока уведомлений нет.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>"
+                                             data-error-text="<?php echo htmlspecialchars(__('Не удалось загрузить уведомления.'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?>">
+                                            <?php echo __('Пока уведомлений нет.'); ?>
+                                        </div>
+                                    </div>
+                                    <div class="notifications-dropdown__footer">
+                                        <a href="<?php echo pp_url('client/settings.php#notifications-settings'); ?>" class="btn btn-link btn-sm">
+                                            <?php echo __('Настройки уведомлений'); ?>
+                                        </a>
+                                    </div>
                                 </div>
                             </li>
                         <?php endif; ?>
