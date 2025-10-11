@@ -177,6 +177,180 @@ if (!function_exists('pp_promotion_crowd_pick_email_domain')) {
     }
 }
 
+if (!function_exists('pp_promotion_crowd_generate_ai_messages')) {
+    function pp_promotion_crowd_generate_ai_messages(array $context, int $count = 10): array {
+        if (!defined('PP_ROOT_PATH')) {
+            return [];
+        }
+        $count = max(1, min(50, (int)$count));
+        $language = pp_promotion_crowd_normalize_language($context['language'] ?? null);
+        $languageName = $language === 'en' ? 'English' : ($language === 'uk' ? 'Ukrainian' : 'Russian');
+        $targetUrl = trim((string)($context['target_url'] ?? ''));
+        $anchor = trim((string)($context['anchor'] ?? ''));
+        $projectName = trim((string)($context['project_name'] ?? ''));
+        $topic = trim((string)($context['topic'] ?? ''));
+        $runId = isset($context['run_id']) ? (int)$context['run_id'] : 0;
+        $providerSetting = strtolower((string)get_setting('ai_provider', 'openai'));
+        $provider = $providerSetting === 'byoa' ? 'byoa' : 'openai';
+        $apiKey = trim((string)get_setting('openai_api_key', ''));
+        if ($provider === 'openai' && $apiKey === '') {
+            return [];
+        }
+        if (!function_exists('pp_resolve_node_binary') || !function_exists('pp_run_node_script')) {
+            return [];
+        }
+        $node = pp_resolve_node_binary(3, true);
+        if (!$node || empty($node['path'])) {
+            return [];
+        }
+        $script = PP_ROOT_PATH . '/scripts/crowd_messages_cli.js';
+        if (!is_file($script)) {
+            return [];
+        }
+        $model = trim((string)get_setting('openai_model', ''));
+        $anchorForPrompt = $anchor !== '' ? $anchor : ($projectName !== '' ? $projectName : ($context['link_title'] ?? 'материал'));
+        $topicPrompt = $topic !== '' ? $topic : ($projectName !== '' ? $projectName : 'target audience');
+        $resolvedUrl = $targetUrl !== '' ? $targetUrl : ($context['fallback_url'] ?? '');
+        $urlForPrompt = $resolvedUrl !== '' ? $resolvedUrl : 'https://example.com';
+        $systemPrompt = 'You are PromoPilot assistant creating natural crowd-comments for link promotion. Focus on being human, concise, and trustworthy.';
+        $promptParts = [];
+        $promptParts[] = 'Language: ' . $languageName;
+        $promptParts[] = 'Goal: share a useful comment that recommends checking the article.';
+        if ($projectName !== '') {
+            $promptParts[] = 'Project name: ' . $projectName;
+        }
+        $promptParts[] = 'Topic / niche: ' . $topicPrompt;
+        $promptParts[] = 'Article title or hook: ' . $anchorForPrompt;
+        $promptParts[] = 'Article URL: ' . $urlForPrompt;
+        $instructions = [];
+        $instructions[] = 'Produce ' . $count . ' distinct, conversational forum-style replies.';
+        $instructions[] = 'Each reply should sound like a real person recommending the article.';
+        $instructions[] = 'Mention one tangible benefit, insight, or takeaway.';
+        $instructions[] = 'Use 40-90 words, 1-2 short paragraphs.';
+        $instructions[] = 'Include the article URL exactly once inside the body (plain text or in parentheses).';
+        $instructions[] = 'Avoid repeating identical wording across replies.';
+        $instructions[] = 'Do not add markdown lists or numbering.';
+        $instructions[] = 'Return a JSON array. Each element must be an object with keys "subject" and "body".';
+        $instructions[] = 'Subject is a short teaser (max 10 words). Body holds the full comment.';
+        $instructions[] = 'Do not include explanations outside JSON.';
+        if ($runId > 0) {
+            $promptParts[] = 'Run ID: ' . $runId;
+        }
+        $prompt = implode("\n", $promptParts) . "\n\nRequirements:\n- " . implode("\n- ", $instructions);
+
+        $job = [
+            'prompt' => $prompt,
+            'systemPrompt' => $systemPrompt,
+            'provider' => $provider,
+            'model' => $model,
+            'openaiApiKey' => $apiKey,
+            'temperature' => 0.65,
+        ];
+
+        $response = pp_run_node_script($script, $job, 75);
+        if (!is_array($response) || empty($response['ok'])) {
+            return [];
+        }
+
+        $parsed = $response['parsed'] ?? null;
+        $rawText = (string)($response['text'] ?? ($response['raw'] ?? ''));
+        if (!is_array($parsed)) {
+            $candidate = null;
+            if ($rawText !== '') {
+                $candidate = json_decode($rawText, true);
+                if (!is_array($candidate)) {
+                    $start = strpos($rawText, '[');
+                    $end = strrpos($rawText, ']');
+                    if ($start !== false && $end !== false && $end > $start) {
+                        $slice = substr($rawText, $start, $end - $start + 1);
+                        $candidate = json_decode($slice, true);
+                    }
+                }
+            }
+            if (is_array($candidate)) {
+                $parsed = $candidate;
+            }
+        }
+
+        $results = [];
+        $appendFallback = static function(array &$list, string $bodyValue) use ($targetUrl) {
+            $body = trim($bodyValue);
+            if ($body === '') { return; }
+            if ($targetUrl !== '' && stripos($body, $targetUrl) === false) {
+                $body .= "\n\n" . $targetUrl;
+            }
+            $list[] = [
+                'subject' => '',
+                'body' => $body,
+            ];
+        };
+
+        if (is_array($parsed)) {
+            foreach ($parsed as $entry) {
+                $subject = '';
+                $body = '';
+                if (is_array($entry)) {
+                    $subject = trim((string)($entry['subject'] ?? ($entry['title'] ?? '')));
+                    $body = trim((string)($entry['body'] ?? ($entry['message'] ?? '')));
+                    if ($body === '' && isset($entry[1])) { $body = trim((string)$entry[1]); }
+                    if ($subject === '' && isset($entry[0]) && !is_array($entry[0])) { $subject = trim((string)$entry[0]); }
+                } elseif (is_string($entry)) {
+                    $body = trim($entry);
+                }
+                if ($body === '') { continue; }
+                if ($targetUrl !== '' && stripos($body, $targetUrl) === false) {
+                    $body .= "\n\n" . $targetUrl;
+                }
+                $results[] = [
+                    'subject' => $subject,
+                    'body' => $body,
+                ];
+                if (count($results) >= $count) {
+                    break;
+                }
+            }
+        }
+
+        if (empty($results) && $rawText !== '') {
+            $lines = preg_split('~\n+~', $rawText);
+            if (is_array($lines)) {
+                foreach ($lines as $line) {
+                    $line = trim((string)$line);
+                    if ($line === '') { continue; }
+                    $appendFallback($results, $line);
+                    if (count($results) >= $count) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        $final = [];
+        foreach ($results as $row) {
+            $subject = trim((string)($row['subject'] ?? ''));
+            $body = trim((string)($row['body'] ?? ''));
+            if ($body === '') { continue; }
+            if (function_exists('pp_promotion_clean_text')) {
+                $subject = $subject !== '' ? pp_promotion_clean_text($subject) : $subject;
+                $body = pp_promotion_clean_text($body);
+            }
+            if ($subject === '') {
+                $subject = $anchor !== '' ? $anchor : ($projectName !== '' ? $projectName : __('Комментарий к статье'));
+            }
+            $final[] = [
+                'subject' => $subject,
+                'body' => $body,
+                'language' => $language,
+            ];
+            if (count($final) >= $count) {
+                break;
+            }
+        }
+
+        return $final;
+    }
+}
+
 if (!function_exists('pp_promotion_crowd_compose_message')) {
     function pp_promotion_crowd_compose_message(string $language, string $anchor, string $link): string {
         $templates = pp_promotion_crowd_message_templates($language);
@@ -256,7 +430,51 @@ if (!function_exists('pp_promotion_crowd_prepare_message_pool')) {
             return $subject;
         };
 
-        for ($i = 0; $i < $count; $i++) {
+        $aiContext = [
+            'language' => $language,
+            'anchor' => $anchor,
+            'target_url' => $targetUrl,
+            'project_name' => (string)($project['name'] ?? ''),
+            'topic' => (string)($project['topic'] ?? ($project['category'] ?? '')),
+            'link_title' => (string)($linkRow['title'] ?? ($linkRow['anchor'] ?? '')),
+        ];
+        $aiBatch = pp_promotion_crowd_generate_ai_messages($aiContext, $count);
+        foreach ($aiBatch as $message) {
+            $subjectCandidate = trim((string)($message['subject'] ?? ''));
+            $body = trim((string)($message['body'] ?? ''));
+            if ($body === '') { continue; }
+            if ($targetUrl !== '' && stripos($body, $targetUrl) === false) {
+                $body .= "\n\n" . $targetUrl;
+            }
+            if (function_exists('pp_promotion_clean_text')) {
+                $body = pp_promotion_clean_text($body);
+            }
+            $hash = sha1($language . '|' . trim($body));
+            if (isset($used[$hash])) {
+                continue;
+            }
+            $subject = $subjectCandidate !== '' ? $subjectCandidate : $makeSubject($anchor, $texts);
+            if (function_exists('mb_strlen') && mb_strlen($subject, 'UTF-8') > 120) {
+                $subject = rtrim(mb_substr($subject, 0, 118, 'UTF-8')) . '…';
+            } elseif (strlen($subject) > 120) {
+                $subject = rtrim(substr($subject, 0, 118)) . '…';
+            }
+            if (function_exists('pp_promotion_clean_text')) {
+                $subject = pp_promotion_clean_text($subject);
+            }
+            $prepared[] = [
+                'subject' => $subject,
+                'body' => $body,
+                'hash' => $hash,
+                'language' => $language,
+            ];
+            $used[$hash] = true;
+            if (count($prepared) >= $count) {
+                break;
+            }
+        }
+
+        for ($i = count($prepared); $i < $count; $i++) {
             $body = pp_promotion_crowd_compose_message($language, $anchor, $targetUrl);
             if ($body === '') {
                 continue;
@@ -1286,7 +1504,7 @@ if (!function_exists('pp_promotion_crowd_collect_nodes')) {
 
 if (!function_exists('pp_promotion_crowd_queue_tasks')) {
     function pp_promotion_crowd_queue_tasks(mysqli $conn, array $run, array $project, array $linkRow, array $nodesNeeds, array $options = []): array {
-        $summary = ['created' => 0, 'fallback' => 0, 'shortage' => false];
+    $summary = ['created' => 0, 'fallback' => 0, 'shortage' => false, 'stale_active' => []];
         if (empty($nodesNeeds)) {
             return $summary;
         }
@@ -1301,19 +1519,48 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
         $nodeDomainUsage = [];
         $nodeMessageHashes = [];
         $linkMessageHashes = [];
-        if ($res = @$conn->query('SELECT pct.node_id, pct.status, pct.crowd_link_id, pct.payload_json, cl.domain FROM promotion_crowd_tasks pct LEFT JOIN crowd_links cl ON cl.id = pct.crowd_link_id WHERE pct.run_id=' . $runId)) {
+        $pendingStatuses = ['planned','queued','running','pending','created'];
+        $successStatuses = ['completed','success','done','posted','published','ok','manual'];
+        $stalePending = [];
+        $staleThreshold = isset($options['stale_seconds']) ? max(60, (int)$options['stale_seconds']) : 900;
+        $nowTs = time();
+        if ($res = @$conn->query('SELECT pct.id, pct.node_id, pct.status, pct.crowd_link_id, pct.payload_json, pct.updated_at, pct.created_at, cl.domain FROM promotion_crowd_tasks pct LEFT JOIN crowd_links cl ON cl.id = pct.crowd_link_id WHERE pct.run_id=' . $runId)) {
             while ($row = $res->fetch_assoc()) {
                 $nodeId = isset($row['node_id']) ? (int)$row['node_id'] : 0;
                 $status = strtolower((string)($row['status'] ?? ''));
+                $taskId = isset($row['id']) ? (int)$row['id'] : 0;
                 $linkId = isset($row['crowd_link_id']) ? (int)$row['crowd_link_id'] : 0;
                 if ($nodeId <= 0) { continue; }
                 if (!isset($existing[$nodeId])) {
                     $existing[$nodeId] = ['completed' => 0, 'active' => 0];
                 }
-                if (in_array($status, ['completed','success','done','posted','published','ok'], true)) {
+                if (in_array($status, $successStatuses, true)) {
                     $existing[$nodeId]['completed']++;
-                } elseif (in_array($status, ['planned','queued','running','pending','created'], true)) {
-                    $existing[$nodeId]['active']++;
+                } elseif (in_array($status, $pendingStatuses, true)) {
+                    $updatedAtRaw = isset($row['updated_at']) ? (string)$row['updated_at'] : '';
+                    $createdAtRaw = isset($row['created_at']) ? (string)$row['created_at'] : '';
+                    $updatedTs = null;
+                    if ($updatedAtRaw !== '') {
+                        $updatedTs = strtotime($updatedAtRaw);
+                    }
+                    if (($updatedTs === null || $updatedTs === false) && $createdAtRaw !== '') {
+                        $updatedTs = strtotime($createdAtRaw);
+                    }
+                    if ($updatedTs === false) { $updatedTs = null; }
+                    $isStale = false;
+                    if ($updatedTs !== null) {
+                        $isStale = ($nowTs - $updatedTs) > $staleThreshold;
+                    } else {
+                        $isStale = true;
+                    }
+                    if ($isStale) {
+                        if (!isset($stalePending[$nodeId])) { $stalePending[$nodeId] = []; }
+                        if ($taskId > 0) {
+                            $stalePending[$nodeId][] = $taskId;
+                        }
+                    } else {
+                        $existing[$nodeId]['active']++;
+                    }
                 }
                 if ($linkId > 0) {
                     if (!isset($existingLinksPerNode[$nodeId])) { $existingLinksPerNode[$nodeId] = []; }
@@ -1346,6 +1593,19 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
                 }
             }
             $res->free();
+        }
+
+        if (!empty($stalePending)) {
+            $staleSummaryLog = [];
+            foreach ($stalePending as $nodeId => $ids) {
+                $staleSummaryLog[$nodeId] = count(array_unique(array_map('intval', $ids)));
+            }
+            pp_promotion_log('promotion.crowd.stale_pending_detected', [
+                'run_id' => $runId,
+                'stale_nodes' => $staleSummaryLog,
+                'stale_seconds' => $staleThreshold,
+            ]);
+            $summary['stale_active'] = $staleSummaryLog;
         }
 
         $createPlan = [];
@@ -1402,6 +1662,8 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
             $usedDomainsNode = $nodeDomainUsage[$nodeId] ?? [];
             $nodeHashes = $nodeMessageHashes[$nodeId] ?? [];
             $preMessagePool = pp_promotion_crowd_prepare_message_pool($project, $linkRow, $meta, $targetUrl, 10, array_keys($nodeHashes));
+            $poolSize = count($preMessagePool);
+            $poolIndex = 0;
             $assignedForNode = 0;
             $domainStrict = true;
             while ($assignedForNode < $amount) {
@@ -1434,18 +1696,32 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
                 }
                 $linkIdCandidate = isset($crowdLink['id']) ? (int)$crowdLink['id'] : 0;
                 $existingHashesLink = $linkMessageHashes[$linkIdCandidate] ?? [];
-                $combinedHashes = $existingHashesLink;
-                if (!empty($nodeHashes)) {
-                    foreach ($nodeHashes as $hashValue => $_) {
-                        $combinedHashes[$hashValue] = true;
+                $forcedMessage = null;
+                if ($poolSize > 0) {
+                    $maxAttempts = $poolSize;
+                    $attempts = 0;
+                    while ($attempts < $maxAttempts) {
+                        $candidateIndex = $poolIndex % $poolSize;
+                        $candidateMessage = $preMessagePool[$candidateIndex] ?? null;
+                        $poolIndex++;
+                        $attempts++;
+                        if ($candidateMessage === null) { continue; }
+                        $candidateHash = isset($candidateMessage['hash']) ? (string)$candidateMessage['hash'] : null;
+                        if ($linkIdCandidate > 0 && $candidateHash !== null && isset($existingHashesLink[$candidateHash])) {
+                            continue;
+                        }
+                        $forcedMessage = $candidateMessage;
+                        break;
+                    }
+                    if ($forcedMessage === null && $poolSize > 0) {
+                        $forcedMessage = $preMessagePool[$poolIndex % $poolSize] ?? null;
                     }
                 }
-                $forcedMessage = !empty($preMessagePool) ? array_shift($preMessagePool) : null;
                 [$payload, $manualFallback] = pp_promotion_crowd_build_payload($project, $linkRow, $meta, $crowdLink, [
                     'target_url' => $targetUrl,
                     'run' => $run,
                     'node_id' => $nodeId,
-                    'existing_hashes' => $combinedHashes,
+                    'existing_hashes' => $existingHashesLink,
                     'forced_subject' => $forcedMessage['subject'] ?? null,
                     'forced_body' => $forcedMessage['body'] ?? null,
                     'forced_message_hash' => $forcedMessage['hash'] ?? null,
@@ -1455,11 +1731,6 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
                 if (!empty($payload['message_hash'])) {
                     $messageHash = (string)$payload['message_hash'];
                 } elseif (!empty($payload['body'])) {
-                    $messageHash = sha1((string)$payload['body']);
-                    $payload['message_hash'] = $messageHash;
-                }
-                if ($messageHash !== null && isset($nodeHashes[$messageHash]) && !empty($payload['body'])) {
-                    $payload['body'] .= "\n\n" . strtoupper(substr(sha1($payload['body'] . microtime(true)), 0, 6));
                     $messageHash = sha1((string)$payload['body']);
                     $payload['message_hash'] = $messageHash;
                 }

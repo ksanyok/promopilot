@@ -49,6 +49,24 @@ try {
         pp_promotion_crowd_worker_finish_slot((int)$workerRow['id'], $nextStatus, null);
         if ($pending > 0) {
             pp_promotion_crowd_schedule_worker($runId);
+        } else {
+            try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+            if ($conn) {
+                $runRow = null;
+                $stmt = $conn->prepare('SELECT * FROM promotion_runs WHERE id = ? LIMIT 1');
+                if ($stmt) {
+                    $stmt->bind_param('i', $runId);
+                    if ($stmt->execute()) {
+                        $runRow = $stmt->get_result()->fetch_assoc();
+                    }
+                    $stmt->close();
+                }
+                if ($runRow) {
+                    pp_promotion_process_run($conn, $runRow);
+                    pp_promotion_update_progress($conn, $runId);
+                }
+                $conn->close();
+            }
         }
     } else {
         if (!isset($taskId) || $taskId === null) { $taskId = null; }

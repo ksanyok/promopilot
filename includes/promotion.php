@@ -1138,6 +1138,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     'created' => $topUpResult['created'] ?? 0,
                     'manual_fallback' => $topUpResult['fallback'] ?? 0,
                     'shortage' => $topUpResult['shortage'] ?? false,
+                    'stale_active' => $topUpResult['stale_active'] ?? [],
                 ]);
                 if (($topUpResult['created'] ?? 0) > 0) {
                     @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
