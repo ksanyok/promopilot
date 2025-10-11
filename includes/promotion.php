@@ -973,7 +973,7 @@ if (!function_exists('pp_promotion_process_run')) {
             pp_promotion_launch_crowd_worker();
             return;
         }
-        if ($stage === 'crowd_ready') {
+        if ($stage === 'crowd_ready' || $stage === 'crowd_waiting') {
             if (!pp_promotion_is_crowd_enabled()) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
@@ -982,6 +982,31 @@ if (!function_exists('pp_promotion_process_run')) {
             if ($crowdPerArticle <= 0) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
+            }
+            $retryDelay = pp_promotion_get_crowd_retry_delay();
+            if ($stage === 'crowd_waiting') {
+                $updatedAtRaw = $run['updated_at'] ?? null;
+                if ($updatedAtRaw) {
+                    $updatedTs = strtotime((string)$updatedAtRaw);
+                    if ($updatedTs !== false) {
+                        $elapsed = time() - $updatedTs;
+                        if ($elapsed < $retryDelay) {
+                            $remaining = max(1, $retryDelay - $elapsed);
+                            static $crowdWaitThrottleTs = 0;
+                            $nowTs = time();
+                            if ($nowTs - $crowdWaitThrottleTs > 30) {
+                                $crowdWaitThrottleTs = $nowTs;
+                                pp_promotion_log('promotion.crowd.waiting_hold', [
+                                    'run_id' => $runId,
+                                    'project_id' => $projectId,
+                                    'remaining_seconds' => $remaining,
+                                    'retry_delay' => $retryDelay,
+                                ]);
+                            }
+                            return;
+                        }
+                    }
+                }
             }
             $crowdSource = pp_promotion_crowd_collect_nodes($conn, $runId);
             $crowdNodes = $crowdSource['nodes'] ?? [];
@@ -1012,7 +1037,6 @@ if (!function_exists('pp_promotion_process_run')) {
 
             $successStatuses = ['completed','success','done','posted','published','ok'];
             $pendingStatuses = ['planned','queued','running','pending','created'];
-            $failureStatuses = ['failed','error','blocked','cancelled','rejected','timeout'];
 
             if ($res = @$conn->query('SELECT node_id, status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY node_id, status')) {
                 while ($row = $res->fetch_assoc()) {
@@ -1076,6 +1100,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 }
             }
 
+            $topUpResult = ['created' => 0, 'fallback' => 0, 'shortage' => false];
             if (!empty($needsTopUp)) {
                 $topUpResult = pp_promotion_crowd_queue_tasks($conn, $run, $project, $linkRow, $needsTopUp, [
                     'crowd_per_article' => $crowdPerArticle,
@@ -1117,6 +1142,31 @@ if (!function_exists('pp_promotion_process_run')) {
             $hasExhausted = false;
             foreach ($nodeStats as $stats) {
                 if (!empty($stats['exhausted'])) { $hasExhausted = true; break; }
+            }
+
+            if (!empty($needsTopUp) && !empty($topUpResult['shortage']) && !$hasExhausted) {
+                $waitingSummary = [];
+                foreach ($needsTopUp as $nodeId => $info) {
+                    $waitingSummary[$nodeId] = (int)($info['needed'] ?? 0);
+                }
+                @$conn->query("UPDATE promotion_runs SET status='crowd_waiting', stage='crowd_waiting', error=NULL, finished_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                pp_promotion_log('promotion.crowd.waiting', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'missing' => $waitingSummary,
+                    'retry_delay' => $retryDelay,
+                ]);
+                return;
+            }
+
+            if (!empty($needsTopUp) && !$hasExhausted) {
+                @$conn->query("UPDATE promotion_runs SET status='crowd_waiting', stage='crowd_waiting', error=NULL, finished_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                pp_promotion_log('promotion.crowd.waiting_reschedule', [
+                    'run_id' => $runId,
+                    'project_id' => $projectId,
+                    'retry_delay' => $retryDelay,
+                ]);
+                return;
             }
 
             @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='CROWD_FAILED_INSUFFICIENT', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
@@ -1166,6 +1216,7 @@ if (!function_exists('pp_promotion_pick_next_run')) {
             'level3_active',
             'pending_crowd',
             'crowd_ready',
+            'crowd_waiting',
             'report_ready',
             'pending_level1',
             'running',
@@ -1181,6 +1232,7 @@ if (!function_exists('pp_promotion_pick_next_run')) {
             'level3_active',
             'pending_crowd',
             'crowd_ready',
+            'crowd_waiting',
             'report_ready',
         ];
         $maxPerProject = max(1, pp_promotion_get_max_active_runs_per_project());
@@ -1263,6 +1315,42 @@ if (!function_exists('pp_promotion_recover_overdue_nodes')) {
         foreach ($runIds as $runId) {
             pp_promotion_recover_stuck_nodes($conn, $runId, $maxAgeSeconds);
             $stats['runs']++;
+        }
+        $conn->close();
+        return $stats;
+    }
+}
+
+if (!function_exists('pp_promotion_recover_crowd_shortage_runs')) {
+    function pp_promotion_recover_crowd_shortage_runs(int $limit = 25): array {
+        $stats = ['reactivated' => 0, 'run_ids' => []];
+        $limit = max(1, (int)$limit);
+        $retryDelay = pp_promotion_get_crowd_retry_delay();
+        try { $conn = @connect_db(); } catch (Throwable $e) { return $stats; }
+        if (!$conn) { return $stats; }
+        $reactivateSql = "SELECT id FROM promotion_runs WHERE status='failed' AND error='CROWD_FAILED_INSUFFICIENT' ORDER BY updated_at ASC, id ASC LIMIT {$limit}";
+        if ($res = @$conn->query($reactivateSql)) {
+            while ($row = $res->fetch_assoc()) {
+                $runId = (int)($row['id'] ?? 0);
+                if ($runId <= 0) { continue; }
+                $ts = time() - max($retryDelay + 5, 65);
+                if ($ts < 0) { $ts = time(); }
+                $reactivatedAt = date('Y-m-d H:i:s', $ts);
+                $stmt = $conn->prepare("UPDATE promotion_runs SET status='crowd_waiting', stage='crowd_waiting', error=NULL, finished_at=NULL, updated_at=? WHERE id=? AND status='failed' AND error='CROWD_FAILED_INSUFFICIENT' LIMIT 1");
+                if ($stmt) {
+                    $stmt->bind_param('si', $reactivatedAt, $runId);
+                    if ($stmt->execute() && $stmt->affected_rows === 1) {
+                        $stats['reactivated']++;
+                        $stats['run_ids'][] = $runId;
+                        pp_promotion_log('promotion.crowd.reactivated', [
+                            'run_id' => $runId,
+                            'retry_delay' => $retryDelay,
+                        ]);
+                    }
+                    $stmt->close();
+                }
+            }
+            $res->free();
         }
         $conn->close();
         return $stats;
@@ -1714,7 +1802,7 @@ if (!function_exists('pp_promotion_get_status')) {
                     ? (float)round(($crowdStats['completed'] / $crowdStats['target']) * 100, 1)
                     : 0.0;
         }
-        $queueStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+        $queueStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','crowd_waiting','report_ready'];
         $queueInfo = [
             'statuses' => $queueStatuses,
             'status_in_queue' => in_array((string)$run['status'], $queueStatuses, true),
@@ -1903,7 +1991,7 @@ if (!function_exists('pp_promotion_start_run')) {
                 }
                 if ($existingRun) {
                     $statusCurrent = (string)($existingRun['status'] ?? '');
-                    $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+                    $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','crowd_waiting','report_ready'];
                     if (in_array($statusCurrent, $activeStatuses, true)) {
                         $result = [
                             'ok' => true,
@@ -2144,7 +2232,7 @@ if (!function_exists('pp_promotion_cancel_run')) {
                     $url = (string)$runRow['target_url'];
                 }
                 $statusCurrent = (string)($runRow['status'] ?? '');
-                $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','report_ready'];
+                $activeStatuses = ['queued','running','pending_level1','level1_active','pending_level2','level2_active','pending_level3','level3_active','pending_crowd','crowd_ready','crowd_waiting','report_ready'];
                 if (!in_array($statusCurrent, $activeStatuses, true)) {
                     $result = ['ok' => true, 'status' => $statusCurrent, 'run_id' => $runId, 'already' => true];
                     break;

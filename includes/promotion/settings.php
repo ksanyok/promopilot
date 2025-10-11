@@ -23,6 +23,7 @@ if (!function_exists('pp_promotion_settings')) {
             'level3_max_len' => 1400,
             'crowd_per_article' => 100,
             'network_repeat_limit' => 2,
+            'crowd_retry_delay_seconds' => 600,
             'price_per_link' => max(0, (float)str_replace(',', '.', (string)get_setting('promotion_price_per_link', '0'))),
         ];
         $map = [
@@ -51,6 +52,10 @@ if (!function_exists('pp_promotion_settings')) {
         $crowdPerSetting = (int)get_setting('promotion_crowd_per_article', (string)$defaults['crowd_per_article']);
         if ($crowdPerSetting >= 0) {
             $defaults['crowd_per_article'] = max(0, min(10000, $crowdPerSetting));
+        }
+        $crowdRetrySetting = (int)get_setting('promotion_crowd_retry_delay_seconds', (string)$defaults['crowd_retry_delay_seconds']);
+        if ($crowdRetrySetting > 0) {
+            $defaults['crowd_retry_delay_seconds'] = max(60, min(86400, $crowdRetrySetting));
         }
         $cache = $defaults;
         return $cache;
@@ -82,5 +87,15 @@ if (!function_exists('pp_promotion_get_level_requirements')) {
             2 => ['per_parent' => max(1, (int)$settings['level2_per_level1']), 'min_len' => (int)$settings['level2_min_len'], 'max_len' => (int)$settings['level2_max_len']],
             3 => ['per_parent' => max(1, (int)$settings['level3_per_level2']), 'min_len' => (int)$settings['level3_min_len'], 'max_len' => (int)$settings['level3_max_len']],
         ];
+    }
+}
+
+if (!function_exists('pp_promotion_get_crowd_retry_delay')) {
+    function pp_promotion_get_crowd_retry_delay(): int {
+        $settings = pp_promotion_settings();
+        $delay = (int)($settings['crowd_retry_delay_seconds'] ?? 600);
+        if ($delay < 60) { $delay = 60; }
+        if ($delay > 86400) { $delay = 86400; }
+        return $delay;
     }
 }

@@ -53,6 +53,173 @@ if (!function_exists('pp_promotion_crowd_texts')) {
     }
 }
 
+if (!function_exists('pp_promotion_crowd_message_templates')) {
+    function pp_promotion_crowd_message_templates(string $language): array {
+        switch ($language) {
+            case 'uk':
+                return [
+                    'intro_with_anchor' => [
+                        'Колеги, натрапив на детальний матеріал «%s» — здається, він відповідає на наші останні питання.',
+                        'Поділюся статтею «%s», яку сьогодні обговорювали на зустрічі — в ній є практичні приклади.',
+                    ],
+                    'intro_generic' => [
+                        'Колеги, знайшов корисну аналітику по темі — ділюся посиланням.',
+                        'Привіт! Під рукою виявився свіжий матеріал, який може стане у пригоді.',
+                    ],
+                    'value' => [
+                        'Автор просто пояснює складні моменти й наводить робочі кейси.',
+                        'Цінний блок про практичні кроки, як підсилити результат.',
+                        'Є короткий чекліст, який можна використати в роботі вже зараз.',
+                    ],
+                    'cta' => [
+                        'Кому цікаво — гляньте, будь ласка, нижче.',
+                        'Буду вдячний за ваші думки щодо цього матеріалу.',
+                    ],
+                    'closing' => [
+                        'Якщо виникнуть ідеї чи зауваження — діліться, обговоримо.',
+                        'Сподіваюся, буде корисно для наших задач.',
+                    ],
+                ];
+            case 'en':
+                return [
+                    'intro_with_anchor' => [
+                        'Team, I came across “%s” today — it gives a clear breakdown of the topic we touched on.',
+                        'Sharing the article “%s”; it matches the questions we recently discussed.',
+                    ],
+                    'intro_generic' => [
+                        'Hi everyone! Found a solid write-up worth bookmarking.',
+                        'Passing along a fresh piece that might save us some research time.',
+                    ],
+                    'value' => [
+                        'The author focuses on practical steps and includes a couple of concise checklists.',
+                        'There is a handy section covering typical pitfalls and how to avoid them.',
+                        'What I liked most is the real-world example toward the middle.',
+                    ],
+                    'cta' => [
+                        'Take a look when you have a minute — link below.',
+                        'Curious to hear what you think once you skim through it.',
+                    ],
+                    'closing' => [
+                        'If you spot anything we can reuse, let’s sync.',
+                        'Hope it brings a few good ideas for our next sprint.',
+                    ],
+                ];
+            case 'ru':
+            default:
+                return [
+                    'intro_with_anchor' => [
+                        'Коллеги, наткнулся на материал «%s» — как раз по нашим последним вопросам.',
+                        'Делюсь статьёй «%s»: автор разбирает тему простым языком.',
+                    ],
+                    'intro_generic' => [
+                        'Коллеги, нашёл толковую статью по теме — решил сразу поделиться.',
+                        'Привет! Попалась на глаза свежая заметка, выглядит полезной.',
+                    ],
+                    'value' => [
+                        'Особенно понравился блок с практическими шагами и примерами.',
+                        'Есть список частых ошибок и подсказки, как их избежать.',
+                        'Подборка кейсов ближе к концу помогает быстрее разобраться.',
+                    ],
+                    'cta' => [
+                        'Кому актуально — посмотрите, пожалуйста, ссылку ниже.',
+                        'Буду рад, если отпишетесь, что думаете.',
+                    ],
+                    'closing' => [
+                        'Если появятся идеи, как применить, напишите — обсудим.',
+                        'Надеюсь, пригодится в ближайших задачах.',
+                    ],
+                ];
+        }
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_generate_persona')) {
+    function pp_promotion_crowd_generate_persona(string $language): string {
+        $personas = [
+            'ru' => [
+                'Анна Ковалева', 'Ирина Маркова', 'Никита Сорокин', 'Павел Назаров', 'Светлана Орлова',
+            ],
+            'uk' => [
+                'Олена Кравчук', 'Марія Іваненко', 'Андрій Поліщук', 'Тетяна Левчук', 'Сергій Мельник',
+            ],
+            'en' => [
+                'Emily Harper', 'Liam Brooks', 'Olivia Turner', 'Noah Collins', 'Grace Mitchell',
+            ],
+        ];
+        if (!isset($personas[$language]) || empty($personas[$language])) {
+            $language = 'ru';
+        }
+        try {
+            $idx = random_int(0, count($personas[$language]) - 1);
+        } catch (Throwable $e) {
+            $idx = mt_rand(0, count($personas[$language]) - 1);
+        }
+        return $personas[$language][$idx] ?? 'PromoPilot Team';
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_pick_email_domain')) {
+    function pp_promotion_crowd_pick_email_domain(string $language): string {
+        $domains = [
+            'ru' => ['gmail.com', 'yandex.ru', 'mail.ru', 'bk.ru', 'icloud.com'],
+            'uk' => ['gmail.com', 'ukr.net', 'i.ua', 'outlook.com', 'icloud.com'],
+            'en' => ['gmail.com', 'outlook.com', 'yahoo.com', 'hotmail.com', 'protonmail.com'],
+        ];
+        if (!isset($domains[$language]) || empty($domains[$language])) {
+            $domains[$language] = ['gmail.com', 'outlook.com', 'protonmail.com'];
+        }
+        try {
+            $idx = random_int(0, count($domains[$language]) - 1);
+        } catch (Throwable $e) {
+            $idx = mt_rand(0, count($domains[$language]) - 1);
+        }
+        return $domains[$language][$idx] ?? 'gmail.com';
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_compose_message')) {
+    function pp_promotion_crowd_compose_message(string $language, string $anchor, string $link): string {
+        $templates = pp_promotion_crowd_message_templates($language);
+        $introPool = $anchor !== ''
+            ? ($templates['intro_with_anchor'] ?? [])
+            : ($templates['intro_generic'] ?? []);
+        if (empty($introPool)) {
+            $introPool = $templates['intro_generic'] ?? ['Смотрите ссылку ниже — может пригодиться.'];
+        }
+        $valuePool = $templates['value'] ?? ['Нашёл полезные детали, которыми стоит поделиться.'];
+        $ctaPool = $templates['cta'] ?? ['Ниже оставляю ссылку — буду рад обратной связи.'];
+        $closingPool = $templates['closing'] ?? ['Напишите, если захотите обсудить.'];
+
+        $pick = static function(array $pool, string $fallback) {
+            if (empty($pool)) { return $fallback; }
+            try {
+                $idx = random_int(0, count($pool) - 1);
+            } catch (Throwable $e) {
+                $idx = mt_rand(0, count($pool) - 1);
+            }
+            return $pool[$idx] ?? $fallback;
+        };
+
+        $intro = $pick($introPool, 'Коллеги, делюсь ссылкой:');
+        if ($anchor !== '') {
+            $intro = sprintf($intro, $anchor);
+        }
+        $value = $pick($valuePool, 'Внутри собраны рабочие советы.');
+        $cta = $pick($ctaPool, 'Гляньте, пожалуйста, по ссылке ниже.');
+        $closing = $pick($closingPool, 'Пишите, если будет полезно!');
+
+        $parts = [$intro . ' ' . $value];
+        if ($cta !== '') {
+            $parts[] = $cta;
+        }
+        if ($link !== '') {
+            $parts[] = $link;
+        }
+        $parts[] = $closing;
+        return trim(implode("\n\n", array_filter($parts, static fn($segment) => trim((string)$segment) !== '')));
+    }
+}
+
 if (!function_exists('pp_promotion_trigger_worker_inline')) {
     function pp_promotion_trigger_worker_inline(?int $runId = null, int $maxIterations = 5): void {
         static $guardActive = false;
@@ -331,27 +498,27 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             if ($emailSlug === '') {
                 $emailSlug = 'promopilot';
             }
-            $authorEmail = $emailSlug . '+' . strtolower($token) . '@example.com';
+            $emailDomain = pp_promotion_crowd_pick_email_domain($language);
+            $authorEmail = $emailSlug . '.' . strtolower(substr($token, 0, 6)) . '@' . $emailDomain;
+        } else {
+            $emailDomain = substr(strrchr($authorEmail, '@'), 1) ?: 'gmail.com';
         }
         $body = $rawBody;
         if ($body === '') {
             $linkForBody = $articleUrl !== '' ? $articleUrl : (string)($task['target_url'] ?? '');
-            $lead = $anchor !== ''
-                ? sprintf($texts['lead_with_anchor'], $anchor)
-                : $texts['lead_without_anchor'];
-            $bodyParts = [trim($lead)];
-            if ($linkForBody !== '') {
-                $bodyParts[] = trim($linkForBody);
-            }
-            $body = trim(implode(' ', array_filter($bodyParts)));
+            $body = pp_promotion_crowd_compose_message($language, $anchor, $linkForBody);
             if ($body === '') {
-                $body = trim($texts['link_prompt'] . ' ' . $linkForBody);
-            }
-            if ($body === '') {
-                $body = $texts['link_prompt'];
-            }
-            if (!empty($texts['feedback'])) {
-                $body .= "\n\n" . $texts['feedback'];
+                $lead = $anchor !== ''
+                    ? sprintf($texts['lead_with_anchor'], $anchor)
+                    : $texts['lead_without_anchor'];
+                $bodyParts = [trim($lead)];
+                if ($linkForBody !== '') {
+                    $bodyParts[] = trim($linkForBody);
+                }
+                $body = trim(implode(' ', array_filter($bodyParts)));
+                if ($body === '') {
+                    $body = trim(($texts['link_prompt'] ?? 'Посмотрите, пожалуйста:') . ' ' . $linkForBody);
+                }
             }
             $body = pp_promotion_clean_text($body);
         }
@@ -387,12 +554,17 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             }
         }
 
+        $website = $articleUrl !== '' ? $articleUrl : (string)($task['target_url'] ?? '');
+        if ($website === '' || !filter_var($website, FILTER_VALIDATE_URL)) {
+            $website = 'https://' . $emailDomain;
+        }
+
         $identity = [
             'token' => $token,
             'message' => $body,
             'email' => $authorEmail,
             'name' => $authorName,
-            'website' => $articleUrl !== '' ? $articleUrl : 'https://example.com/',
+            'website' => $website,
             'phone' => pp_promotion_generate_fake_phone(),
             'password' => substr(sha1($authorEmail . microtime(true)), 0, 12),
             'company' => $projectName,
@@ -509,14 +681,46 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             $stmt->close();
         }
 
-        pp_promotion_log('promotion.crowd.task_processed', [
-            'task_id' => $taskId,
-            'run_id' => $runId,
-            'status' => $finalStatus,
-            'result' => $result['status'],
-            'needs_review' => $needsReview,
-            'link_url' => $linkUrl,
-        ]);
+        if ($crowdLinkId > 0) {
+            if ($result['status'] === 'no_form') {
+                $stmtLink = $conn->prepare("UPDATE crowd_links SET status='no_form', deep_status='no_form', updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+                if ($stmtLink) {
+                    $stmtLink->bind_param('i', $crowdLinkId);
+                    $stmtLink->execute();
+                    $stmtLink->close();
+                }
+            } elseif ($result['status'] === 'blocked') {
+                $stmtLink = $conn->prepare("UPDATE crowd_links SET status='blocked', deep_status='blocked', updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+                if ($stmtLink) {
+                    $stmtLink->bind_param('i', $crowdLinkId);
+                    $stmtLink->execute();
+                    $stmtLink->close();
+                }
+            }
+        }
+
+        $shouldLogTask = true;
+        if ($finalStatus === 'manual' && $result['status'] === 'no_form') {
+            static $noFormLog = [];
+            $logKey = $crowdLinkId > 0 ? ('link:' . $crowdLinkId) : ('url:' . md5($linkUrl));
+            $now = time();
+            if (isset($noFormLog[$logKey]) && ($now - $noFormLog[$logKey]) < 600) {
+                $shouldLogTask = false;
+            } else {
+                $noFormLog[$logKey] = $now;
+            }
+        }
+
+        if ($shouldLogTask) {
+            pp_promotion_log('promotion.crowd.task_processed', [
+                'task_id' => $taskId,
+                'run_id' => $runId,
+                'status' => $finalStatus,
+                'result' => $result['status'],
+                'needs_review' => $needsReview,
+                'link_url' => $linkUrl,
+            ]);
+        }
     }
 }
 
@@ -680,7 +884,7 @@ if (!function_exists('pp_promotion_crowd_queue_tasks')) {
             return $summary;
         }
 
-    $preferredLanguage = pp_promotion_crowd_normalize_language($linkRow['language'] ?? $project['language'] ?? null);
+        $preferredLanguage = pp_promotion_crowd_normalize_language($linkRow['language'] ?? $project['language'] ?? null);
         $preferredRegion = strtoupper(trim((string)($project['region'] ?? '')));
 
         $excludeLinkIds = array_keys($busyLinks);
@@ -891,8 +1095,23 @@ if (!function_exists('pp_promotion_crowd_fetch_available_links')) {
             }
         }
 
+        $allowedDeep = $options['deep_statuses'] ?? ['success', 'partial', 'needs_review'];
+        if (!is_array($allowedDeep) || empty($allowedDeep)) {
+            $allowedDeep = ['success'];
+        }
+        $allowedDeepEsc = [];
+        foreach ($allowedDeep as $statusValue) {
+            $statusValue = trim((string)$statusValue);
+            if ($statusValue === '') { continue; }
+            $allowedDeepEsc[] = "'" . $conn->real_escape_string($statusValue) . "'";
+        }
+        if (empty($allowedDeepEsc)) {
+            $allowedDeepEsc[] = "'success'";
+        }
+        $deepClause = ' AND deep_status IN (' . implode(',', $allowedDeepEsc) . ')';
+
         $fetchLimit = min(800, max($limit * 6, 60));
-        $sql = "SELECT id, url, domain, status, language, region, form_required, deep_status, deep_checked_at FROM crowd_links WHERE status = 'ok' AND deep_status = 'success'"
+        $sql = "SELECT id, url, domain, status, language, region, form_required, deep_status, deep_checked_at FROM crowd_links WHERE status = 'ok' {$deepClause}"
             . $excludeClause . $domainExcludeClause
             . ' ORDER BY COALESCE(deep_checked_at, updated_at) DESC, id DESC LIMIT ' . $fetchLimit;
         $links = [];
@@ -1001,33 +1220,45 @@ if (!function_exists('pp_promotion_crowd_build_payload')) {
         } elseif (strlen($subject) > 120) {
             $subject = rtrim(substr($subject, 0, 118)) . '…';
         }
-        $lead = $anchor !== ''
-            ? sprintf($texts['lead_with_anchor'], $anchor)
-            : $texts['lead_without_anchor'];
+        if (function_exists('pp_promotion_clean_text')) {
+            $subject = pp_promotion_clean_text($subject);
+        }
         $linkForBody = $targetUrl !== '' ? $targetUrl : (string)($options['run']['target_url'] ?? '');
-        $bodyParts = [trim($lead)];
-        if ($linkForBody !== '') {
-            $bodyParts[] = $linkForBody;
-        }
-        $body = trim(implode(' ', array_filter($bodyParts)));
-        if ($body === '') {
-            $body = trim($texts['link_prompt'] . ' ' . $linkForBody);
+        $body = pp_promotion_crowd_compose_message($language, $anchor, $linkForBody);
+        if (function_exists('pp_promotion_clean_text')) {
+            $body = pp_promotion_clean_text($body);
         }
         if ($body === '') {
-            $body = $texts['link_prompt'];
-        }
-        if (!empty($texts['feedback'])) {
-            $body .= "\n\n" . $texts['feedback'];
+            $body = trim(($texts['lead_without_anchor'] ?? 'Коллеги, делюсь ссылкой.') . "\n\n" . $linkForBody);
         }
 
         $authorName = $projectName !== '' ? $projectName : $texts['author_default'];
+        $needsPersona = ($authorName === '' || stripos($authorName, 'promopilot') !== false);
+        if (!$needsPersona) {
+            if (function_exists('mb_strlen')) {
+                $needsPersona = mb_strlen($authorName, 'UTF-8') < 3;
+            } else {
+                $needsPersona = strlen($authorName) < 3;
+            }
+        }
+        if ($needsPersona) {
+            $authorName = pp_promotion_crowd_generate_persona($language);
+        }
         try {
             $token = substr(bin2hex(random_bytes(8)), 0, 12);
         } catch (Throwable $e) {
             $token = substr(sha1($body . microtime(true)), 0, 12);
         }
         $emailSlug = pp_promotion_make_email_slug($authorName);
-        $authorEmail = $emailSlug . '+' . strtolower($token) . '@example.com';
+        if ($emailSlug === '') {
+            $emailSlug = 'team';
+        }
+        $emailDomain = pp_promotion_crowd_pick_email_domain($language);
+        $authorEmail = $emailSlug . '.' . strtolower(substr($token, 0, 6)) . '@' . $emailDomain;
+        $websiteSource = $targetUrl !== '' ? $targetUrl : (string)($options['run']['target_url'] ?? '');
+        if ($websiteSource === '' || !filter_var($websiteSource, FILTER_VALIDATE_URL)) {
+            $websiteSource = 'https://' . $emailDomain;
+        }
 
         $payload = [
             'run_id' => (int)($options['run']['id'] ?? 0),
@@ -1052,7 +1283,7 @@ if (!function_exists('pp_promotion_crowd_build_payload')) {
             'message' => $body,
             'email' => $authorEmail,
             'name' => $authorName,
-            'website' => $targetUrl !== '' ? $targetUrl : 'https://example.com/',
+            'website' => $websiteSource,
             'company' => $projectName !== '' ? $projectName : $authorName,
             'phone' => pp_promotion_generate_fake_phone(),
             'language' => $language,

@@ -31,6 +31,7 @@ $activeStages = [
     'level3_active',
     'pending_crowd',
     'crowd_ready',
+    'crowd_waiting',
     'report_ready',
 ];
 
@@ -95,6 +96,23 @@ try {
     pp_promotion_log('promotion.cron.recover_error', ['error' => $e->getMessage()]);
 }
 
+$crowdRecoveryStats = ['reactivated' => 0, 'run_ids' => []];
+try {
+    $crowdRecoveryStats = pp_promotion_recover_crowd_shortage_runs(40);
+} catch (Throwable $e) {
+    pp_promotion_log('promotion.cron.crowd_recover_error', ['error' => $e->getMessage()]);
+}
+if (!empty($crowdRecoveryStats['run_ids'])) {
+    foreach ($crowdRecoveryStats['run_ids'] as $reactivatedRunId) {
+        $reactivatedRunId = (int)$reactivatedRunId;
+        if ($reactivatedRunId <= 0) { continue; }
+        if (!in_array($reactivatedRunId, $runIds, true)) {
+            $runIds[] = $reactivatedRunId;
+        }
+        pp_promotion_launch_worker($reactivatedRunId, true);
+    }
+}
+
 // Drive publications queue in the background as part of the cron tick.
 // This ensures enqueued publications progress even without any web requests.
 $watchdogStats = ['released' => 0, 'failed' => 0, 'checked' => 0];
@@ -116,6 +134,7 @@ pp_promotion_log('promotion.cron.tick', [
     'pub_running' => $pubRunning,
     'recovery_runs' => $recoveryStats['runs'] ?? 0,
     'recovery_candidates' => $recoveryStats['candidates'] ?? 0,
+    'crowd_reactivated' => $crowdRecoveryStats['reactivated'] ?? 0,
     'pub_released' => $watchdogStats['released'] ?? 0,
     'pub_failed' => $watchdogStats['failed'] ?? 0,
     'pub_checked' => $watchdogStats['checked'] ?? 0,
