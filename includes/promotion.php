@@ -1035,7 +1035,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
 
-            $successStatuses = ['completed','success','done','posted','published','ok'];
+            $successStatuses = ['completed','success','done','posted','published','ok','manual'];
             $pendingStatuses = ['planned','queued','running','pending','created'];
 
             if ($res = @$conn->query('SELECT node_id, status, COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=' . $runId . ' GROUP BY node_id, status')) {
@@ -1077,6 +1077,13 @@ if (!function_exists('pp_promotion_process_run')) {
             $totalFailed = 0;
             $totalManual = 0;
 
+            $needsTopUp = [];
+            $totalPending = 0;
+            $totalCompleted = 0;
+            $totalFailed = 0;
+            $totalManual = 0;
+            $exhaustedNodes = [];
+
             foreach ($nodeStats as $nodeId => $stats) {
                 $totalPending += (int)$stats['pending'];
                 $totalCompleted += (int)$stats['completed'];
@@ -1091,7 +1098,7 @@ if (!function_exists('pp_promotion_process_run')) {
                     $attemptLimit = max($crowdPerArticle * 6, $crowdPerArticle + 12);
                     if ($attempts >= $attemptLimit) {
                         $nodeStats[$nodeId]['exhausted'] = true;
-                        continue;
+                        $exhaustedNodes[$nodeId] = true;
                     }
                     $needsTopUp[$nodeId] = [
                         'target_url' => $nodeTargets[$nodeId],
@@ -1144,7 +1151,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 if (!empty($stats['exhausted'])) { $hasExhausted = true; break; }
             }
 
-            if (!empty($needsTopUp) && !empty($topUpResult['shortage']) && !$hasExhausted) {
+            if (!empty($needsTopUp) && !empty($topUpResult['shortage'])) {
                 $waitingSummary = [];
                 foreach ($needsTopUp as $nodeId => $info) {
                     $waitingSummary[$nodeId] = (int)($info['needed'] ?? 0);
@@ -1159,7 +1166,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 return;
             }
 
-            if (!empty($needsTopUp) && !$hasExhausted) {
+            if (!empty($needsTopUp)) {
                 @$conn->query("UPDATE promotion_runs SET status='crowd_waiting', stage='crowd_waiting', error=NULL, finished_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 pp_promotion_log('promotion.crowd.waiting_reschedule', [
                     'run_id' => $runId,
@@ -1780,7 +1787,7 @@ if (!function_exists('pp_promotion_get_status')) {
             }
             $res->free();
         }
-        $successfulCrowdStatuses = ['completed','success','done','posted','published','ok'];
+        $successfulCrowdStatuses = ['completed','success','done','posted','published','ok','manual'];
         $visibleCrowdItems = [];
         foreach ($crowdStats['items'] as $item) {
             $statusNormalized = strtolower((string)($item['status_normalized'] ?? $item['status'] ?? ''));
@@ -1884,9 +1891,17 @@ if (!function_exists('pp_promotion_get_status')) {
         ];
         $conn->close();
 
+        $statusNote = null;
+        $canManualTrigger = true;
+        $runStatusString = (string)$run['status'];
+        if ($runStatusString === 'crowd_waiting') {
+            $statusNote = __('Мы продолжаем крауд-продвижение на новых площадках автоматически. Запуск вручную временно недоступен.');
+            $canManualTrigger = false;
+        }
+
         return [
             'ok' => true,
-            'status' => (string)$run['status'],
+            'status' => $runStatusString,
             'stage' => (string)$run['stage'],
             'progress' => ['done' => (int)$run['progress_done'], 'total' => (int)$run['progress_total'], 'target' => $level1Required],
             'levels' => $levels,
@@ -1908,6 +1923,11 @@ if (!function_exists('pp_promotion_get_status')) {
             'queue' => $queueInfo,
             'schedule' => $scheduleInfo,
             'owner_id' => $ownerId,
+            'status_note' => $statusNote,
+            'actions' => [
+                'can_start' => $canManualTrigger,
+                'can_retry' => $canManualTrigger,
+            ],
         ];
     }
 }
