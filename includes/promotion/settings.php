@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../promotion_helpers.php';
+require_once __DIR__ . '/../publication_queue.php';
 
 if (!function_exists('pp_promotion_settings')) {
     function pp_promotion_settings(): array {
@@ -61,6 +62,10 @@ if (!function_exists('pp_promotion_settings')) {
         $parallelSetting = (int)get_setting('promotion_crowd_max_parallel_runs', (string)$defaults['crowd_max_parallel_runs']);
         if ($parallelSetting > 0) {
             $defaults['crowd_max_parallel_runs'] = max(1, min(20, $parallelSetting));
+        }
+        $globalSlots = pp_get_max_concurrent_jobs();
+        if ($defaults['crowd_max_parallel_runs'] > $globalSlots) {
+            $defaults['crowd_max_parallel_runs'] = $globalSlots;
         }
         $cache = $defaults;
         return $cache;

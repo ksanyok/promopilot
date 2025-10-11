@@ -2,6 +2,8 @@
 require_once __DIR__ . '/../promotion_helpers.php';
 require_once __DIR__ . '/../notifications.php';
 require_once __DIR__ . '/../mailer.php';
+require_once __DIR__ . '/../publication_queue.php';
+
 require_once __DIR__ . '/settings.php';
 
 if (!function_exists('pp_promotion_normalize_language_code')) {
@@ -48,7 +50,8 @@ if (!function_exists('pp_promotion_get_max_active_runs_per_project')) {
         $default = 1;
         $configured = (int)get_setting('promotion_max_active_runs_per_project', (string)$default);
         if ($configured < 1) { $configured = 1; }
-        if ($configured > 5) { $configured = 5; }
+        $global = pp_get_max_concurrent_jobs();
+        if ($configured > $global) { $configured = $global; }
         return $configured;
     }
 }

@@ -2,7 +2,7 @@
 // Publications queue helpers: limits, claiming jobs, processing, worker loop
 
 if (!function_exists('pp_get_max_concurrent_jobs')) {
-    function pp_get_max_concurrent_jobs(): int { $n = (int) get_setting('max_concurrent_jobs', 1); if ($n < 1) $n = 1; if ($n > 5) $n = 5; return $n; }
+    function pp_get_max_concurrent_jobs(): int { $n = (int)get_setting('max_concurrent_jobs', 5); if ($n < 1) { $n = 1; } if ($n > 20) { $n = 20; } return $n; }
 }
 if (!function_exists('pp_get_min_job_spacing_ms')) {
     function pp_get_min_job_spacing_ms(): int { $ms = (int) get_setting('min_job_spacing_ms', 0); if ($ms < 0) $ms = 0; if ($ms > 60000) $ms = 60000; return $ms; }

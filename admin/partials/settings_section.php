@@ -64,10 +64,24 @@
                 </div>
 
                 <div class="settings-field settings-field--wide">
-                    <?php $queueCap = isset($maxConcurrentJobsSetting) ? max(1, (int)$maxConcurrentJobsSetting) : 1; ?>
+                    <?php $queueCap = isset($maxConcurrentJobsSetting) ? max(1, min(20, (int)$maxConcurrentJobsSetting)) : 5; ?>
                     <label class="form-label"><?php echo __('Ограничения продвижения'); ?></label>
                     <div class="row g-2">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
+                            <label class="form-label" for="maxConcurrentJobs"><?php echo __('Глобальный лимит публикаций'); ?></label>
+                            <input type="number"
+                                   name="max_concurrent_jobs"
+                                   id="maxConcurrentJobs"
+                                   class="form-control"
+                                   min="1"
+                                   max="20"
+                                   value="<?php echo htmlspecialchars($settings['max_concurrent_jobs']); ?>"
+                                   required>
+                            <div class="form-text">
+                                <?php echo __('Сколько потоков публикаций может работать одновременно (1–20). Увеличение требует ресурсов сервера.'); ?>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label" for="promotionMaxRunsPerProject"><?php echo __('Одновременных запусков на проект'); ?></label>
                             <input type="number"
                                    name="promotion_max_active_runs_per_project"
@@ -78,10 +92,10 @@
                                    value="<?php echo htmlspecialchars($settings['promotion_max_active_runs_per_project']); ?>"
                                    required>
                             <div class="form-text">
-                                <?php echo sprintf(__('Не более %d. Ограничивает, сколько каскадов выполняются параллельно для одного клиента.'), (int)$queueCap); ?>
+                                <?php echo sprintf(__('Не более %d. Определяет, сколько каскадов выполняются параллельно для одного клиента.'), (int)$queueCap); ?>
                             </div>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <label class="form-label" for="publicationMaxJobsPerProject"><?php echo __('Одновременных публикаций на проект'); ?></label>
                             <input type="number"
                                    name="publication_max_jobs_per_project"
@@ -92,7 +106,7 @@
                                    value="<?php echo htmlspecialchars($settings['publication_max_jobs_per_project']); ?>"
                                    required>
                             <div class="form-text">
-                                <?php echo sprintf(__('Ограничивает число публикаций из очереди, работающих параллельно. Не может превышать %d.'), (int)$queueCap); ?>
+                                <?php echo sprintf(__('Не более %d. Ограничивает параллельные публикации из очереди по одному проекту.'), (int)$queueCap); ?>
                             </div>
                         </div>
                     </div>
