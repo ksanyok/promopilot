@@ -1189,6 +1189,43 @@ function pp_run_schema_bootstrap(): void {
         }
     }
 
+    $crowdWorkerCols = $getCols('promotion_crowd_workers');
+    if (empty($crowdWorkerCols)) {
+        @$conn->query("CREATE TABLE IF NOT EXISTS `promotion_crowd_workers` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `run_id` INT NOT NULL,
+            `status` VARCHAR(32) NOT NULL DEFAULT 'pending',
+            `pid` INT NULL,
+            `attempts` INT NOT NULL DEFAULT 0,
+            `last_error` TEXT NULL,
+            `started_at` TIMESTAMP NULL DEFAULT NULL,
+            `heartbeat_at` TIMESTAMP NULL DEFAULT NULL,
+            `finished_at` TIMESTAMP NULL DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `uniq_promotion_crowd_workers_run` (`run_id`),
+            CONSTRAINT `fk_promotion_crowd_workers_run` FOREIGN KEY (`run_id`) REFERENCES `promotion_runs`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+    } else {
+        $ensureWorkerCol = static function(string $column, string $ddl) use ($crowdWorkerCols, $conn): void {
+            if (!isset($crowdWorkerCols[$column])) { @($conn->query("ALTER TABLE `promotion_crowd_workers` {$ddl}")); }
+        };
+        $ensureWorkerCol('status', "ADD COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'pending' AFTER `run_id`");
+        $ensureWorkerCol('pid', "ADD COLUMN `pid` INT NULL AFTER `status`");
+        $ensureWorkerCol('attempts', "ADD COLUMN `attempts` INT NOT NULL DEFAULT 0 AFTER `pid`");
+        $ensureWorkerCol('last_error', "ADD COLUMN `last_error` TEXT NULL AFTER `attempts`");
+        $ensureWorkerCol('started_at', "ADD COLUMN `started_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_error`");
+        $ensureWorkerCol('heartbeat_at', "ADD COLUMN `heartbeat_at` TIMESTAMP NULL DEFAULT NULL AFTER `started_at`");
+        $ensureWorkerCol('finished_at', "ADD COLUMN `finished_at` TIMESTAMP NULL DEFAULT NULL AFTER `heartbeat_at`");
+        $ensureWorkerCol('updated_at', "ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        if (!isset($crowdWorkerCols['run_id'])) {
+            @$conn->query("ALTER TABLE `promotion_crowd_workers` ADD COLUMN `run_id` INT NOT NULL FIRST");
+        }
+        if (pp_mysql_index_exists($conn, 'promotion_crowd_workers', 'uniq_promotion_crowd_workers_run') === false) {
+            @$conn->query("ALTER TABLE `promotion_crowd_workers` ADD UNIQUE KEY `uniq_promotion_crowd_workers_run` (`run_id`)");
+        }
+    }
+
     // Settings table optional—skip if missing
 
     @$conn->close();

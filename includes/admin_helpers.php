@@ -47,6 +47,7 @@ if (!function_exists('pp_admin_setting_keys')) {
             'promotion_level2_per_level1',
             'promotion_level3_per_level2',
             'promotion_crowd_per_article',
+            'promotion_crowd_max_parallel_runs',
             'promotion_level1_enabled',
             'promotion_level2_enabled',
             'promotion_level3_enabled',
@@ -89,6 +90,7 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
         $level2PerLevel1 = max(1, min(500, (int)($post['promotion_level2_per_level1'] ?? 10)));
         $level3PerLevel2 = max(1, min(500, (int)($post['promotion_level3_per_level2'] ?? 5)));
         $crowdPerArticle = max(0, min(5000, (int)($post['promotion_crowd_per_article'] ?? 100)));
+        $crowdMaxParallel = max(1, min(20, (int)($post['promotion_crowd_max_parallel_runs'] ?? 3)));
         $maxConcurrentJobs = pp_get_max_concurrent_jobs();
         if (!is_int($maxConcurrentJobs) || $maxConcurrentJobs < 1) {
             $maxConcurrentJobs = 1;
@@ -115,6 +117,7 @@ if (!function_exists('pp_admin_handle_settings_submit')) {
             ['promotion_level2_per_level1', (string)$level2PerLevel1],
             ['promotion_level3_per_level2', (string)$level3PerLevel2],
             ['promotion_crowd_per_article', (string)$crowdPerArticle],
+            ['promotion_crowd_max_parallel_runs', (string)$crowdMaxParallel],
             ['promotion_level1_enabled', isset($post['promotion_level1_enabled']) ? '1' : '0'],
             ['promotion_level2_enabled', isset($post['promotion_level2_enabled']) ? '1' : '0'],
             ['promotion_level3_enabled', isset($post['promotion_level3_enabled']) ? '1' : '0'],

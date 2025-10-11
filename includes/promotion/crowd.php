@@ -249,7 +249,7 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
             pp_promotion_log('promotion.crowd.worker_missing', ['script' => $script]);
             if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
                 try {
-                    $processed = pp_promotion_crowd_worker($taskId, 5);
+                    $processed = pp_promotion_crowd_worker($taskId, 5, null);
                     pp_promotion_log('promotion.crowd.worker_fallback_used', [
                         'task_id' => $taskId,
                         'processed' => $processed,
@@ -311,7 +311,7 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
                 $pendingAfter = 0;
                 try {
                     for ($batch = 0; $batch < $maxBatches; $batch++) {
-                        $processed = pp_promotion_crowd_worker($taskId, $batchSize);
+                        $processed = pp_promotion_crowd_worker($taskId, $batchSize, null);
                         $inlineIterations += $processed;
                         $batchesRun++;
                         $taskId = null;
@@ -366,7 +366,7 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
 
         if ($allowFallback && function_exists('pp_promotion_crowd_worker')) {
             try {
-                $processed = pp_promotion_crowd_worker($taskId, 5);
+                $processed = pp_promotion_crowd_worker($taskId, 5, null);
                 pp_promotion_log('promotion.crowd.worker_fallback_used', [
                     'task_id' => $taskId,
                     'processed' => $processed,
@@ -383,13 +383,21 @@ if (!function_exists('pp_promotion_launch_crowd_worker')) {
 }
 
 if (!function_exists('pp_promotion_crowd_claim_task')) {
-    function pp_promotion_crowd_claim_task(mysqli $conn, ?int $specificTaskId = null): ?array {
+    function pp_promotion_crowd_claim_task(mysqli $conn, ?int $specificTaskId = null, ?int $runId = null): ?array {
         $taskId = null;
         if ($specificTaskId !== null && $specificTaskId > 0) {
             $taskId = $specificTaskId;
-            $stmt = $conn->prepare("UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('planned','queued','running') LIMIT 1");
+            $bindRun = $runId !== null && $runId > 0;
+            $sql = "UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=?"
+                . ($bindRun ? " AND run_id=?" : "")
+                . " AND status IN ('planned','queued','running') LIMIT 1";
+            $stmt = $conn->prepare($sql);
             if ($stmt) {
-                $stmt->bind_param('i', $taskId);
+                if ($bindRun) {
+                    $stmt->bind_param('ii', $taskId, $runId);
+                } else {
+                    $stmt->bind_param('i', $taskId);
+                }
                 $stmt->execute();
                 if ($stmt->affected_rows === 0) {
                     $stmt->close();
@@ -400,20 +408,56 @@ if (!function_exists('pp_promotion_crowd_claim_task')) {
                 return null;
             }
         } else {
-            if ($res = @$conn->query("SELECT id FROM promotion_crowd_tasks WHERE status IN ('planned','queued') ORDER BY id ASC LIMIT 1")) {
-                if ($row = $res->fetch_assoc()) {
-                    $taskId = (int)($row['id'] ?? 0);
+            if ($runId !== null && $runId > 0) {
+                $stmtSelect = $conn->prepare("SELECT id FROM promotion_crowd_tasks WHERE run_id=? AND status IN ('planned','queued') ORDER BY id ASC LIMIT 1");
+                if ($stmtSelect) {
+                    $stmtSelect->bind_param('i', $runId);
+                    if ($stmtSelect->execute()) {
+                        $res = $stmtSelect->get_result();
+                        if ($row = $res->fetch_assoc()) {
+                            $taskId = (int)($row['id'] ?? 0);
+                        }
+                        $res->free();
+                    }
+                    $stmtSelect->close();
                 }
-                $res->free();
+            } else {
+            $stmtSelect = $conn->prepare(
+                "SELECT pct.id
+                 FROM promotion_crowd_tasks pct
+                 LEFT JOIN promotion_runs pr ON pr.id = pct.run_id
+                 LEFT JOIN projects pj ON pj.id = pr.project_id
+                 WHERE pct.status IN ('planned','queued')
+                 ORDER BY COALESCE(pr.project_id, pj.id) ASC, pct.id ASC
+                 LIMIT 1"
+            );
+            if ($stmtSelect) {
+                if ($stmtSelect->execute()) {
+                    $res = $stmtSelect->get_result();
+                    if ($row = $res->fetch_assoc()) {
+                        $taskId = (int)($row['id'] ?? 0);
+                    }
+                    $res->free();
+                }
+                $stmtSelect->close();
+            }
             }
             if (!$taskId) {
                 return null;
             }
-            $stmt = $conn->prepare("UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('planned','queued') LIMIT 1");
+            $bindRun = $runId !== null && $runId > 0;
+            $sqlUpdate = "UPDATE promotion_crowd_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=?"
+                . ($bindRun ? " AND run_id=?" : "")
+                . " AND status IN ('planned','queued') LIMIT 1";
+            $stmt = $conn->prepare($sqlUpdate);
             if (!$stmt) {
                 return null;
             }
-            $stmt->bind_param('i', $taskId);
+            if ($bindRun) {
+                $stmt->bind_param('ii', $taskId, $runId);
+            } else {
+                $stmt->bind_param('i', $taskId);
+            }
             $stmt->execute();
             if ($stmt->affected_rows === 0) {
                 $stmt->close();
@@ -716,6 +760,378 @@ if (!function_exists('pp_promotion_crowd_process_task')) {
             'needs_review' => $needsReview,
             'link_url' => $linkUrl,
         ]);
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_schedule_worker')) {
+    function pp_promotion_crowd_schedule_worker(int $runId): ?array {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return null; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
+        if (!$conn) { return null; }
+        $stmt = $conn->prepare("INSERT INTO promotion_crowd_workers (run_id, status, attempts, created_at, updated_at) VALUES (?, 'queued', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON DUPLICATE KEY UPDATE
+                status = IF(status='running', 'running', 'queued'),
+                pid = IF(status='running', pid, NULL),
+                started_at = IF(status='running', started_at, NULL),
+                heartbeat_at = NULL,
+                finished_at = NULL,
+                last_error = IF(status='running', last_error, NULL),
+                attempts = IF(status='running', attempts, attempts + 1),
+                updated_at = CURRENT_TIMESTAMP");
+        if ($stmt) {
+            $stmt->bind_param('i', $runId);
+            $stmt->execute();
+            $stmt->close();
+        }
+        $row = null;
+        $stmtSelect = $conn->prepare("SELECT id, status, pid, attempts, started_at, heartbeat_at, finished_at FROM promotion_crowd_workers WHERE run_id = ? LIMIT 1");
+        if ($stmtSelect) {
+            $stmtSelect->bind_param('i', $runId);
+            if ($stmtSelect->execute()) {
+                $row = $stmtSelect->get_result()->fetch_assoc();
+            }
+            $stmtSelect->close();
+        }
+        $conn->close();
+        return $row;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker_claim_slot')) {
+    function pp_promotion_crowd_worker_claim_slot(int $runId, int $pid): ?array {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return null; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return null; }
+        if (!$conn) { return null; }
+        $stmt = $conn->prepare("UPDATE promotion_crowd_workers SET status='running', pid=?, started_at=COALESCE(started_at, CURRENT_TIMESTAMP), heartbeat_at=CURRENT_TIMESTAMP, last_error=NULL, updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status IN ('queued','failed','stalled','pending') LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('ii', $pid, $runId);
+            $stmt->execute();
+            if ($stmt->affected_rows === 0) {
+                $stmt->close();
+                $stmtCheck = $conn->prepare("SELECT id, status, pid, started_at, heartbeat_at FROM promotion_crowd_workers WHERE run_id=? LIMIT 1");
+                if ($stmtCheck) {
+                    $stmtCheck->bind_param('i', $runId);
+                    if ($stmtCheck->execute()) {
+                        $row = $stmtCheck->get_result()->fetch_assoc();
+                        $stmtCheck->close();
+                        $conn->close();
+                        return $row ?: null;
+                    }
+                    $stmtCheck->close();
+                }
+                $conn->close();
+                return null;
+            }
+            $stmt->close();
+        }
+        $row = null;
+        $stmtSelect = $conn->prepare("SELECT id, status, pid, started_at, heartbeat_at FROM promotion_crowd_workers WHERE run_id=? LIMIT 1");
+        if ($stmtSelect) {
+            $stmtSelect->bind_param('i', $runId);
+            if ($stmtSelect->execute()) {
+                $row = $stmtSelect->get_result()->fetch_assoc();
+            }
+            $stmtSelect->close();
+        }
+        $conn->close();
+        return $row;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker_heartbeat')) {
+    function pp_promotion_crowd_worker_heartbeat(int $workerId): void {
+        $workerId = (int)$workerId;
+        if ($workerId <= 0) { return; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
+        if (!$conn) { return; }
+        @$conn->query("UPDATE promotion_crowd_workers SET heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $workerId . " LIMIT 1");
+        $conn->close();
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker_finish_slot')) {
+    function pp_promotion_crowd_worker_finish_slot(int $workerId, string $status, ?string $error = null): void {
+        $workerId = (int)$workerId;
+        if ($workerId <= 0) { return; }
+        $status = trim($status);
+        if ($status === '') { $status = 'completed'; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
+        if (!$conn) { return; }
+        $stmt = $conn->prepare("UPDATE promotion_crowd_workers SET status=?, last_error=?, finished_at=CURRENT_TIMESTAMP, heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('ssi', $status, $error, $workerId);
+            $stmt->execute();
+            $stmt->close();
+        }
+        $conn->close();
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker_finish_slot_by_run')) {
+    function pp_promotion_crowd_worker_finish_slot_by_run(int $runId, string $status = 'completed', ?string $error = null): void {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return; }
+        if (!$conn) { return; }
+        $status = trim($status);
+        if ($status === '') { $status = 'completed'; }
+        $stmt = $conn->prepare("UPDATE promotion_crowd_workers SET status=?, last_error=?, finished_at=CURRENT_TIMESTAMP, heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status <> 'completed' LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('ssi', $status, $error, $runId);
+            $stmt->execute();
+            $stmt->close();
+        }
+        $conn->close();
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_has_pending_tasks')) {
+    function pp_promotion_crowd_has_pending_tasks(int $runId): bool {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return false; }
+        try { $conn = @connect_db(); } catch (Throwable $e) { return false; }
+        if (!$conn) { return false; }
+        $pending = false;
+        $stmt = $conn->prepare("SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=? AND status IN ('planned','queued','running','pending','created')");
+        if ($stmt) {
+            $stmt->bind_param('i', $runId);
+            if ($stmt->execute()) {
+                $row = $stmt->get_result()->fetch_assoc();
+                if ($row) {
+                    $pending = ((int)($row['c'] ?? 0)) > 0;
+                }
+            }
+            $stmt->close();
+        }
+        $conn->close();
+        return $pending;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_launch_worker_for_run')) {
+    function pp_promotion_crowd_launch_worker_for_run(int $runId, bool $allowFallback = true): bool {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return false; }
+        if (!pp_promotion_crowd_has_pending_tasks($runId)) {
+            pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
+            return false;
+        }
+        $workerRow = pp_promotion_crowd_schedule_worker($runId);
+        if (!$workerRow) { return false; }
+        if (!empty($workerRow['status']) && $workerRow['status'] === 'running' && !empty($workerRow['pid'])) {
+            return false;
+        }
+        $maxParallel = pp_promotion_get_crowd_max_parallel_runs();
+        $currentRunning = pp_promotion_crowd_count_running_workers();
+        if ($currentRunning >= $maxParallel) {
+            return false;
+        }
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        if ($conn) {
+            $stmt = $conn->prepare("UPDATE promotion_crowd_workers SET status='pending', pid=NULL, heartbeat_at=NULL, started_at=NULL, finished_at=NULL, last_error=NULL, updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status IN ('queued','failed','stalled','pending') LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $runId);
+                $stmt->execute();
+                $stmt->close();
+            }
+            $conn->close();
+        }
+        $script = PP_ROOT_PATH . '/scripts/promotion_crowd_worker.php';
+        if (!is_file($script)) {
+            pp_promotion_log('promotion.crowd.worker_missing', ['script' => $script, 'run_id' => $runId]);
+            return false;
+        }
+        $phpBinary = PHP_BINARY ?: 'php';
+        $args = ' --run=' . $runId;
+        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        $success = false;
+        if ($isWindows) {
+            $cmd = 'start /B "" ' . escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args;
+            $handle = @popen($cmd, 'r');
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $success = true;
+            }
+        } else {
+            $cmd = escapeshellarg($phpBinary) . ' ' . escapeshellarg($script) . $args . ' > /dev/null 2>&1 &';
+            if (function_exists('popen')) {
+                $handle = @popen($cmd, 'r');
+                if (is_resource($handle)) {
+                    @pclose($handle);
+                    $success = true;
+                }
+            }
+            if (!$success) {
+                $output = [];
+                $status = 1;
+                @exec($cmd, $output, $status);
+                if ($status === 0) {
+                    $success = true;
+                }
+            }
+        }
+        if ($success) {
+            pp_promotion_log('promotion.crowd.worker_run_launched', [
+                'run_id' => $runId,
+                'script' => $script,
+                'mode' => $isWindows ? 'windows_popen' : 'posix_background',
+                'slots' => [
+                    'running' => $currentRunning + 1,
+                    'max' => $maxParallel,
+                ],
+            ]);
+            return true;
+        }
+        pp_promotion_log('promotion.crowd.worker_run_launch_failed', [
+            'run_id' => $runId,
+            'script' => $script,
+            'mode' => $isWindows ? 'windows_popen' : 'posix_background',
+        ]);
+        return false;
+    }
+}
+
+if (!function_exists('pp_promotion_launch_crowd_worker_for_run')) {
+    function pp_promotion_launch_crowd_worker_for_run(int $runId, bool $allowFallback = true): bool {
+        return pp_promotion_crowd_launch_worker_for_run($runId, $allowFallback);
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_prune_stale_workers')) {
+    function pp_promotion_crowd_prune_stale_workers(int $timeoutSeconds = 180): array {
+        $timeoutSeconds = max(60, $timeoutSeconds);
+        try { $conn = @connect_db(); } catch (Throwable $e) { return ['requeued' => 0]; }
+        if (!$conn) { return ['requeued' => 0]; }
+        $threshold = date('Y-m-d H:i:s', time() - $timeoutSeconds);
+        $stmt = $conn->prepare("UPDATE promotion_crowd_workers
+            SET status='queued', pid=NULL, heartbeat_at=NULL, started_at=NULL, finished_at=NULL, last_error='HEARTBEAT_TIMEOUT', updated_at=CURRENT_TIMESTAMP
+            WHERE status='running' AND (
+                (heartbeat_at IS NULL AND started_at IS NOT NULL AND started_at < ?)
+                OR (heartbeat_at IS NOT NULL AND heartbeat_at < ?)
+            )");
+        $requeued = 0;
+        if ($stmt) {
+            $stmt->bind_param('ss', $threshold, $threshold);
+            $stmt->execute();
+            $requeued = $stmt->affected_rows;
+            $stmt->close();
+        }
+        $conn->close();
+        return ['requeued' => $requeued, 'threshold' => $threshold];
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_count_running_workers')) {
+    function pp_promotion_crowd_count_running_workers(): int {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return 0; }
+        if (!$conn) { return 0; }
+        $count = 0;
+        if ($res = @$conn->query("SELECT COUNT(*) AS c FROM promotion_crowd_workers WHERE status='running'")) {
+            if ($row = $res->fetch_assoc()) {
+                $count = (int)($row['c'] ?? 0);
+            }
+            $res->free();
+        }
+        $conn->close();
+        return $count;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_collect_dispatch_queue')) {
+    function pp_promotion_crowd_collect_dispatch_queue(int $limit = 10): array {
+        $limit = max(1, $limit);
+        try { $conn = @connect_db(); } catch (Throwable $e) { return []; }
+        if (!$conn) { return []; }
+        $runIds = [];
+        $stmt = $conn->prepare("SELECT run_id FROM promotion_crowd_workers WHERE status IN ('queued','failed','stalled','pending') ORDER BY updated_at ASC LIMIT ?");
+        if ($stmt) {
+            $stmt->bind_param('i', $limit);
+            if ($stmt->execute()) {
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) {
+                    $runId = (int)($row['run_id'] ?? 0);
+                    if ($runId > 0) { $runIds[$runId] = $runId; }
+                }
+                $res->free();
+            }
+            $stmt->close();
+        }
+        $conn->close();
+        return array_values($runIds);
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_sync_worker_rows')) {
+    function pp_promotion_crowd_sync_worker_rows(int $limit = 30): array {
+        try { $conn = @connect_db(); } catch (Throwable $e) { return []; }
+        if (!$conn) { return []; }
+        $runIds = [];
+        $sql = "SELECT pr.id AS run_id
+                FROM promotion_runs pr
+                LEFT JOIN promotion_crowd_workers pcw ON pcw.run_id = pr.id
+                WHERE pr.status IN ('crowd_ready','crowd_waiting')
+                  AND (pcw.id IS NULL OR pcw.status IN ('completed','failed'))
+                  AND EXISTS (
+                      SELECT 1 FROM promotion_crowd_tasks pct
+                      WHERE pct.run_id = pr.id
+                        AND pct.status IN ('planned','queued','running','pending','created')
+                  )
+                ORDER BY pr.updated_at ASC
+                LIMIT " . max(1, (int)$limit);
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $runId = (int)($row['run_id'] ?? 0);
+                if ($runId > 0) {
+                    $runIds[$runId] = $runId;
+                }
+            }
+            $res->free();
+        }
+        $conn->close();
+        foreach ($runIds as $runId) {
+            pp_promotion_crowd_schedule_worker($runId);
+        }
+        return array_values($runIds);
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_recent_publications')) {
+    function pp_promotion_crowd_recent_publications(mysqli $conn, int $runId, int $limit = 25): array {
+        $limit = max(1, min(200, $limit));
+        $result = [];
+        $statuses = "'completed','success','done','posted','published','manual'";
+        $sql = "SELECT id, node_id, crowd_link_id, target_url, result_url, status, payload_json, updated_at
+                FROM promotion_crowd_tasks
+                WHERE run_id = " . (int)$runId . " AND status IN ($statuses)
+                ORDER BY updated_at DESC
+                LIMIT " . $limit;
+        if ($res = @$conn->query($sql)) {
+            while ($row = $res->fetch_assoc()) {
+                $payload = [];
+                if (!empty($row['payload_json'])) {
+                    $decoded = json_decode((string)$row['payload_json'], true);
+                    if (is_array($decoded)) { $payload = $decoded; }
+                }
+                $result[] = [
+                    'id' => (int)($row['id'] ?? 0),
+                    'node_id' => isset($row['node_id']) ? (int)$row['node_id'] : null,
+                    'crowd_link_id' => isset($row['crowd_link_id']) ? (int)$row['crowd_link_id'] : null,
+                    'status' => (string)($row['status'] ?? ''),
+                    'result_url' => $row['result_url'] ?? null,
+                    'target_url' => $row['target_url'] ?? null,
+                    'updated_at' => $row['updated_at'] ?? null,
+                    'manual_fallback' => !empty($payload['manual_fallback']),
+                    'anchor' => $payload['anchor'] ?? null,
+                    'message_preview' => isset($payload['body']) ? trim((string)$payload['body']) : null,
+                    'author' => $payload['author_name'] ?? null,
+                    'link_url' => $payload['crowd_link_url'] ?? null,
+                ];
+            }
+            $res->free();
+        }
+        return $result;
     }
 }
 
@@ -1048,7 +1464,7 @@ if (!function_exists('pp_promotion_crowd_pending_count')) {
 }
 
 if (!function_exists('pp_promotion_crowd_worker')) {
-    function pp_promotion_crowd_worker(?int $specificTaskId = null, int $maxIterations = 30): int {
+    function pp_promotion_crowd_worker(?int $specificTaskId = null, int $maxIterations = 30, ?int $runId = null, ?int $workerId = null): int {
         if (function_exists('session_write_close')) { @session_write_close(); }
         @ignore_user_abort(true);
         try {
@@ -1062,14 +1478,28 @@ if (!function_exists('pp_promotion_crowd_worker')) {
         }
 
         $processed = 0;
-        $maxIterations = max(1, min(200, $maxIterations));
+        $maxIterations = max(1, min(500, $maxIterations));
+        $startTime = microtime(true);
         for ($i = 0; $i < $maxIterations; $i++) {
-            $task = pp_promotion_crowd_claim_task($conn, $specificTaskId);
+            $task = pp_promotion_crowd_claim_task($conn, $specificTaskId, $runId);
             $specificTaskId = null;
-            if (!$task) { break; }
+            if (!$task) {
+                $idleElapsed = microtime(true) - $startTime;
+                if ($processed === 0 && $idleElapsed < 6.0) {
+                    usleep(150000);
+                    $task = pp_promotion_crowd_claim_task($conn, $specificTaskId, $runId);
+                    if (!$task) { continue; }
+                } else {
+                    break;
+                }
+            }
+            $startTime = microtime(true);
             try {
                 pp_promotion_crowd_process_task($conn, $task);
                 $processed++;
+                if ($workerId !== null) {
+                    pp_promotion_crowd_worker_heartbeat($workerId);
+                }
             } catch (Throwable $e) {
                 $taskId = (int)($task['id'] ?? 0);
                 $status = 'failed';
@@ -1103,6 +1533,34 @@ if (!function_exists('pp_promotion_crowd_worker')) {
         }
         $conn->close();
         return $processed;
+    }
+}
+
+if (!function_exists('pp_promotion_crowd_worker_run')) {
+    function pp_promotion_crowd_worker_run(int $runId, int $maxIterations = 300, ?int $workerId = null, bool $interactiveWait = false): array {
+        $runId = (int)$runId;
+        if ($runId <= 0) { return ['processed' => 0, 'pending' => 0]; }
+        $processed = pp_promotion_crowd_worker(null, $maxIterations, $runId, $workerId);
+        $pending = 0;
+        try { $conn = @connect_db(); } catch (Throwable $e) { $conn = null; }
+        if ($conn) {
+            $stmt = $conn->prepare("SELECT COUNT(*) AS c FROM promotion_crowd_tasks WHERE run_id=? AND status IN ('planned','queued','running','pending','created')");
+            if ($stmt) {
+                $stmt->bind_param('i', $runId);
+                if ($stmt->execute()) {
+                    $row = $stmt->get_result()->fetch_assoc();
+                    if ($row) {
+                        $pending = (int)($row['c'] ?? 0);
+                    }
+                }
+                $stmt->close();
+            }
+            $conn->close();
+        }
+        if ($pending > 0) {
+            pp_promotion_crowd_schedule_worker($runId);
+        }
+        return ['processed' => $processed, 'pending' => $pending];
     }
 }
 

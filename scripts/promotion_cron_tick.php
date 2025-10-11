@@ -86,8 +86,6 @@ foreach ($runIds as $runId) {
     pp_promotion_launch_worker($runId, true);
 }
 
-$crowdLaunched = pp_promotion_launch_crowd_worker(null, true);
-
 // Heal stuck promotion nodes before advancing the queue.
 $recoveryStats = ['runs' => 0, 'candidates' => 0];
 try {
@@ -96,20 +94,23 @@ try {
     pp_promotion_log('promotion.cron.recover_error', ['error' => $e->getMessage()]);
 }
 
-$crowdRecoveryStats = ['reactivated' => 0, 'run_ids' => []];
-try {
-    $crowdRecoveryStats = pp_promotion_recover_crowd_shortage_runs(40);
-} catch (Throwable $e) {
-    pp_promotion_log('promotion.cron.crowd_recover_error', ['error' => $e->getMessage()]);
-}
-if (!empty($crowdRecoveryStats['run_ids'])) {
-    foreach ($crowdRecoveryStats['run_ids'] as $reactivatedRunId) {
-        $reactivatedRunId = (int)$reactivatedRunId;
-        if ($reactivatedRunId <= 0) { continue; }
-        if (!in_array($reactivatedRunId, $runIds, true)) {
-            $runIds[] = $reactivatedRunId;
+$crowdSyncRuns = pp_promotion_crowd_sync_worker_rows(40);
+$staleInfo = pp_promotion_crowd_prune_stale_workers(180);
+$crowdRunning = pp_promotion_crowd_count_running_workers();
+$maxCrowdParallel = pp_promotion_get_crowd_max_parallel_runs();
+$crowdDispatched = [];
+if ($crowdRunning < $maxCrowdParallel) {
+    $dispatchCandidates = pp_promotion_crowd_collect_dispatch_queue(max(10, $maxCrowdParallel * 3));
+    foreach ($dispatchCandidates as $candidateRunId) {
+        if ($crowdRunning >= $maxCrowdParallel) { break; }
+        if (!pp_promotion_crowd_has_pending_tasks($candidateRunId)) {
+            pp_promotion_crowd_worker_finish_slot_by_run($candidateRunId, 'completed', null);
+            continue;
         }
-        pp_promotion_launch_worker($reactivatedRunId, true);
+        if (pp_promotion_crowd_launch_worker_for_run($candidateRunId, false)) {
+            $crowdRunning++;
+            $crowdDispatched[] = $candidateRunId;
+        }
     }
 }
 
@@ -128,13 +129,16 @@ pp_promotion_log('promotion.cron.tick', [
     'runs_checked' => count($runIds),
     'crowd_pending' => $crowdPending,
     'worker_launched' => $workerLaunched,
-    'crowd_worker_launched' => $crowdLaunched,
+    'crowd_running' => $crowdRunning,
+    'crowd_dispatched' => count($crowdDispatched),
+    'crowd_slots' => $maxCrowdParallel,
+    'crowd_requeued' => $staleInfo['requeued'] ?? 0,
+    'crowd_synced' => count($crowdSyncRuns),
     'max_runs' => $maxRuns,
     'pub_queued' => $pubQueued,
     'pub_running' => $pubRunning,
     'recovery_runs' => $recoveryStats['runs'] ?? 0,
     'recovery_candidates' => $recoveryStats['candidates'] ?? 0,
-    'crowd_reactivated' => $crowdRecoveryStats['reactivated'] ?? 0,
     'pub_released' => $watchdogStats['released'] ?? 0,
     'pub_failed' => $watchdogStats['failed'] ?? 0,
     'pub_checked' => $watchdogStats['checked'] ?? 0,

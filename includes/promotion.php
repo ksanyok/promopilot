@@ -915,11 +915,17 @@ if (!function_exists('pp_promotion_process_run')) {
         if ($stage === 'pending_crowd') {
             if (!pp_promotion_is_crowd_enabled()) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                if (function_exists('pp_promotion_crowd_worker_finish_slot_by_run')) {
+                    pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
+                }
                 return;
             }
             $crowdPerArticle = pp_promotion_crowd_required_per_article($run);
             if ($crowdPerArticle <= 0) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                if (function_exists('pp_promotion_crowd_worker_finish_slot_by_run')) {
+                    pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
+                }
                 return;
             }
             $crowdSource = pp_promotion_crowd_collect_nodes($conn, $runId);
@@ -966,11 +972,15 @@ if (!function_exists('pp_promotion_process_run')) {
                 ]);
                 $errorEscaped = $conn->real_escape_string($errorCode);
                 @$conn->query("UPDATE promotion_runs SET status='failed', stage='failed', error='" . $errorEscaped . "', finished_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                pp_promotion_crowd_worker_finish_slot_by_run($runId, 'failed', $errorCode);
                 return;
             }
 
             @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
-            pp_promotion_launch_crowd_worker();
+            pp_promotion_crowd_schedule_worker($runId);
+            if (function_exists('pp_promotion_crowd_launch_worker_for_run')) {
+                pp_promotion_crowd_launch_worker_for_run($runId);
+            }
             return;
         }
         if ($stage === 'crowd_ready' || $stage === 'crowd_waiting') {
@@ -983,6 +993,7 @@ if (!function_exists('pp_promotion_process_run')) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
                 return;
             }
+            pp_promotion_crowd_schedule_worker($runId);
             $retryDelay = pp_promotion_get_crowd_retry_delay();
             if ($stage === 'crowd_waiting') {
                 $updatedAtRaw = $run['updated_at'] ?? null;
@@ -1012,6 +1023,9 @@ if (!function_exists('pp_promotion_process_run')) {
             $crowdNodes = $crowdSource['nodes'] ?? [];
             if (empty($crowdNodes)) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                if (function_exists('pp_promotion_crowd_worker_finish_slot_by_run')) {
+                    pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
+                }
                 return;
             }
 
@@ -1127,14 +1141,20 @@ if (!function_exists('pp_promotion_process_run')) {
                 ]);
                 if (($topUpResult['created'] ?? 0) > 0) {
                     @$conn->query("UPDATE promotion_runs SET stage='crowd_ready', status='crowd_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
-                    pp_promotion_launch_crowd_worker();
+                    pp_promotion_crowd_schedule_worker($runId);
+                    if (function_exists('pp_promotion_crowd_launch_worker_for_run')) {
+                        pp_promotion_crowd_launch_worker_for_run($runId);
+                    }
                     return;
                 }
             }
 
             $activeTasks = $totalPending;
             if ($activeTasks > 0) {
-                pp_promotion_launch_crowd_worker();
+                pp_promotion_crowd_schedule_worker($runId);
+                if (function_exists('pp_promotion_crowd_launch_worker_for_run')) {
+                    pp_promotion_crowd_launch_worker_for_run($runId);
+                }
                 return;
             }
 
@@ -1143,6 +1163,9 @@ if (!function_exists('pp_promotion_process_run')) {
 
             if ($completedSuccess >= $requiredSuccess) {
                 @$conn->query("UPDATE promotion_runs SET stage='report_ready', status='report_ready', updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1");
+                if (function_exists('pp_promotion_crowd_worker_finish_slot_by_run')) {
+                    pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
+                }
                 return;
             }
 
@@ -1194,6 +1217,7 @@ if (!function_exists('pp_promotion_process_run')) {
             if ($reportJson === false) { $reportJson = '{}'; }
             $updateSql = "UPDATE promotion_runs SET status='completed', stage='completed', report_json='" . $conn->real_escape_string($reportJson) . "', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=" . $runId . " LIMIT 1";
             $updated = @$conn->query($updateSql);
+            pp_promotion_crowd_worker_finish_slot_by_run($runId, 'completed', null);
             if ($updated && $conn->affected_rows > 0 && function_exists('pp_promotion_send_completion_notification')) {
                 $runForNotify = $run;
                 $runForNotify['status'] = 'completed';
@@ -1889,6 +1913,7 @@ if (!function_exists('pp_promotion_get_status')) {
             'strategy' => isset($run['schedule_strategy']) ? (string)$run['schedule_strategy'] : null,
             'spread_seconds' => isset($run['schedule_spread_seconds']) ? (int)$run['schedule_spread_seconds'] : 0,
         ];
+        $crowdRecent = pp_promotion_crowd_recent_publications($conn, $runId, 25);
         $conn->close();
 
         $statusNote = null;
@@ -1906,6 +1931,7 @@ if (!function_exists('pp_promotion_get_status')) {
             'progress' => ['done' => (int)$run['progress_done'], 'total' => (int)$run['progress_total'], 'target' => $level1Required],
             'levels' => $levels,
             'crowd' => $crowdStats,
+            'crowd_recent' => $crowdRecent,
             'run_id' => $runId,
             'link_id' => $linkIdResolved,
             'target_url' => $url,

@@ -264,6 +264,27 @@
                         <div class="form-text"><?php echo __('Сколько крауд-ссылок добавляем на каждую публикацию последнего уровня.'); ?></div>
                     </div>
                 </div>
+                <div class="promotion-level-card">
+                    <div class="promotion-level-card__header">
+                        <div>
+                            <div class="promotion-level-card__title"><?php echo __('Крауд-воркеры'); ?></div>
+                            <div class="promotion-level-card__hint"><?php echo __('Управляет количеством параллельных крауд-задач.'); ?></div>
+                        </div>
+                    </div>
+                    <div class="promotion-level-card__body">
+                        <label class="form-label" for="promotionCrowdParallel"><?php echo __('Параллельных запусков kraud-воркера'); ?></label>
+                        <input type="number"
+                               min="1"
+                               max="20"
+                               step="1"
+                               name="promotion_crowd_max_parallel_runs"
+                               id="promotionCrowdParallel"
+                               class="form-control"
+                               value="<?php echo htmlspecialchars($settings['promotion_crowd_max_parallel_runs']); ?>"
+                               required>
+                        <div class="form-text"><?php echo __('Рекомендуем 3. Определяет, сколько кампаний крауда выполняется одновременно (от 1 до 20), ориентируясь на мощности сервера.'); ?></div>
+                    </div>
+                </div>
             </div>
 
             <div class="cascade-summary card mt-3" id="promotionCascadeSummary" aria-live="polite">

@@ -24,6 +24,7 @@ if (!function_exists('pp_promotion_settings')) {
             'crowd_per_article' => 100,
             'network_repeat_limit' => 2,
             'crowd_retry_delay_seconds' => 600,
+            'crowd_max_parallel_runs' => max(1, (int)get_setting('promotion_crowd_max_parallel_runs', '3')),
             'price_per_link' => max(0, (float)str_replace(',', '.', (string)get_setting('promotion_price_per_link', '0'))),
         ];
         $map = [
@@ -56,6 +57,10 @@ if (!function_exists('pp_promotion_settings')) {
         $crowdRetrySetting = (int)get_setting('promotion_crowd_retry_delay_seconds', (string)$defaults['crowd_retry_delay_seconds']);
         if ($crowdRetrySetting > 0) {
             $defaults['crowd_retry_delay_seconds'] = max(60, min(86400, $crowdRetrySetting));
+        }
+        $parallelSetting = (int)get_setting('promotion_crowd_max_parallel_runs', (string)$defaults['crowd_max_parallel_runs']);
+        if ($parallelSetting > 0) {
+            $defaults['crowd_max_parallel_runs'] = max(1, min(20, $parallelSetting));
         }
         $cache = $defaults;
         return $cache;
@@ -97,5 +102,15 @@ if (!function_exists('pp_promotion_get_crowd_retry_delay')) {
         if ($delay < 60) { $delay = 60; }
         if ($delay > 86400) { $delay = 86400; }
         return $delay;
+    }
+}
+
+if (!function_exists('pp_promotion_get_crowd_max_parallel_runs')) {
+    function pp_promotion_get_crowd_max_parallel_runs(): int {
+        $settings = pp_promotion_settings();
+        $parallel = (int)($settings['crowd_max_parallel_runs'] ?? 3);
+        if ($parallel < 1) { $parallel = 1; }
+        if ($parallel > 20) { $parallel = 20; }
+        return $parallel;
     }
 }
